@@ -18,6 +18,7 @@ from ..exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InsufficientQuotaError,
     InternalServerError,
     NotFoundError,
     PermissionDeniedError,
@@ -64,6 +65,20 @@ class ExceptionCheckers:
             return True
 
         return False
+
+    @staticmethod
+    def is_error_str_insufficient_quota(error_str: str) -> bool:
+        """
+        Check if an error string indicates an exhausted billing quota.
+
+        Providers return this as an HTTP 429 that is indistinguishable from a
+        transient rate limit by status code alone, so the provider-specific
+        ``insufficient_quota`` marker is the only reliable signal. Unlike a
+        transient rate limit, retrying cannot clear it.
+        """
+        if not isinstance(error_str, str):
+            return False
+        return "insufficient_quota" in error_str.lower()
 
     @staticmethod
     def is_error_str_context_window_exceeded(error_str: str) -> bool:
@@ -280,7 +295,17 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-    if ExceptionCheckers.is_error_str_rate_limit(error_str):
+    if ExceptionCheckers.is_error_str_insufficient_quota(error_str) or (
+        getattr(original_exception, "code", None) == "insufficient_quota"
+    ):
+        raise InsufficientQuotaError(
+            message=f"InsufficientQuotaError: {exception_provider} - {message}",
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
+        )
+    elif ExceptionCheckers.is_error_str_rate_limit(error_str):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
             model=model,

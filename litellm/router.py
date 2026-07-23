@@ -6698,6 +6698,9 @@ class Router:
         if isinstance(error, litellm.ContentPolicyViolationError) and content_policy_fallbacks is not None:
             raise error
 
+        if isinstance(error, litellm.InsufficientQuotaError):
+            raise error
+
         status_code = getattr(error, "status_code", None)
         if status_code is not None and not litellm._should_retry(status_code):
             # 401/403 are special cases - allow retry if multiple deployments exist (handled below)

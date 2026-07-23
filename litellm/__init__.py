@@ -1308,6 +1308,7 @@ from .exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    InsufficientQuotaError,
     RateLimitErrorCategory,
     RateLimitType,
     ServiceUnavailableError,

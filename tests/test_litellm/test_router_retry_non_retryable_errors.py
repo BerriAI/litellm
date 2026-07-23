@@ -54,6 +54,17 @@ def _make_not_found_error(message="Model not found"):
     )
 
 
+def _make_insufficient_quota_error(
+    message="You exceeded your current quota, please check your plan and billing details.",
+):
+    """Create an InsufficientQuotaError for testing."""
+    return litellm.InsufficientQuotaError(
+        message=message,
+        llm_provider="openai",
+        model="gpt-4",
+    )
+
+
 def _create_router(num_retries=2):
     """Create a Router with two deployments for testing."""
     return Router(
@@ -234,6 +245,43 @@ async def test_retryable_errors_still_retry_normally():
 
         # Initial call + 3 retries = 4 total calls
         assert call_count == 4
+
+
+@pytest.mark.asyncio
+async def test_insufficient_quota_error_not_retried():
+    """
+    An exhausted provider billing quota (InsufficientQuotaError) is non-retryable
+    even though it is a 429 - retrying the same key cannot clear it. The router must
+    surface it after the very first call instead of burning the retry budget on it.
+
+    Regression for https://github.com/BerriAI/litellm/issues/32785
+    """
+    router = _create_router(num_retries=3)
+
+    call_count = 0
+
+    async def mock_make_call(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise _make_insufficient_quota_error()
+
+    with (
+        patch.object(router, "make_call", side_effect=mock_make_call),
+        patch.object(
+            router,
+            "_async_get_healthy_deployments",
+            return_value=(["d1", "d2"], ["d1", "d2"]),
+        ),
+        patch.object(router, "_time_to_sleep_before_retry", return_value=0),
+        patch.object(router, "log_retry", side_effect=lambda kwargs, e: kwargs),
+    ):
+        with pytest.raises(litellm.InsufficientQuotaError):
+            await router.async_function_with_retries(
+                num_retries=3,
+                **_base_kwargs(),
+            )
+
+        assert call_count == 1
 
 
 @pytest.mark.asyncio

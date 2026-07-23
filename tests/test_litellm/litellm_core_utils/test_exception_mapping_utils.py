@@ -133,6 +133,22 @@ class TestExceptionCheckers:
         result = ExceptionCheckers.is_error_str_rate_limit(error_str)
         assert result is True
 
+    def test_is_error_str_insufficient_quota_detects_quota_marker(self):
+        """A serialized OpenAI 429 body carrying the insufficient_quota marker must be detected"""
+
+        error_str = (
+            "Error code: 429 - {'error': {'message': 'You exceeded your current quota, "
+            "please check your plan and billing details.', 'type': 'insufficient_quota', "
+            "'param': None, 'code': 'insufficient_quota'}}"
+        )
+        assert ExceptionCheckers.is_error_str_insufficient_quota(error_str) is True
+
+    def test_is_error_str_insufficient_quota_ignores_transient_rate_limit(self):
+        """A transient rate-limit 429 without the quota marker must not be treated as quota exhaustion"""
+
+        error_str = "RateLimitError: OpenAIException - Rate limit reached (status code 429)"
+        assert ExceptionCheckers.is_error_str_insufficient_quota(error_str) is False
+
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
 
@@ -371,6 +387,70 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
                 original_exception=original_exception,
                 custom_llm_provider=custom_llm_provider,
             )
+
+
+def test_openai_insufficient_quota_maps_to_insufficient_quota_error():
+    """
+    An OpenAI 429 carrying code/type ``insufficient_quota`` (an exhausted billing
+    quota) must map to the non-retryable litellm.InsufficientQuotaError rather than
+    the retryable litellm.RateLimitError.
+
+    Regression for https://github.com/BerriAI/litellm/issues/32785
+    """
+    model = "gpt-5.5"
+    error_message = (
+        "Error code: 429 - {'error': {'message': 'You exceeded your current quota, "
+        "please check your plan and billing details.', 'type': 'insufficient_quota', "
+        "'param': None, 'code': 'insufficient_quota'}}"
+    )
+    original_exception = OpenAIError(
+        status_code=429,
+        message=error_message,
+        headers={},
+    )
+
+    with pytest.raises(litellm.InsufficientQuotaError) as excinfo:
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    err = excinfo.value
+    assert isinstance(err, litellm.RateLimitError)
+    assert err.status_code == 429
+    assert err.category == litellm.RateLimitErrorCategory.VENDOR_INSUFFICIENT_QUOTA.value
+    assert err.code == "insufficient_quota"
+    assert err.type == "insufficient_quota"
+
+
+def test_openai_transient_rate_limit_stays_rate_limit_error():
+    """
+    A transient OpenAI 429 (no insufficient_quota marker) must remain a plain
+    retryable litellm.RateLimitError, never the InsufficientQuotaError subclass.
+    """
+    model = "gpt-5.5"
+    error_message = (
+        "Error code: 429 - {'error': {'message': 'Rate limit reached for gpt-5.5 in "
+        "organization org-xxxx on requests per min.', 'type': 'requests', "
+        "'param': None, 'code': 'rate_limit_exceeded'}}"
+    )
+    original_exception = OpenAIError(
+        status_code=429,
+        message=error_message,
+        headers={},
+    )
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    err = excinfo.value
+    assert not isinstance(err, litellm.InsufficientQuotaError)
+    assert err.category == litellm.RateLimitErrorCategory.VENDOR_RATE_LIMIT.value
 
 
 class TestGetBodyErrorCode:
