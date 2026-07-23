@@ -6,11 +6,14 @@ LiteLLM runs a minimal OAuth 2.1 authorization code flow.  The "authorization pa
 just a form that asks the user for their API key — not a full identity-provider OAuth.
 
 Endpoints implemented here:
-  GET  /.well-known/oauth-authorization-server      — OAuth authorization server metadata
-  GET  /.well-known/oauth-protected-resource         — OAuth protected resource metadata
   GET  /v1/mcp/oauth/authorize                       — Shows HTML form to collect the API key
   POST /v1/mcp/oauth/authorize                       — Stores temp auth code and redirects
   POST /v1/mcp/oauth/token                           — Exchanges code for a bearer JWT token
+
+OAuth metadata discovery (`/.well-known/oauth-authorization-server` and
+`/.well-known/oauth-protected-resource`) is owned by `discoverable_endpoints.py`,
+which resolves a single OAuth2 MCP server for the root path and always emits
+`registration_endpoint` for dynamic client registration.
 """
 
 import base64
@@ -27,9 +30,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
-from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-    get_request_base_url,
-)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     validate_loopback_redirect_uri,
@@ -589,39 +589,6 @@ def _build_authorize_html(
 </script>
 </body>
 </html>"""
-
-
-# ---------------------------------------------------------------------------
-# OAuth metadata discovery endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
-async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
-    """RFC 8414 Authorization Server Metadata for the BYOK OAuth flow."""
-    base_url = get_request_base_url(request)
-    return JSONResponse(
-        {
-            "issuer": base_url,
-            "authorization_endpoint": f"{base_url}/v1/mcp/oauth/authorize",
-            "token_endpoint": f"{base_url}/v1/mcp/oauth/token",
-            "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
-            "code_challenge_methods_supported": ["S256"],
-        }
-    )
-
-
-@router.get("/.well-known/oauth-protected-resource", include_in_schema=False)
-async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
-    """RFC 9728 Protected Resource Metadata pointing back at this server."""
-    base_url = get_request_base_url(request)
-    return JSONResponse(
-        {
-            "resource": base_url,
-            "authorization_servers": [base_url],
-        }
-    )
 
 
 # ---------------------------------------------------------------------------

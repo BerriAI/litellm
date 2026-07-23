@@ -3420,6 +3420,77 @@ async def test_discovery_root_includes_server_name_prefix():
 
 
 @pytest.mark.asyncio
+async def test_root_well_known_handlers_not_shadowed_by_byok_router():
+    """Regression: when both BYOK and discoverable routers are mounted (as in
+    production via _lazy_features.py), the discoverable handler must own the
+    root /.well-known/oauth-authorization-server and /.well-known/oauth-protected-resource
+    paths so dynamic client registration metadata is advertised.
+
+    Bug: prior to the fix, byok_oauth_endpoints.py declared duplicate handlers at
+    these root paths and was registered first via _lazy_features.py — so its
+    trimmed payload (no `registration_endpoint`) shadowed the correct one and
+    broke MCP client OAuth at the unified /mcp URL.
+    """
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+            router as byok_router,
+        )
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            router as discoverable_router,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP routers not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    app = FastAPI()
+    # Mount in the same order as _lazy_features.py: BYOK first, discoverable second.
+    # If a future change reintroduces a shadowing handler in BYOK, this ordering
+    # is what would mask it in production — so we reproduce it here.
+    app.include_router(byok_router)
+    app.include_router(discoverable_router)
+    client = TestClient(app)
+
+    try:
+        # /.well-known/oauth-authorization-server — must include registration_endpoint
+        resp = client.get("/.well-known/oauth-authorization-server")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "registration_endpoint" in data, (
+            "Root oauth-authorization-server response is missing "
+            "registration_endpoint — MCP clients will fail dynamic client "
+            "registration. Likely a duplicate handler shadowing "
+            "discoverable_endpoints.py."
+        )
+        # Discoverable's authorize/token endpoints — NOT BYOK's API-key-form ones.
+        assert not data["authorization_endpoint"].endswith(
+            "/v1/mcp/oauth/authorize"
+        ), "BYOK metadata is shadowing discoverable at the root path."
+        assert not data["token_endpoint"].endswith(
+            "/v1/mcp/oauth/token"
+        ), "BYOK metadata is shadowing discoverable at the root path."
+
+        # /.well-known/oauth-protected-resource — resource must point at /mcp.
+        resp = client.get("/.well-known/oauth-protected-resource")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["resource"].endswith("/mcp"), (
+            "BYOK protected-resource handler is shadowing discoverable at the "
+            "root path (resource should be base_url/mcp, not base_url)."
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
 async def test_discovery_root_does_not_expose_private_server_for_external_client():
     """Root discovery must use caller visibility before adding server-specific metadata."""
     try:
