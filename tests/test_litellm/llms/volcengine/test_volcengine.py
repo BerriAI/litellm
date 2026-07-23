@@ -109,6 +109,101 @@ class TestVolcEngineConfig:
         )
         assert result_no_thinking == {}
 
+    def test_reasoning_effort_mapping(self):
+        """Translate OpenAI-spec reasoning_effort -> Volcengine thinking.type."""
+        config = VolcEngineConfig()
+
+        # reasoning_effort is now an advertised supported param
+        assert "reasoning_effort" in config.get_supported_openai_params(
+            model="doubao-seed-1.6"
+        )
+
+        # 'none' -> disabled (the original bug fix)
+        out = config.map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="doubao-seed-1.6",
+            drop_params=False,
+        )
+        assert out == {"extra_body": {"thinking": {"type": "disabled"}}}
+
+        # 'minimal' -> disabled (matches GPT-5 minimal semantics)
+        out = config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="doubao-seed-1.6",
+            drop_params=False,
+        )
+        assert out == {"extra_body": {"thinking": {"type": "disabled"}}}
+
+        # 'low' / 'medium' / 'high' / 'xhigh' -> enabled
+        for effort in ("low", "medium", "high", "xhigh"):
+            out = config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params={},
+                model="doubao-seed-1.6",
+                drop_params=False,
+            )
+            assert out == {"extra_body": {"thinking": {"type": "enabled"}}}, effort
+
+        # 'auto' -> auto
+        out = config.map_openai_params(
+            non_default_params={"reasoning_effort": "auto"},
+            optional_params={},
+            model="doubao-seed-1.6",
+            drop_params=False,
+        )
+        assert out == {"extra_body": {"thinking": {"type": "auto"}}}
+
+        # Explicit thinking= takes precedence over reasoning_effort=
+        out = config.map_openai_params(
+            non_default_params={
+                "reasoning_effort": "high",
+                "thinking": {"type": "disabled"},
+            },
+            optional_params={},
+            model="doubao-seed-1.6",
+            drop_params=False,
+        )
+        assert out == {"extra_body": {"thinking": {"type": "disabled"}}}
+
+        # End-to-end via get_optional_params
+        e2e = get_optional_params(
+            model="doubao-seed-1.6",
+            custom_llm_provider="volcengine",
+            reasoning_effort="none",
+            drop_params=False,
+        )
+        assert e2e["extra_body"]["thinking"] == {"type": "disabled"}
+
+    def test_reasoning_effort_unknown_value(self):
+        """Unknown reasoning_effort values must respect drop_params semantics."""
+        import pytest
+
+        from litellm.exceptions import UnsupportedParamsError
+
+        config = VolcEngineConfig()
+
+        # drop_params=False: raise on unknown value (not silently drop)
+        with pytest.raises(UnsupportedParamsError) as exc_info:
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": "ultra"},
+                optional_params={},
+                model="doubao-seed-1.6",
+                drop_params=False,
+            )
+        assert "reasoning_effort" in str(exc_info.value)
+        assert "ultra" in str(exc_info.value)
+
+        # drop_params=True: silently drop unknown value, no thinking written
+        out = config.map_openai_params(
+            non_default_params={"reasoning_effort": "ultra"},
+            optional_params={},
+            model="doubao-seed-1.6",
+            drop_params=True,
+        )
+        assert out == {}
+
     def test_e2e_completion(self):
         from openai import OpenAI
 

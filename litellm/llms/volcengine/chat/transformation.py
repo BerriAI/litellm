@@ -1,5 +1,7 @@
 from typing import Optional, Union
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
@@ -66,6 +68,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             "max_retries",
             "extra_headers",
             "thinking",
+            "reasoning_effort",
         ]  # works across all models
 
     def map_openai_params(
@@ -83,6 +86,39 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             drop_params,
             replace_max_completion_tokens_with_max_tokens,
         )
+
+        # Translate OpenAI-spec `reasoning_effort` -> Volcengine native `thinking.type`.
+        # Explicit `thinking=` always wins over `reasoning_effort=` (precedence rule).
+        # Mapping rationale:
+        #   - "none" / "minimal" -> disabled (no chain-of-thought; matches GPT-5 minimal semantics)
+        #   - "low" / "medium" / "high" / "xhigh" -> enabled (model self-decides depth)
+        #   - "auto" -> auto (let the model choose)
+        reasoning_effort = optional_params.pop("reasoning_effort", None)
+        if (
+            reasoning_effort is not None
+            and "thinking" not in optional_params
+            and "thinking" not in non_default_params
+        ):
+            if reasoning_effort in ("none", "minimal"):
+                optional_params["thinking"] = {"type": "disabled"}
+            elif reasoning_effort in ("low", "medium", "high", "xhigh"):
+                optional_params["thinking"] = {"type": "enabled"}
+            elif reasoning_effort == "auto":
+                optional_params["thinking"] = {"type": "auto"}
+            else:
+                # Unknown reasoning_effort value: respect drop_params semantics.
+                # When drop_params=True (or litellm.drop_params=True): silently drop.
+                # Otherwise: raise so callers don't silently get default thinking behavior.
+                if not (drop_params or litellm.drop_params):
+                    raise UnsupportedParamsError(
+                        status_code=400,
+                        message=(
+                            f"VolcEngine does not support reasoning_effort="
+                            f"{reasoning_effort!r}. Supported values: 'none', "
+                            f"'minimal', 'low', 'medium', 'high', 'xhigh', 'auto'. "
+                            f"Pass drop_params=True to silently drop unknown values."
+                        ),
+                    )
 
         if "thinking" in optional_params:
             """
