@@ -8798,6 +8798,12 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.image_edit import (
+                get_dashscope_image_edit_config,
+            )
+
+            return get_dashscope_image_edit_config(model)
         return None
 
     @staticmethod
@@ -8964,6 +8970,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.text_to_speech.transformation import (
+                DashScopeTextToSpeechConfig,
+            )
+
+            return DashScopeTextToSpeechConfig()
         return None
 
     @staticmethod
