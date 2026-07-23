@@ -1048,6 +1048,41 @@ async def test_estimate_tokens_floor_unchanged_when_kwarg_omitted(rate_limiter):
 
 
 @pytest.mark.asyncio
+async def test_responses_base64_image_does_not_exhaust_tpm(rate_limiter):
+    handler, cache = rate_limiter
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-responses-image"),
+        tpm_limit=50_000,
+    )
+    data = {
+        "model": "gpt-4o",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Describe this image"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,"
+                        + ("A" * 2_500_000),
+                    },
+                ],
+            }
+        ],
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="aresponses",
+    )
+
+    reserved_tokens = (data.get("metadata") or {})[TPM_RESERVED_TOKENS_KEY]
+    assert 0 < reserved_tokens < user_api_key_dict.tpm_limit
+
+
+@pytest.mark.asyncio
 async def test_small_tpm_cap_admits_no_max_tokens_request(rate_limiter):
     """
     Regression (end-to-end at the hook level): a project-level model_tpm_limit
