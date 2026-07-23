@@ -160,6 +160,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "posthog",
     "levo",
     "compression_interception",
+    "ecologits",
     "newrelic",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
