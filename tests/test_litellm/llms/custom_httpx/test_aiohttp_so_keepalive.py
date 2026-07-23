@@ -27,7 +27,7 @@ def test_socket_factory_omitted_when_disabled(monkeypatch):
     session_mock = MagicMock(name="session")
 
     with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
+        http_handler_module, "HardenedTCPConnector", return_value=connector_mock
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
@@ -48,7 +48,7 @@ def test_socket_factory_attached_when_enabled(monkeypatch):
     session_mock = MagicMock(name="session")
 
     with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
+        http_handler_module, "HardenedTCPConnector", return_value=connector_mock
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
@@ -70,7 +70,7 @@ def test_socket_factory_skipped_on_old_aiohttp(monkeypatch):
     session_mock = MagicMock(name="session")
 
     with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
+        http_handler_module, "HardenedTCPConnector", return_value=connector_mock
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock

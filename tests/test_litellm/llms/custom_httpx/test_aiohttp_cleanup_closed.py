@@ -9,7 +9,7 @@ def test_create_aiohttp_transport_sets_enable_cleanup_closed_when_needed(monkeyp
     monkeypatch.setattr(http_handler_module, "AIOHTTP_NEEDS_CLEANUP_CLOSED", True)
 
     with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
+        http_handler_module, "HardenedTCPConnector", return_value=connector_mock
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
@@ -32,7 +32,7 @@ def test_create_aiohttp_transport_omits_enable_cleanup_closed_when_not_needed(
     monkeypatch.setattr(http_handler_module, "AIOHTTP_NEEDS_CLEANUP_CLOSED", False)
 
     with patch.object(
-        http_handler_module, "TCPConnector", return_value=connector_mock
+        http_handler_module, "HardenedTCPConnector", return_value=connector_mock
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
