@@ -10628,9 +10628,7 @@ class Router:
 
         ## DEFAULT ORDER FILTERING ## -> without a fallback target, return deployments with the lowest configured order
         if _target_order is None:
-            healthy_deployments = litellm.utils._get_order_filtered_deployments(
-                cast(list[dict], healthy_deployments)
-            )
+            healthy_deployments = litellm.utils._get_order_filtered_deployments(cast(list[dict], healthy_deployments))
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
         ## this request via weighted-failover. Always honored, regardless of the
