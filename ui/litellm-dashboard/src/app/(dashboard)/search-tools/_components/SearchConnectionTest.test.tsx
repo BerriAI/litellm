@@ -28,7 +28,10 @@ describe("SearchConnectionTest", () => {
     render(<SearchConnectionTest {...defaultProps} />);
 
     await waitFor(() => {
-      expect(networking.testSearchToolConnection).toHaveBeenCalledWith(defaultProps.accessToken, defaultProps.litellmParams);
+      expect(networking.testSearchToolConnection).toHaveBeenCalledWith(
+        defaultProps.accessToken,
+        defaultProps.litellmParams,
+      );
     });
   });
 
