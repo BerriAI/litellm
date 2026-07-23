@@ -9092,10 +9092,10 @@ class Router:
             if isinstance(item, str):
                 _router_model_group = item
             elif isinstance(item, dict):
-                if item["hidden"] is True:
+                if item.get("hidden") is True:
                     return None
                 else:
-                    _router_model_group = item["model"]
+                    _router_model_group = item.get("model", "")
             else:
                 return None
 
@@ -9738,10 +9738,10 @@ class Router:
                 _router_model_name: str = model_value
             elif isinstance(model_value, dict):
                 _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                if _model_value["hidden"] is True:
+                if _model_value.get("hidden") is True:
                     continue
                 else:
-                    _router_model_name = _model_value["model"]
+                    _router_model_name = _model_value.get("model", "")
             else:
                 continue
 
