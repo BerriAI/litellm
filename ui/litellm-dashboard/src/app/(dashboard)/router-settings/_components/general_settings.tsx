@@ -13,25 +13,14 @@ import {
   Icon,
   Switch,
 } from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
 import { InputNumber, Select as AntdSelect } from "antd";
 import { TrashIcon } from "@heroicons/react/outline";
 import { StatusBadge } from "@/components/shared/table_cells";
 
-import RouterSettings from "@/components/router_settings";
-import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
-import RoutingGroups from "@/components/routing_groups";
-
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
-
-interface GeneralSettingsPageProps {
-  accessToken: string | null;
-  userRole: string | null;
-  userID: string | null;
-}
 
 export interface generalSettingsItem {
   field_name: string;
@@ -162,154 +151,105 @@ export const PromptCachingPanel: React.FC<{
   );
 };
 
-const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
+const useGeneralSettings = (accessToken: string) => {
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
 
   useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
     getGeneralSettingsCall(accessToken).then((data) => {
-      let general_settings = data;
-      setGeneralSettings(general_settings);
+      setGeneralSettings(data);
     });
   }, [accessToken]);
 
   const handleInputChange = (fieldName: string, newValue: any) => {
-    // Update the value in the state
-    const updatedSettings = generalSettings.map((setting) =>
-      setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
+    setGeneralSettings((prev) =>
+      prev.map((setting) => (setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting)),
     );
-    setGeneralSettings(updatedSettings);
   };
 
   const handleUpdateField = (fieldName: string) => {
-    if (!accessToken) {
+    const fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
+    if (fieldValue == null) {
       return;
     }
-
-    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
-
-    if (fieldValue == null || fieldValue == undefined) {
-      return;
-    }
-    try {
-      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
-      // update value in state
-
-      const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting,
-      );
-      setGeneralSettings(updatedSettings);
-    } catch (error) {
-      // do something
-    }
+    updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+    setGeneralSettings((prev) =>
+      prev.map((setting) => (setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting)),
+    );
   };
 
   const handleResetField = (fieldName: string) => {
-    if (!accessToken) {
-      return;
-    }
-
-    try {
-      deleteConfigFieldSetting(accessToken, fieldName);
-      // update value in state
-
-      const updatedSettings = generalSettings.map((setting) =>
+    deleteConfigFieldSetting(accessToken, fieldName);
+    setGeneralSettings((prev) =>
+      prev.map((setting) =>
         setting.field_name === fieldName
           ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
           : setting,
-      );
-      setGeneralSettings(updatedSettings);
-    } catch (error) {
-      // do something
-    }
+      ),
+    );
   };
 
-  if (!accessToken) {
-    return null;
-  }
-
-  return (
-    <div className="w-full">
-      <TabGroup className="h-[75vh] w-full">
-        <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-          <Tab value="1">Loadbalancing</Tab>
-          <Tab value="2">Routing Groups</Tab>
-          <Tab value="3">Fallbacks</Tab>
-          <Tab value="5">Prompt Caching</Tab>
-          <Tab value="4">General</Tab>
-        </TabList>
-        <TabPanels className="px-8 py-6">
-          <TabPanel>
-            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabPanel>
-          <TabPanel>
-            <RoutingGroups />
-          </TabPanel>
-          <TabPanel>
-            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabPanel>
-          <TabPanel>
-            <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
-          </TabPanel>
-          <TabPanel>
-            <Card>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>Setting</TableHeaderCell>
-                    <TableHeaderCell>Value</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Action</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {generalSettings
-                    .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
-                    .map((value, index) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          <Text>{value.field_name}</Text>
-                          <p
-                            style={{
-                              fontSize: "0.65rem",
-                              color: "#808080",
-                              fontStyle: "italic",
-                            }}
-                            className="mt-1"
-                          >
-                            {value.field_description}
-                          </p>
-                        </TableCell>
-                        <TableCell>
-                          <SettingValueEditor setting={value} onChange={handleInputChange} />
-                        </TableCell>
-                        <TableCell>
-                          {value.stored_in_db == true ? (
-                            <StatusBadge tone="success" label="In DB" />
-                          ) : value.stored_in_db == false ? (
-                            <StatusBadge tone="neutral" label="In Config" />
-                          ) : (
-                            <StatusBadge tone="neutral" label="Not Set" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
-                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name)}>
-                            Reset
-                          </Icon>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
-    </div>
-  );
+  return { generalSettings, handleInputChange, handleUpdateField, handleResetField };
 };
 
-export default GeneralSettings;
+export const PromptCachingSettingsTab: React.FC<{ accessToken: string }> = ({ accessToken }) => {
+  const { generalSettings, handleInputChange } = useGeneralSettings(accessToken);
+  return <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />;
+};
+
+export const GeneralConfigTab: React.FC<{ accessToken: string }> = ({ accessToken }) => {
+  const { generalSettings, handleInputChange, handleUpdateField, handleResetField } = useGeneralSettings(accessToken);
+
+  return (
+    <Card>
+      <Table>
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell>Setting</TableHeaderCell>
+            <TableHeaderCell>Value</TableHeaderCell>
+            <TableHeaderCell>Status</TableHeaderCell>
+            <TableHeaderCell>Action</TableHeaderCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {generalSettings
+            .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
+            .map((value, index) => (
+              <TableRow key={index}>
+                <TableCell>
+                  <Text>{value.field_name}</Text>
+                  <p
+                    style={{
+                      fontSize: "0.65rem",
+                      color: "#808080",
+                      fontStyle: "italic",
+                    }}
+                    className="mt-1"
+                  >
+                    {value.field_description}
+                  </p>
+                </TableCell>
+                <TableCell>
+                  <SettingValueEditor setting={value} onChange={handleInputChange} />
+                </TableCell>
+                <TableCell>
+                  {value.stored_in_db == true ? (
+                    <StatusBadge tone="success" label="In DB" />
+                  ) : value.stored_in_db == false ? (
+                    <StatusBadge tone="neutral" label="In Config" />
+                  ) : (
+                    <StatusBadge tone="neutral" label="Not Set" />
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
+                  <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name)}>
+                    Reset
+                  </Icon>
+                </TableCell>
+              </TableRow>
+            ))}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+};
