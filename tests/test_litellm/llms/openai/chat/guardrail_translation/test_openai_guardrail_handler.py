@@ -25,8 +25,10 @@ from litellm.types.utils import (
     Choices,
     Function,
     GenericGuardrailAPIInputs,
+    GenericGuardrailAPIUsage,
     Message,
     ModelResponse,
+    Usage,
 )
 
 
@@ -679,6 +681,48 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         response_tool_call = response.choices[0].message.tool_calls[0]
         args = json.loads(response_tool_call.function.arguments)
         assert args["keywords"] == "LITELLM DOCUMENTATION"
+
+    @pytest.mark.asyncio
+    async def test_output_response_passes_usage_to_guardrail_inputs(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        response = ModelResponse(
+            id="chatcmpl-usage",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="hello",
+                        role="assistant",
+                    ),
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=10,
+                completion_tokens=20,
+                total_tokens=30,
+                completion_tokens_details={
+                    "reasoning_tokens": 7,
+                    "text_tokens": 13,
+                },
+            ),
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert guardrail.last_inputs is not None
+        usage = guardrail.last_inputs["usage"]
+        assert isinstance(usage, GenericGuardrailAPIUsage)
+        assert usage.completion_tokens_details is not None
+        assert usage.completion_tokens_details.reasoning_tokens == 7
+        assert usage.prompt_tokens == 10
+        assert usage.completion_tokens == 20
+        assert usage.total_tokens == 30
 
     @pytest.mark.asyncio
     async def test_extract_multiple_tool_calls_from_output(self):

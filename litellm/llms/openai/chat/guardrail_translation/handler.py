@@ -39,6 +39,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
+    normalize_generic_guardrail_api_usage,
 )
 
 if TYPE_CHECKING:
@@ -365,9 +366,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
-            # Include model information from the response if available
+            # Include model and usage information from the response if available
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
+            inputs["usage"] = normalize_generic_guardrail_api_usage(getattr(response, "usage", None))
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,

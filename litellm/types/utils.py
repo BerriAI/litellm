@@ -3848,6 +3848,103 @@ class PriorityReservationSettings(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class GenericGuardrailAPICompletionTokensDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accepted_prediction_tokens: Optional[int] = None
+    audio_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
+    rejected_prediction_tokens: Optional[int] = None
+
+
+class GenericGuardrailAPIPromptTokensDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audio_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+
+
+class GenericGuardrailAPIUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completion_tokens: int
+    prompt_tokens: int
+    total_tokens: int
+    completion_tokens_details: Optional[GenericGuardrailAPICompletionTokensDetails] = None
+    prompt_tokens_details: Optional[GenericGuardrailAPIPromptTokensDetails] = None
+
+
+def _get_generic_guardrail_api_usage_field(usage: object, field_name: str) -> object:
+    if isinstance(usage, Mapping):
+        return usage.get(field_name)
+    return getattr(usage, field_name, None)
+
+
+def _get_generic_guardrail_api_int_usage_field(
+    usage: object, field_name: str, fallback_field_name: Optional[str] = None
+) -> Optional[int]:
+    value = _get_generic_guardrail_api_usage_field(usage, field_name)
+    fallback_value = (
+        _get_generic_guardrail_api_usage_field(usage, fallback_field_name)
+        if value is None and fallback_field_name is not None
+        else value
+    )
+    return fallback_value if type(fallback_value) is int else None
+
+
+def _normalize_generic_guardrail_api_completion_tokens_details(
+    usage: object,
+) -> Optional[GenericGuardrailAPICompletionTokensDetails]:
+    details = _get_generic_guardrail_api_usage_field(usage, "completion_tokens_details")
+    if details is None:
+        details = _get_generic_guardrail_api_usage_field(usage, "output_tokens_details")
+    if details is None:
+        return None
+    normalized_details = GenericGuardrailAPICompletionTokensDetails(
+        accepted_prediction_tokens=_get_generic_guardrail_api_int_usage_field(details, "accepted_prediction_tokens"),
+        audio_tokens=_get_generic_guardrail_api_int_usage_field(details, "audio_tokens"),
+        reasoning_tokens=_get_generic_guardrail_api_int_usage_field(details, "reasoning_tokens"),
+        rejected_prediction_tokens=_get_generic_guardrail_api_int_usage_field(details, "rejected_prediction_tokens"),
+    )
+    return normalized_details if normalized_details.model_dump(exclude_none=True) else None
+
+
+def _normalize_generic_guardrail_api_prompt_tokens_details(
+    usage: object,
+) -> Optional[GenericGuardrailAPIPromptTokensDetails]:
+    details = _get_generic_guardrail_api_usage_field(usage, "prompt_tokens_details")
+    if details is None:
+        details = _get_generic_guardrail_api_usage_field(usage, "input_tokens_details")
+    if details is None:
+        return None
+    normalized_details = GenericGuardrailAPIPromptTokensDetails(
+        audio_tokens=_get_generic_guardrail_api_int_usage_field(details, "audio_tokens"),
+        cached_tokens=_get_generic_guardrail_api_int_usage_field(details, "cached_tokens"),
+    )
+    return normalized_details if normalized_details.model_dump(exclude_none=True) else None
+
+
+def normalize_generic_guardrail_api_usage(
+    usage: object,
+) -> Optional[GenericGuardrailAPIUsage]:
+    if usage is None:
+        return None
+    if isinstance(usage, GenericGuardrailAPIUsage):
+        return usage
+    prompt_tokens = _get_generic_guardrail_api_int_usage_field(usage, "prompt_tokens", "input_tokens")
+    completion_tokens = _get_generic_guardrail_api_int_usage_field(usage, "completion_tokens", "output_tokens")
+    total_tokens = _get_generic_guardrail_api_int_usage_field(usage, "total_tokens")
+    if prompt_tokens is None or completion_tokens is None or total_tokens is None:
+        return None
+    return GenericGuardrailAPIUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        prompt_tokens_details=_normalize_generic_guardrail_api_prompt_tokens_details(usage),
+        completion_tokens_details=_normalize_generic_guardrail_api_completion_tokens_details(usage),
+    )
+
+
 class GenericGuardrailAPIInputs(TypedDict, total=False):
     texts: List[str]  # extracted text from the LLM response - for basic text guardrails
     images: List[str]  # extracted images from the LLM response - for image guardrails
@@ -3862,3 +3959,4 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     stream_holdback_chars: List[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
+    usage: Optional[GenericGuardrailAPIUsage]

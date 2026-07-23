@@ -52,7 +52,10 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputText,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    normalize_generic_guardrail_api_usage,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -427,7 +430,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
-            # Include model information from the response if available
+            # Include model and usage information from the response if available
             response_model = None
             if isinstance(response, dict):
                 response_model = response.get("model")
@@ -435,6 +438,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 response_model = getattr(response, "model", None)
             if response_model:
                 inputs["model"] = response_model
+            inputs["usage"] = normalize_generic_guardrail_api_usage(
+                response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+            )
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -525,6 +531,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 response_model = response_obj.get("model")
                 if response_model:
                     inputs["model"] = response_model
+                inputs["usage"] = normalize_generic_guardrail_api_usage(response_obj.get("usage"))
 
                 guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
