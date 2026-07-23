@@ -9945,8 +9945,10 @@ class Router:
         for var in kwargs:
             if var in _allowed_settings:
                 if var in _int_settings:
-                    _casted_value = int(kwargs[var])
-                    setattr(self, var, _casted_value)
+                    if kwargs[var] is None:
+                        setattr(self, var, None)
+                    else:
+                        setattr(self, var, int(kwargs[var]))
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True

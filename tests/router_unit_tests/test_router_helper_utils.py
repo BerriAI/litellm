@@ -1313,6 +1313,32 @@ def test_update_settings(model_list):
     assert router.allowed_fails == 20
 
 
+def test_update_settings_none_int_values(model_list):
+    """Regression test: update_settings must not crash when None is passed for int settings.
+    Previously raised TypeError: int() argument must be a string... not 'NoneType'"""
+    router = Router(model_list=model_list, timeout=30, allowed_fails=5)
+
+    # None should reset each int setting without raising TypeError
+    router.update_settings(timeout=None)
+    assert router.timeout is None
+
+    router.update_settings(allowed_fails=None)
+    assert router.allowed_fails is None
+
+    router.update_settings(num_retries=None)
+    assert router.num_retries is None
+
+    router.update_settings(cooldown_time=None)
+    assert router.cooldown_time is None
+
+    router.update_settings(retry_after=None)
+    assert router.retry_after is None
+
+    # Valid int values must still work after None resets
+    router.update_settings(timeout=60)
+    assert router.timeout == 60
+
+
 def test_common_checks_available_deployment(model_list):
     """Test if the 'common_checks_available_deployment' function is working correctly"""
     router = Router(model_list=model_list)
