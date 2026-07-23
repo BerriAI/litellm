@@ -148,6 +148,10 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         default=None,
         description="User info endpoint URL for generic OAuth provider",
     )
+    generic_scope: Optional[str] = Field(
+        default=None,
+        description="Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'",
+    )
 
     # Common settings
     proxy_base_url: Optional[str] = Field(

@@ -453,6 +453,44 @@ describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
   });
 });
 
+describe("KeyInfoView handleKeyUpdate budget_duration", () => {
+  it("should send a canonical budget_duration through unchanged", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "30d",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
+  });
+
+  it("should heal a legacy word-form budget_duration to canonical", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "monthly",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
+  });
+});
+
 describe("KeyInfoView handleKeyUpdate empty strings", () => {
   ["tpm_limit", "rpm_limit", "max_parallel_requests", "max_budget"].forEach((limit) => {
     it(`maps empty strings to null for ${limit}`, async () => {

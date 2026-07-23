@@ -1781,28 +1781,38 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         from litellm.proxy.auth.auth_utils import get_team_mcp_rpm_limit
 
-        if not mcp_server_name or not user_api_key_dict.team_id:
+        if not mcp_server_name:
             return
 
-        mcp_rpm_limit = get_team_mcp_rpm_limit(user_api_key_dict)
-        if not mcp_rpm_limit:
-            return
+        # Which teams' buckets does this call charge? A key is pinned to exactly one team. A keyless
+        # MCP-admitted subject reaches servers through SEVERAL teams at once and has no team_id, so
+        # without the second source below its calls charged no team bucket at all and it outran every
+        # team's mcp_rpm_limit. Every applicable team is charged rather than one being picked: the
+        # limiter enforces all descriptors, so each team's own ceiling binds on a call made through
+        # its grant, and there is no arbitrary attribution when several teams grant the same server.
+        team_limits: list[tuple[str | None, dict[str, int] | None]] = []
+        if user_api_key_dict.team_id:
+            team_limits.append((user_api_key_dict.team_id, get_team_mcp_rpm_limit(user_api_key_dict)))
+        for source_team_id, source_limit in (user_api_key_dict.mcp_source_team_rpm_limits or {}).items():
+            team_limits.append((source_team_id, source_limit))
 
-        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
-        if server_rpm_limit is None:
-            return
-
-        descriptors.append(
-            RateLimitDescriptor(
-                key="mcp_per_team",
-                value=f"{user_api_key_dict.team_id}:{mcp_server_name}",
-                rate_limit={
-                    "requests_per_unit": server_rpm_limit,
-                    "tokens_per_unit": None,
-                    "window_size": self.window_size,
-                },
+        for team_id, mcp_rpm_limit in team_limits:
+            if not team_id or not mcp_rpm_limit:
+                continue
+            server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+            if server_rpm_limit is None:
+                continue
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="mcp_per_team",
+                    value=f"{team_id}:{mcp_server_name}",
+                    rate_limit={
+                        "requests_per_unit": server_rpm_limit,
+                        "tokens_per_unit": None,
+                        "window_size": self.window_size,
+                    },
+                )
             )
-        )
 
     def _should_enforce_rate_limit(
         self,
