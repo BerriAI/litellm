@@ -43,6 +43,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     model_max_budget: Optional[Dict] = {}
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    password_updated_at: Optional[datetime] = None
+    reset_password_required: bool = False
     organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 

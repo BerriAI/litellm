@@ -13560,7 +13560,11 @@ async def login_v2(request: Request):
         # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the
         # server-set cookie, which would otherwise cause an infinite login redirect.
         json_response = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
+            content={
+                "redirect_url": litellm_dashboard_ui,
+                "token": jwt_token,
+                "reset_password_required": returned_ui_token_object.get("reset_password_required", False),
+            },
             status_code=status.HTTP_200_OK,
         )
         json_response.set_cookie(key="token", value=jwt_token)
@@ -13638,7 +13642,11 @@ async def login_v3(request: Request):
         # Store JWT behind a single-use opaque code (60s TTL)
         code = secrets.token_urlsafe(32)
         cache_key = f"login_code:{code}"
-        cache_value = {"token": jwt_token, "redirect_url": litellm_dashboard_ui}
+        cache_value = {
+            "token": jwt_token,
+            "redirect_url": litellm_dashboard_ui,
+            "reset_password_required": returned_ui_token_object.get("reset_password_required", False),
+        }
         if redis_usage_cache is not None:
             await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
         else:
@@ -13714,6 +13722,7 @@ async def login_v3_exchange(request: Request):
             content={
                 "token": cached_data["token"],
                 "redirect_url": cached_data["redirect_url"],
+                "reset_password_required": cached_data.get("reset_password_required", False),
             },
             status_code=status.HTTP_200_OK,
         )
@@ -13812,6 +13821,7 @@ async def onboarding(invite_link: str, request: Request):
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        reset_password_required=True,
     )
     jwt_token = jwt.encode(  # type: ignore
         cast(dict, returned_ui_token_object),
@@ -13921,6 +13931,7 @@ async def _generate_onboarding_ui_session_token(user_obj: Any) -> str:
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        reset_password_required=getattr(user_obj, "reset_password_required", False),
     )
     assert master_key is not None
     return jwt.encode(  # type: ignore
@@ -14009,7 +14020,12 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
         ### UPDATE USER OBJECT ###
         user_obj = await tx.litellm_usertable.update(
-            where={"user_id": invite_obj.user_id}, data={"password": hashed_pw}
+            where={"user_id": invite_obj.user_id},
+            data={
+                "password": hashed_pw,
+                "password_updated_at": current_time,
+                "reset_password_required": False,
+            },
         )
 
         if user_obj is None:

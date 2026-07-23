@@ -46,12 +46,11 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
             "user_role": "proxy_admin",
             "premium_user": premium_user,
             "key": "sk-fake-ui-key",
+            "reset_password_required": False,
         }
 
     monkeypatch.setattr("litellm.proxy.auth.login_utils.authenticate_user", _fake_auth)
-    monkeypatch.setattr(
-        "litellm.proxy.auth.login_utils.create_ui_token_object", _fake_token_object
-    )
+    monkeypatch.setattr("litellm.proxy.auth.login_utils.create_ui_token_object", _fake_token_object)
     monkeypatch.setattr(ps, "master_key", "sk-test-master")
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "premium_user", False)
@@ -69,9 +68,7 @@ def test_fallback_login_returns_html_form(client, monkeypatch):
     body_lower = response.text.lower()
     shape = {
         "status": response.status_code,
-        "content_type_html": response.headers.get("content-type", "").startswith(
-            "text/html"
-        ),
+        "content_type_html": response.headers.get("content-type", "").startswith("text/html"),
         "has_form": "<form" in body_lower or "username" in body_lower,
     }
     assert shape == {
@@ -88,9 +85,7 @@ def test_fallback_login_returns_html_form_with_ui_username_set(client, monkeypat
     body_lower = response.text.lower()
     shape = {
         "status": response.status_code,
-        "content_type_html": response.headers.get("content-type", "").startswith(
-            "text/html"
-        ),
+        "content_type_html": response.headers.get("content-type", "").startswith("text/html"),
         "has_form_or_username": "<form" in body_lower or "username" in body_lower,
     }
     assert shape == {
@@ -126,11 +121,7 @@ def test_fallback_login_invalid_method_405(client):
     """POST against the GET-only /fallback/login is rejected (error path)."""
     response = client.post("/fallback/login")
     assert response.status_code == 405
-    body = (
-        response.json()
-        if response.headers.get("content-type", "").startswith("application/json")
-        else {}
-    )
+    body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
     assert isinstance(body, dict)
 
 
@@ -193,15 +184,16 @@ def test_v2_login_success_returns_token_and_redirect(client, monkeypatch):
         json={"username": "admin", "password": "password"},
     )
     assert response.status_code == 200
-    assert normalize(
-        response.json(), volatile=frozenset({"token", "redirect_url"})
-    ) == {"redirect_url": "<VOLATILE>", "token": "<VOLATILE>"}
+    assert normalize(response.json(), volatile=frozenset({"token", "redirect_url"})) == {
+        "redirect_url": "<VOLATILE>",
+        "token": "<VOLATILE>",
+        "reset_password_required": False,
+    }
     body = response.json()
     set_cookie = response.headers.get("set-cookie", "")
     shape = {
         "redirect_url_has_ui": "/ui/" in body.get("redirect_url", ""),
-        "redirect_url_has_login_success": "login=success"
-        in body.get("redirect_url", ""),
+        "redirect_url_has_login_success": "login=success" in body.get("redirect_url", ""),
         "token_in_body": bool(body.get("token")),
         "token_cookie_set": "token=" in set_cookie,
     }
@@ -264,9 +256,7 @@ def test_v3_login_success_returns_code(client, monkeypatch):
     from litellm.proxy import proxy_server as ps
 
     _install_login_mocks(monkeypatch)
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
     # Force the local (non-redis) cache path
     monkeypatch.setattr(ps, "redis_usage_cache", None)
     fake_cache = MagicMock()
@@ -301,9 +291,7 @@ def test_v3_login_authenticate_failure_500(client, monkeypatch):
     from litellm.proxy import proxy_server as ps
 
     _install_login_mocks(monkeypatch, raise_on_auth=True)
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
 
     response = client.post(
         "/v3/login",
@@ -337,9 +325,7 @@ def test_v3_login_exchange_missing_code_400(client, monkeypatch):
     """Error path: missing 'code' in body -> 400 with 'Missing' message."""
     from litellm.proxy import proxy_server as ps
 
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
 
     response = client.post("/v3/login/exchange", json={})
     assert response.status_code == 400
@@ -352,9 +338,7 @@ def test_v3_login_exchange_invalid_code_401(client, monkeypatch):
     """Error path: code that isn't in cache -> 401 'Invalid or expired'."""
     from litellm.proxy import proxy_server as ps
 
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
     monkeypatch.setattr(ps, "redis_usage_cache", None)
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=None)
@@ -372,14 +356,13 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
     """Pin: valid code -> JSON {token, redirect_url} + token cookie + cache deleted (single-use)."""
     from litellm.proxy import proxy_server as ps
 
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
     monkeypatch.setattr(ps, "redis_usage_cache", None)
 
     cached_payload = {
         "token": "jwt-token-xyz",
         "redirect_url": "https://litellm.example.invalid/ui/?login=success",
+        "reset_password_required": False,
     }
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=cached_payload)
@@ -388,9 +371,11 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
 
     response = client.post("/v3/login/exchange", json={"code": "valid-code"})
     assert response.status_code == 200
-    assert normalize(
-        response.json(), volatile=frozenset({"token", "redirect_url"})
-    ) == {"token": "<VOLATILE>", "redirect_url": "<VOLATILE>"}
+    assert normalize(response.json(), volatile=frozenset({"token", "redirect_url"})) == {
+        "token": "<VOLATILE>",
+        "redirect_url": "<VOLATILE>",
+        "reset_password_required": False,
+    }
     body = response.json()
     set_cookie = response.headers.get("set-cookie", "")
     shape = {

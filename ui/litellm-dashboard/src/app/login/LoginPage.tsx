@@ -114,6 +114,8 @@ function LoginPageContent() {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
             router.push("/ui/?login=success");
+          } else if (data.reset_password_required) {
+            router.push("/ui/reset-password");
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
             const returnUrl = consumeReturnUrl();

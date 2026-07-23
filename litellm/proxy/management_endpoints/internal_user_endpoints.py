@@ -44,7 +44,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     prepare_metadata_fields,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import handle_exception_on_proxy, hash_password
+from litellm.proxy.utils import handle_exception_on_proxy, hash_password, verify_password
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
@@ -75,6 +75,29 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
 
 router = APIRouter()
+
+
+class ChangePasswordRequest(LiteLLMPydanticObjectBase):
+    """Self-service password change request."""
+
+    current_password: str
+    new_password: str
+
+
+class ResetPasswordRequest(LiteLLMPydanticObjectBase):
+    """Admin-triggered password reset request."""
+
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    new_password: Optional[str] = None
+    require_reset: bool = True
+
+
+class PasswordChangeResponse(LiteLLMPydanticObjectBase):
+    """Response for password change/reset operations."""
+
+    success: bool
+    message: str
 
 
 def _hash_password_in_dict(data: dict) -> None:
@@ -956,6 +979,8 @@ async def user_info_v2(
             metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
             created_at=user_data.get("created_at"),
             updated_at=user_data.get("updated_at"),
+            password_updated_at=user_data.get("password_updated_at"),
+            reset_password_required=user_data.get("reset_password_required", False),
             sso_user_id=user_data.get("sso_user_id"),
             teams=user_data.get("teams") or [],
         )
@@ -1428,6 +1453,190 @@ async def user_update(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@router.post(
+    "/user/change_password",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PasswordChangeResponse,
+)
+@management_endpoint_wrapper
+async def change_password(
+    data: ChangePasswordRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Self-service password change for the authenticated user.
+
+    Requires the current password to be verified before updating to the new password.
+    On success, records the password update time and clears any reset-password-required flag.
+
+    Example:
+    ```bash
+    curl -X POST 'http://0.0.0.0:4000/user/change_password' \
+    -H 'Authorization: Bearer <token>' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "current_password": "old_password",
+        "new_password": "new_password"
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        user_id = user_api_key_dict.user_id
+        if user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Cannot identify authenticated user"},
+            )
+
+        if not data.new_password:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "New password cannot be empty"},
+            )
+
+        user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+        if user_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User {user_id} not found"},
+            )
+
+        stored_password = getattr(user_row, "password", None)
+        if stored_password is None or not verify_password(data.current_password, stored_password):
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "Current password is incorrect"},
+            )
+
+        current_time = datetime.now(timezone.utc)
+        await UserRepository(prisma_client).table.update(
+            where={"user_id": user_id},
+            data={
+                "password": hash_password(data.new_password),
+                "password_updated_at": current_time,
+                "reset_password_required": False,
+                "updated_at": current_time,
+            },
+        )
+
+        return PasswordChangeResponse(
+            success=True,
+            message="Password updated successfully",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.change_password(): Exception occured - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/user/reset_password",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PasswordChangeResponse,
+)
+@management_endpoint_wrapper
+async def reset_password(
+    data: ResetPasswordRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Admin-triggered password reset.
+
+    Only proxy admins may call this endpoint. It sets `reset_password_required=True`
+    for the target user, forcing them to change their password on next login. If a
+    `new_password` is provided, it is also stored as the user's current password.
+
+    Parameters:
+    - user_id: Optional[str] - Target user id.
+    - user_email: Optional[str] - Target user email (used if user_id not provided).
+    - new_password: Optional[str] - Optional temporary password to set.
+    - require_reset: bool - Default=True. Sets reset_password_required flag.
+
+    Example:
+    ```bash
+    curl -X POST 'http://0.0.0.0:4000/user/reset_password' \
+    -H 'Authorization: Bearer sk-1234' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "user_id": "test-user",
+        "new_password": "temp_password"
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Only proxy admins can reset passwords"},
+            )
+
+        if not data.user_id and not data.user_email:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Either user_id or user_email must be provided"},
+            )
+
+        where_clause: Dict[str, Any]
+        if data.user_id:
+            where_clause = {"user_id": data.user_id}
+        elif data.user_email:
+            where_clause = {"user_email": {"equals": data.user_email.strip(), "mode": "insensitive"}}
+        else:
+            where_clause = {}
+
+        user_row = await UserRepository(prisma_client).table.find_first(where=where_clause)
+        if user_row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "User not found"},
+            )
+
+        update_data: Dict[str, Any] = {"reset_password_required": data.require_reset}
+
+        if data.new_password is not None:
+            if not data.new_password:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "New password cannot be empty"},
+                )
+            update_data["password"] = hash_password(data.new_password)
+            update_data["password_updated_at"] = datetime.now(timezone.utc)
+
+        await UserRepository(prisma_client).table.update(
+            where={"user_id": user_row.user_id},
+            data=update_data,
+        )
+
+        return PasswordChangeResponse(
+            success=True,
+            message="Password reset triggered successfully",
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.reset_password(): Exception occured - {}".format(str(e))
+        )
+        raise handle_exception_on_proxy(e)
 
 
 async def bulk_update_processed_users(

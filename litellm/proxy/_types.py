@@ -2741,6 +2741,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    password_updated_at: Optional[datetime] = None
+    reset_password_required: bool = False
     sso_user_id: Optional[str] = None
     teams: List[str] = []  # Just team IDs, not full team objects
 
