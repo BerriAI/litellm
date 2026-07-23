@@ -10587,6 +10587,17 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
+        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
+        ## this request via weighted-failover. Runs before the affinity callback
+        ## so an affinity pin can't re-select an already-excluded deployment and
+        ## collapse the candidate set. Always honored, regardless of the
+        ## router-level flag, so a stale exclusion key on kwargs cannot escape.
+        _excluded_deployment_ids = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
+        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
+            cast(List[Dict], healthy_deployments),
+            excluded_deployment_ids=_excluded_deployment_ids,
+        )
+
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
             healthy_deployments=healthy_deployments,
@@ -10622,15 +10633,6 @@ class Router:
         _target_order = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
             cast(List[Dict], healthy_deployments), target_order=_target_order
-        )
-
-        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
-        ## this request via weighted-failover. Always honored, regardless of the
-        ## router-level flag, so a stale exclusion key on kwargs cannot escape.
-        _excluded_deployment_ids = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
-            cast(List[Dict], healthy_deployments),
-            excluded_deployment_ids=_excluded_deployment_ids,
         )
 
         if len(healthy_deployments) == 0:
