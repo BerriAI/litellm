@@ -20,13 +20,26 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    reencode_video_id_with_model_id,
 )
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
     decode_video_id_with_provider,
 )
 
 router = APIRouter()
+
+
+def _pin_video_id_to_deployment(response: Any, data: dict[str, Any]) -> Any:
+    hidden_params = get_hidden_params_dict(response)
+    model_id = ProxyBaseLLMRequestProcessing._get_model_id_from_response(hidden_params, data)
+    provider = hidden_params.get("custom_llm_provider") or data.get("custom_llm_provider")
+    return reencode_video_id_with_model_id(
+        response=response,
+        custom_llm_provider=provider if isinstance(provider, str) else None,
+        model_id=model_id,
+    )
 
 
 @router.post(
@@ -88,7 +101,7 @@ async def video_generation(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -106,6 +119,7 @@ async def video_generation(
             user_api_base=user_api_base,
             version=version,
         )
+        return _pin_video_id_to_deployment(response, data)
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -479,7 +493,7 @@ async def video_remix(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -497,6 +511,7 @@ async def video_remix(
             user_api_base=user_api_base,
             version=version,
         )
+        return _pin_video_id_to_deployment(response, data)
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -788,7 +803,7 @@ async def video_edit(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -806,6 +821,7 @@ async def video_edit(
             user_api_base=user_api_base,
             version=version,
         )
+        return _pin_video_id_to_deployment(response, data)
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -888,7 +904,7 @@ async def video_extension(
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -906,6 +922,7 @@ async def video_extension(
             user_api_base=user_api_base,
             version=version,
         )
+        return _pin_video_id_to_deployment(response, data)
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,

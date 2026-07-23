@@ -2,7 +2,11 @@ from typing import Any, Dict, Optional
 
 import orjson
 
-from litellm.types.videos.utils import encode_character_id_with_provider
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_character_id_with_provider,
+    encode_video_id_with_provider,
+)
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> Optional[str]:
@@ -51,4 +55,38 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
             provider=custom_llm_provider,
             model_id=model_id,
         )
+    return response
+
+
+def reencode_video_id_with_model_id(response: Any, custom_llm_provider: str | None, model_id: str | None) -> Any:
+    if not model_id:
+        return response
+
+    if isinstance(response, dict):
+        current_id = response.get("id")
+    else:
+        current_id = getattr(response, "id", None)
+
+    if not isinstance(current_id, str) or not current_id:
+        return response
+
+    decoded = decode_video_id_with_provider(current_id)
+    if decoded.get("model_id") == model_id:
+        return response
+
+    provider = decoded.get("custom_llm_provider") or custom_llm_provider
+    if not provider:
+        return response
+
+    raw_video_id = decoded.get("video_id") or current_id
+    new_id = encode_video_id_with_provider(
+        video_id=raw_video_id,
+        provider=provider,
+        model_id=model_id,
+    )
+
+    if isinstance(response, dict):
+        response["id"] = new_id
+    else:
+        response.id = new_id
     return response
