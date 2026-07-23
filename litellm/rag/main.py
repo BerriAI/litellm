@@ -233,7 +233,8 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
-    filters = retrieval_config.get("retrieval_filter") or retrieval_config.get("filters")
+    kwargs_filters = kwargs.pop("filters", None)
+    filters = retrieval_config.get("retrieval_filter") or retrieval_config.get("filters") or kwargs_filters
     with _suppressed_sub_call_billing():
         search_response = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
