@@ -3639,6 +3639,46 @@ def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_resp
     assert result.usage.prompt_tokens == 4  # type: ignore[attr-defined]
 
 
+def _responses_logging_obj():
+    return LitellmLogging(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aresponses",
+        start_time=time.time(),
+        litellm_call_id="33688",
+        function_id="33688",
+    )
+
+
+def test_transform_usage_objects_keeps_prompt_and_completion_tokens_serializable():
+    """Regression for #33688. _transform_usage_objects transforms a Responses API
+    usage object into the chat Usage shape, but it must store it as a plain dict on
+    result.usage. If it stores the Pydantic Usage object instead, result.model_dump()
+    serializes it under the declared ResponseAPIUsage schema and silently drops
+    prompt_tokens/completion_tokens (only total_tokens survives), so Prometheus,
+    custom callbacks, and SpendLogs lose those counts."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    logging_obj = _responses_logging_obj()
+    result = logging_obj._transform_usage_objects(result=_responses_api_response_with_text())
+
+    assert isinstance(result.usage, dict)
+    assert result.usage["prompt_tokens"] == 11
+    assert result.usage["completion_tokens"] == 7
+    assert result.usage["total_tokens"] == 18
+
+    dumped = result.model_dump()
+    assert dumped["usage"]["prompt_tokens"] == 11
+    assert dumped["usage"]["completion_tokens"] == 7
+    assert dumped["usage"]["total_tokens"] == 18
+
+    usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=dumped)
+    assert usage_dict["prompt_tokens"] == 11
+    assert usage_dict["completion_tokens"] == 7
+    assert usage_dict["total_tokens"] == 18
+
+
 class _SuccessCapturingLogger(CustomLogger):
     """Records the success payload. success_payload is populated only in
     async_log_success_event, so it stays None when the buggy no-op
