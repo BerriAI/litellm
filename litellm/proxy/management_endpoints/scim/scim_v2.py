@@ -1317,6 +1317,13 @@ async def delete_user(
                     where={"team_id": team.team_id}, data={"members": new_members}
                 )
 
+            team_row = LiteLLM_TeamTable(**team.model_dump())
+            if any(member.user_id == user_id for member in team_row.members_with_roles or []):
+                await team_member_delete(
+                    data=TeamMemberDeleteRequest(team_id=team_row.team_id, user_id=user_id),
+                    user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                )
+
         await _set_user_keys_blocked(user_id=user_id, blocked=True)
 
         await _delete_rows_referencing_user(prisma_client, user_id=user_id)
@@ -1344,6 +1351,31 @@ def _extract_group_values(value: Any) -> List[str]:
     elif isinstance(value, str):
         group_values.append(value)
     return group_values
+
+
+def _extract_ids_from_path_filter(path: str | None, attribute: str) -> List[str]:
+    """Return ids from a SCIM filtered path like ``members[value eq "id"]``.
+
+    Okta commonly sends membership removals as a filtered path and omits the
+    request body ``value``, so the id lives only inside the ``[value eq "..."]``
+    filter. The ``eq`` operator is matched case-insensitively per the SCIM
+    spec; the id keeps its original case. Per the SCIM filter grammar the
+    compared value must be quoted (single or double), so malformed unquoted
+    filters yield no id. A quoted id may contain escaped quotes and
+    backslashes (``\\"`` and ``\\\\``), which are unescaped before use.
+    ``path`` must be the raw, case-preserving path from the patch op.
+    """
+    if not path:
+        return []
+    match = re.match(
+        rf"""\s*{re.escape(attribute)}\s*\[\s*value\s+eq\s+(['"])((?:\\.|[^\\])*?)\1\s*\]\s*$""",
+        path,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return []
+    extracted = re.sub(r"\\(.)", r"\1", match.group(2))
+    return [extracted] if extracted else []
 
 
 def _handle_displayname_update(op_type: str, value: Any, update_data: Dict[str, Any]) -> None:
@@ -1389,9 +1421,11 @@ def _handle_name_update(path: str, op_type: str, value: Any, scim_metadata: Dict
             scim_metadata["familyName"] = str(value)
 
 
-def _handle_group_operations(op_type: str, value: Any, teams_set: Set[str]) -> Optional[Set[str]]:
+def _handle_group_operations(op_type: str, value: Any, teams_set: Set[str], path: str | None) -> Set[str] | None:
     """Handle group/team membership operations."""
     group_values = _extract_group_values(value)
+    if not group_values and value is None:
+        group_values = _extract_ids_from_path_filter(path, "groups")
     if op_type == "replace":
         return set(group_values)
     elif op_type == "add":
@@ -1504,7 +1538,7 @@ def _apply_patch_ops(
         elif _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
             _handle_multi_valued_attribute_update(path, op_type, value, metadata)
         elif path.startswith("groups"):
-            new_replace_set = _handle_group_operations(op_type, value, teams_set)
+            new_replace_set = _handle_group_operations(op_type, value, teams_set, op.path)
             if new_replace_set is not None:
                 replace_team_set = new_replace_set
         else:
@@ -1925,8 +1959,16 @@ async def delete_group(
 
 async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team, prisma_client
-) -> Tuple[Dict[str, Any], Set[str]]:
-    """Process patch operations for a group and return update data and final members."""
+) -> Tuple[Dict[str, Any], Set[str], Set[str] | None]:
+    """Process patch operations for a group and return update data, final members
+    and, when the request contained a member ``replace`` op, the absolute target
+    roster it declared (``None`` otherwise).
+
+    ``add``/``remove`` are deltas relative to the current roster, but ``replace``
+    is absolute: it declares the roster is exactly this set, so the caller must
+    reconcile against it as a set-to-target rather than rebasing it onto a
+    concurrently-mutated roster.
+    """
     update_data: Dict[str, Any] = {}
 
     # Create a fresh copy of existing metadata to avoid Prisma issues
@@ -1960,6 +2002,8 @@ async def _process_group_patch_operations(
         elif path.startswith("members"):
             # Handle member operations
             member_values = _extract_group_values(value)
+            if not member_values and value is None:
+                member_values = _extract_ids_from_path_filter(op.path, "members")
             # Check the feature flag
             scim_upsert_user = await _get_scim_upsert_user_setting()
             # Validate all users exist or create them based on feature flag
@@ -2012,7 +2056,12 @@ async def _process_group_patch_operations(
     if metadata:
         update_data["metadata"] = metadata
 
-    return update_data, final_members
+    member_replace_present = any(
+        op.op == "replace" and (op.path or "").lower().startswith("members") for op in patch_ops.Operations
+    )
+    replace_target = set(final_members) if member_replace_present else None
+
+    return update_data, final_members, replace_target
 
 
 async def _apply_group_patch_updates(group_id: str, update_data: Dict[str, Any], prisma_client):
@@ -2083,27 +2132,29 @@ async def patch_group(
         existing_team = await _check_team_exists(group_id)
 
         # Process patch operations
-        update_data, final_members = await _process_group_patch_operations(patch_ops, existing_team, prisma_client)
+        update_data, final_members, replace_target = await _process_group_patch_operations(
+            patch_ops, existing_team, prisma_client
+        )
 
-        # Track current members BEFORE update for comparison
-        current_members = set(await _get_team_member_user_ids_from_team(existing_team))
+        snapshot_members = set(await _get_team_member_user_ids_from_team(existing_team))
+        intended_add = final_members - snapshot_members
+        intended_remove = snapshot_members - final_members
 
         # Apply the metadata/displayName updates to the database
         updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client)
 
-        # Refresh team data from database to get the latest state after concurrent updates
-        # This prevents race conditions when multiple PATCH requests come in simultaneously
         refreshed_team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
-        if refreshed_team:
-            # Re-read current members from refreshed team to account for concurrent updates
-            refreshed_current_members = set(
-                await _get_team_member_user_ids_from_team(LiteLLM_TeamTable(**refreshed_team.model_dump()))
-            )
-            # Use the refreshed members for comparison
-            current_members = refreshed_current_members
+        refreshed_current = (
+            set(await _get_team_member_user_ids_from_team(LiteLLM_TeamTable(**refreshed_team.model_dump())))
+            if refreshed_team
+            else snapshot_members
+        )
 
-        # Handle user-team relationship changes
-        await _handle_group_membership_changes(group_id, current_members, final_members)
+        effective_final = (
+            replace_target if replace_target is not None else (refreshed_current | intended_add) - intended_remove
+        )
+
+        await _handle_group_membership_changes(group_id, refreshed_current, effective_final)
 
         # A rename can flip whether this group matches scim_admin_group by display
         # name, so retained members must be re-resolved too, not just the ones whose
@@ -2112,7 +2163,7 @@ async def patch_group(
         alias_changed = new_alias != existing_team.team_alias
         await _recompute_scim_member_roles(
             prisma_client,
-            (current_members | final_members if alias_changed else current_members ^ final_members),
+            (refreshed_current | effective_final if alias_changed else refreshed_current ^ effective_final),
         )
 
         # Refresh team one more time to get final state after membership changes

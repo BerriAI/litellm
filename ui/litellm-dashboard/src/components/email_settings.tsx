@@ -26,9 +26,17 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
       .forEach((alert) => {
         Object.entries(alert.variables ?? {}).forEach(([key, value]) => {
           const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
-          if (inputElement && inputElement.value) {
-            updatedVariables[key] = inputElement?.value;
+          if (!inputElement || !inputElement.value) {
+            return;
           }
+          // Only send fields the admin actually edited. Values rendered from the
+          // server are masked (SMTP_PASSWORD) or sourced from the process
+          // environment, so re-submitting an untouched field would persist a mask
+          // or copy env-managed config into the database.
+          if (inputElement.value === (value == null ? "" : String(value))) {
+            return;
+          }
+          updatedVariables[key] = inputElement.value;
         });
       });
 

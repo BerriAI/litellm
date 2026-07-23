@@ -18,9 +18,16 @@ interface FallbackGroupConfigProps {
   onChange: (updatedGroup: FallbackGroup) => void;
   availableModels: string[];
   maxFallbacks: number;
+  disablePrimaryModel?: boolean;
 }
 
-export function FallbackGroupConfig({ group, onChange, availableModels, maxFallbacks }: FallbackGroupConfigProps) {
+export function FallbackGroupConfig({
+  group,
+  onChange,
+  availableModels,
+  maxFallbacks,
+  disablePrimaryModel = false,
+}: FallbackGroupConfigProps) {
   // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
   const availableFallbackOptions = availableModels.filter((m) => m !== group.primaryModel);
 
@@ -70,12 +77,13 @@ export function FallbackGroupConfig({ group, onChange, availableModels, maxFallb
           placeholder="Select primary model"
           value={group.primaryModel}
           onChange={handlePrimaryChange}
+          disabled={disablePrimaryModel}
           showSearch
           getPopupContainer={(trigger) => trigger.parentElement || document.body}
           filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
           options={availableModels.map((m) => ({ label: m, value: m }))}
         />
-        {!group.primaryModel && (
+        {!disablePrimaryModel && !group.primaryModel && (
           <div className="mt-2 flex items-center gap-2 text-amber-600 text-xs bg-amber-50 p-2 rounded-sm">
             <AlertCircle className="w-4 h-4" />
             <span>Select a model to begin configuring fallbacks</span>
@@ -176,6 +184,7 @@ export function FallbackGroupConfig({ group, onChange, availableModels, maxFallb
 
                     <button
                       type="button"
+                      data-testid={`remove-fallback-${modelValue}`}
                       onClick={() => removeFallback(index)}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
                     >
