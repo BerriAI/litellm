@@ -2762,8 +2762,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
         verbose_logger.debug(f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}")
-        if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
-            return
+        should_log_failure = self.should_run_logging(event_type="sync_failure")  # prevent double logging
         litellm_params = self.model_call_details.get("litellm_params", {})
         is_sync_request = self._is_sync_litellm_request(litellm_params)
 
@@ -2785,9 +2784,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
                 result=result,
             )
-            self.has_run_logging(event_type="sync_failure")
+            if should_log_failure:
+                self.has_run_logging(event_type="sync_failure")
             for callback in callbacks:
                 try:
+                    if not should_log_failure and not self._is_router_cooldown_callback(callback):
+                        continue
                     should_run = self.should_run_callback(
                         callback=callback,
                         litellm_params=litellm_params,
@@ -2934,8 +2936,7 @@ class Logging(LiteLLMLoggingBaseClass):
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         await self.special_failure_handlers(exception=exception)
-        if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
-            return
+        should_log_failure = self.should_run_logging(event_type="async_failure")  # prevent double logging
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,
@@ -2950,10 +2951,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
         result = None  # result sent to all loggers, init this to None incase it's not created
 
-        self.has_run_logging(event_type="async_failure")
+        if should_log_failure:
+            self.has_run_logging(event_type="async_failure")
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})
+                if not should_log_failure and not self._is_router_cooldown_callback(callback):
+                    continue
                 should_run = self.should_run_callback(
                     callback=callback,
                     litellm_params=litellm_params,
@@ -3115,6 +3119,14 @@ class Logging(LiteLLMLoggingBaseClass):
         if hasattr(cb, "__class__"):
             return cb.__class__.__name__
         return str(cb)
+
+    def _is_router_cooldown_callback(self, cb) -> bool:
+        if not callable(cb):
+            return False
+        return self._get_callback_name(cb) in (
+            "deployment_callback_on_failure",
+            "async_deployment_callback_on_failure",
+        )
 
     def _is_internal_litellm_proxy_callback(self, cb) -> bool:
         """Helper to check if a callback is internal"""

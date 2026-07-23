@@ -3018,6 +3018,67 @@ def test_failure_handler_runs_sync_callbacks_for_non_pass_through_requests(
     dummy_logger.log_failure_event.assert_called_once()
 
 
+def test_failure_handler_runs_router_cooldown_callback_on_every_attempt(logging_obj):
+    """Regression for #32574: router retries/fallbacks reuse the same Logging object, so
+    sync_failure dedup used to skip deployment_callback_on_failure after the first failure
+    and leave later failed deployments out of cooldown. The cooldown callback must fire on
+    every failed attempt while observability callbacks stay deduplicated (once per request).
+    """
+    cooldown_calls = []
+    observability_calls = []
+
+    def deployment_callback_on_failure(kwargs, completion_response, start_time, end_time):
+        cooldown_calls.append(kwargs.get("exception"))
+
+    def observability_cb(kwargs, completion_response, start_time, end_time):
+        observability_calls.append(kwargs.get("exception"))
+
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[deployment_callback_on_failure, observability_cb],
+    ):
+        for _ in range(2):
+            logging_obj.failure_handler(exception=Exception("429"), traceback_exception="")
+
+    assert len(cooldown_calls) == 2
+    assert len(observability_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_runs_router_cooldown_callback_on_every_attempt(logging_obj):
+    """Async counterpart of #32574: async_deployment_callback_on_failure must run on every
+    failed attempt even though observability failure callbacks are deduplicated.
+    """
+    cooldown_calls = []
+    observability_calls = []
+
+    async def async_deployment_callback_on_failure(kwargs, completion_response, start_time, end_time):
+        cooldown_calls.append(kwargs.get("exception"))
+
+    async def observability_cb(kwargs, completion_response, start_time, end_time):
+        observability_calls.append(kwargs.get("exception"))
+
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[async_deployment_callback_on_failure, observability_cb],
+    ):
+        for _ in range(2):
+            await logging_obj.async_failure_handler(exception=Exception("429"), traceback_exception="")
+
+    assert len(cooldown_calls) == 2
+    assert len(observability_calls) == 1
+
+
 def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
     """Streaming completion path should mirror non-stream: metadata.hidden_params from response."""
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
