@@ -1057,6 +1057,49 @@ def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
     router.get_model_list.assert_called_once_with(model_name="slow-model")
 
 
+def test_keepalive_from_deployment_config_fallback_by_name_agreeing_deployments(monkeypatch):
+    """Multiple deployments under the same model_name with the same keepalive_seconds
+    is unambiguous, so the shared value is used even without a model_id."""
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 20.0}},
+        {"litellm_params": {"keepalive_seconds": 20.0}},
+    ]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {}
+
+    result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
+    assert result == 20.0
+
+
+def test_keepalive_from_deployment_config_fallback_by_name_conflicting_deployments(monkeypatch):
+    """Without a model_id, if deployments under the same model_name disagree on
+    keepalive_seconds, we can't tell which one served the stream: don't guess and
+    apply the wrong deployment's interval (or override an explicit disable)."""
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 20.0}},
+        {"litellm_params": {"keepalive_seconds": 0}},
+    ]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {}
+
+    result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
+    assert result is None
+
+
 def test_keepalive_from_deployment_config_no_router_returns_none(monkeypatch):
     monkeypatch.setattr(ps, "llm_router", None)
     result = _keepalive_from_deployment_config({"model": "gpt-4"}, None)
