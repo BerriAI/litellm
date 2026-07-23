@@ -2087,6 +2087,22 @@
         "interactions": true
       }
     },
+    "pruna": {
+      "display_name": "Pruna AI (`pruna`)",
+      "url": "https://docs.litellm.ai/docs/providers/pruna",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "recraft": {
       "display_name": "Recraft (`recraft`)",
       "url": "https://docs.litellm.ai/docs/providers/recraft",

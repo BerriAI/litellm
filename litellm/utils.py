@@ -8579,6 +8579,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.PRUNA == provider:
+            from litellm.llms.pruna.image_generation import (
+                get_pruna_image_generation_config,
+            )
+
+            return get_pruna_image_generation_config(model)
         elif LlmProviders.AIML == provider:
             from litellm.llms.aiml.image_generation import (
                 get_aiml_image_generation_config,
