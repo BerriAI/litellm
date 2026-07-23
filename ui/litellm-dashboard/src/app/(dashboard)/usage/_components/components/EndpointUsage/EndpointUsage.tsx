@@ -39,16 +39,16 @@ const EndpointUsage: React.FC<EndpointUsageProps> = ({ userSpendData }) => {
             api_key_breakdown: {},
           };
         }
-        aggregatedEndpoints[endpoint].metrics.spend += metrics.metrics.spend;
-        aggregatedEndpoints[endpoint].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        aggregatedEndpoints[endpoint].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        aggregatedEndpoints[endpoint].metrics.total_tokens += metrics.metrics.total_tokens;
-        aggregatedEndpoints[endpoint].metrics.api_requests += metrics.metrics.api_requests;
-        aggregatedEndpoints[endpoint].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        aggregatedEndpoints[endpoint].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        aggregatedEndpoints[endpoint].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+        aggregatedEndpoints[endpoint].metrics.spend += metrics.metrics?.spend ?? 0;
+        aggregatedEndpoints[endpoint].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+        aggregatedEndpoints[endpoint].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+        aggregatedEndpoints[endpoint].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+        aggregatedEndpoints[endpoint].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+        aggregatedEndpoints[endpoint].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+        aggregatedEndpoints[endpoint].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
+        aggregatedEndpoints[endpoint].metrics.cache_read_input_tokens += metrics.metrics?.cache_read_input_tokens ?? 0;
         aggregatedEndpoints[endpoint].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
+          metrics.metrics?.cache_creation_input_tokens ?? 0;
       });
     });
 
