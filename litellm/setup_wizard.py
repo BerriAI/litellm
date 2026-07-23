@@ -13,8 +13,9 @@ import re
 import secrets
 import sys
 import sysconfig
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 # termios / tty are Unix-only; fall back gracefully on Windows
 try:
@@ -27,14 +28,15 @@ except ImportError:
     tty = None  # type: ignore[assignment]
     _HAS_RAW_TERMINAL = False
 
-from litellm.utils import check_valid_key
+import litellm
+from litellm.exceptions import AuthenticationError
 
 # ---------------------------------------------------------------------------
 # Provider definitions
 # ---------------------------------------------------------------------------
 # Each entry describes one provider card shown in the wizard.
 # `env_key`      — primary env var name (None = no key needed, e.g. Ollama)
-# `test_model`   — model passed to check_valid_key for credential validation
+# `test_model`   — model used to validate credentials with a live completion
 #                  (None = skip validation, e.g. Azure needs a deployment name)
 # `models`       — default models written into the generated config
 # ---------------------------------------------------------------------------
@@ -69,11 +71,11 @@ PROVIDERS: List[Dict] = [
     {
         "id": "gemini",
         "name": "Google Gemini",
-        "description": "Gemini 2.0 Flash, Gemini 2.5 Pro",
+        "description": "Gemini 3.5 Flash, Gemini 2.5 Pro",
         "env_key": "GEMINI_API_KEY",
         "key_hint": "AIza...",
-        "test_model": "gemini/gemini-2.0-flash",
-        "models": ["gemini/gemini-2.0-flash", "gemini/gemini-2.5-pro"],
+        "test_model": "gemini/gemini-3.5-flash",
+        "models": ["gemini/gemini-3.5-flash", "gemini/gemini-2.5-pro"],
     },
     {
         "id": "azure",
@@ -109,6 +111,31 @@ PROVIDERS: List[Dict] = [
         "api_base": "http://localhost:11434",
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# Credential-check result (tagged union)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyValid:
+    """The provider accepted the key."""
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyInvalid:
+    """The provider rejected the key with an authentication error."""
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyUnverified:
+    """Validity is unknown: the probe failed for a non-auth reason."""
+
+    reason: str
+
+
+_KeyCheck = _KeyValid | _KeyInvalid | _KeyUnverified
 
 
 # ---------------------------------------------------------------------------
@@ -433,9 +460,40 @@ class SetupWizard:
                 return ""
 
     @staticmethod
-    def _validate_and_report(provider: Dict, api_key: str) -> str:
+    def _classify_key(
+        test_model: str,
+        api_key: str,
+        completion: Callable[..., object],
+    ) -> "_KeyCheck":
         """
-        Validate credentials using litellm.utils.check_valid_key and print result.
+        Probe credentials with a live, minimal completion and classify the outcome.
+
+        An authentication error means the key is definitively invalid. Any other
+        error (rate limit, model unavailable for this key, network, etc.) leaves
+        the key's validity unknown, so its reason is surfaced verbatim rather than
+        being mislabelled as an invalid key.
+        """
+        try:
+            completion(
+                model=test_model,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                api_key=api_key,
+                max_tokens=10,
+            )
+            return _KeyValid()
+        except AuthenticationError:
+            return _KeyInvalid()
+        except Exception as exc:  # noqa: BLE001  # any provider/network error is surfaced as unverified, never crashes the wizard
+            return _KeyUnverified(reason=f"{type(exc).__name__}: {exc}")
+
+    @staticmethod
+    def _validate_and_report(
+        provider: Dict,
+        api_key: str,
+        completion: Callable[..., object] = litellm.completion,
+    ) -> str:
+        """
+        Validate credentials with a live completion and print the result.
         Offers a re-entry loop on failure. Returns the final (possibly re-entered) key.
         """
         test_model: Optional[str] = provider.get("test_model")
@@ -447,12 +505,19 @@ class SetupWizard:
                 f"  {grey('Testing connection to ' + provider['name'] + '...')}",
                 flush=True,
             )
-            valid = check_valid_key(model=test_model, api_key=api_key)
-            if valid:
-                print(f"  {green(_CHECK)} {bold(provider['name'])} connected successfully")
-                return api_key
+            result = SetupWizard._classify_key(test_model, api_key, completion)
+            match result:
+                case _KeyValid():
+                    print(f"  {green(_CHECK)} {bold(provider['name'])} connected successfully")
+                    return api_key
+                case _KeyInvalid():
+                    print(f"  {_CROSS} {bold(provider['name'])} {grey('— invalid API key')}")
+                case _KeyUnverified(reason=reason):
+                    print(f"  {_CROSS} {bold(provider['name'])} {grey('— could not verify key')}")
+                    print(f"    {grey(reason)}")
+                    print(grey("    The key may still be valid; the test request failed for another reason."))
+                    print(grey("    Re-run with --detailed_debug to see the full request and response."))
 
-            print(f"  {_CROSS} {bold(provider['name'])} {grey('— invalid API key')}")
             if _styled_input(f"  {blue('❯')} Re-enter key? {grey('(y/N)')}: ").lower() != "y":
                 return api_key
 
@@ -620,6 +685,8 @@ class SetupWizard:
 # ---------------------------------------------------------------------------
 
 
-def run_setup_wizard() -> None:
+def run_setup_wizard(debug: bool = False) -> None:
     """Run the interactive setup wizard. Called by `litellm --setup`."""
+    if debug:
+        litellm._turn_on_debug()
     SetupWizard.run()

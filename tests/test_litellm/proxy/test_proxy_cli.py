@@ -2072,3 +2072,24 @@ class TestWorkerStartupHooks:
 
         assert _dummy_hook_called is True, "First hook was not called"
         assert _dummy_async_hook_called is True, "Second hook was not called"
+
+
+@pytest.mark.parametrize(
+    "cli_args, expected_debug",
+    [
+        (["--setup"], False),
+        (["--setup", "--detailed_debug"], True),
+    ],
+)
+def test_setup_flag_forwards_detailed_debug(cli_args, expected_debug):
+    """`litellm --setup` must run the wizard, and --detailed_debug must reach it
+    so the wizard can enable debug logging (previously it returned first)."""
+    from click.testing import CliRunner
+
+    from litellm.proxy.proxy_cli import run_server
+
+    with patch("litellm.setup_wizard.run_setup_wizard") as mock_wizard:
+        result = CliRunner().invoke(run_server, cli_args)
+
+    assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+    mock_wizard.assert_called_once_with(debug=expected_debug)

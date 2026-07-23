@@ -903,7 +903,7 @@ def run_server(
     if setup:
         from litellm.setup_wizard import run_setup_wizard
 
-        run_setup_wizard()
+        run_setup_wizard(debug=detailed_debug)
         return
 
     args = locals()
