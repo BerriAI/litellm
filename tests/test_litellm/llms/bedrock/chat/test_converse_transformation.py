@@ -4517,7 +4517,7 @@ def test_streaming_filters_json_tool_call_with_real_tools():
 
 
 def test_streaming_interleaved_json_tool_call_does_not_hide_real_tool_delta():
-    """Keep each Bedrock content block's tool state separate while streaming."""
+    """Preserve a real tool delta when an internal JSON block starts later."""
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
     decoder = AWSEventStreamDecoder(model="test-model", json_mode=True)

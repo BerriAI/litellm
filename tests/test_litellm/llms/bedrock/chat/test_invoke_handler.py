@@ -36,7 +36,7 @@ def test_transform_thinking_blocks_with_redacted_content():
 
 
 def test_fake_stream_json_mode_preserves_regular_tool_use():
-    """A fake stream must not turn a user tool call into JSON text."""
+    """Preserve a regular tool call in a fake stream with JSON mode enabled."""
     response = litellm.ModelResponse(
         id="chatcmpl-test",
         created=0,
@@ -76,7 +76,7 @@ def test_fake_stream_json_mode_preserves_regular_tool_use():
 
 
 def test_fake_stream_json_mode_converts_only_response_format_tool():
-    """The internal response-format tool remains regular JSON text."""
+    """Convert only the response-format helper tool to JSON content."""
     response = litellm.ModelResponse(
         id="chatcmpl-test",
         created=0,

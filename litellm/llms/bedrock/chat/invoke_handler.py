@@ -1283,9 +1283,7 @@ class AWSEventStreamDecoder:
 
         self.model = model
         self.parser = EventStreamJSONParser()
-        # Bedrock can stream multiple content blocks concurrently. Keep the
-        # state keyed by contentBlockIndex so a later block start cannot change
-        # how an earlier block's delta is interpreted.
+        # Bedrock associates streamed deltas with content blocks by this index.
         self._content_blocks_by_content_block_index: dict[int, list[ContentBlockDeltaEvent]] = {}
         self._tool_names_by_content_block_index: dict[int, str] = {}
         self.tool_calls_index: Optional[int] = None
@@ -1380,8 +1378,7 @@ class AWSEventStreamDecoder:
                 response_tool_name = get_bedrock_tool_name(response_tool_name=_response_tool_name)
                 self._tool_names_by_content_block_index[content_block_index] = response_tool_name
 
-                # When json_mode is True, suppress the internal json_tool_call
-                # and convert its content to text in delta events instead
+                # response_format is represented by an internal tool call.
                 if self.json_mode is True and response_tool_name == RESPONSE_FORMAT_TOOL_NAME:
                     return tool_use, provider_specific_fields, thinking_blocks
 
@@ -1426,8 +1423,6 @@ class AWSEventStreamDecoder:
         if "text" in delta_obj:
             text = delta_obj["text"]
         elif "toolUse" in delta_obj:
-            # When json_mode is True and this is the internal json_tool_call,
-            # convert tool input to text content instead of tool call arguments
             if (
                 self.json_mode is True
                 and self._tool_names_by_content_block_index.get(index) == RESPONSE_FORMAT_TOOL_NAME
@@ -1469,8 +1464,6 @@ class AWSEventStreamDecoder:
         tool_use: Optional[ChatCompletionToolCallChunk] = None
 
         tool_name = self._tool_names_by_content_block_index.pop(index, None)
-        # If the ending block was the internal json_tool_call, skip emitting
-        # the empty-args tool chunk.
         if self.json_mode is True and tool_name == RESPONSE_FORMAT_TOOL_NAME:
             self._content_blocks_by_content_block_index.pop(index, None)
             return tool_use
@@ -1744,10 +1737,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         if self.json_mode is True and tool_calls is not None:
-            # ``json_mode`` is also set when response_format is emulated with the
-            # internal ``json_tool_call``. A fake stream can still contain a real
-            # user tool call, so converting the first tool unconditionally loses
-            # the protocol signal needed by streaming SDK clients to execute it.
+            # Bedrock represents response_format as an internal json_tool_call.
             json_mode_tool_calls = [
                 tool_call for tool_call in tool_calls if tool_call["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
             ]
