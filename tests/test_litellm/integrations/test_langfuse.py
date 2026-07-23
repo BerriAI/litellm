@@ -366,6 +366,195 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             mock_add_prompt_params.assert_called_once()
 
+    def test_log_langfuse_v2_input_excludes_cache_creation_tokens(self):
+        """
+        Anthropic's `prompt_tokens` includes both `cache_creation_input_tokens`
+        and `cache_read_input_tokens`. Langfuse's `usage_details.input` is
+        meant to represent the count of fresh (non-cached) input tokens — the
+        cache portions are tracked separately under `cache_creation_input_tokens`
+        and `cache_read_input_tokens`. Subtracting only the read portion would
+        double-count the creation portion (it would appear both inside `input`
+        and as `cache_creation_input_tokens`), inflating the input cost shown
+        in the Langfuse UI.
+
+        Regression: this test pins the math so a future refactor can't silently
+        drop the cache_creation subtraction again.
+        """
+        self.mock_langfuse_client.reset_mock(side_effect=True)
+        self.mock_langfuse_trace.reset_mock(side_effect=True)
+        self.mock_langfuse_generation.reset_mock(side_effect=True)
+
+        self.mock_langfuse_generation.trace_id = "test-trace-id"
+        mock_span = MagicMock()
+        mock_span.end = MagicMock()
+        self.mock_langfuse_trace.span.return_value = mock_span
+        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.logger.Langfuse = self.mock_langfuse_client
+
+        with (
+            patch(
+                "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+                side_effect=lambda generation_params, **kwargs: generation_params,
+                create=True,
+            ),
+            patch.object(self.logger, "_supports_prompt", return_value=True),
+        ):
+            # Anthropic-style: prompt_tokens = fresh + cache_creation + cache_read
+            # 1000 = 100 + 200 + 700
+            response_obj = MagicMock()
+            response_obj.usage = MagicMock()
+            response_obj.usage.prompt_tokens = 1000
+            response_obj.usage.completion_tokens = 50
+            response_obj.usage.total_tokens = 1050
+
+            cache_values = {
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 700,
+            }
+
+            def mock_get(key, default=None):
+                return cache_values.get(key, default)
+
+            response_obj.usage.get = mock_get
+
+            kwargs = {
+                "model": "claude-haiku-4-5",
+                "messages": [{"role": "user", "content": "Test"}],
+                "litellm_params": {"metadata": {}},
+                "optional_params": {},
+                "litellm_call_id": "test-call-id-cache",
+                "standard_logging_object": None,
+                "response_cost": 0.0,
+            }
+
+            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+            self.logger._log_langfuse_v2(
+                user_id="test-user",
+                metadata={},
+                litellm_params=kwargs["litellm_params"],
+                output={"role": "assistant", "content": "Response"},
+                start_time=fixed_time,
+                end_time=fixed_time + datetime.timedelta(seconds=1),
+                kwargs=kwargs,
+                optional_params=kwargs["optional_params"],
+                input={"messages": kwargs["messages"]},
+                response_obj=response_obj,
+                level="DEFAULT",
+                litellm_call_id=kwargs["litellm_call_id"],
+            )
+
+            self.mock_langfuse_trace.generation.assert_called_once()
+            _, call_kwargs = self.mock_langfuse_trace.generation.call_args
+            usage_details_arg = call_kwargs.get("usage_details")
+            self.assertIsNotNone(usage_details_arg)
+
+            # Fresh input only — both cache portions excluded.
+            self.assertEqual(
+                usage_details_arg["input"],
+                100,
+                msg=(
+                    "input must subtract BOTH cache_read AND cache_creation; "
+                    "got %r (expected 100 = 1000 - 700 - 200)"
+                    % usage_details_arg["input"]
+                ),
+            )
+            self.assertEqual(usage_details_arg["cache_creation_input_tokens"], 200)
+            self.assertEqual(usage_details_arg["cache_read_input_tokens"], 700)
+            # Components sum back to prompt_tokens — no double-counting.
+            self.assertEqual(
+                usage_details_arg["input"]
+                + usage_details_arg["cache_creation_input_tokens"]
+                + usage_details_arg["cache_read_input_tokens"],
+                response_obj.usage.prompt_tokens,
+            )
+
+    def test_log_langfuse_v2_input_floors_at_zero_for_malformed_usage(self):
+        """
+        Defensive guard: if a provider returns a malformed usage object where
+        `cache_read + cache_creation` exceeds `prompt_tokens`, the subtraction
+        would produce a negative `input` value and corrupt Langfuse's cost
+        calculation. Floor `input` at 0 instead.
+        """
+        self.mock_langfuse_client.reset_mock(side_effect=True)
+        self.mock_langfuse_trace.reset_mock(side_effect=True)
+        self.mock_langfuse_generation.reset_mock(side_effect=True)
+
+        self.mock_langfuse_generation.trace_id = "test-trace-id"
+        mock_span = MagicMock()
+        mock_span.end = MagicMock()
+        self.mock_langfuse_trace.span.return_value = mock_span
+        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.logger.Langfuse = self.mock_langfuse_client
+
+        with (
+            patch(
+                "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+                side_effect=lambda generation_params, **kwargs: generation_params,
+                create=True,
+            ),
+            patch.object(self.logger, "_supports_prompt", return_value=True),
+        ):
+            # Malformed: prompt_tokens=100 but cache fields claim 200 + 700 = 900.
+            response_obj = MagicMock()
+            response_obj.usage = MagicMock()
+            response_obj.usage.prompt_tokens = 100
+            response_obj.usage.completion_tokens = 10
+            response_obj.usage.total_tokens = 110
+
+            cache_values = {
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 700,
+            }
+
+            def mock_get(key, default=None):
+                return cache_values.get(key, default)
+
+            response_obj.usage.get = mock_get
+
+            kwargs = {
+                "model": "claude-haiku-4-5",
+                "messages": [{"role": "user", "content": "Test"}],
+                "litellm_params": {"metadata": {}},
+                "optional_params": {},
+                "litellm_call_id": "test-call-id-malformed",
+                "standard_logging_object": None,
+                "response_cost": 0.0,
+            }
+
+            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+            self.logger._log_langfuse_v2(
+                user_id="test-user",
+                metadata={},
+                litellm_params=kwargs["litellm_params"],
+                output={"role": "assistant", "content": "Response"},
+                start_time=fixed_time,
+                end_time=fixed_time + datetime.timedelta(seconds=1),
+                kwargs=kwargs,
+                optional_params=kwargs["optional_params"],
+                input={"messages": kwargs["messages"]},
+                response_obj=response_obj,
+                level="DEFAULT",
+                litellm_call_id=kwargs["litellm_call_id"],
+            )
+
+            self.mock_langfuse_trace.generation.assert_called_once()
+            _, call_kwargs = self.mock_langfuse_trace.generation.call_args
+            usage_details_arg = call_kwargs.get("usage_details")
+            self.assertIsNotNone(usage_details_arg)
+
+            # Should floor at 0, not be negative.
+            self.assertEqual(
+                usage_details_arg["input"],
+                0,
+                msg=(
+                    "input must be floored at 0 when cache counts exceed "
+                    "prompt_tokens; got %r" % usage_details_arg["input"]
+                ),
+            )
+            self.assertGreaterEqual(usage_details_arg["input"], 0)
+
     def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
         payload = {
             "id": "payload-id",
