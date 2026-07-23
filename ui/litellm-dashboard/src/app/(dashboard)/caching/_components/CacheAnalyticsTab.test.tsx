@@ -2,16 +2,14 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "../../../../../tests/test-utils";
-import CacheDashboard from "./cache_dashboard";
+import CacheAnalyticsTab from "./CacheAnalyticsTab";
 
-const { adminGlobalCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
+const { adminGlobalCacheActivity } = vi.hoisted(() => ({
   adminGlobalCacheActivity: vi.fn(),
-  cachingHealthCheckCall: vi.fn(),
 }));
 
 vi.mock("@/components/networking", () => ({
   adminGlobalCacheActivity,
-  cachingHealthCheckCall,
 }));
 
 const cacheActivity = [
@@ -35,10 +33,7 @@ const cacheActivity = [
   },
 ];
 
-const renderDashboard = () =>
-  renderWithProviders(
-    <CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />,
-  );
+const renderAnalytics = () => renderWithProviders(<CacheAnalyticsTab accessToken="sk-test" />);
 
 const findChartCards = async () => {
   await screen.findByText("Cache Hits vs API Requests");
@@ -63,21 +58,21 @@ const legendFillByCategory = (card: HTMLElement) =>
     ]),
   );
 
-describe("CacheDashboard cache analytics charts", () => {
+describe("CacheAnalyticsTab charts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     adminGlobalCacheActivity.mockResolvedValue(cacheActivity);
   });
 
   it("renders both chart card titles", async () => {
-    renderDashboard();
+    renderAnalytics();
 
     expect(await screen.findByText("Cache Hits vs API Requests")).toBeInTheDocument();
     expect(screen.getByText("Cached Completion Tokens vs Generated Completion Tokens")).toBeInTheDocument();
   });
 
   it("scopes the analytics tab to the response cache, not provider prompt caching", async () => {
-    renderDashboard();
+    renderAnalytics();
 
     expect(await screen.findByText(/is not shown here/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "response cache" })).toHaveAttribute(
@@ -93,7 +88,7 @@ describe("CacheDashboard cache analytics charts", () => {
   });
 
   it("renders the requests chart with each category legend-bound to its fill and stacked in order", async () => {
-    renderDashboard();
+    renderAnalytics();
     const { requestsCard } = await findChartCards();
 
     expect(legendFillByCategory(requestsCard)).toEqual({
@@ -104,7 +99,7 @@ describe("CacheDashboard cache analytics charts", () => {
   });
 
   it("renders the tokens chart with each category legend-bound to its fill and stacked in order", async () => {
-    renderDashboard();
+    renderAnalytics();
     const { tokensCard } = await findChartCards();
 
     expect(legendFillByCategory(tokensCard)).toEqual({
@@ -115,7 +110,7 @@ describe("CacheDashboard cache analytics charts", () => {
   });
 
   it("indexes bars by call_type name on the x axis", async () => {
-    renderDashboard();
+    renderAnalytics();
     const { requestsCard, tokensCard } = await findChartCards();
 
     for (const card of [requestsCard, tokensCard]) {
@@ -125,7 +120,7 @@ describe("CacheDashboard cache analytics charts", () => {
   });
 
   it("stacks the two categories into one column per call_type", async () => {
-    renderDashboard();
+    renderAnalytics();
     const { requestsCard, tokensCard } = await findChartCards();
 
     for (const card of [requestsCard, tokensCard]) {
@@ -137,7 +132,7 @@ describe("CacheDashboard cache analytics charts", () => {
   });
 
   it("formats y-axis ticks with compact notation", async () => {
-    renderDashboard();
+    renderAnalytics();
     const { requestsCard, tokensCard } = await findChartCards();
 
     const compactTicks = (card: HTMLElement) =>
