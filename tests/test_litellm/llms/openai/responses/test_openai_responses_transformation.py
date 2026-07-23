@@ -13,6 +13,7 @@ sys.path.insert(
 import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
@@ -43,6 +44,30 @@ class TestOpenAIResponsesAPIConfig:
 
         # The function should return the params unchanged
         assert result == test_params
+
+    @pytest.mark.parametrize(
+        "config",
+        [OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig()],
+    )
+    def test_delete_response_preserves_not_found_status(self, config):
+        response = httpx.Response(
+            status_code=404,
+            json={
+                "error": {
+                    "message": "Response not found",
+                    "type": "invalid_request_error",
+                }
+            },
+            request=httpx.Request("DELETE", "https://example.com/v1/responses/resp_missing"),
+        )
+
+        with pytest.raises(OpenAIError) as exc_info:
+            config.transform_delete_response_api_response(
+                raw_response=response,
+                logging_obj=self.logging_obj,
+            )
+
+        assert exc_info.value.status_code == 404
 
     @pytest.mark.parametrize("max_output_tokens", [1, 15])
     def test_map_openai_params_clamps_max_output_tokens_below_minimum(self, max_output_tokens):
