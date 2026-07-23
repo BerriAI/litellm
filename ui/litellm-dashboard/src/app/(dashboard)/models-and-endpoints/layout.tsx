@@ -13,13 +13,13 @@ import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminFo
 import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
 import ModelInfoView from "@/components/model_info_view";
 import TeamInfoView from "@/components/team/TeamInfo";
-import { modelTabHref, slugFromPathname } from "@/app/(dashboard)/models-and-endpoints/tabRoutes";
+import { modelTabHref, slugFromPathname, type ModelTabSlug } from "@/app/(dashboard)/models-and-endpoints/tabRoutes";
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 
 const BASE_TAB_KEY = "all-models";
 
-const TAB_LABELS: Record<string, string> = {
+const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
   "llm-credentials": "LLM Credentials",
   "pass-through": "Pass-Through Endpoints",
@@ -49,19 +49,19 @@ export default function ModelsAndEndpointsLayout({ children }: { children: React
   const shouldHideAddModelTab = !isProxyAdmin && (addModelDisabledForInternalUsers || !isUserTeamAdmin);
   const isAdmin = all_admin_roles.includes(userRole);
 
-  const visibleSlugs = useMemo<string[]>(
+  const visibleSlugs = useMemo<Array<"" | ModelTabSlug>>(
     () => [
       "",
-      ...(shouldHideAddModelTab ? [] : ["add"]),
+      ...(shouldHideAddModelTab ? [] : (["add"] as const)),
       ...(isAdmin
-        ? ["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"]
+        ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
         : []),
     ],
     [shouldHideAddModelTab, isAdmin],
   );
 
   const activeSlug = slugFromPathname(pathname);
-  const isKnownSlug = visibleSlugs.includes(activeSlug);
+  const isKnownSlug = visibleSlugs.some((slug) => slug === activeSlug);
   const activeKey = isKnownSlug ? activeSlug || BASE_TAB_KEY : BASE_TAB_KEY;
 
   useEffect(() => {
