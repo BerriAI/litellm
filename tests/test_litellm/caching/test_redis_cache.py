@@ -71,27 +71,152 @@ async def test_redis_cache_async_increment_refresh_ttl_true_bumps_existing_ttl(
         )
 
     mock_redis_instance.expire.assert_awaited_once_with("spend:team_member:u:t", 60)
+    mock_redis_instance.ttl.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_redis_cache_async_increment_default_does_not_bump_existing_ttl(
+async def test_redis_cache_async_increment_default_uses_expire_nx(
     monkeypatch, redis_no_ping
 ):
-    """Default (refresh_ttl=False) preserves window-style semantics: TTL is
-    set only on first creation, never refreshed (used by rate-limit windows)."""
+    """Default (refresh_ttl=False) uses EXPIRE NX to preserve window-style
+    semantics in a single RTT (no explicit TTL read)."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()
     mock_redis_instance = AsyncMock()
     mock_redis_instance.__aenter__.return_value = mock_redis_instance
     mock_redis_instance.__aexit__.return_value = None
-    mock_redis_instance.ttl.return_value = 42  # key already has ~42s left
 
     with patch.object(
         redis_cache, "init_async_client", return_value=mock_redis_instance
     ):
         await redis_cache.async_increment(key="rate_limit:window", value=1)
 
-    mock_redis_instance.expire.assert_not_awaited()
+    mock_redis_instance.expire.assert_awaited_once_with(
+        "rate_limit:window", 60, nx=True
+    )
+    mock_redis_instance.ttl.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_default_falls_back_when_expire_nx_unsupported(
+    monkeypatch, redis_no_ping
+):
+    """If expire(nx=True) is unsupported by the client, fallback to
+    TTL-check + conditional EXPIRE for compatibility."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+    mock_redis_instance.expire.side_effect = [
+        TypeError("unexpected keyword argument 'nx'"),
+        True,
+    ]
+    mock_redis_instance.ttl.return_value = -1
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_increment(key="rate_limit:window", value=1)
+
+    assert mock_redis_instance.expire.await_count == 2
+    assert mock_redis_instance.expire.await_args_list[0].args == (
+        "rate_limit:window",
+        60,
+    )
+    assert mock_redis_instance.expire.await_args_list[0].kwargs == {"nx": True}
+    assert mock_redis_instance.expire.await_args_list[1].args == (
+        "rate_limit:window",
+        60,
+    )
+    assert mock_redis_instance.expire.await_args_list[1].kwargs == {}
+    mock_redis_instance.ttl.assert_awaited_once_with("rate_limit:window")
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_default_fallback_existing_ttl_skips_second_expire(
+    monkeypatch, redis_no_ping
+):
+    """When expire(nx=True) is unsupported and key already has a TTL, fallback
+    should not issue a second expire() call."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+    mock_redis_instance.expire.side_effect = [
+        TypeError("unexpected keyword argument 'nx'"),
+    ]
+    mock_redis_instance.ttl.return_value = 42
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_increment(key="rate_limit:window", value=1)
+
+    assert mock_redis_instance.expire.await_count == 1
+    assert mock_redis_instance.expire.await_args_list[0].args == (
+        "rate_limit:window",
+        60,
+    )
+    assert mock_redis_instance.expire.await_args_list[0].kwargs == {"nx": True}
+    mock_redis_instance.ttl.assert_awaited_once_with("rate_limit:window")
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_default_falls_back_on_redis6_expire_nx_syntax_error(
+    monkeypatch, redis_no_ping
+):
+    """If Redis server rejects EXPIRE ... NX, fallback to TTL-check + conditional EXPIRE."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+
+    class ResponseError(Exception):
+        pass
+
+    mock_redis_instance.expire.side_effect = [
+        ResponseError("ERR syntax error"),
+        True,
+    ]
+    mock_redis_instance.ttl.return_value = -1
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_increment(key="rate_limit:window", value=1)
+
+    assert mock_redis_instance.expire.await_count == 2
+    assert mock_redis_instance.expire.await_args_list[0].kwargs == {"nx": True}
+    assert mock_redis_instance.expire.await_args_list[1].kwargs == {}
+    mock_redis_instance.ttl.assert_awaited_once_with("rate_limit:window")
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_default_raises_non_compat_expire_error(
+    monkeypatch, redis_no_ping
+):
+    """Non-compatibility expire errors should still propagate."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+
+    class ResponseError(Exception):
+        pass
+
+    mock_redis_instance.expire.side_effect = ResponseError("READONLY You can't write")
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        with pytest.raises(ResponseError, match="READONLY"):
+            await redis_cache.async_increment(key="rate_limit:window", value=1)
+
+    mock_redis_instance.ttl.assert_not_awaited()
 
 
 @pytest.mark.parametrize("namespace", [None, "litellm"])

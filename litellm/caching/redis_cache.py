@@ -96,6 +96,24 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         return "unknown"
 
 
+def _is_expire_nx_unsupported_error(error: Exception) -> bool:
+    """
+    Return True when EXPIRE ... NX is unsupported and we should fallback.
+
+    Compatibility cases:
+    - Older redis-py clients that do not accept `nx` -> TypeError
+    - Redis < 7 servers that reject `EXPIRE key ttl NX` -> ResponseError syntax/arity errors
+    """
+    if isinstance(error, TypeError):
+        return True
+
+    if error.__class__.__name__ != "ResponseError":
+        return False
+
+    error_message = str(error).lower()
+    return "syntax error" in error_message or "wrong number of arguments" in error_message
+
+
 class RedisCircuitBreaker:
     """
     Tracks Redis health for a RedisCache instance.
@@ -874,9 +892,19 @@ class RedisCache(BaseCache):
                 if refresh_ttl:
                     await _redis_client.expire(key, _used_ttl)
                 else:
-                    current_ttl = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+                    # Prefer EXPIRE NX to avoid an extra TTL round trip on the
+                    # hot increment path while preserving window semantics.
+                    try:
+                        await _redis_client.expire(key, _used_ttl, nx=True)
+                    except Exception as e:
+                        if not _is_expire_nx_unsupported_error(e):
+                            raise
+                        # Backward-compatible fallback if the Redis client does
+                        # not support the "nx" kwarg on expire(), or if an
+                        # older Redis server rejects EXPIRE ... NX.
+                        current_ttl = await _redis_client.ttl(key)
+                        if current_ttl == -1:
+                            await _redis_client.expire(key, _used_ttl)
 
             ## LOGGING ##
             end_time = time.time()
