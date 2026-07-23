@@ -664,9 +664,7 @@ async def test_source_memoizes_usable_lookups_within_ttl():
     pay a DB read per call; the memo expires with the TTL and the row is re-read."""
     clock = {"now": time.time()}
     fetches: list[str] = []
-    # No declared expiry, so the cache horizon is the default TTL rather than the token's own
-    # expiry (an assertion that declares one is cached exactly until it becomes refresh-eligible).
-    stored = _stored(None)
+    stored = _stored(3600)
 
     async def fetch(user_id: str):
         fetches.append(user_id)
@@ -689,6 +687,43 @@ async def test_source_memoizes_usable_lookups_within_ttl():
     third = await source.fetch_usable("alice")
     assert isinstance(third, UsableSsoAssertion)
     assert fetches == ["alice", "alice"]
+
+
+@pytest.mark.asyncio
+async def test_replacing_the_row_drops_a_cached_superseded_assertion():
+    """A re-login must take effect at once, not when the superseded id_token finally expires.
+
+    The assertion is identity material, so a user who re-authenticates after their IdP claims are
+    REDUCED must stop being able to spend the old one. ``persist_sso_identity_assertion`` is the
+    single place the row is replaced, so it drops the cached predecessor; without that hook the
+    warm entry below keeps serving the old id_token for its full remaining life.
+    """
+    superseded = _make_id_token(exp_offset=3600, iss="https://old.example.com")
+    replacement = _make_id_token(exp_offset=3600, iss="https://new.example.com")
+    state = {"stored": SSOIdentityAssertion(id_token=SecretStr(superseded))}
+
+    async def fetch(user_id: str):
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        state["stored"] = assertion
+
+    async def post(url, form):
+        return SsoRefreshUnreachable()
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    warm = await source.fetch_usable("alice")
+    assert isinstance(warm, UsableSsoAssertion)
+    assert warm.assertion.id_token.get_secret_value() == superseded
+
+    # The user signs in again; the row is replaced through the real write chokepoint.
+    state["stored"] = SSOIdentityAssertion(id_token=SecretStr(replacement))
+    with patch("litellm.proxy.proxy_server.prisma_client", _make_prisma({})):
+        await persist_sso_identity_assertion("alice", state["stored"])
+
+    after = await source.fetch_usable("alice")
+    assert isinstance(after, UsableSsoAssertion)
+    assert after.assertion.id_token.get_secret_value() == replacement
 
 
 @pytest.mark.asyncio
@@ -718,7 +753,7 @@ async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
     """A store read failure must fail closed as absent (never raise into egress), and a warm
     memo entry keeps serving through the outage."""
     calls = {"n": 0}
-    stored = _stored(None)
+    stored = _stored(3600)
 
     async def flaky_fetch(user_id: str):
         calls["n"] += 1

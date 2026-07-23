@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
@@ -29,8 +30,10 @@ from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationEr
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
+    InMemoryTokenCacheBackend,
     OAuthToken,
     RefreshingTokenStore,
+    TokenCacheBackend,
     TokenStoreUnavailable,
 )
 
@@ -153,6 +156,10 @@ async def persist_sso_identity_assertion(user_id: str, assertion: SSOIdentityAss
             "update": {"assertion_b64": encoded},
         },
     )
+    # This is the one place the row is replaced, so it is the one place that must drop a cached
+    # predecessor: otherwise a re-login (notably one that reduces the user's IdP claims) would keep
+    # serving the superseded assertion until the old id_token expired.
+    await _drop_cached_assertion(user_id)
 
 
 async def fetch_sso_identity_assertion(user_id: str) -> SSOIdentityAssertion | None:
@@ -519,6 +526,45 @@ class _SsoAssertionRefresher:
         return refreshed_token
 
 
+class _CappedTtlCacheBackend:
+    """Bounds how long a positive assertion is served from cache.
+
+    The shared cache holds a token that declares an expiry until that expiry, which for an id_token
+    is typically an hour. An assertion is identity material, not just a bearer: a re-login that
+    REDUCES the user's claims must take effect promptly, so a superseded assertion is never served
+    for the old token's full life. The write hook below clears the pod that took the login; this
+    cap bounds every other pod (and any entry written before that hook ran).
+    """
+
+    def __init__(self, inner: TokenCacheBackend, max_ttl_seconds: float) -> None:
+        self._inner = inner
+        self._max_ttl_seconds = max_ttl_seconds
+
+    async def get(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return await self._inner.get(user_id, server_id)
+
+    async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
+        await self._inner.set(user_id, server_id, token, min(ttl_seconds, self._max_ttl_seconds))
+
+    async def delete(self, user_id: str, server_id: str) -> None:
+        await self._inner.delete(user_id, server_id)
+
+
+# Live sources, so the one write chokepoint can drop a superseded assertion from their caches the
+# moment the row is replaced. Weak, so a discarded source never keeps an instance alive.
+_LIVE_ASSERTION_SOURCES: weakref.WeakSet[LiveSsoAssertionSource] = weakref.WeakSet()
+
+
+async def _drop_cached_assertion(user_id: str) -> None:
+    for source in tuple(_LIVE_ASSERTION_SOURCES):
+        try:
+            await source.invalidate(user_id)
+        except Exception as exc:  # noqa: BLE001  # a cache drop must never fail the login write
+            verbose_proxy_logger.warning(
+                "Could not drop the cached SSO assertion for user_id=%s after its row was replaced: %s", user_id, exc
+            )
+
+
 class LiveSsoAssertionSource:
     """The resolver's view of the assertion store, built on the shared per-user credential stack.
 
@@ -552,8 +598,18 @@ class LiveSsoAssertionSource:
             ),
             default_ttl_seconds=cache_ttl_seconds,
             expiry_skew_seconds=_ASSERTION_EXPIRY_BUFFER_SECONDS,
+            backend=_CappedTtlCacheBackend(InMemoryTokenCacheBackend(clock=now), cache_ttl_seconds),
             clock=now,
         )
+        _LIVE_ASSERTION_SOURCES.add(self)
+
+    async def invalidate(self, user_id: str) -> None:
+        """Drop this pod's cached assertion for ``user_id`` so the next read sees the replaced row.
+
+        Called from the write chokepoint, so a re-login (in particular one that reduces the user's
+        claims) is honored immediately rather than when the superseded id_token finally expires.
+        """
+        await self._store.invalidate(user_id, _ASSERTION_SERVER_KEY)
 
     async def fetch_usable(self, user_id: str) -> SsoAssertionLookup:
         if not user_id:
