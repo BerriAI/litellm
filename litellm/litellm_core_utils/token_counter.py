@@ -289,9 +289,12 @@ def calculate_img_tokens(
     if use_default_image_token_count:
         verbose_logger.debug("Using default image token count: {}".format(DEFAULT_IMAGE_TOKEN_COUNT))
         return DEFAULT_IMAGE_TOKEN_COUNT
-    if mode == "low" or mode == "auto":
+    if mode == "low":
         return base_tokens
-    elif mode == "high":
+    elif mode == "high" or mode == "auto":
+        # "auto" mirrors "high": actual auto-detail sizing is tile-based, so
+        # treating it as a flat low-detail cost silently undercounts tokens
+        # for the (default) case where callers never set an explicit detail.
         # Run the async function using the helper
         width, height = get_image_dimensions(
             data=data,
