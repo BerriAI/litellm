@@ -12,7 +12,7 @@ inflating TTFT and turning a steady provider stream into gap-then-burst delivery
 import binascii
 import json
 import struct
-from typing import AsyncIterator
+from typing import AsyncIterator, Iterator
 from unittest.mock import MagicMock
 
 import httpx
@@ -55,6 +55,19 @@ def _make_frames(n: int) -> list[bytes]:
     return frames
 
 
+class _CountingSyncStream(httpx.SyncByteStream):
+    """Yields provider frames one at a time and records how many have been pulled."""
+
+    def __init__(self, frames: list[bytes]) -> None:
+        self._frames = frames
+        self.consumed = 0
+
+    def __iter__(self) -> Iterator[bytes]:
+        for frame in self._frames:
+            self.consumed += 1
+            yield frame
+
+
 class _CountingAsyncStream(httpx.AsyncByteStream):
     """Yields provider frames one at a time and records how many have been pulled."""
 
@@ -68,12 +81,50 @@ class _CountingAsyncStream(httpx.AsyncByteStream):
             yield frame
 
 
+class _FakeSyncClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+
+    def post(self, *args, **kwargs) -> httpx.Response:
+        return self._response
+
+
 class _FakeAsyncClient:
     def __init__(self, response: httpx.Response) -> None:
         self._response = response
 
     async def post(self, *args, **kwargs) -> httpx.Response:
         return self._response
+
+
+def test_sync_native_streaming_forwards_each_frame_incrementally():
+    """Each token must be emitted after exactly one newly-pulled source frame.
+
+    With the old `chunk_size=1024` the httpx chunker would swallow several small
+    frames before yielding, so the first token would arrive only after `consumed`
+    had already crossed multiple frames, and tokens would then replay in a burst.
+    """
+    frames = _make_frames(24)
+    stream = _CountingSyncStream(frames)
+    response = httpx.Response(200, stream=stream)
+
+    completion_stream = SagemakerLLM().make_sync_call(
+        api_base="https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/phi-4/invocations-response-stream",
+        headers={},
+        data="",
+        logging_obj=MagicMock(),
+        client=_FakeSyncClient(response),
+    )
+
+    consumed_at_token = []
+    texts = []
+    for chunk in completion_stream:
+        if chunk is not None and chunk["text"]:
+            consumed_at_token.append(stream.consumed)
+            texts.append(chunk["text"])
+
+    assert texts == [f"token{i} " for i in range(len(frames))]
+    assert consumed_at_token == list(range(1, len(frames) + 1))
 
 
 @pytest.mark.asyncio

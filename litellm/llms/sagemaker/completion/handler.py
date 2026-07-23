@@ -200,23 +200,12 @@ class SagemakerLLM(BaseAWSLLM):
                     # Add model_id as InferenceComponentName header
                     # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
                     prepared_request.headers.update({"X-Amzn-SageMaker-Inference-Component": model_id})
-                sync_handler = _get_httpx_client()
-                sync_response = sync_handler.post(
-                    url=prepared_request.url,
+                completion_stream = self.make_sync_call(
+                    api_base=prepared_request.url,
                     headers=prepared_request.headers,  # type: ignore
-                    data=prepared_request.body,
-                    stream=stream,
+                    data=cast(str, prepared_request.body),  # cast-ok: signed body is a JSON str, mirrors async path
+                    logging_obj=logging_obj,
                 )
-
-                if sync_response.status_code != 200:
-                    raise SagemakerError(
-                        status_code=sync_response.status_code,
-                        message=str(sync_response.read()),
-                    )
-
-                decoder = AWSEventStreamDecoder(model="")
-
-                completion_stream = decoder.iter_bytes(sync_response.iter_bytes())
                 streaming_response = CustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
@@ -333,6 +322,29 @@ class SagemakerLLM(BaseAWSLLM):
             encoding=encoding,
             litellm_params=litellm_params,
         )
+
+    def make_sync_call(
+        self,
+        api_base: str,
+        headers: dict,
+        data: str,
+        logging_obj,
+        client=None,
+    ):
+        if client is None:
+            client = _get_httpx_client()
+        sync_response = client.post(
+            api_base,
+            headers=headers,
+            data=data,
+            stream=True,
+        )
+
+        if sync_response.status_code != 200:
+            raise SagemakerError(status_code=sync_response.status_code, message=str(sync_response.read()))
+
+        decoder = AWSEventStreamDecoder(model="")
+        return decoder.iter_bytes(sync_response.iter_bytes())
 
     async def make_async_call(
         self,
