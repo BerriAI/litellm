@@ -232,14 +232,12 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     rows = client.poll_logs_for_key(
         scoped_key, predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
     )
-    cache_rows = [r for r in rows if r.cache_hit == "True"]
-    if not cache_rows:
-        pytest.skip(
-            "no cache-hit row observed; caching may be disabled on this proxy. "
-            f"rows seen: {_summarize(rows)}"
-        )
-
-    cache_row = cache_rows[0]
+    cache_row = _require_row(
+        rows,
+        lambda r: r.cache_hit == "True",
+        "with cache_hit=True (caching is enabled on the e2e proxy, so an identical "
+        "repeat call must hit the cache)",
+    )
     assert (
         cache_row.spend or 0
     ) == 0.0, f"cache hit was charged (double-charge regression): {_summarize(rows)}"
