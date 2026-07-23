@@ -3303,6 +3303,38 @@ def test_tool_search_tool_result_not_in_tool_results():
     assert provider_fields.get("tool_results") is None
 
 
+def test_transform_parsed_response_ignores_null_error_field():
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    raw_response = MagicMock(spec=httpx.Response)
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    model_response = ModelResponse()
+
+    transformed_response = config.transform_parsed_response(
+        completion_response={
+            "id": "msg_gateway_success",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+            "error": None,
+        },
+        raw_response=raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    assert transformed_response.choices[0].message.content == "hello"
+
+
 def test_web_search_tool_result_backwards_compatibility():
     """
     Test that web_search_tool_result continues to be stored in web_search_results
