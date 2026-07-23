@@ -5006,7 +5006,10 @@ async def validate_key_list_check(
     key_hash: Optional[str],
     prisma_client: PrismaClient,
 ) -> Optional[LiteLLM_UserTable]:
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+    if user_api_key_dict.user_role in [
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    ]:
         return None
 
     if user_api_key_dict.user_id is None:
