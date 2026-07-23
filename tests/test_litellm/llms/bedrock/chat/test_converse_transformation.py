@@ -2602,6 +2602,83 @@ def test_auto_convert_last_user_message_string_content():
     )
 
 
+def test_guarded_text_conversion_preserves_cache_control_on_content_block():
+    """Regression for #33281: converting a trailing user text block to guarded_text
+    must carry over its cache_control so a cachePoint is still emitted for prompt caching."""
+    config = AmazonConverseConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Summarize the attached document",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+    optional_params = {
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
+    }
+
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
+    guarded_block = converted_messages[0]["content"][0]
+    assert guarded_block["type"] == "guarded_text"
+    assert guarded_block["cache_control"] == {"type": "ephemeral"}
+
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    user_content = result["messages"][0]["content"]
+    assert any("guardContent" in block for block in user_content)
+    assert any(block.get("cachePoint") == {"type": "default"} for block in user_content)
+
+
+def test_guarded_text_conversion_preserves_message_level_cache_control_string_content():
+    """Regression for #33281: message-level cache_control on a trailing string user
+    message must survive the guarded_text conversion and still emit a cachePoint."""
+    config = AmazonConverseConfig()
+
+    messages = [
+        {
+            "role": "user",
+            "content": "Summarize the attached document",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    optional_params = {
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
+    }
+
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
+    guarded_block = converted_messages[0]["content"][0]
+    assert guarded_block["type"] == "guarded_text"
+    assert guarded_block["cache_control"] == {"type": "ephemeral"}
+
+    result = config._transform_request(
+        model="us.amazon.nova-pro-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    user_content = result["messages"][0]["content"]
+    assert any("guardContent" in block for block in user_content)
+    assert any(block.get("cachePoint") == {"type": "default"} for block in user_content)
+
+
 def test_no_conversion_when_no_guardrail_config():
     """Test that no conversion happens when guardrailConfig is not present."""
     config = AmazonConverseConfig()
