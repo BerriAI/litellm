@@ -249,6 +249,53 @@ class TestMistralReasoningSupport:
         assert result == messages
         assert len(result) == 1
 
+    def test_transform_messages_strips_extra_fields(self):
+        """GH#30882: extra fields like metadata should be stripped
+        from messages before sending to Mistral API."""
+        mistral_config = MistralConfig()
+        messages: List[AllMessageValues] = [
+            cast(
+                AllMessageValues,
+                {
+                    "role": "assistant",
+                    "content": "hello",
+                    "metadata": {
+                        "tool_outputs_trimmed": True,
+                        "trimmed_by": "async_context_compression",
+                    },
+                    "provider_specific_fields": {"foo": "bar"},
+                    "thinking_blocks": [],
+                    "cache_control": {"type": "ephemeral"},
+                    "reasoning_content": "some thinking",
+                },
+            )
+        ]
+        result = mistral_config._transform_messages(messages, "mistral/mistral-large-latest")
+        assert len(result) == 1
+        msg = cast(dict, result[0])
+        assert msg["role"] == "assistant"
+        assert msg["content"] == "hello"
+        assert "metadata" not in msg
+        assert "provider_specific_fields" not in msg
+        assert "thinking_blocks" not in msg
+        assert "cache_control" not in msg
+        assert "reasoning_content" not in msg
+
+    def test_user_message_extra_fields_are_preserved(self):
+        """GH#30882: user messages should not be stripped of extra fields."""
+        mistral_config = MistralConfig()
+        messages: List[AllMessageValues] = [
+            cast(
+                AllMessageValues,
+                {"role": "user", "content": "Question?", "reasoning_content": "noise"},
+            )
+        ]
+        result = mistral_config._transform_messages(messages, "mistral/mistral-large-latest")
+        assert len(result) == 1
+        msg = cast(dict, result[0])
+        assert msg["role"] == "user"
+        assert msg["reasoning_content"] == "noise"
+
     def test_transform_request_magistral_with_reasoning(self):
         """Test transform_request method for magistral model with reasoning."""
         mistral_config = MistralConfig()

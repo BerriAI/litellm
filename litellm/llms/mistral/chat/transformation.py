@@ -267,6 +267,8 @@ class MistralConfig(OpenAIGPTConfig):
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
 
+        new_messages = self._strip_extra_fields(new_messages)
+
         if is_async:
             return super()._transform_messages(new_messages, model, True)
         else:
@@ -280,7 +282,7 @@ class MistralConfig(OpenAIGPTConfig):
         # and then apply Mistral-specific handling for files
         messages = await super()._transform_messages(messages, model, True)
         messages = self._handle_message_with_file(messages)
-        return messages
+        return self._strip_extra_fields(messages)
 
     def _transform_messages_sync(self, messages: List[AllMessageValues], model: str) -> List[AllMessageValues]:
         """Handle modification of messages for Mistral API in a sync context."""
@@ -289,6 +291,17 @@ class MistralConfig(OpenAIGPTConfig):
         # This is the sync version of the async method above
         messages = super()._transform_messages(messages, model, False)
         messages = self._handle_message_with_file(messages)
+        return self._strip_extra_fields(messages)
+
+    @staticmethod
+    def _strip_extra_fields(messages: list[AllMessageValues]) -> list[AllMessageValues]:
+        for m in messages:
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                m.pop("metadata", None)
+                m.pop("provider_specific_fields", None)
+                m.pop("thinking_blocks", None)
+                m.pop("cache_control", None)
+                m.pop("reasoning_content", None)
         return messages
 
     def _handle_message_with_file(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
