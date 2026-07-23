@@ -249,8 +249,9 @@ model LiteLLM_UserTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
-    budget_duration String? 
+    budget_duration String?
     budget_reset_at DateTime?
+    budget_limits Json?
     allowed_cache_controls String[] @default([])
     policies         String[] @default([])
     model_spend      Json @default("{}")
