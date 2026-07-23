@@ -162,7 +162,7 @@ const renderWithToolSpend = (results: DailyData[], toolSpend: ToolSpendResponse)
 
 describe("UsageTab", () => {
   it("sums compression and caching dollars across days into the summary cards", () => {
-    const { getByText } = renderWith([
+    const { getByText, getAllByText } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.04,
         prompt_caching_savings_spend: 0.006,
@@ -176,7 +176,7 @@ describe("UsageTab", () => {
     ]);
 
     expect(getByText("$0.1560")).toBeInTheDocument();
-    expect(getByText("$0.1400")).toBeInTheDocument();
+    expect(getAllByText("$0.1400")[0]).toBeInTheDocument();
     expect(getByText("$0.0160")).toBeInTheDocument();
     expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
   });
@@ -223,7 +223,8 @@ describe("UsageTab", () => {
 
     const detailQuery = mockUseQuery.mock.calls
       .map(([args]) => args as { queryKey: string[]; queryFn: () => Promise<unknown> })
-      .find((args) => args.queryKey[0] === "cost-optimization-spend-log");
+      .filter((args) => args.queryKey[0] === "cost-optimization-spend-log")
+      .at(-1);
     expect(detailQuery).toBeDefined();
     await detailQuery?.queryFn();
     expect(mockUiSpendLogsCall).toHaveBeenCalledWith(
