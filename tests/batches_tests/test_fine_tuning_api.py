@@ -526,3 +526,43 @@ async def test_mock_azure_create_fine_tune_job_with_azure_specific_params():
         # Verify the response
         assert response.id == "ft-azure-123"
         assert response.model == "gpt-4.1-mini-2025-04-14"
+
+
+def test_create_fine_tuning_job_does_not_mutate_caller_hyperparameters():
+    from openai.types.fine_tuning.fine_tuning_job import (
+        Hyperparameters as OAIHyperparameters,
+    )
+    from litellm.types.utils import LiteLLMFineTuningJob
+
+    mock_response = LiteLLMFineTuningJob(
+        id="ft-azure-456",
+        model="gpt-4.1-mini-2025-04-14",
+        created_at=1677610602,
+        status="validating_files",
+        fine_tuned_model=None,
+        object="fine_tuning.job",
+        hyperparameters=OAIHyperparameters(n_epochs=2),
+        organization_id="org-123",
+        seed=42,
+        training_file="file-123",
+        result_files=[],
+    )
+
+    params = {"n_epochs": 2, "prompt_loss_weight": 0.25}
+
+    with patch(
+        "litellm.llms.azure.fine_tuning.handler.AzureOpenAIFineTuningAPI.create_fine_tuning_job",
+        return_value=mock_response,
+    ):
+        create_fine_tuning_job(
+            model="gpt-4.1-mini-2025-04-14",
+            training_file="file-123",
+            hyperparameters=params,
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+        )
+
+    assert "prompt_loss_weight" in params
+    assert params["prompt_loss_weight"] == 0.25
