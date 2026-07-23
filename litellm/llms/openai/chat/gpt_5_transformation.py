@@ -115,6 +115,37 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
+    def is_gpt5_responses_bridge_case(
+        cls,
+        model: str,
+        custom_llm_provider: str,
+        current_mode: Optional[str],
+        has_tools: bool,
+        has_reasoning_effort: bool,
+        has_reasoning_summary: bool,
+    ) -> bool:
+        """Whether a GPT-5 chat/completions request must be bridged to the Responses API.
+
+        Chat Completions rejects Responses-only fields (e.g. ``reasoningSummary``) and,
+        for gpt-5.4+, rejects function tools combined with ``reasoning_effort``; those
+        combinations are transparently upgraded to /v1/responses instead. Applies to the
+        OpenAI-family chat providers (openai, azure, github_copilot). The reasoning-summary
+        alias path stays openai/azure-only; github_copilot bridges only the gpt-5.4+ tools
+        path.
+        """
+        if custom_llm_provider not in ("openai", "azure", "github_copilot"):
+            return False
+        if current_mode == "responses":
+            return False
+        if not cls.is_model_gpt_5_model(model) or cls.is_model_gpt_5_search_model(model):
+            return False
+        if not has_reasoning_effort:
+            return False
+        if has_reasoning_summary and custom_llm_provider in ("openai", "azure"):
+            return True
+        return cls.is_model_gpt_5_4_plus_model(model) and has_tools
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 

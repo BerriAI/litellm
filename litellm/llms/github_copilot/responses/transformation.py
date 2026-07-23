@@ -44,14 +44,21 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     """
     Gate native /v1/responses dispatch per github_copilot model.
 
-    Resolution (first match wins): mode "responses" -> True; mode "chat" ->
-    False (opt-out wins for dual-endpoint models); "/v1/responses" in
-    supported_endpoints -> True; else False. Unknown model -> False (the bridge
-    always works since every Copilot model supports /chat/completions).
+    Resolution (first match wins): gpt-5.4+ -> True (responses-capable even
+    though the map default mode is "chat", so tools + reasoning_effort can be
+    bridged); mode "responses" -> True; mode "chat" -> False (opt-out wins for
+    dual-endpoint models); "/v1/responses" in supported_endpoints -> True; else
+    False. Unknown model -> False (the bridge always works since every Copilot
+    model supports /chat/completions).
 
     Reads merged model info (per-deployment model_info applied via the router's
     register_model, which also clears the cache used here).
     """
+    from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+    if OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model):
+        return True
+
     try:
         info = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
     except Exception as e:
