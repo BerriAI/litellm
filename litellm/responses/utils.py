@@ -1,4 +1,5 @@
 import base64
+import copy
 import re
 from typing import (
     Any,
@@ -651,6 +652,86 @@ class ResponsesAPIRequestUtils:
         """
         decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
         return decoded.get("response_id", container_id)
+
+    @staticmethod
+    def _get_tool_value(tool: Any, key: str) -> Any:
+        if isinstance(tool, dict):
+            return tool.get(key)
+        return getattr(tool, key, None)
+
+    @staticmethod
+    def _set_tool_value(tool: Any, key: str, value: Any) -> None:
+        if isinstance(tool, dict):
+            tool[key] = value
+            return
+        setattr(tool, key, value)
+
+    @staticmethod
+    def get_decoded_container_payload_from_tool(
+        tool: Any, require_code_interpreter: bool = False
+    ) -> Optional[DecodedResponseId]:
+        if require_code_interpreter and ResponsesAPIRequestUtils._get_tool_value(tool, "type") != "code_interpreter":
+            return None
+
+        container_id = ResponsesAPIRequestUtils._get_tool_value(tool, "container")
+        if not isinstance(container_id, str):
+            return None
+
+        decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+        original_id = decoded.get("response_id", container_id)
+        if original_id == container_id:
+            return None
+        return decoded
+
+    @staticmethod
+    def get_decoded_container_payload_from_tools(
+        tools: Any,
+    ) -> Optional[DecodedResponseId]:
+        if not isinstance(tools, list):
+            return None
+        for tool in tools:
+            decoded = ResponsesAPIRequestUtils.get_decoded_container_payload_from_tool(
+                tool, require_code_interpreter=True
+            )
+            if decoded is not None:
+                return decoded
+        return None
+
+    @staticmethod
+    def set_custom_llm_provider_if_missing(kwargs: dict[str, Any], custom_llm_provider: Optional[str]) -> None:
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
+
+    @staticmethod
+    def decode_container_ids_in_tools_for_request(
+        tools: Optional[Iterable[Any]],
+    ) -> Optional[Iterable[Any]]:
+        """Decode LiteLLM-managed Responses API tool container IDs.
+
+        Returns the possibly updated tools with LiteLLM-managed container IDs
+        replaced by the original provider-issued container IDs.
+        """
+        if tools is None:
+            return tools
+
+        updated_tools: list[Any] = []
+        changed = False
+
+        for tool in tools:
+            updated_tool = tool
+            decoded = ResponsesAPIRequestUtils.get_decoded_container_payload_from_tool(tool)
+            if decoded is not None:
+                updated_tool = tool.copy() if isinstance(tool, dict) else copy.copy(tool)
+                ResponsesAPIRequestUtils._set_tool_value(updated_tool, "container", decoded["response_id"])
+                changed = True
+            updated_tools.append(updated_tool)
+
+        if not changed:
+            if isinstance(tools, list):
+                return tools
+            return updated_tools
+
+        return updated_tools
 
     @staticmethod
     def _encode_container_ids_in_annotations(

@@ -4556,6 +4556,8 @@ class Router:
 
         from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
+        self._decode_responses_api_tool_container_ids(kwargs)
+
         # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
         # mutates them. A shallow copy alone is not enough: the primary
         # attempt mutates nested dicts in place — notably `litellm_metadata`,
@@ -4586,6 +4588,28 @@ class Router:
                 initial_kwargs=fallback_kwargs,
             )
         return response
+
+    @staticmethod
+    def _decode_responses_api_tool_container_ids(
+        kwargs: dict[str, Any], custom_llm_provider: Optional[str] = None
+    ) -> None:
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        ResponsesAPIRequestUtils.set_custom_llm_provider_if_missing(kwargs, custom_llm_provider)
+        request_tools = kwargs.get("tools")
+        decoded_container_payload = ResponsesAPIRequestUtils.get_decoded_container_payload_from_tools(request_tools)
+        tools = ResponsesAPIRequestUtils.decode_container_ids_in_tools_for_request(request_tools)
+        if tools is not request_tools:
+            kwargs["tools"] = tools
+        if decoded_container_payload is None:
+            return
+
+        model_id = decoded_container_payload.get("model_id")
+        if model_id:
+            kwargs["model"] = model_id
+        decoded_provider = decoded_container_payload.get("custom_llm_provider")
+        if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
+            kwargs["custom_llm_provider"] = decoded_provider
 
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
@@ -5626,6 +5650,8 @@ class Router:
                 client: Optional[Any] = None,
                 **kwargs,
             ):
+                if call_type == "responses":
+                    self._decode_responses_api_tool_container_ids(kwargs, custom_llm_provider)
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
             return sync_wrapper
@@ -5729,6 +5755,7 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "aresponses":
+                self._decode_responses_api_tool_container_ids(kwargs, custom_llm_provider)
                 return await self._aresponses_with_streaming_fallbacks(
                     original_function=original_function,
                     **kwargs,

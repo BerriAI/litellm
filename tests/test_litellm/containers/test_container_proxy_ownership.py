@@ -1,7 +1,7 @@
 import json
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -35,6 +35,133 @@ def _container(container_id: str) -> ContainerObject:
         object="container",
         created_at=1,
         status="active",
+    )
+
+
+def test_collect_response_code_interpreter_container_ids_filters_tools():
+    from litellm.proxy.common_request_processing import (
+        _collect_response_code_interpreter_container_ids,
+    )
+
+    assert _collect_response_code_interpreter_container_ids({"tools": None}) == set()
+    assert _collect_response_code_interpreter_container_ids(
+        {
+            "tools": [
+                "not-a-dict",
+                {"type": "file_search", "container": "cntr_ignored"},
+                {"type": "code_interpreter", "container": {"type": "auto"}},
+                {"type": "code_interpreter", "container": ""},
+                {"type": "code_interpreter", "container": "cntr_1"},
+            ]
+        }
+    ) == {"cntr_1"}
+
+
+@pytest.mark.asyncio
+async def test_response_code_interpreter_container_authorization_defaults_to_openai(
+    monkeypatch,
+):
+    from litellm.proxy.common_request_processing import (
+        _authorize_response_code_interpreter_containers,
+    )
+
+    mock_assert = AsyncMock()
+    monkeypatch.setattr(
+        ownership,
+        "assert_user_can_access_container",
+        mock_assert,
+    )
+
+    await _authorize_response_code_interpreter_containers(
+        data={
+            "tools": [
+                {
+                    "type": "code_interpreter",
+                    "container": "cntr_native_123",
+                }
+            ]
+        },
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    mock_assert.assert_awaited_once_with(
+        container_id="cntr_native_123",
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_pre_call_authorizes_vector_stores_and_code_containers(
+    monkeypatch,
+):
+    from litellm.proxy import common_request_processing
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    data = {
+        "model": "gpt-4.1",
+        "tools": [
+            {"type": "file_search", "vector_store_ids": ["vs_123"]},
+            {"type": "code_interpreter", "container": "cntr_native_123"},
+        ],
+    }
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    request = MagicMock()
+    request.headers = {}
+    request.url.path = "/v1/responses"
+    user_api_key_dict = UserAPIKeyAuth(user_id="user-1")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.pre_call_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs["data"]
+    )
+    logging_obj = MagicMock()
+
+    async def mock_add_litellm_data_to_request(**kwargs):
+        return kwargs["data"]
+
+    mock_authorize_vector_stores = AsyncMock()
+    mock_authorize_code_containers = AsyncMock()
+    monkeypatch.setattr(
+        common_request_processing,
+        "add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    )
+    monkeypatch.setattr(
+        common_request_processing,
+        "_authorize_response_file_search_vector_stores",
+        mock_authorize_vector_stores,
+    )
+    monkeypatch.setattr(
+        common_request_processing,
+        "_authorize_response_code_interpreter_containers",
+        mock_authorize_code_containers,
+    )
+    monkeypatch.setattr(
+        common_request_processing.litellm.utils,
+        "function_setup",
+        lambda **kwargs: (logging_obj, kwargs),
+    )
+
+    returned_data, returned_logging_obj = (
+        await processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings={},
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=MagicMock(),
+            route_type="aresponses",
+        )
+    )
+
+    assert returned_data["tools"] == data["tools"]
+    assert returned_logging_obj is logging_obj
+    mock_authorize_vector_stores.assert_awaited_once_with(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    mock_authorize_code_containers.assert_awaited_once_with(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
     )
 
 
@@ -212,6 +339,87 @@ async def test_should_deny_untracked_container_access_by_default(monkeypatch):
         )
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_response_code_interpreter_container_requires_owner_access(monkeypatch):
+    from litellm.proxy.common_request_processing import (
+        _authorize_response_code_interpreter_containers,
+    )
+
+    table = AsyncMock()
+    table.find_first.return_value = SimpleNamespace(created_by="user-2")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-deployment-id",
+        container_id="cntr_native_123",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _authorize_response_code_interpreter_containers(
+            data={
+                "tools": [
+                    {
+                        "type": "code_interpreter",
+                        "container": encoded_container_id,
+                    }
+                ]
+            },
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+
+    assert exc.value.status_code == 403
+    table.find_first.assert_awaited_once_with(
+        where={
+            "model_object_id": "container:azure:cntr_native_123",
+            "file_purpose": ownership.CONTAINER_OBJECT_PURPOSE,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_code_interpreter_container_allows_owner(monkeypatch):
+    from litellm.proxy.common_request_processing import (
+        _authorize_response_code_interpreter_containers,
+    )
+
+    table = AsyncMock()
+    table.find_first.return_value = SimpleNamespace(created_by="user-1")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    encoded_container_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-deployment-id",
+        container_id="cntr_native_123",
+    )
+
+    await _authorize_response_code_interpreter_containers(
+        data={
+            "tools": [
+                {
+                    "type": "code_interpreter",
+                    "container": encoded_container_id,
+                }
+            ]
+        },
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    table.find_first.assert_awaited_once()
 
 
 @pytest.mark.asyncio
