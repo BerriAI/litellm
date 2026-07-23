@@ -66,7 +66,6 @@ async def _get_internal_user_api_keys(
 
     key_records = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"user_id": user_id},
-        select={"token": True},
     )
     user_api_keys.update(key_record.token for key_record in key_records if getattr(key_record, "token", None))
 

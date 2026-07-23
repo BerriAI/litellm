@@ -366,7 +366,6 @@ async def _resolve_team_id_to_object_permission_id(
     team_id_clean = team_id.strip()
     row = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id_clean},
-        select={"object_permission_id": True},
     )
     if row is None:
         return None
@@ -385,7 +384,6 @@ async def _resolve_team_id_to_object_permission_id(
         await ObjectPermissionRepository(prisma_client).table.delete(where={"object_permission_id": new_id})
         row = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": team_id_clean},
-            select={"object_permission_id": True},
         )
         return getattr(row, "object_permission_id", None) if row else None
     return new_id

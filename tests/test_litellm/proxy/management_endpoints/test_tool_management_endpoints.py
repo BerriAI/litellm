@@ -9,6 +9,7 @@ imports these inside function bodies to avoid circular imports.
 
 import os
 import sys
+import pytest
 from datetime import datetime, timezone
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -147,3 +148,35 @@ class TestToolManagementEndpoints:
             json={"tool_name": "my_tool", "input_policy": "invalid_value"},
         )
         assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_id_does_not_use_select_kwarg():
+    """Regression for #30972: find_unique(..., select=...) raised TypeError on prisma-client-py.
+
+    _resolve_team_id_to_object_permission_id must call find_unique without a select=
+    argument so that the full row is returned and getattr(row, 'object_permission_id', None) works.
+    """
+    from litellm.proxy.management_endpoints.tool_management_endpoints import (
+        _resolve_team_id_to_object_permission_id,
+    )
+
+    mock_row = MagicMock()
+    mock_row.object_permission_id = "perm-uuid-123"
+
+    mock_table = MagicMock()
+    mock_table.find_unique = AsyncMock(return_value=mock_row)
+
+    mock_prisma = MagicMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.tool_management_endpoints.TeamRepository"
+    ) as MockRepo:
+        MockRepo.return_value.table = mock_table
+        result = await _resolve_team_id_to_object_permission_id(mock_prisma, "team-abc")
+
+    call_kwargs = mock_table.find_unique.call_args[1]
+    assert "select" not in call_kwargs, "select= kwarg is not supported by prisma-client-py"
+    assert result == "perm-uuid-123"
+
+

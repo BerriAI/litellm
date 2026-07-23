@@ -448,7 +448,6 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
             ]
             mock_db.litellm_verificationtoken.find_many.assert_awaited_once_with(
                 where={"user_id": "internal-user-123"},
-                select={"token": True},
             )
             mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
                 by=["tag"],
@@ -1076,3 +1075,40 @@ async def test_add_tag_to_deployment_model_not_found():
 
         assert exc_info.value.status_code == 500
         assert "not found in database" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_internal_user_api_keys_does_not_use_select_kwarg():
+    """Regression for #30972: find_many(..., select=...) raised TypeError on prisma-client-py.
+
+    _get_internal_user_api_keys must call find_many without a select= argument so
+    that the full row is returned and getattr(record, token, None) works.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        _get_internal_user_api_keys,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_key_record = MagicMock()
+    mock_key_record.token = "hashed-token-abc"
+
+    mock_table = MagicMock()
+    mock_table.find_many = AsyncMock(return_value=[mock_key_record])
+
+    mock_prisma = MagicMock()
+
+    # Use a simple mock to avoid UserAPIKeyAuth validation side effects
+    user_dict = MagicMock()
+    user_dict.api_key = None   # falsy so it won't be added to the set
+    user_dict.user_id = "user-123"
+
+    with patch(
+        "litellm.proxy.management_endpoints.tag_management_endpoints.VerificationTokenRepository"
+    ) as MockRepo:
+        MockRepo.return_value.table = mock_table
+        await _get_internal_user_api_keys(mock_prisma, user_dict)
+
+    call_kwargs = mock_table.find_many.call_args[1]
+    assert "select" not in call_kwargs, "select= kwarg is not supported by prisma-client-py"
