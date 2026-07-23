@@ -18,6 +18,7 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    anthropic_proxy_route,
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
@@ -30,7 +31,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -3022,3 +3023,105 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestAnthropicProxyRoute:
+    ANTHROPIC_401_BODY = '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}'
+
+    def _setup_mocks(self, monkeypatch, api_key, upstream_error):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+        mock_router = MagicMock()
+        mock_router.get_credentials.return_value = api_key
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
+            mock_router,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            AsyncMock(return_value=False),
+        )
+
+        mock_create_route = MagicMock(
+            return_value=AsyncMock(side_effect=upstream_error)
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            mock_create_route,
+        )
+        return mock_create_route
+
+    async def _call_route(self):
+        return await anthropic_proxy_route(
+            endpoint="v1/messages",
+            request=MagicMock(spec=Request),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+    @pytest.mark.asyncio
+    async def test_upstream_401_without_proxy_credentials_explains_missing_key(
+        self, monkeypatch
+    ):
+        upstream_error = ProxyException(
+            message=self.ANTHROPIC_401_BODY, type="None", param="None", code=401
+        )
+        self._setup_mocks(monkeypatch, api_key=None, upstream_error=upstream_error)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._call_route()
+
+        assert exc_info.value.code == "401"
+        assert "No Anthropic credentials found on the proxy" in exc_info.value.message
+        assert "ANTHROPIC_API_KEY" in exc_info.value.message
+        assert self.ANTHROPIC_401_BODY in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_upstream_401_with_proxy_credentials_is_not_rewritten(
+        self, monkeypatch
+    ):
+        upstream_error = ProxyException(
+            message=self.ANTHROPIC_401_BODY, type="None", param="None", code=401
+        )
+        mock_create_route = self._setup_mocks(
+            monkeypatch, api_key="sk-ant-proxy-key", upstream_error=upstream_error
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._call_route()
+
+        assert exc_info.value.message == self.ANTHROPIC_401_BODY
+        assert mock_create_route.call_args.kwargs["custom_headers"] == {
+            "x-api-key": "sk-ant-proxy-key"
+        }
+
+    @pytest.mark.asyncio
+    async def test_upstream_non_401_without_proxy_credentials_is_not_rewritten(
+        self, monkeypatch
+    ):
+        upstream_error = ProxyException(
+            message="invalid request", type="None", param="None", code=400
+        )
+        self._setup_mocks(monkeypatch, api_key=None, upstream_error=upstream_error)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._call_route()
+
+        assert exc_info.value.message == "invalid request"
+
+    @pytest.mark.asyncio
+    async def test_successful_response_is_returned_unchanged(self, monkeypatch):
+        self._setup_mocks(monkeypatch, api_key=None, upstream_error=None)
+        mock_create_route = MagicMock(
+            return_value=AsyncMock(return_value={"id": "msg_123"})
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            mock_create_route,
+        )
+
+        result = await self._call_route()
+
+        assert result == {"id": "msg_123"}
+        assert mock_create_route.call_args.kwargs["custom_headers"] == {}
