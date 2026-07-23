@@ -1841,21 +1841,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/search-tools/_components/SearchConnectionTest.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/search-tools/_components/SearchToolTester.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/search-tools/_components/SearchToolView.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 2
