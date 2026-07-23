@@ -664,9 +664,6 @@
     }
   },
   "src/app/(dashboard)/old-usage/_components/usage.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     },
