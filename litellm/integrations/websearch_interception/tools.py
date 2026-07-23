@@ -290,3 +290,74 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
         return True
 
     return False
+
+
+def collect_rewritten_tool_names(original_tools: list[dict[str, Any]]) -> set[str]:
+    """Return the set of names from ``original_tools`` that the converter
+    rewrote to ``LITELLM_WEB_SEARCH_TOOL_NAME``. Used to scope
+    ``rewrite_web_search_tool_choice`` to only the names that were
+    actually renamed in this request — a bare ``WebSearch`` with no
+    ``input_schema`` is rewritten, but a Cowork client-side
+    ``WebSearch`` tool that ships with ``input_schema`` is not, and the
+    tool_choice rewriter must follow the same gate.
+    """
+    names: set[str] = set()
+    for tool in original_tools:
+        if not isinstance(tool, dict):
+            continue
+        if not is_web_search_tool(tool):
+            continue
+        name = tool.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+        function = tool.get("function")
+        if isinstance(function, dict):
+            function_name = function.get("name")
+            if isinstance(function_name, str) and function_name:
+                names.add(function_name)
+    return names
+
+
+def rewrite_web_search_tool_choice(tool_choice: Any, rewritten_names: set[str]) -> Any:
+    """Rename ``tool_choice`` entries that point at a tool the converter
+    just renamed to ``LITELLM_WEB_SEARCH_TOOL_NAME`` so the choice
+    keeps resolving against the new tools array.
+
+    Without this, ``tool_choice={"type": "tool", "name": "web_search"}``
+    (Anthropic style) or
+    ``tool_choice={"type": "function", "function": {"name": "web_search"}}``
+    (OpenAI style) lands on Bedrock after we've already renamed the tool
+    entry, and the provider rejects with
+    ``"Tool 'web_search' not found in provided tools"`` (issue #30822).
+
+    Scoped to ``rewritten_names`` (the output of
+    :func:`collect_rewritten_tool_names`) so a Cowork-style request that
+    forces ``tool_choice={"type": "tool", "name": "WebSearch"}`` while
+    keeping its client-side ``WebSearch`` tool (which carries an
+    ``input_schema`` and is not converted) does not get rewritten — that
+    would produce the inverse of the original bug.
+
+    Returns the (possibly rewritten) tool_choice. Non-dict values, plain
+    strings (``"auto"``/``"none"``/``"any"``/``"required"``), and entries
+    naming a tool we did not rewrite are returned unchanged.
+    """
+    if not isinstance(tool_choice, dict) or not rewritten_names:
+        return tool_choice
+
+    # Anthropic shape: {"type": "tool", "name": "..."}
+    name = tool_choice.get("name")
+    if isinstance(name, str) and name in rewritten_names:
+        rewritten = dict(tool_choice)
+        rewritten["name"] = LITELLM_WEB_SEARCH_TOOL_NAME
+        return rewritten
+
+    # OpenAI shape: {"type": "function", "function": {"name": "..."}}
+    function = tool_choice.get("function")
+    if isinstance(function, dict):
+        function_name = function.get("name")
+        if isinstance(function_name, str) and function_name in rewritten_names:
+            rewritten = dict(tool_choice)
+            rewritten["function"] = {**function, "name": LITELLM_WEB_SEARCH_TOOL_NAME}
+            return rewritten
+
+    return tool_choice
