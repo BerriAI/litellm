@@ -6168,6 +6168,9 @@ def create_model_info_response(
     if model_cost_info is not None:
         max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
         max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
+        mode = model_cost_info.get("mode")
+        if isinstance(mode, str):
+            base["mode"] = mode
 
     if llm_router is not None:
         configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
