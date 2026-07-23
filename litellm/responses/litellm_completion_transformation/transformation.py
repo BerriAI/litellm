@@ -167,6 +167,41 @@ class LiteLLMCompletionResponsesConfig:
         return tool_choice
 
     @staticmethod
+    def _transform_tool_choice_for_response(
+        tool_choice: Any,
+    ) -> str | dict[str, Any]:
+        """
+        Normalize tool_choice into a shape valid for ResponsesAPIResponse.tool_choice
+        when echoing the request back on response events.
+
+        Unlike _transform_tool_choice (which targets the Chat Completions request and
+        emits the nested {"type": "function", "function": {"name": ...}} shape), the
+        Responses API response object only accepts a string or the flat Responses API
+        shape {"type": "function", "name": "..."}, so a forced named tool must keep the
+        flat shape here to avoid a ResponsesAPIResponse ValidationError.
+        """
+        if tool_choice is None:
+            return "auto"
+
+        if isinstance(tool_choice, str):
+            return tool_choice
+
+        if isinstance(tool_choice, dict):
+            tool_choice_type = tool_choice.get("type")
+
+            if tool_choice_type == "function":
+                function_name = tool_choice.get("name") or tool_choice.get("function", {}).get("name")
+                if function_name:
+                    return {"type": "function", "name": function_name}
+                return "required"
+            if tool_choice_type in ("auto", "none", "required"):
+                return tool_choice_type
+            if tool_choice_type in ("tool", "any"):
+                return "required"
+
+        return tool_choice
+
+    @staticmethod
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: str | None) -> bool:
         """
         A Responses ``web_search`` built-in tool is derived into a ``web_search_options`` param.
