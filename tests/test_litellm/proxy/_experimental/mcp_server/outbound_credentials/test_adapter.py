@@ -358,6 +358,34 @@ def test_to_subject_maps_principal_fields():
     assert subject.tenant_id == "org1"
     assert subject.subject_id == "user1"
     assert subject.inbound_token is None
+    assert subject.inbound_provenance == "absent"
+
+
+def test_to_subject_classifies_an_external_jwt_as_id_token_candidate():
+    import jwt as pyjwt
+
+    external_jwt = pyjwt.encode({"iss": "https://idp.example.com", "sub": "alice"}, "idp-key", algorithm="HS256")
+    subject = to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), external_jwt)
+    assert subject.inbound_provenance == "external_jwt"
+
+
+def test_to_subject_classifies_an_opaque_inbound_token_as_external_opaque():
+    subject = to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), "opaque-not-a-jwt-token")
+    assert subject.inbound_provenance == "external_opaque"
+
+
+def test_to_subject_classifies_a_gateway_credential_inbound_token(monkeypatch):
+    """The edge is where a gateway-issued bearer that rode Authorization is recognized, so the
+    resolver core never has to; a virtual key is stamped `gateway_credential`."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master-adapter-test")
+    subject = to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), "sk-a-caller-virtual-key")
+    assert subject.inbound_provenance == "gateway_credential"
+
+
+def test_to_subject_absent_token_classifies_absent():
+    assert to_subject(SimpleNamespace(org_id="", team_id="", user_id="alice"), None).inbound_provenance == "absent"
 
 
 @pytest.mark.parametrize(
@@ -512,9 +540,7 @@ def test_id_jag_client_secret_maps_to_config():
     # ID-JAG asserts the user's id_token; the access_token default maps to id_token.
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:id_token"
     assert isinstance(spec.config.client_auth, ClientSecretAuth)
-    assert spec.config.client_auth.client_secret.get_secret_value() == (
-        "litellm-client-secret"
-    )
+    assert spec.config.client_auth.client_secret.get_secret_value() == ("litellm-client-secret")
 
 
 def test_id_jag_private_key_maps_to_private_key_jwt_auth():
@@ -540,9 +566,7 @@ def test_id_jag_private_key_wins_over_client_secret():
 
 
 def test_id_jag_honors_explicit_subject_token_type():
-    spec = to_server_spec(
-        _id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2")
-    )
+    spec = to_server_spec(_id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2"))
     assert spec is not None and isinstance(spec.config, IdJagConfig)
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:saml2"
 

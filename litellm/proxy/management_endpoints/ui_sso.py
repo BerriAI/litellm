@@ -66,6 +66,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     SSOIdentityAssertion,
     assertion_from_sso_login,
+    generic_sso_scopes,
     retain_sso_identity_assertion_for_ema,
 )
 from litellm.proxy._types import (
@@ -1106,7 +1107,7 @@ def _setup_generic_sso_env_vars(
 ) -> Tuple[str, List[str], str, str, str, bool]:
     """Setup and validate Generic SSO environment variables."""
     generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
-    generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
+    generic_scope = generic_sso_scopes()
     generic_authorization_endpoint = os.getenv("GENERIC_AUTHORIZATION_ENDPOINT", None)
     generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
     generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)
@@ -2609,7 +2610,7 @@ class SSOAuthenticationHandler:
             from fastapi_sso.sso.generic import create_provider
 
             generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
-            generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
+            generic_scope = generic_sso_scopes()
             generic_authorization_endpoint = os.getenv("GENERIC_AUTHORIZATION_ENDPOINT", None)
             generic_token_endpoint = os.getenv("GENERIC_TOKEN_ENDPOINT", None)
             generic_userinfo_endpoint = os.getenv("GENERIC_USERINFO_ENDPOINT", None)

@@ -18,6 +18,9 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 from typing_extensions import assert_never
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials.credential_provenance import (
+    classify_inbound_provenance,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
@@ -48,15 +51,19 @@ def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optio
     """Map v1's authenticated principal onto the resolver's Subject.
 
     tenant_id / subject_id are empty for an unauthenticated caller; the per-user arms must reject
-    an empty subject rather than share one credential slot across callers.
+    an empty subject rather than share one credential slot across callers. The inbound token's
+    provenance (gateway-issued vs the caller's own external credential) is classified here, at the
+    edge, so the resolver core never has to recognize gateway credentials itself.
     """
     inbound = SecretStr(subject_token) if subject_token else None
+    provenance = classify_inbound_provenance(subject_token)
     if user_api_key_auth is None:
-        return Subject(tenant_id="", subject_id="", inbound_token=inbound)
+        return Subject(tenant_id="", subject_id="", inbound_token=inbound, inbound_provenance=provenance)
     return Subject(
         tenant_id=user_api_key_auth.org_id or user_api_key_auth.team_id or "",
         subject_id=user_api_key_auth.user_id or "",
         inbound_token=inbound,
+        inbound_provenance=provenance,
     )
 
 

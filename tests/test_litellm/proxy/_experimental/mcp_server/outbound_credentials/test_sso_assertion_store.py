@@ -14,7 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt as pyjwt
 import pytest
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    TokenStoreUnavailable,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    SsoAssertionUnrenewable,
     assertion_from_sso_login,
     ema_assertion_retention_enabled,
     fetch_sso_identity_assertion,
@@ -49,9 +53,7 @@ def _make_prisma(stored: dict, db_has_id_jag_server: bool = False):
     ``db_has_id_jag_server`` drives the retention gate's authoritative DB fallback;
     it is wired explicitly so the gate never reads a truthy bare MagicMock."""
     prisma = MagicMock()
-    prisma.db.litellm_mcpservertable.find_first = AsyncMock(
-        return_value=MagicMock() if db_has_id_jag_server else None
-    )
+    prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=MagicMock() if db_has_id_jag_server else None)
 
     async def _upsert(where, data):
         stored[where["user_id"]] = data["update"]["assertion_b64"]
@@ -240,19 +242,35 @@ async def test_fetch_missing_row_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_fetch_undecryptable_row_returns_none():
+async def test_fetch_undecryptable_row_is_unrenewable_not_absent():
+    """A row that will not decrypt (salt-key rotation) is unusable material, not a user who never
+    signed in; the remedy is a fresh sign-in, so it must not read as absence."""
     prisma = _make_prisma({"user-a": "not-an-encrypted-blob"})
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-        assert await fetch_sso_identity_assertion("user-a") is None
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma), pytest.raises(SsoAssertionUnrenewable):
+        await fetch_sso_identity_assertion("user-a")
 
 
 @pytest.mark.asyncio
-async def test_fetch_unparseable_payload_returns_none():
+async def test_fetch_unparseable_payload_is_unrenewable_not_absent():
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
     prisma = _make_prisma({"user-a": encrypt_value_helper("]]not json")})
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-        assert await fetch_sso_identity_assertion("user-a") is None
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma), pytest.raises(SsoAssertionUnrenewable):
+        await fetch_sso_identity_assertion("user-a")
+
+
+@pytest.mark.asyncio
+async def test_fetch_reports_an_unreachable_store_as_unavailable_never_absent():
+    """The reported defect: a transient store outage for a user who DOES have an assertion must be
+    retryable (503), never the precondition-required shape that means "you have never signed in".
+    ``None`` is reserved for the one determinate fact that no row was ever written."""
+    with patch("litellm.proxy.proxy_server.prisma_client", None), pytest.raises(TokenStoreUnavailable):
+        await fetch_sso_identity_assertion("user-a")
+
+    exploding = _make_prisma({})
+    exploding.db.litellm_ssoidentityassertion.find_unique = AsyncMock(side_effect=RuntimeError("db down"))
+    with patch("litellm.proxy.proxy_server.prisma_client", exploding), pytest.raises(TokenStoreUnavailable):
+        await fetch_sso_identity_assertion("user-a")
 
 
 @pytest.mark.asyncio
@@ -341,3 +359,641 @@ async def test_rotation_skips_unreadable_rows_but_rotates_readable_ones():
     await rotate_sso_identity_assertions_master_key(prisma_client=prisma, new_master_key="another-new-salt-key-0000")
     assert stored["bad"] == "garbage-blob"
     assert stored["good"] != good_blob_before
+
+
+# -- LiveSsoAssertionSource: the resolver-facing usable-assertion lookup + refresh -------------
+
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (  # noqa: E402
+    LiveSsoAssertionSource,
+    SSOIdentityAssertion,
+    SsoAssertionUnrenewable,
+)
+from pydantic import SecretStr  # noqa: E402
+
+_SSO_ENV = {
+    "GENERIC_CLIENT_ID": "sso-client",
+    "GENERIC_CLIENT_SECRET": "sso-secret",
+    "GENERIC_TOKEN_ENDPOINT": "https://idp.example.com/token",
+}
+
+
+def _stored(expires_in_seconds: int | None, refresh_token: str | None = "rt_stored") -> SSOIdentityAssertion:
+    return SSOIdentityAssertion(
+        id_token=SecretStr(_make_id_token()),
+        refresh_token=SecretStr(refresh_token) if refresh_token else None,
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+            if expires_in_seconds is not None
+            else None
+        ),
+    )
+
+
+def _source(stored: SSOIdentityAssertion | None, post_bodies: list, env: dict | None = None):
+    fetches: list[str] = []
+    persisted: list[tuple[str, SSOIdentityAssertion]] = []
+    posts: list[tuple[str, dict]] = []
+    state = {"stored": stored}
+
+    async def fetch(user_id: str):
+        fetches.append(user_id)
+        return state["stored"]
+
+    async def persist(user_id: str, assertion: SSOIdentityAssertion):
+        persisted.append((user_id, assertion))
+        state["stored"] = assertion
+
+    async def post(url: str, form: dict):
+        posts.append((url, dict(form)))
+        body = post_bodies.pop(0) if post_bodies else None
+        if body is None:
+            raise TokenStoreUnavailable("idp unreachable")
+        return body
+
+    environment = _SSO_ENV if env is None else env
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=environment.get)
+    return source, fetches, persisted, posts
+
+
+@pytest.mark.asyncio
+async def test_source_empty_user_id_is_absent_without_a_db_read():
+    source, fetches, _, _ = _source(_stored(3600), [])
+    assert await source.fetch_usable("") is None
+    assert fetches == []
+
+
+@pytest.mark.asyncio
+async def test_source_missing_row_is_absent():
+    source, _, _, posts = _source(None, [])
+    assert await source.fetch_usable("alice") is None
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_source_unexpired_assertion_is_usable_without_refresh():
+    stored = _stored(3600)
+    source, _, _, posts = _source(stored, [])
+    lookup = await source.fetch_usable("alice")
+    assert lookup is not None
+    assert lookup.access_token == stored.id_token.get_secret_value()
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_source_near_expiry_assertion_counts_as_expired():
+    """A token inside the buffer would die mid-exchange; it must refresh, not be served."""
+    source, _, _, posts = _source(_stored(10, refresh_token=None), [])
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_source_expired_with_refresh_renews_persists_and_returns_usable():
+    new_id_token = _make_id_token(exp_offset=7200)
+    source, _, persisted, posts = _source(
+        _stored(-100), [{"id_token": new_id_token, "refresh_token": "rt_rotated", "access_token": "at"}]
+    )
+    lookup = await source.fetch_usable("alice")
+    assert lookup is not None
+    assert lookup.access_token == new_id_token
+    assert lookup.refresh_token is not None
+    assert lookup.refresh_token == "rt_rotated"
+    assert len(persisted) == 1 and persisted[0][0] == "alice"
+    url, form = posts[0]
+    assert url == "https://idp.example.com/token"
+    assert form["grant_type"] == "refresh_token"
+    assert form["refresh_token"] == "rt_stored"
+    assert form["client_id"] == "sso-client"
+    assert form["client_secret"] == "sso-secret"
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_requests_openid_scope_so_the_idp_returns_an_id_token():
+    """The refresh grant must carry a scope containing ``openid`` or the IdP returns no id_token,
+    stranding a renewable assertion as expired and forcing a needless re-login (the round-9
+    finding). With no GENERIC_SCOPE configured it falls to the same default the login uses, which
+    contains ``openid``. Dropping the scope from the refresh form makes this fail."""
+    source, _, _, posts = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}])
+    await source.fetch_usable("alice")
+    _, form = posts[0]
+    assert "openid" in form["scope"].split(" ")
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_scope_matches_the_configured_login_scope():
+    """Refresh requests exactly the scopes the login was granted, read through the same shared
+    owner off the injected env, so the two can never diverge and the refresh stays within RFC 6749
+    granted scope. Sourcing the scope from the global environment instead of the injected getenv
+    makes this fail."""
+    env = {**_SSO_ENV, "GENERIC_SCOPE": "openid email offline_access"}
+    source, _, _, posts = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}], env=env)
+    await source.fetch_usable("alice")
+    _, form = posts[0]
+    assert form["scope"] == "openid email offline_access"
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_without_rotated_token_carries_the_stored_one_forward():
+    source, _, _, _ = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}])
+    lookup = await source.fetch_usable("alice")
+    assert lookup is not None
+    assert lookup.refresh_token is not None
+    assert lookup.refresh_token == "rt_stored"
+
+
+@pytest.mark.asyncio
+async def test_source_expired_without_refresh_token_is_expired():
+    source, _, _, posts = _source(_stored(-100, refresh_token=None), [])
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    assert posts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"id_token": ""}, {"id_token": 123}, {"access_token": "at-only"}])
+async def test_source_refresh_granting_no_usable_id_token_is_expired(body):
+    source, _, persisted, _ = _source(_stored(-100), [body])
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    assert persisted == []
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_rejection_is_expired_and_unreachable_is_unavailable():
+    """A 4xx is a verdict on the grant (re-login fixes it); an unreachable IdP proves nothing
+    about the grant, so the user must NOT be told to re-login for a transient outage."""
+
+    async def fetch(user_id: str):
+        return _stored(-100)
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def rejected_post(url, form):
+        raise SsoAssertionUnrenewable("rejected")
+
+    async def unreachable_post(url, form):
+        raise TokenStoreUnavailable("unreachable")
+
+    rejected_source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=rejected_post, getenv=_SSO_ENV.get)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await rejected_source.fetch_usable("alice")
+
+    unreachable_source = LiveSsoAssertionSource(
+        fetch=fetch, persist=persist, post=unreachable_post, getenv=_SSO_ENV.get
+    )
+    with pytest.raises(TokenStoreUnavailable):
+        await unreachable_source.fetch_usable("alice")
+
+
+@pytest.mark.asyncio
+async def test_source_missing_sso_env_is_unavailable_not_expired():
+    """Env absence is a deployment problem; a re-login cannot fix it (SSO needs the same env),
+    so the state must be Unavailable, not Expired."""
+    source, _, _, posts = _source(_stored(-100), [], env={})
+    with pytest.raises(TokenStoreUnavailable):
+        await source.fetch_usable("alice")
+    assert posts == []
+
+
+@pytest.mark.asyncio
+async def test_a_dead_grant_costs_one_post_because_the_verdict_lands_on_the_row():
+    """A dead refresh grant costs one token-endpoint POST, not one per egress call, because the
+    rejection strips the refresh token from the row itself; later reads answer from the row. The
+    bound therefore holds on every pod and for as long as the row stands, and a re-login lifts it
+    by replacing the row rather than by waiting out a timer."""
+    clock = {"now": time.time()}
+    posts: list[dict] = []
+    state = {"stored": _stored(-100)}
+
+    async def fetch(user_id: str):
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        state["stored"] = assertion
+
+    async def post(url, form):
+        posts.append(dict(form))
+        raise SsoAssertionUnrenewable("rejected")
+
+    source = LiveSsoAssertionSource(
+        fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"]
+    )
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    assert len(posts) == 1
+
+    clock["now"] = clock["now"] + 31.0
+    state["stored"] = _stored(3600)
+    lookup = await source.fetch_usable("alice")
+    assert lookup is not None
+    assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_relogin_within_the_negative_window_is_honored_immediately():
+    """The 401 challenge tells the user to re-login; the fresh row must be served the moment it
+    lands, even while a negative verdict is still memoized (no clock advance, same pod). The
+    negative memo may only bound re-POST thrash for a row that is genuinely still expired; it must
+    never mask the authoritative read, or the recovery the challenge asks for silently fails."""
+    posts: list[dict] = []
+    state = {"stored": _stored(-100)}
+
+    async def fetch(user_id: str):
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        state["stored"] = assertion
+
+    async def post(url, form):
+        posts.append(dict(form))
+        raise SsoAssertionUnrenewable("rejected")
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    assert len(posts) == 1
+
+    state["stored"] = _stored(3600)  # re-login lands in the same negative window, no clock advance
+    lookup = await source.fetch_usable("alice")
+    assert lookup is not None
+    assert len(posts) == 1  # the fresh usable row short-circuits before any refresh POST
+
+
+@pytest.mark.asyncio
+async def test_source_waiter_of_an_expired_winner_does_not_respend_the_grant():
+    """The hand-off channel carries negative verdicts too: a waiter behind a winner whose
+    refresh was rejected reads the memoized Expired instead of re-POSTing the spent token."""
+    import asyncio
+
+    posts: list[dict] = []
+
+    async def fetch(user_id: str):
+        await asyncio.sleep(0)
+        return _stored(-100)
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def post(url, form):
+        posts.append(dict(form))
+        await asyncio.sleep(0)
+        raise SsoAssertionUnrenewable("rejected")
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"), return_exceptions=True)
+    assert all(isinstance(r, SsoAssertionUnrenewable) for r in results)
+    assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_concurrent_expired_fetches_refresh_once():
+    """Two flights hit the same expired assertion; the single-flight lock makes the second
+    re-read the row the first refreshed instead of spending the refresh token again. The fake
+    post yields to the loop so the flights genuinely interleave."""
+    import asyncio
+
+    fetches: list[str] = []
+    posts: list[tuple[str, dict]] = []
+    state = {"stored": _stored(-100)}
+    bodies = [{"id_token": _make_id_token(exp_offset=7200)}, {"id_token": _make_id_token(exp_offset=7200)}]
+
+    async def fetch(user_id: str):
+        await asyncio.sleep(0)
+        fetches.append(user_id)
+        return state["stored"]
+
+    async def persist(user_id: str, assertion: SSOIdentityAssertion):
+        await asyncio.sleep(0)
+        state["stored"] = assertion
+
+    async def post(url: str, form: dict):
+        posts.append((url, dict(form)))
+        await asyncio.sleep(0)
+        return bodies.pop(0)
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
+    assert all(r is not None for r in results)
+    assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_memoizes_usable_lookups_within_ttl():
+    """A usable assertion is served from the in-process memo, so repeated egress calls do not
+    pay a DB read per call; the memo expires with the TTL and the row is re-read."""
+    clock = {"now": time.time()}
+    fetches: list[str] = []
+    stored = _stored(3600)
+
+    async def fetch(user_id: str):
+        fetches.append(user_id)
+        return stored
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def post(url, form):
+        return None
+
+    source = LiveSsoAssertionSource(
+        fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"], cache_ttl_seconds=60.0
+    )
+    first = await source.fetch_usable("alice")
+    second = await source.fetch_usable("alice")
+    assert first is not None and second is not None
+    assert fetches == ["alice"]
+    clock["now"] = clock["now"] + 61.0
+    third = await source.fetch_usable("alice")
+    assert third is not None
+    assert fetches == ["alice", "alice"]
+
+
+@pytest.mark.asyncio
+async def test_a_dead_grant_verdict_never_refuses_a_caller_who_signed_in_again():
+    """A rejected grant must not refuse the NEXT assertion, even one that is itself near expiry.
+
+    The verdict is recorded on the row (its refresh token is stripped), so replacing the row at
+    re-login clears it by construction. A verdict parked in a side cache keyed by user would still
+    be inside its window here and would raise a false 401 at the moment the fresh assertion first
+    needs renewing, despite a perfectly good refresh token.
+    """
+    state = {"stored": _stored(-100, refresh_token="rt_dead")}
+    outcomes = {"reject": True}
+
+    async def fetch(user_id: str):
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        state["stored"] = assertion
+
+    async def post(url, form):
+        if outcomes["reject"]:
+            raise SsoAssertionUnrenewable("grant is dead")
+        return {"id_token": _make_id_token(exp_offset=3600), "refresh_token": "rt_fresh"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    # The verdict lives on the row now: the dead refresh token is gone, so a repeat costs no POST.
+    assert state["stored"].refresh_token is None
+
+    # The user signs in again. The new assertion is ALSO near expiry, so renewal runs immediately;
+    # it must use the new grant rather than a remembered verdict.
+    outcomes["reject"] = False
+    state["stored"] = _stored(-5, refresh_token="rt_after_relogin")
+    renewed = await source.fetch_usable("alice")
+    assert renewed is not None
+    assert renewed.refresh_token == "rt_fresh"
+
+
+@pytest.mark.asyncio
+async def test_replacing_the_row_drops_a_cached_superseded_assertion():
+    """A re-login must take effect at once, not when the superseded id_token finally expires.
+
+    The assertion is identity material, so a user who re-authenticates after their IdP claims are
+    REDUCED must stop being able to spend the old one. ``persist_sso_identity_assertion`` is the
+    single place the row is replaced, so it drops the cached predecessor; without that hook the
+    warm entry below keeps serving the old id_token for its full remaining life.
+    """
+    superseded = _make_id_token(exp_offset=3600, iss="https://old.example.com")
+    replacement = _make_id_token(exp_offset=3600, iss="https://new.example.com")
+    state = {"stored": SSOIdentityAssertion(id_token=SecretStr(superseded))}
+
+    async def fetch(user_id: str):
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        state["stored"] = assertion
+
+    async def post(url, form):
+        raise TokenStoreUnavailable("unreachable")
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    warm = await source.fetch_usable("alice")
+    assert warm is not None
+    assert warm.access_token == superseded
+
+    # The user signs in again; the row is replaced through the real write chokepoint.
+    state["stored"] = SSOIdentityAssertion(id_token=SecretStr(replacement))
+    with patch("litellm.proxy.proxy_server.prisma_client", _make_prisma({})):
+        await persist_sso_identity_assertion("alice", state["stored"])
+
+    after = await source.fetch_usable("alice")
+    assert after is not None
+    assert after.access_token == replacement
+
+
+@pytest.mark.asyncio
+async def test_source_never_memoizes_absence_so_a_fresh_login_is_seen_immediately():
+    fetches: list[str] = []
+    state = {"stored": None}
+
+    async def fetch(user_id: str):
+        fetches.append(user_id)
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def post(url, form):
+        return None
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    assert await source.fetch_usable("alice") is None
+    state["stored"] = _stored(3600)
+    assert await source.fetch_usable("alice") is not None
+    assert fetches == ["alice", "alice"]
+
+
+@pytest.mark.asyncio
+async def test_source_store_outage_is_retryable_and_a_warm_cache_survives_it():
+    """A warm cache keeps serving through an outage, and once cold the outage is RETRYABLE.
+
+    It must never read as absence: this user has an assertion, so answering "you have never signed
+    in" would send them to a sign-in that fixes nothing while the real remedy is to retry. ``None``
+    is reserved for the one case where no row was ever written.
+    """
+    calls = {"n": 0}
+    stored = _stored(3600)
+
+    async def flaky_fetch(user_id: str):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("db down")
+        return stored
+
+    async def persist(user_id, assertion):
+        return None
+
+    async def post(url, form):
+        return None
+
+    clock = {"now": time.time()}
+    source = LiveSsoAssertionSource(
+        fetch=flaky_fetch,
+        persist=persist,
+        post=post,
+        getenv=_SSO_ENV.get,
+        now=lambda: clock["now"],
+        cache_ttl_seconds=60.0,
+    )
+    assert await source.fetch_usable("alice") is not None
+    assert await source.fetch_usable("alice") is not None
+    clock["now"] = clock["now"] + 61.0
+    with pytest.raises(TokenStoreUnavailable):
+        await source.fetch_usable("alice")
+
+
+@pytest.mark.asyncio
+async def test_source_persist_failure_after_refresh_still_serves_the_in_hand_token():
+    """A write-back failure is not a read failure: the freshly refreshed assertion is valid
+    and in hand, and discarding it would also strand a one-time rotated refresh token."""
+    new_id_token = _make_id_token(exp_offset=7200)
+    posts: list[tuple[str, dict]] = []
+
+    async def fetch(user_id: str):
+        return _stored(-100)
+
+    async def failing_persist(user_id, assertion):
+        raise RuntimeError("db write down")
+
+    async def post(url, form):
+        posts.append((url, dict(form)))
+        return {"id_token": new_id_token, "refresh_token": "rt_rotated"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=failing_persist, post=post, getenv=_SSO_ENV.get)
+    lookup = await source.fetch_usable("alice")
+    assert lookup is not None
+    assert lookup.access_token == new_id_token
+    assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_returning_expired_token_reads_expired_but_persists_rotation():
+    """Usable has ONE construction gate: a refreshed assertion passes the same expiry
+    predicate as a stored one, so an IdP handing back a dead token reads Expired instead of
+    being sent to an exchange; the rotated refresh token is still persisted."""
+    expired_new = _make_id_token(exp_offset=-10)
+    persisted: list[tuple[str, SSOIdentityAssertion]] = []
+
+    async def fetch(user_id: str):
+        return _stored(-100)
+
+    async def persist(user_id, assertion):
+        persisted.append((user_id, assertion))
+
+    async def post(url, form):
+        return {"id_token": expired_new, "refresh_token": "rt_rotated"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    assert len(persisted) == 1
+    stored_assertion = persisted[0][1]
+    assert stored_assertion.refresh_token is not None
+    assert stored_assertion.refresh_token.get_secret_value() == "rt_rotated"
+
+
+@pytest.mark.asyncio
+async def test_source_waiter_gets_the_winners_token_when_persist_failed():
+    """The memo is the single-flight hand-off: with the write-back failing and a one-time
+    refresh token, the waiter must receive the winner's in-hand assertion from the memo under
+    the lock instead of re-reading the stale row and re-spending the refresh grant."""
+    import asyncio
+
+    new_id_token = _make_id_token(exp_offset=7200)
+    posts: list[dict] = []
+
+    async def fetch(user_id: str):
+        await asyncio.sleep(0)
+        return _stored(-100)
+
+    async def failing_persist(user_id, assertion):
+        raise RuntimeError("db write down")
+
+    async def post(url, form):
+        posts.append(dict(form))
+        await asyncio.sleep(0)
+        if form["refresh_token"] != "rt_stored" or len(posts) > 1:
+            raise SsoAssertionUnrenewable("rejected")
+        return {"id_token": new_id_token, "refresh_token": "rt_rotated"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=failing_persist, post=post, getenv=_SSO_ENV.get)
+    results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
+    assert all(r is not None for r in results)
+    assert len(posts) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code,body,expected_type",
+    [
+        (400, {"error": "invalid_grant"}, SsoAssertionUnrenewable),
+        (401, {"error": "invalid_client"}, SsoAssertionUnrenewable),
+        (429, {"error": "rate_limited"}, TokenStoreUnavailable),
+        (400, "not-json-object", TokenStoreUnavailable),
+        (400, None, TokenStoreUnavailable),
+        (502, {"error": "invalid_grant"}, TokenStoreUnavailable),
+    ],
+)
+async def test_post_helper_rejection_requires_a_proven_oauth_verdict(status_code, body, expected_type, monkeypatch):
+    """Rejected needs proof: a non-429 4xx carrying an RFC 6749 error code. A rate limit, a 4xx
+    without the error object (an intermediary, not the token endpoint), or any 5xx proves
+    nothing about the grant and must not send the user to re-login."""
+    import json as _json
+
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
+
+    response = MagicMock()
+    response.status_code = status_code
+    if body is None:
+        response.json.side_effect = _json.JSONDecodeError("x", "y", 0)
+    else:
+        response.json.return_value = body
+    response.raise_for_status.side_effect = httpx.HTTPStatusError("err", request=MagicMock(), response=response)
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
+    with pytest.raises(expected_type):
+        await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [None, [], "string", 42])
+async def test_post_helper_2xx_non_object_body_is_unreachable_not_a_crash(body, monkeypatch):
+    """A 2xx whose body is not a JSON object must read Unreachable; letting it construct a
+    Granted outcome detonates downstream validation into the broad catch, which misreads the
+    state as Absent and misdirects the user to a 412 instead of a retryable failure."""
+    client = MagicMock()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    response.json.return_value = body
+    client.post = AsyncMock(return_value=response)
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
+
+    with pytest.raises(TokenStoreUnavailable):
+        await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
+
+
+@pytest.mark.asyncio
+async def test_post_helper_transport_failure_is_unreachable(monkeypatch):
+    client = MagicMock()
+    client.post = AsyncMock(side_effect=ConnectionError("down"))
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
+
+    with pytest.raises(TokenStoreUnavailable):
+        await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})

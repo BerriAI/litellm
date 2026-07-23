@@ -1209,6 +1209,29 @@ class MCPRequestHandler:
         return MCP_CLIENT_SIDE_AUTH_HEADER_NAME
 
     @staticmethod
+    def authorization_is_free_rider(raw_headers: dict[str, str] | None) -> bool:
+        """Whether the request's Authorization bearer was NOT the admission credential.
+
+        This is the inverse view of ``get_litellm_api_key_from_headers`` and must encode the
+        SAME header-preference rule: admission authenticates with the explicit primary header
+        only when its value is truthy (a missing or empty primary falls back to Authorization),
+        so the Authorization bearer was the admission credential exactly when the primary is
+        absent or empty. It lives in this module beside that accessor so one owner holds the
+        rule, and the agreement test pins the two against a shared header matrix.
+        """
+        if not raw_headers:
+            return False
+        primary = next(
+            (
+                value
+                for key, value in raw_headers.items()
+                if str(key).lower() == MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY.lower()
+            ),
+            None,
+        )
+        return bool(primary)
+
+    @staticmethod
     def get_litellm_api_key_from_headers(headers: Headers) -> Optional[str]:
         """
         Get the Litellm API key from the headers using case-insensitive lookup

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 from functools import partial
+from typing import Protocol
 
 import httpx
 from typing_extensions import assert_never
@@ -40,6 +41,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
     Result,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    SsoAssertionUnrenewable,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
     ExchangedToken,
@@ -72,6 +76,29 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 _TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
 _JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _ID_JAG_REQUESTED_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:id-jag"
+
+
+def _inbound_id_token(subject: Subject) -> str | None:
+    """The inbound bearer when it is the caller's own presented id_token, else None so id_jag
+    sourcing falls to the stored assertion. The ID-JAG exchange takes an id_token (a JWT), so the
+    inbound is used only when the edge classified it ``external_jwt``: a gateway-issued credential
+    and an opaque (non-JWT) bearer are both rejected here and resolve through the store instead."""
+    if subject.inbound_token is None or subject.inbound_provenance != "external_jwt":
+        return None
+    return subject.inbound_token.get_secret_value()
+
+
+class SsoAssertionSource(Protocol):
+    """Where the ID-JAG arm finds the caller's stored SSO identity assertion by user id."""
+
+    async def fetch_usable(self, user_id: str) -> OAuthToken | None: ...
+
+
+class _NullSsoAssertionSource:
+    """Fail-closed default: with no assertion source wired, no stored assertion is ever found."""
+
+    async def fetch_usable(self, user_id: str) -> OAuthToken | None:
+        return None
 
 
 class _NullOAuthTokenStore:
@@ -111,12 +138,14 @@ class UpstreamCredentialProvider:
         token_endpoint: TokenEndpointClient | None = None,
         exchanged_tokens: ExchangedTokenCache | None = None,
         client_credentials_source: ClientCredentialsTokenSource | None = None,
+        sso_assertions: SsoAssertionSource | None = None,
     ) -> None:
         self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
         self._token_exchanger: TokenExchanger = token_exchanger or _NullTokenExchanger()
         self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
         self._client_credentials_source = client_credentials_source or ClientCredentialsTokenSource()
+        self._sso_assertions: SsoAssertionSource = sso_assertions or _NullSsoAssertionSource()
 
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
@@ -170,15 +199,52 @@ class UpstreamCredentialProvider:
                 return Error(CredError.of_not_implemented("api_key BYOK source not implemented yet"))
         assert_never(config.key_source)
 
-    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx.Auth, CredError]:
-        if subject.inbound_token is None:
+    async def _id_jag_subject_token(self, subject: Subject) -> Result[str, CredError]:
+        """The ONE sourcing rule for the ID-JAG subject token, shared by resolve and invalidate.
+        The ID-JAG exchange takes an id_token, so the subject is the caller's presented id_token
+        when the inbound bearer is one (the live, freshest identity evidence), else the stored SSO
+        assertion (itself an id_token, renewed when expired), else fail closed. Anything that is
+        not an id_token, a gateway-issued credential or an opaque bearer, is never forwarded: it
+        resolves through the store or not at all. An expired-and-unrenewable stored assertion is a
+        401 re-login challenge, never a silent fall-through: the user HAS connected and the only
+        fix is theirs to perform."""
+        inbound = _inbound_id_token(subject)
+        if inbound is not None:
+            return Ok(inbound)
+        try:
+            assertion = await self._sso_assertions.fetch_usable(subject.subject_id)
+        except SsoAssertionUnrenewable:
+            return Error(
+                CredError.of_unauthorized(
+                    "The stored identity assertion for this user has expired and could not "
+                    "be renewed; sign in to the gateway again to re-establish it.",
+                    www_authenticate=(
+                        'Bearer error="invalid_token", error_description="identity assertion expired; re-authenticate"'
+                    ),
+                )
+            )
+        except TokenStoreUnavailable:
+            return Error(
+                CredError.of_upstream_unavailable(
+                    "the stored identity assertion is expired and could not be renewed because "
+                    "the identity provider was unreachable; retry shortly"
+                )
+            )
+        if assertion is None:
             return Error(
                 CredError.of_precondition_required(
                     "ID-JAG requires a caller identity token; it asserts the calling "
                     "user's identity upstream and cannot use a static credential."
                 )
             )
-        token = subject.inbound_token.get_secret_value()
+        return Ok(assertion.access_token)
+
+    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx.Auth, CredError]:
+        match await self._id_jag_subject_token(subject):
+            case Error(err):
+                return Error(err)
+            case Ok(resolved):
+                token = resolved
         cache_key = _id_jag_cache_key(token, server.server_id, config)
 
         async def _exchange() -> Result[ExchangedToken, CredError]:
@@ -248,12 +314,26 @@ class UpstreamCredentialProvider:
         No inbound token means there is nothing to exchange, so the arm fails closed with a 401 rather
         than falling through to a weaker source (§1.5); the exchanger handles the IdP round-trip and
         caching and returns the upstream token or a typed error.
+
+        The arm keeps its exchange-what-was-presented contract for the caller's own external token,
+        but a gateway-issued credential (an admission key, session token, or gateway-signed JWT that
+        arrived on Authorization) is never disclosed to the external token endpoint; it fails closed
+        with the same 401 as a missing token so a misdirected gateway credential is refused, not
+        forwarded.
         """
         inbound = subject.inbound_token
         if inbound is None:
             return Error(
                 CredError.of_unauthorized(
                     "Token exchange requires a caller token to exchange (OBO).",
+                    www_authenticate='Bearer error="invalid_request"',
+                )
+            )
+        if subject.inbound_provenance == "gateway_credential":
+            return Error(
+                CredError.of_unauthorized(
+                    "Token exchange refuses a gateway-issued credential as the subject token; "
+                    "present the caller's own identity token to exchange (OBO).",
                     www_authenticate='Bearer error="invalid_request"',
                 )
             )
@@ -272,18 +352,22 @@ class UpstreamCredentialProvider:
         than serving the same rejected token until TTL. `token_exchange` and `id_jag` hold a
         re-mintable cached credential here; `client_credentials` recovers inside its own auth flow
         (`ClientCredentialsBearerAuth` retries the 401'd request once with a fresh token), and
-        other modes are a no-op.
+        other modes are a no-op. The `id_jag` eviction resolves its subject token through the same
+        rule that minted the cache entry, so a stored-assertion caller (no inbound token) evicts
+        the entry its resolve created; a failed resolution means no entry could exist, a no-op.
         """
-        if subject.inbound_token is None:
-            return
         if isinstance(server.config, TokenExchangeConfig):
+            if subject.inbound_token is None:
+                return
             await self._token_exchanger.invalidate(
                 subject.inbound_token.get_secret_value(), server, server.config, tenant_id=subject.tenant_id
             )
         if isinstance(server.config, IdJagConfig):
-            self._exchanged_tokens.invalidate(
-                _id_jag_cache_key(subject.inbound_token.get_secret_value(), server.server_id, server.config)
-            )
+            match await self._id_jag_subject_token(subject):
+                case Ok(resolved):
+                    self._exchanged_tokens.invalidate(_id_jag_cache_key(resolved, server.server_id, server.config))
+                case Error(_):
+                    return
 
     async def _authz_token(self, subject: Subject, server: ServerSpec) -> OAuthToken | None:
         """The user's authorization_code token, or None when absent or the store is unreachable.
