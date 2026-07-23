@@ -145,6 +145,7 @@ _STREAMING_ERROR_BODY_READ_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 
 _MAX_ERROR_BODY_BYTES = 64 * 1024  # 64 KB cap — prevents event-loop stalls from huge upstream error bodies
 
+
 def _prepare_request_data_and_content(
     data: Optional[Union[dict, str, bytes]] = None,
     content: Any = None,
@@ -402,7 +403,10 @@ async def _safe_aread_response(response: httpx.Response, timeout: Optional[float
         else:
             body = await response.aread()
         if len(body) > _MAX_ERROR_BODY_BYTES:
-            body = body[:_MAX_ERROR_BODY_BYTES] + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+            body = (
+                body[:_MAX_ERROR_BODY_BYTES]
+                + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+            )
         return body
     except Exception:
         return b""
@@ -416,14 +420,20 @@ def _safe_read_response(response: httpx.Response, timeout: Optional[float] = Non
             try:
                 body = future.result(timeout=timeout)
                 if len(body) > _MAX_ERROR_BODY_BYTES:
-                    body = body[:_MAX_ERROR_BODY_BYTES] + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+                    body = (
+                        body[:_MAX_ERROR_BODY_BYTES]
+                        + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+                    )
                 return body
             except Exception:
                 response.close()
                 return b""
         body = response.read()
         if len(body) > _MAX_ERROR_BODY_BYTES:
-            body = body[:_MAX_ERROR_BODY_BYTES] + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+            body = (
+                body[:_MAX_ERROR_BODY_BYTES]
+                + f" ... [truncated, original size exceeded {_MAX_ERROR_BODY_BYTES} bytes]".encode()
+            )
         return body
     except Exception:
         return b""

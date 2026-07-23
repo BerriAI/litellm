@@ -231,10 +231,12 @@ class RouterBudgetLimiting(CustomLogger):
                             budget_limit=config.max_budget,
                         )
                         if current_spend >= config.max_budget:
-                            debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.max_budget}"
+                            debug_msg = (
+                                f"Exceeded budget for provider {provider}: {current_spend} >= {config.max_budget}"
+                            )
                             deployment_above_budget_info += f"{debug_msg}\n"
                             is_within_budget = False
-                            
+
             # Check deployment budget
             if self.deployment_budget_config and is_within_budget:
                 _model_name = deployment.get("model_name")
