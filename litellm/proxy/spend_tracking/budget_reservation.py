@@ -68,14 +68,12 @@ def _raise_reservation_unavailable(counter_key: str) -> NoReturn:
     )
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail={
-            "error": (
-                "Budget enforcement unavailable: the budget reservation could not "
-                "be written to the spend counter backend, and "
-                "fail_closed_budget_enforcement is enabled, so the request was "
-                "rejected to avoid exceeding the configured budget. Retry shortly."
-            )
-        },
+        detail=(
+            "Budget enforcement unavailable: the budget reservation could not "
+            "be written to the spend counter backend, and "
+            "fail_closed_budget_enforcement is enabled, so the request was "
+            "rejected to avoid exceeding the configured budget. Retry shortly."
+        ),
     )
 
 
