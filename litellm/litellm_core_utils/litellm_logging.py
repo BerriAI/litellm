@@ -1995,10 +1995,19 @@ class Logging(LiteLLMLoggingBaseClass):
         reset_session_id(self._session_id_token)
 
     def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+        """Restores trace_id/session_id contextvars once this attempt's own success
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return self._success_handler_body(
+                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+            )
+        finally:
+            self._restore_correlation_context()
+
+    def _success_handler_body(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         verbose_logger.debug(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
-        self._restore_correlation_context()
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -2402,6 +2411,16 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
     async def async_success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
+        """Restores trace_id/session_id contextvars once this attempt's own success
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return await self._async_success_handler_body(
+                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+            )
+        finally:
+            self._restore_correlation_context()
+
+    async def _async_success_handler_body(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
@@ -2410,7 +2429,6 @@ class Logging(LiteLLMLoggingBaseClass):
             event_type="async_success"
         ):  # prevent double logging (non-streaming)
             return
-        self._restore_correlation_context()
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
@@ -2795,10 +2813,22 @@ class Logging(LiteLLMLoggingBaseClass):
                 )  # type: ignore
 
     def failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
+        """Restores trace_id/session_id contextvars once this attempt's own failure
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return self._failure_handler_body(
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        finally:
+            self._restore_correlation_context()
+
+    def _failure_handler_body(self, exception, traceback_exception, start_time=None, end_time=None):
         verbose_logger.debug(f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}")
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
             return
-        self._restore_correlation_context()
         litellm_params = self.model_call_details.get("litellm_params", {})
         is_sync_request = self._is_sync_litellm_request(litellm_params)
 
@@ -2965,13 +2995,25 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
     async def async_failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
+        """Restores trace_id/session_id contextvars once this attempt's own failure
+        logging (including any nested calls its callbacks trigger) is fully done."""
+        try:
+            return await self._async_failure_handler_body(
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        finally:
+            self._restore_correlation_context()
+
+    async def _async_failure_handler_body(self, exception, traceback_exception, start_time=None, end_time=None):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         await self.special_failure_handlers(exception=exception)
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
             return
-        self._restore_correlation_context()
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,
