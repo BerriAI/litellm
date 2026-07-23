@@ -5242,6 +5242,7 @@ async def test_overwrite_user_with_key_hash_clobbers_caller_supplied_user(monkey
 
     raw_key = "sk-overwrite-user-test-1234"
     user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
     data = {"model": "gpt-4o", "user": "attacker-chosen-id"}
 
     updated_data = await add_litellm_data_to_request(
@@ -5266,6 +5267,7 @@ async def test_overwrite_user_with_key_hash_sets_user_when_absent(monkeypatch):
 
     raw_key = "sk-overwrite-user-test-5678"
     user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
     data = {"model": "gpt-4o"}
 
     updated_data = await add_litellm_data_to_request(
@@ -5285,6 +5287,7 @@ async def test_overwrite_user_with_key_hash_disabled_preserves_caller_user():
     assert litellm.overwrite_user_with_key_hash is False
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-overwrite-user-test-9999")
+    user_api_key_dict.via_virtual_key = True
     data = {"model": "gpt-4o", "user": "caller-chosen-id"}
 
     updated_data = await add_litellm_data_to_request(
@@ -5342,3 +5345,35 @@ async def test_overwrite_user_with_key_hash_skips_jwt_auth(monkeypatch):
     )
 
     assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_skips_hex_shaped_custom_credential(monkeypatch):
+    """A custom-auth credential that happens to be 64 hex chars is indistinguishable
+    from a key hash by shape alone; only the server-set via_virtual_key marker may
+    authorize stamping, so this raw credential must never be forwarded."""
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    hex_shaped_credential = "a" * 64
+    user_api_key_dict = UserAPIKeyAuth(api_key=hex_shaped_credential)
+    assert user_api_key_dict.api_key == hex_shaped_credential
+    assert user_api_key_dict.via_virtual_key is False
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+def test_via_virtual_key_cannot_be_forged_from_validated_input():
+    from_kwargs = UserAPIKeyAuth(api_key="b" * 64, via_virtual_key=True)
+    assert from_kwargs.via_virtual_key is False
+
+    from_dict = UserAPIKeyAuth.model_validate({"api_key": "b" * 64, "via_virtual_key": True})
+    assert from_dict.via_virtual_key is False

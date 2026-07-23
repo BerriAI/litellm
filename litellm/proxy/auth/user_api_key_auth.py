@@ -2021,7 +2021,7 @@ async def _user_api_key_auth_builder(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            return await _return_user_api_key_auth_obj(
+            virtual_key_auth_obj = await _return_user_api_key_auth_obj(
                 user_obj=user_obj,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
@@ -2029,6 +2029,8 @@ async def _user_api_key_auth_builder(
                 route=route,
                 start_time=start_time,
             )
+            virtual_key_auth_obj.via_virtual_key = True
+            return virtual_key_auth_obj
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
             e=e,

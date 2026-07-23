@@ -52,11 +52,13 @@ _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
-def _stampable_key_hash(api_key: str | None) -> str | None:
-    """Only standard virtual keys are stamped: UserAPIKeyAuth stores them as a sha256
-    hex digest. Custom-auth credentials arrive raw (never forward auth material) and
-    hashed JWTs rotate on re-issue (useless as a stable ban id), so both are skipped."""
-    if api_key is not None and _SHA256_HEX_RE.fullmatch(api_key):
+def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """Only DB-validated virtual keys are stamped, proven by the unforgeable
+    via_virtual_key marker AND the sha256-hex shape UserAPIKeyAuth stores them in.
+    Custom-auth credentials arrive raw (never forward auth material) and hashed
+    JWTs rotate on re-issue (useless as a stable ban id), so both are skipped."""
+    api_key = user_api_key_dict.api_key
+    if user_api_key_dict.via_virtual_key and api_key is not None and _SHA256_HEX_RE.fullmatch(api_key):
         return api_key
     return None
 
@@ -1461,7 +1463,7 @@ async def add_litellm_data_to_request(
             data["user"] = user
 
     if litellm.overwrite_user_with_key_hash is True:
-        stampable_hash = _stampable_key_hash(user_api_key_dict.api_key)
+        stampable_hash = _stampable_key_hash(user_api_key_dict)
         if stampable_hash is not None:
             data["user"] = stampable_hash
 
