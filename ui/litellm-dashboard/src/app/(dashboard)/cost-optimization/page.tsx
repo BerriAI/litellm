@@ -1,9 +1,11 @@
 "use client";
 
-import CostOptimizationView from "./_components/CostOptimizationView";
+import UsageTab from "./_components/UsageTab";
+import { useDailyActivityRange } from "./_components/useDailyActivityRange";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export default function CostOptimizationPage() {
   const { accessToken, userId, userRole } = useAuthorized();
-  return <CostOptimizationView accessToken={accessToken} userId={userId} userRole={userRole} />;
+  const activity = useDailyActivityRange(accessToken, userId, userRole);
+  return <UsageTab accessToken={accessToken} activity={activity} />;
 }
