@@ -592,15 +592,15 @@ def login(ctx: click.Context):
         poll_secret = cli_sso_flow["poll_secret"]
         user_code = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
+        login_url = f"{base_url}/ui/login?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
 
-        click.echo(f"Opening browser to: {sso_url}")
-        click.echo("Please complete the SSO authentication in your browser...")
+        click.echo(f"Opening browser to: {login_url}")
+        click.echo("Please complete authentication in your browser...")
         click.echo(f"Verification code: {user_code}")
         click.echo(f"Session ID: {key_id}")
 
         # Open browser
-        webbrowser.open(sso_url)
+        webbrowser.open(login_url)
 
         # Poll for authentication completion
         click.echo("Waiting for authentication...")

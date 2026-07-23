@@ -420,7 +420,8 @@ class TestLoginCommand:
             # Verify browser was opened with correct URL
             mock_browser.assert_called_once()
             call_args = mock_browser.call_args[0][0]
-            assert "https://test.example.com/sso/key/generate" in call_args
+            assert "https://test.example.com/ui/login" in call_args
+            assert "source=litellm-cli" in call_args
             assert "cli-test-uuid-123" in call_args
             assert "Verification code: ABCD-EFGH" in result.output
             mock_post.assert_called_once()
@@ -722,7 +723,7 @@ class TestCLIKeyRegenerationFlow:
             # Verify browser was opened
             mock_browser.assert_called_once()
             call_args = mock_browser.call_args[0][0]
-            assert "https://test.example.com/sso/key/generate" in call_args
+            assert "https://test.example.com/ui/login" in call_args
 
             # Verify two polling requests were made
             assert mock_get.call_count == 2
@@ -779,7 +780,7 @@ class TestCLIKeyRegenerationFlow:
             # Verify browser was opened
             mock_browser.assert_called_once()
             call_args = mock_browser.call_args[0][0]
-            assert "https://test.example.com/sso/key/generate" in call_args
+            assert "https://test.example.com/ui/login" in call_args
             assert "source=litellm-cli" in call_args
             assert "key=cli-session-uuid-solo" in call_args
 
