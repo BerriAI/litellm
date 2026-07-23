@@ -413,4 +413,47 @@ describe("ChatUI", () => {
       }
     }
   });
+
+  it("revokes pending upload preview object URLs on unmount", async () => {
+    const createSpy = vi.fn(() => "blob:preview-1");
+    const revokeSpy = vi.fn();
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = createSpy;
+    URL.revokeObjectURL = revokeSpy;
+
+    try {
+      const { container, unmount } = render(
+        <ChatUI
+          accessToken="1234567890"
+          token="1234567890"
+          userRole="user"
+          userID="1234567890"
+          disabledPersonalKeyCreation={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(container.querySelector('input[type="file"]')).toBeInTheDocument();
+      });
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File(["image data"], "photo.png", { type: "image/png" });
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+      });
+
+      await waitFor(() => {
+        expect(createSpy).toHaveBeenCalledWith(file);
+      });
+      expect(revokeSpy).not.toHaveBeenCalledWith("blob:preview-1");
+
+      unmount();
+
+      expect(revokeSpy).toHaveBeenCalledWith("blob:preview-1");
+    } finally {
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+    }
+  });
 });
