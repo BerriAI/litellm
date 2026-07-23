@@ -9,7 +9,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
-from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
+from litellm.router_utils.cooldown_handlers import _first_present, _set_cooldown_deployments
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
@@ -34,7 +34,8 @@ def _trigger_cooldown_for_failed_deployment(
     fallback deployment is evaluated for cooldown regardless.
     """
     try:
-        metadata = kwargs.get("litellm_metadata") or {}
+        metadata_key = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        metadata = kwargs.get(metadata_key) or {}
         model_info = metadata.get("model_info") or {}
         deployment_id: str | None = model_info.get("id") if isinstance(model_info, dict) else None
 
@@ -47,7 +48,9 @@ def _trigger_cooldown_for_failed_deployment(
         time_to_cooldown = litellm_router.cooldown_time
         deployment_dict = litellm_router.get_model_info(id=deployment_id)
         if deployment_dict is not None:
-            deployment_cooldown = (deployment_dict.get("litellm_params") or {}).get("cooldown_time")
+            deployment_cooldown = _first_present(
+                deployment_dict.get("litellm_params"), deployment_dict.get("model_info"), key="cooldown_time"
+            )
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 time_to_cooldown = deployment_cooldown
 
@@ -208,7 +211,7 @@ async def run_async_fallback(
                 original_exception=original_exception,
             )
             logging_obj = kwargs.get("litellm_logging_obj")
-            if getattr(logging_obj, "has_logged_async_failure", False):
+            if logging_obj is not None and logging_obj.model_call_details.get("has_logged_async_failure", False):
                 _trigger_cooldown_for_failed_deployment(
                     litellm_router=litellm_router,
                     kwargs=kwargs,

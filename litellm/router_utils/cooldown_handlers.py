@@ -50,25 +50,43 @@ _EXCEPTION_POLICY_FIELDS: tuple[tuple[type, str], ...] = (
 )
 
 
+def _first_present(*sources: dict[str, Any] | None, key: str) -> Any:
+    """Return *key* from the first source dict where it's set, so callers can support
+    a setting living in more than one deployment config location. Sources are checked
+    in order from most to least specific to that setting."""
+    for source in sources:
+        if source is None:
+            continue
+        value = source.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def _get_deployment_cooldown_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
-) -> tuple[Optional[dict[str, int]], Optional[int]]:
-    """Return (allowed_fails_policy, allowed_fails) from deployment model_info, or (None, None)."""
+) -> tuple[dict[str, int] | None, int | None]:
+    """Return (allowed_fails_policy, allowed_fails) from deployment model_info, or (None, None).
+
+    `model_info` is the canonical location for these two fields; `litellm_params` is
+    also accepted as a fallback for operators who colocate them with `cooldown_time`.
+    """
     dep = litellm_router_instance.get_model_info(id=deployment)
     if dep is None:
         return None, None
     mi: dict[str, Any] = dep.get("model_info") or {}
-    raw = mi.get("allowed_fails_policy")
-    policy: Optional[dict[str, int]] = raw if isinstance(raw, dict) else None
-    allowed: Optional[int] = mi.get("allowed_fails")
+    litellm_params: dict[str, Any] = dep.get("litellm_params") or {}
+    raw = _first_present(mi, litellm_params, key="allowed_fails_policy")
+    policy: dict[str, int] | None = raw if isinstance(raw, dict) else None
+    allowed: int | None = _first_present(mi, litellm_params, key="allowed_fails")
     return policy, allowed
 
 
 def _resolve_allowed_fails_from_policy(
-    policy: Optional[dict[str, int]],
+    policy: dict[str, int] | None,
     exception: Any,
-) -> Optional[int]:
+) -> int | None:
     """Match *exception* against *policy* and return the configured allowed-fail count, or None."""
     if policy is None:
         return None
@@ -82,8 +100,8 @@ def _should_cooldown_based_on_deployment_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
     original_exception: Any,
-    dep_policy: Optional[dict[str, int]],
-    dep_allowed_fails: Optional[int],
+    dep_policy: dict[str, int] | None,
+    dep_allowed_fails: int | None,
 ) -> bool:
     """Resolve deployment-level allowed-fails and delegate to the shared counting logic."""
     allowed_fails_from_policy = _resolve_allowed_fails_from_policy(dep_policy, original_exception)
@@ -94,11 +112,10 @@ def _should_cooldown_based_on_deployment_policy(
         allowed_fails_override = dep_allowed_fails if dep_allowed_fails is not None else 0
         cache_key_suffix = "generic"
 
-    model_info = litellm_router_instance.get_model_info(id=deployment)
-    cooldown_time_override: Optional[float] = None
-    if model_info is not None:
-        litellm_params = model_info.get("litellm_params") or {}
-        cooldown_time_override = litellm_params.get("cooldown_time")
+    dep = litellm_router_instance.get_model_info(id=deployment)
+    cooldown_time_override: float | None = None
+    if dep is not None:
+        cooldown_time_override = _first_present(dep.get("litellm_params"), dep.get("model_info"), key="cooldown_time")
 
     return should_cooldown_based_on_allowed_fails_policy(
         litellm_router_instance=litellm_router_instance,
@@ -448,9 +465,9 @@ def should_cooldown_based_on_allowed_fails_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
     original_exception: Any,
-    allowed_fails_override: Optional[int] = None,
-    cooldown_time_override: Optional[float] = None,
-    cache_key_suffix: Optional[str] = None,
+    allowed_fails_override: int | None = None,
+    cooldown_time_override: float | None = None,
+    cache_key_suffix: str | None = None,
 ) -> bool:
     """
     Check if fails are within the allowed limit and update the number of fails.

@@ -105,7 +105,7 @@ class CooldownCache:
         key: str,
         result: dict,
         current_time: float,
-    ) -> Optional[CooldownCacheValue]:
+    ) -> CooldownCacheValue | None:
         """
         Return a CooldownCacheValue if the cooldown is still active, or None if it has expired.
 
