@@ -1078,6 +1078,71 @@ def test_sync_delete_responses_sets_json_content_type():
     assert _content_type(captured["headers"]) == "application/json"
 
 
+@pytest.mark.asyncio
+async def test_async_delete_response_api_handler_logs_response_id():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://api.openai.com/v1/responses"
+    config.transform_delete_response_api_request.return_value = (
+        "https://api.openai.com/v1/responses/resp_xyz",
+        {},
+    )
+    config.transform_delete_response_api_response.return_value = "deleted"
+    logging_obj = Mock()
+    client = AsyncHTTPHandler()
+    client.delete = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("DELETE", "https://api.openai.com/v1/responses/resp_xyz"),
+        )
+    )
+
+    response = await handler.async_delete_response_api_handler(
+        response_id="resp_xyz",
+        responses_api_provider_config=config,
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        client=client,
+    )
+
+    assert response == "deleted"
+    assert logging_obj.pre_call.call_args.kwargs["input"] == "resp_xyz"
+
+
+def test_sync_delete_response_api_handler_logs_response_id():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://api.openai.com/v1/responses"
+    config.transform_delete_response_api_request.return_value = (
+        "https://api.openai.com/v1/responses/resp_xyz",
+        {},
+    )
+    config.transform_delete_response_api_response.return_value = "deleted"
+    logging_obj = Mock()
+    client = HTTPHandler()
+    client.delete = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("DELETE", "https://api.openai.com/v1/responses/resp_xyz"),
+        )
+    )
+
+    response = handler.delete_response_api_handler(
+        response_id="resp_xyz",
+        responses_api_provider_config=config,
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        client=client,
+    )
+
+    assert response == "deleted"
+    assert logging_obj.pre_call.call_args.kwargs["input"] == "resp_xyz"
+
+
 # ---------------------------------------------------------------------------
 # Parity tests: request-body is serialized once and reused for the wire.
 # (_async_post_anthropic_messages_with_http_error_retry)

@@ -440,3 +440,38 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
         wire_json = post_kwargs.get("json") or {}
         assert "model" not in wire_json
         assert data.get("model") == base_model
+
+
+@pytest.mark.asyncio
+async def test_azure_image_generation_async_wrapper_logs_prompt():
+    azure_chat_completion = AzureChatCompletion()
+    prompt = "A precise watercolor of a skyline"
+    mock_response = MagicMock()
+
+    with patch.object(
+        azure_chat_completion,
+        "initialize_azure_sdk_client",
+        return_value={
+            "api_base": "https://example.openai.azure.com",
+            "api_version": "2024-07-01-preview",
+        },
+    ), patch.object(
+        azure_chat_completion,
+        "aimage_generation",
+        new=AsyncMock(return_value=mock_response),
+    ) as mock_aimage_generation:
+        response = await azure_chat_completion.image_generation(
+            prompt=prompt,
+            timeout=60.0,
+            optional_params={"n": 1},
+            logging_obj=MagicMock(),
+            headers={},
+            model="gpt-image-15",
+            api_key="test-api-key",
+            api_base="https://example.openai.azure.com",
+            api_version="2024-07-01-preview",
+            aimg_generation=True,
+        )
+
+    assert response is mock_response
+    assert mock_aimage_generation.call_args.kwargs["input"] == prompt
