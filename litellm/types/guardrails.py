@@ -355,6 +355,12 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         # extra param to let the ui know this is a boolean
         json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
     )
+    mask_pii_fail_closed: Optional[bool] = Field(
+        default=None,
+        description="When True, a mask-only Presidio guardrail blocks the request (fail closed) if the analyzer errors, instead of forwarding unmasked text",
+        # extra param to let the ui know this is a boolean
+        json_schema_extra={"ui_type": GuardrailParamUITypes.BOOL},
+    )
     presidio_language: Optional[str] = Field(
         default="en",
         description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",

@@ -86,6 +86,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_anonymizer_api_base: Optional[str] = None,
         output_parse_pii: Optional[bool] = False,
         apply_to_output: bool = False,
+        mask_pii_fail_closed: bool = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
         pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = None,
@@ -104,6 +105,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
+        self.mask_pii_fail_closed = mask_pii_fail_closed
 
         # When output_parse_pii or apply_to_output is enabled, the guardrail must
         # also run on post_call to unmask/mask the response.  Expand the event_hook
@@ -309,7 +311,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 def _fail_on_invalid_response(
                     reason: str,
                 ) -> List[PresidioAnalyzeResponseItem]:
-                    should_fail_closed = bool(self.pii_entities_config) or self.output_parse_pii or self.apply_to_output
+                    should_fail_closed = (
+                        bool(self.pii_entities_config)
+                        or self.output_parse_pii
+                        or self.apply_to_output
+                        or self.mask_pii_fail_closed
+                    )
                     if should_fail_closed:
                         raise GuardrailRaisedException(
                             guardrail_name=self.guardrail_name,

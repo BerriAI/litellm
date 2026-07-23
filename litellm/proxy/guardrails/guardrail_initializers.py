@@ -102,7 +102,10 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             apply_to_output=False,
         )
         params.update(overrides)
-        callback = _OPTIONAL_PresidioPIIMasking(**params)
+        callback = _OPTIONAL_PresidioPIIMasking(
+            **params,
+            mask_pii_fail_closed=bool(litellm_params.mask_pii_fail_closed),
+        )
         litellm.logging_callback_manager.add_litellm_callback(callback)
         return callback
 
