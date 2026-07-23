@@ -4,7 +4,9 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, cast
+from typing import Any, Dict, List, Mapping, NoReturn, Optional, Sequence, cast
+
+from fastapi import HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -57,6 +59,24 @@ class _CounterReservationUnavailable(Exception):
         self.touched_counter = touched_counter
         self.counter_invalidated = counter_invalidated
         super().__init__("Counter reservation unavailable")
+
+
+def _raise_reservation_unavailable(counter_key: str) -> NoReturn:
+    verbose_proxy_logger.warning(
+        "fail_closed_budget_enforcement: rejecting request — budget reservation for %s could not be written",
+        counter_key,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "error": (
+                "Budget enforcement unavailable: the budget reservation could not "
+                "be written to the spend counter backend, and "
+                "fail_closed_budget_enforcement is enabled, so the request was "
+                "rejected to avoid exceeding the configured budget. Retry shortly."
+            )
+        },
+    )
 
 
 def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
@@ -138,6 +158,7 @@ async def reserve_budget_for_request(
     end_user_id: Optional[str] = None,
     end_user_object: Optional[Any] = None,
     skip_user_budget_on_team_key: bool = False,
+    fail_closed_budget_enforcement: bool = False,
 ) -> Optional[dict]:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -193,6 +214,8 @@ async def reserve_budget_for_request(
                         default_reserved_cost=reservation_cost,
                     )
                 applied_entries.remove(entry)
+                if fail_closed_budget_enforcement:
+                    _raise_reservation_unavailable(counter_key=counter.counter_key)
                 continue
 
             if reserved_value is not None:
