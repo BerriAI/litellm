@@ -693,6 +693,9 @@ async def common_checks(
                     valid_token=valid_token,
                 ),
                 _user_max_budget_check(),
+                _user_multi_budget_check(user_object=user_object)
+                if (team_object is None or team_object.team_id is None) and user_object is not None
+                else None,
                 _check_team_member_budget(
                     team_object=team_object,
                     user_object=user_object,
@@ -4001,6 +4004,41 @@ async def _team_multi_budget_check(
                 ),
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
+            )
+
+
+async def _user_multi_budget_check(
+    user_object: Optional[LiteLLM_UserTable],
+):
+    """
+    Raises BudgetExceededError if any budget window in user_object.budget_limits is exceeded.
+
+    Each window has its own Redis counter keyed by spend:user:{user_id}:window:{budget_duration}.
+    """
+    if user_object is None or not user_object.budget_limits:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for window in user_object.budget_limits:
+        w: dict = window if isinstance(window, dict) else window.model_dump()
+        counter_key = f"spend:user:{user_object.user_id}:window:{w['budget_duration']}"
+        window_spend = await get_current_spend(
+            counter_key=counter_key,
+            fallback_spend=0.0,
+            max_budget=w["max_budget"],
+            window_entity_type="User",
+            window_entity_id=user_object.user_id,
+            window_start=get_budget_window_start(w),
+        )
+        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
+            raise litellm.BudgetExceededError(
+                current_cost=window_spend,
+                max_budget=w["max_budget"],
+                message=(
+                    f"ExceededBudget: User={user_object.user_id} over {w['budget_duration']} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                ),
             )
 
 
