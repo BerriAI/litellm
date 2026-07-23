@@ -7404,7 +7404,7 @@ def _resolve_keepalive_seconds(request_data: dict[str, Any], response: Any = Non
     if raw is None:
         raw = _keepalive_from_deployment_config(request_data, response)
     try:
-        value = float(raw or 0)
+        value = float(raw) if raw is not None else 0.0
     except (TypeError, ValueError):
         return 0.0
     if value <= 0:
