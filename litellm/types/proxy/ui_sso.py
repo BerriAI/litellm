@@ -19,6 +19,17 @@ class ReturnedUITokenObject(TypedDict):
     server_root_path: str  # e.g. `/litellm`
 
 
+class UISessionJWTClaims(ReturnedUITokenObject):
+    """The signed claim set of the UI session cookie.
+
+    ``exp`` is stamped by the encoder rather than carried on
+    :class:`ReturnedUITokenObject`, because the lifetime belongs to the credential and not to the
+    payload that endpoints hand back in a response body.
+    """
+
+    exp: int
+
+
 class ParsedOpenIDResult(TypedDict, total=False):
     """
     Parsed OpenID result

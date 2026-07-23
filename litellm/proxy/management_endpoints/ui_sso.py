@@ -88,6 +88,7 @@ from litellm.proxy.auth.auth_utils import (
     _has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.ui_session_jwt import encode_ui_session_jwt
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -3055,8 +3056,6 @@ class SSOAuthenticationHandler:
         return_to: Optional[str] = None,
         sso_assertion: SSOIdentityAssertion | None = None,
     ) -> RedirectResponse:
-        import jwt
-
         from litellm.proxy.proxy_server import (
             general_settings,
             generate_key_helper_fn,
@@ -3219,11 +3218,7 @@ class SSOAuthenticationHandler:
             server_root_path=get_server_root_path(),
         )
 
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            master_key or "",
-            algorithm="HS256",
-        )
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, master_key or "")
 
         # Control-plane cross-origin: store JWT behind a single-use opaque
         # code (60s TTL) so the token never appears in browser history / logs.
