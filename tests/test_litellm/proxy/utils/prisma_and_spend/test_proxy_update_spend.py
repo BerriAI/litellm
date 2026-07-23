@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.proxy.utils import ProxyUpdateSpend, update_spend_logs_job
 
 
 class _AsyncCM:
@@ -335,6 +335,85 @@ async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
     attempts = mock_prisma_client.db.litellm_spendlogs.create_many.await_count
     assert attempts <= attempt_cap
     assert attempts < n_rows
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_restores_batch_when_write_fails(
+    mock_prisma_client: Any,
+    make_spend_log_row: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A batch popped by ``update_spend_logs_job`` must return to the queue when
+    the DB write fails for every attempt, so it is retried rather than dropped.
+
+    Reproduces issue #33873: the job removes logs from
+    ``spend_log_transactions`` before writing and, on the unfixed code, never
+    restores them once ``update_spend_logs`` raises, permanently losing the rows.
+    """
+    import httpx
+    import litellm.proxy.utils as utils_mod
+
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
+
+    rows = [make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")]
+    mock_prisma_client.spend_log_transactions = list(rows)
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=httpx.ReadError("db down")
+    )
+    mock_prisma_client.proxy_logging_obj.failure_handler = AsyncMock()
+
+    with pytest.raises(httpx.ReadError):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=mock_prisma_client.proxy_logging_obj,
+        )
+
+    assert mock_prisma_client.spend_log_transactions == rows
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_restores_batch_ahead_of_new_logs(
+    mock_prisma_client: Any,
+    make_spend_log_row: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The restored batch is prepended so its rows keep their place ahead of
+    logs enqueued while the failed write was in flight.
+    """
+    import httpx
+    import litellm.proxy.utils as utils_mod
+
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
+
+    popped = [make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")]
+    newly_enqueued = make_spend_log_row(request_id="c")
+    mock_prisma_client.spend_log_transactions = list(popped)
+
+    async def _fail_then_capture_new_log(*, data: Any, skip_duplicates: bool) -> None:
+        if newly_enqueued not in mock_prisma_client.spend_log_transactions:
+            mock_prisma_client.spend_log_transactions.append(newly_enqueued)
+        raise httpx.ReadError("db down")
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
+        side_effect=_fail_then_capture_new_log
+    )
+    mock_prisma_client.proxy_logging_obj.failure_handler = AsyncMock()
+
+    with pytest.raises(httpx.ReadError):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=mock_prisma_client.proxy_logging_obj,
+        )
+
+    assert mock_prisma_client.spend_log_transactions == popped + [newly_enqueued]
 
 
 def test_disable_spend_updates_reflects_general_settings(
