@@ -2349,25 +2349,12 @@
       "count": 1
     }
   },
-  "src/components/KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/LicenseExpiryBanner.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
   "src/components/ModelSelect/ModelSelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/ModelSelect/PaginatedModelSelect/PaginatedModelSelect.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -3511,17 +3498,6 @@
       "count": 1
     }
   },
-  "src/components/molecules/filter.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/molecules/message_manager.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -4404,17 +4380,6 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogsTableToolbar.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/ToolsSection/FormattedToolView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -4443,9 +4408,6 @@
   "src/components/view_logs/columns.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/view_logs/index.tsx": {
@@ -4453,9 +4415,6 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
