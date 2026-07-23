@@ -57,6 +57,7 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    AWS_PINNED_CREDENTIAL_PARAMS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
@@ -3030,6 +3031,30 @@ class Router:
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
+    @staticmethod
+    def _pin_deployment_aws_credentials(deployment: dict, kwargs: dict) -> None:
+        """
+        When ``litellm.pin_deployment_credentials`` is enabled, treat the
+        deployment's AWS credential/identity params as authoritative by dropping
+        any caller-supplied ``aws_*`` credential override from the request
+        kwargs. The config values then flow through unchanged when deployment
+        ``litellm_params`` are merged in at the call site.
+
+        Only applies to Bedrock/SageMaker deployments, the providers that consume
+        the ``aws_*`` passthrough.
+        """
+        if not litellm.pin_deployment_credentials:
+            return
+        litellm_params = deployment.get("litellm_params", {})
+        model = litellm_params.get("model")
+        if not isinstance(model, str):
+            return
+        provider = litellm_params.get("custom_llm_provider") or (model.split("/", 1)[0] if "/" in model else "")
+        if provider != "bedrock" and not provider.startswith("sagemaker"):
+            return
+        for param in AWS_PINNED_CREDENTIAL_PARAMS:
+            kwargs.pop(param, None)
+
     def _update_kwargs_with_deployment(
         self,
         deployment: dict,
@@ -3043,6 +3068,7 @@ class Router:
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         """
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
+        self._pin_deployment_aws_credentials(deployment=deployment, kwargs=kwargs)
 
         model_info = deployment.get("model_info", {}).copy()
         deployment_litellm_model_name = deployment["litellm_params"]["model"]

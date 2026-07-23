@@ -240,6 +240,7 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 # Or via `litellm_settings.strip_anthropic_total_tokens: true` in
 # config.yaml.
 strip_anthropic_total_tokens: bool = False
+pin_deployment_credentials: bool = False
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge

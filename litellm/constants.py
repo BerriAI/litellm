@@ -1214,6 +1214,20 @@ bedrock_embedding_models: set = set(
     ]
 )
 
+AWS_PINNED_CREDENTIAL_PARAMS: frozenset = frozenset(
+    {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+    }
+)
+
 known_tokenizer_config = {
     "mistralai/Mistral-7B-Instruct-v0.1": {
         "tokenizer": {
