@@ -596,6 +596,53 @@ describe("UsagePage", () => {
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
+  it("should not crash when a breakdown entry is missing its metrics (partial/large dataset)", async () => {
+    const malformedSpendData = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            api_keys: {
+              ...mockSpendData.results[0].breakdown.api_keys,
+              "sk-broken": {
+                metadata: { key_alias: "Broken Key", tags: [] },
+              },
+            },
+            models: {
+              ...mockSpendData.results[0].breakdown.models,
+              "broken-model": {
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            model_groups: {
+              ...mockSpendData.results[0].breakdown.model_groups,
+              "broken-group": {
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            providers: {
+              ...mockSpendData.results[0].breakdown.providers,
+              "broken-provider": {},
+            },
+          },
+        },
+      ],
+    };
+    mockUserDailyActivityAggregatedCall.mockResolvedValue(malformedSpendData as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
   it("should render the daily spend and top models charts with cyan bars", async () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
 
