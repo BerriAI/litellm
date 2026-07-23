@@ -1379,11 +1379,6 @@
       "count": 1
     }
   },
-  "src/components/ModelSelect/PaginatedModelSelect/PaginatedModelSelect.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
   "src/components/Navbar/BlogDropdown/BlogDropdown.test.tsx": {
     "max-nested-callbacks": {
       "count": 12
@@ -1855,11 +1850,6 @@
       "count": 1
     }
   },
-  "src/components/molecules/filter.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    }
-  },
   "src/components/molecules/models/columns.test.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2162,16 +2152,8 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogsTableToolbar.tsx": {
-    "no-nested-ternary": {
-      "count": 4
-    }
-  },
   "src/components/view_logs/index.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
