@@ -53,6 +53,12 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     return CustomerResponse.model_validate(record.model_dump())
 
 
+def _customer_update_values(data: UpdateCustomerRequest) -> dict:
+    """Return only fields the caller sent, preserving explicit False and 0."""
+    data_json: dict = data.json(exclude_unset=True)
+    return {key: value for key, value in data_json.items() if value is not None and value not in ([], {})}
+
+
 @router.post(
     "/end_user/block",
     tags=["Customer Management"],
@@ -538,20 +544,12 @@ async def update_end_user(
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
-        data_json: dict = data.json()
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        # get non default values for key
-        non_default_values = {}
-        for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
-                non_default_values[k] = v
+        # Keep explicit False/0 updates, but ignore omitted defaults.
+        non_default_values = _customer_update_values(data)
 
         ## Get end user table data ##
         end_user_table_data = await EndUserRepository(prisma_client).table.find_first(
