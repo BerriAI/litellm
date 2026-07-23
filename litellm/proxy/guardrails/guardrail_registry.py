@@ -54,6 +54,13 @@ from .guardrail_initializers import (
     initialize_tool_permission,
 )
 
+
+def _normalize_model_group_allowlist(values: list[str] | None) -> frozenset[str]:
+    if not values:
+        return frozenset()
+    return frozenset(str(v).strip().lower() for v in values if str(v).strip())
+
+
 guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
@@ -488,6 +495,11 @@ class InMemoryGuardrailHandler:
                 custom_guardrail_callback,
                 "skip_tool_message_in_guardrail",
                 getattr(litellm_params, "skip_tool_message_in_guardrail", None),
+            )
+            setattr(
+                custom_guardrail_callback,
+                "apply_guardrail_to_model_groups",
+                _normalize_model_group_allowlist(getattr(litellm_params, "apply_guardrail_to_model_groups", None)),
             )
 
         parsed_guardrail = Guardrail(

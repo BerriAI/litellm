@@ -757,6 +757,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    apply_guardrail_to_model_groups: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "If set, run this guardrail only for requests whose requested model group "
+            "is in this list (matched case-insensitively against the request's model / "
+            "model_group). Empty/None = all model groups. Enforced generically by "
+            "CustomGuardrail.should_run_guardrail for every guardrail type."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,

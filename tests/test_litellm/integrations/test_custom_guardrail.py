@@ -1914,3 +1914,106 @@ class TestOnlyScanNewMessages:
         cache.async_set_cache = AsyncMock(side_effect=RuntimeError("redis down"))
 
         await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
+
+
+class TestShouldRunGuardrailModelGroupGate:
+    def _guardrail(self, **kwargs) -> CustomGuardrail:
+        return CustomGuardrail(guardrail_name="test-guardrail", default_on=True, **kwargs)
+
+    def _with_allowlist(self, g: CustomGuardrail, groups: frozenset[str]) -> CustomGuardrail:
+        setattr(g, "apply_guardrail_to_model_groups", groups)
+        return g
+
+    def test_no_attribute_does_not_restrict(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._guardrail()
+        assert not hasattr(g, "apply_guardrail_to_model_groups")
+        assert g.should_run_guardrail(data={"model": "anything"}, event_type=GuardrailEventHooks.pre_call) is True
+
+    def test_empty_allowlist_does_not_restrict(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset())
+        assert g.should_run_guardrail(data={"model": "anything"}, event_type=GuardrailEventHooks.pre_call) is True
+
+    def test_model_in_allowlist_passes_gate(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"ai-gateway-low-intelligence-general"}))
+        result = g.should_run_guardrail(
+            data={"model": "ai-gateway-low-intelligence-general"},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        assert result is True
+
+    def test_model_not_in_allowlist_blocked(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"ai-gateway-low-intelligence-general"}))
+        result = g.should_run_guardrail(
+            data={"model": "ai-gateway-high-intelligence-general"},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        assert result is False
+
+    def test_model_match_is_case_insensitive(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"ai-gateway-low-intelligence-general"}))
+        result = g.should_run_guardrail(
+            data={"model": "AI-GATEWAY-LOW-INTELLIGENCE-GENERAL"},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        assert result is True
+
+    def test_metadata_model_group_used_as_fallback(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"scoped-group"}))
+        result = g.should_run_guardrail(
+            data={"metadata": {"model_group": "scoped-group"}},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        assert result is True
+
+    def test_litellm_metadata_model_group_used_as_fallback(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"scoped-group"}))
+        result = g.should_run_guardrail(
+            data={"litellm_metadata": {"model_group": "scoped-group"}},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        assert result is True
+
+    def test_no_model_or_metadata_is_blocked(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"scoped-group"}))
+        result = g.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call)
+        assert result is False
+
+
+class TestResolveMetadataModelGroup:
+    def test_litellm_metadata_takes_priority(self):
+        data = {
+            "litellm_metadata": {"model_group": "from-litellm"},
+            "metadata": {"model_group": "from-metadata"},
+        }
+        assert CustomGuardrail._resolve_metadata_model_group(data) == "from-litellm"
+
+    def test_metadata_fallback_when_litellm_metadata_absent(self):
+        data = {"metadata": {"model_group": "from-metadata"}}
+        assert CustomGuardrail._resolve_metadata_model_group(data) == "from-metadata"
+
+    def test_returns_none_when_neither_container_present(self):
+        assert CustomGuardrail._resolve_metadata_model_group({}) is None
+
+    def test_returns_none_when_model_group_key_absent(self):
+        data = {"litellm_metadata": {"something_else": "value"}}
+        assert CustomGuardrail._resolve_metadata_model_group(data) is None
+
+    def test_strips_whitespace(self):
+        data = {"metadata": {"model_group": "  scoped-group  "}}
+        assert CustomGuardrail._resolve_metadata_model_group(data) == "scoped-group"

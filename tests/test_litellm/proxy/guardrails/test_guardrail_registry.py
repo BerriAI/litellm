@@ -1,5 +1,6 @@
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
+    _normalize_model_group_allowlist,
     get_guardrail_initializer_from_hooks,
     InMemoryGuardrailHandler,
 )
@@ -367,3 +368,55 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+class TestNormalizeModelGroupAllowlist:
+    def test_none_returns_empty_frozenset(self):
+        assert _normalize_model_group_allowlist(None) == frozenset()
+
+    def test_empty_list_returns_empty_frozenset(self):
+        assert _normalize_model_group_allowlist([]) == frozenset()
+
+    def test_normalizes_to_lowercase_and_strips_whitespace(self):
+        result = _normalize_model_group_allowlist(["  AI-Gateway-Low  ", "AI-Gateway-High"])
+        assert result == frozenset({"ai-gateway-low", "ai-gateway-high"})
+
+    def test_deduplicates_entries(self):
+        result = _normalize_model_group_allowlist(["group-a", "GROUP-A", "  group-a  "])
+        assert result == frozenset({"group-a"})
+
+    def test_drops_blank_entries(self):
+        result = _normalize_model_group_allowlist(["valid-group", "  ", ""])
+        assert result == frozenset({"valid-group"})
+
+    def test_returns_frozenset(self):
+        result = _normalize_model_group_allowlist(["group-a"])
+        assert isinstance(result, frozenset)
+
+
+def test_initialize_guardrail_sets_apply_guardrail_to_model_groups_on_callback():
+    handler = InMemoryGuardrailHandler()
+
+    callback = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    litellm_params = LitellmParams(
+        guardrail="test-guardrail",
+        mode="pre_call",
+        default_on=True,
+        apply_guardrail_to_model_groups=["Group-A", "  GROUP-B  "],
+    )
+    setattr(callback, "skip_system_message_in_guardrail", None)
+    setattr(callback, "skip_tool_message_in_guardrail", None)
+    setattr(
+        callback,
+        "apply_guardrail_to_model_groups",
+        _normalize_model_group_allowlist(
+            getattr(litellm_params, "apply_guardrail_to_model_groups", None)
+        ),
+    )
+
+    assert getattr(callback, "apply_guardrail_to_model_groups") == frozenset({"group-a", "group-b"})
+
