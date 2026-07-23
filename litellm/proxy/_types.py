@@ -2778,6 +2778,30 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
         return values
 
 
+class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
+    """
+    Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+
+    Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+    left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+    the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_alias: str | None = None
+    models: list[str] | None = None
+    metadata: dict | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    max_parallel_requests: int | None = None
+    model_max_budget: dict | None = None
+    budget_duration: str | None = None
+    object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+
 from litellm.models.organization import (  # noqa: E402
     LiteLLM_OrganizationTable as LiteLLM_OrganizationTable,
 )
