@@ -23838,6 +23838,179 @@
       }
     }
   },
+  "relay": {
+    "components": {
+      "schemas": {
+        "JsonValue": {},
+        "RelayClaudeCodeConfig": {
+          "properties": {
+            "channel": {
+              "default": "pinned",
+              "title": "Channel",
+              "type": "string"
+            },
+            "managed_settings": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Managed Settings",
+              "type": "object"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            },
+            "package": {
+              "default": "@anthropic-ai/claude-code",
+              "title": "Package",
+              "type": "string"
+            },
+            "registry": {
+              "default": "npm",
+              "title": "Registry",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "title": "RelayClaudeCodeConfig",
+          "type": "object"
+        },
+        "RelayCodexConfig": {
+          "properties": {
+            "channel": {
+              "default": "pinned",
+              "title": "Channel",
+              "type": "string"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            },
+            "package": {
+              "default": "@openai/codex",
+              "title": "Package",
+              "type": "string"
+            },
+            "registry": {
+              "default": "npm",
+              "title": "Registry",
+              "type": "string"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "title": "RelayCodexConfig",
+          "type": "object"
+        },
+        "RelayManagedConfigResponse": {
+          "properties": {
+            "claude_code": {
+              "$ref": "#/components/schemas/RelayClaudeCodeConfig"
+            },
+            "codex": {
+              "$ref": "#/components/schemas/RelayCodexConfig"
+            },
+            "policy_version": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Policy Version"
+            },
+            "updated_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated At"
+            },
+            "updated_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated By"
+            }
+          },
+          "title": "RelayManagedConfigResponse",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/relay/managed-config": {
+        "get": {
+          "operationId": "get_relay_managed_config_relay_managed_config_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RelayManagedConfigResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Relay Managed Config",
+          "tags": [
+            "relay"
+          ]
+        }
+      }
+    }
+  },
   "scim": {
     "components": {
       "schemas": {
