@@ -75,7 +75,7 @@ async def test_over_first_window_raises():
             await _virtual_key_multi_budget_check(valid_token=token)
 
     err = exc_info.value
-    assert err.status_code == 429
+    assert err.status_code == 402
     assert "24h" in str(err)
     assert "Key over" in str(err)
 
@@ -107,7 +107,7 @@ async def test_over_second_window_raises():
             await _virtual_key_multi_budget_check(valid_token=token)
 
     err = exc_info.value
-    assert err.status_code == 429
+    assert err.status_code == 402
     assert "30d" in str(err)
 
 

@@ -90,7 +90,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     ) -> Optional[Union[Exception, str, dict]]:
         """
         Before each LLM call, check if max_budget_per_session is set and
-        whether accumulated spend exceeds the budget (429 if so).
+        whether accumulated spend exceeds the budget.
         """
         max_budget = self._get_max_budget_per_session(user_api_key_dict)
 
@@ -121,6 +121,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 rate_limit_type=RateLimitType.BUDGET,
                 model=resolved_model,
                 llm_provider=llm_provider,
+                status_code=402,
             )
 
         return None

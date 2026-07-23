@@ -1389,9 +1389,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         "signature": thought_sig,
                     }
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif choice.delta.content is not None and len(choice.delta.content) > 0:
-                return "text", TextBlock(type="text", text="")
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
+            if isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
                     thinking_block = thinking_blocks[0]
@@ -1410,13 +1408,11 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
-            # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
-            # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
-            # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
-            # branch above is skipped entirely; open a ``thinking`` block here so the
-            # matching ``thinking_delta`` stream is not emitted into a text block.
-            elif isinstance(choice, StreamingChoices) and getattr(choice.delta, "reasoning_content", None):
-                return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
+            if isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
+                if choice.delta.reasoning_content:
+                    return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
+            if choice.delta.content is not None and len(choice.delta.content) > 0:
+                return "text", TextBlock(type="text", text="")
 
         return "text", TextBlock(type="text", text="")
 
@@ -1438,8 +1434,7 @@ class LiteLLMAnthropicMessagesAdapter:
         for choice in choices:
             if choice.delta.content is not None and len(choice.delta.content) > 0:
                 text += choice.delta.content
-            if choice.delta.tool_calls:
-                partial_json = ""
+            if choice.delta.tool_calls is not None and len(choice.delta.tool_calls) > 0:
                 for tool in choice.delta.tool_calls:
                     if tool.function is not None and tool.function.arguments is not None:
                         partial_json = (partial_json or "") + tool.function.arguments
@@ -1459,7 +1454,7 @@ class LiteLLMAnthropicMessagesAdapter:
             # Handle reasoning_content when thinking_blocks is not present
             # This handles providers like OpenRouter that return reasoning_content
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
-                if choice.delta.reasoning_content is not None:
+                if choice.delta.reasoning_content:
                     reasoning_content += choice.delta.reasoning_content
 
         if reasoning_content and reasoning_signature:

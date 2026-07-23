@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { uiSpendLogsCall } from "../networking";
+import type { LogEntry } from "./columns";
 import { useLogFilterLogic } from "./log_filter_logic";
 
 const mockHandleFilterResetFromHook = vi.fn();
@@ -13,7 +14,7 @@ vi.mock("./log_filter_logic", async (importOriginal) => {
   return {
     ...actual,
     useLogFilterLogic: vi.fn(() => ({
-      logsQuery: { isLoading: false, isFetching: false, refetch: vi.fn() },
+      logsQuery: { isLoading: false, isFetching: false, isPlaceholderData: false, refetch: vi.fn() },
       filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
       allTeams: [],
       handleFilterChange: vi.fn(),
@@ -43,6 +44,42 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
 
+const mockUseLogFilterLogicReturn = (data: LogEntry[] = []) => ({
+  logsQuery: { isLoading: false, isFetching: false, isPlaceholderData: false, refetch: vi.fn() },
+  filteredLogs: { data, total: data.length, page: 1, page_size: 50, total_pages: 1 },
+  allTeams: [],
+  handleFilterChange: vi.fn(),
+  handleFilterReset: mockHandleFilterResetFromHook,
+});
+
+const createLog = (overrides: Partial<LogEntry>): LogEntry => ({
+  request_id: "req-default",
+  api_key: "api-key",
+  team_id: "team-1",
+  model: "gpt-4.1",
+  model_id: "model-1",
+  call_type: "acompletion",
+  spend: 0,
+  total_tokens: 0,
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  startTime: "2026-07-21T00:00:00Z",
+  endTime: "2026-07-21T00:00:01Z",
+  user: "user-1",
+  end_user: "end-user-1",
+  metadata: {
+    status: "success",
+    user_api_key: "key-hash",
+    user_api_key_alias: "key-alias",
+    user_api_key_team_alias: "team-alias",
+  },
+  cache_hit: "false",
+  request_tags: {},
+  messages: [],
+  response: {},
+  ...overrides,
+});
+
 describe("SpendLogsTable", () => {
   const defaultProps = {
     accessToken: "test-token",
@@ -54,6 +91,7 @@ describe("SpendLogsTable", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useLogFilterLogic).mockImplementation(() => mockUseLogFilterLogicReturn());
     // Clear sessionStorage to avoid isLiveTail state from previous tests
     sessionStorage.clear();
   });
@@ -84,9 +122,8 @@ describe("SpendLogsTable", () => {
     const customRangeButton = await screen.findByRole("button", { name: "Custom Range" });
     await user.click(customRangeButton);
 
-    // Custom date inputs should now be visible (start and end datetime-local inputs)
-    const datetimeInputs = document.querySelectorAll('input[type="datetime-local"]');
-    expect(datetimeInputs.length).toBeGreaterThanOrEqual(2);
+    // Custom date inputs should now be visible in the logs toolbar.
+    expect(screen.getByTestId("logs-custom-date-range")).toBeInTheDocument();
 
     // Click Reset Filters - this should reset the custom date range and hide custom inputs
     const resetButton = screen.getByRole("button", { name: "Reset Filters" });
@@ -96,11 +133,54 @@ describe("SpendLogsTable", () => {
       expect(mockHandleFilterResetFromHook).toHaveBeenCalled();
     });
 
-    // After reset, custom date inputs should be hidden (isCustomDate reset to false)
+    // After reset, logs toolbar custom date inputs should be hidden (isCustomDate reset to false)
     await waitFor(() => {
-      const inputsAfterReset = document.querySelectorAll('input[type="datetime-local"]');
-      expect(inputsAfterReset.length).toBe(0);
+      expect(screen.queryByTestId("logs-custom-date-range")).not.toBeInTheDocument();
     });
+  });
+
+  it("renders the Analytics toggle between Live Tail and Fetch", () => {
+    const { container } = renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+    const content = container.textContent || "";
+    const liveTailIndex = content.indexOf("Live Tail");
+    const analyticsIndex = content.indexOf("Analytics");
+    const fetchIndex = content.indexOf("Fetch");
+
+    expect(liveTailIndex).toBeGreaterThanOrEqual(0);
+    expect(analyticsIndex).toBeGreaterThan(liveTailIndex);
+    expect(fetchIndex).toBeGreaterThan(analyticsIndex);
+  });
+
+  it("renders all returned rows even when they belong to the same session", () => {
+    vi.mocked(useLogFilterLogic).mockImplementation(() =>
+      mockUseLogFilterLogicReturn([
+        createLog({
+          request_id: "req-session-1",
+          session_id: "session-1",
+          session_total_count: 3,
+          call_type: "acompletion",
+        }),
+        createLog({
+          request_id: "req-session-2",
+          session_id: "session-1",
+          session_total_count: 3,
+          call_type: "call_mcp_tool",
+        }),
+        createLog({
+          request_id: "req-session-3",
+          session_id: "session-1",
+          session_total_count: 3,
+          call_type: "asend_message",
+        }),
+      ]),
+    );
+
+    renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+    expect(screen.getByText("req-session-1")).toBeInTheDocument();
+    expect(screen.getByText("req-session-2")).toBeInTheDocument();
+    expect(screen.getByText("req-session-3")).toBeInTheDocument();
   });
 
   describe("auth-not-ready guard", () => {

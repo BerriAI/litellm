@@ -22,6 +22,22 @@ def _process_all(events: list) -> list:
     return list(wrapper._chunk_queue)
 
 
+def _assert_delta_block_types_are_valid(chunks: list) -> None:
+    block_types = {}
+    for chunk in chunks:
+        if chunk["type"] == "content_block_start":
+            block_types[chunk["index"]] = chunk["content_block"]["type"]
+        elif chunk["type"] == "content_block_delta":
+            delta_type = chunk["delta"]["type"]
+            block_type = block_types[chunk["index"]]
+            if delta_type in ("thinking_delta", "signature_delta"):
+                assert block_type == "thinking"
+            elif delta_type == "text_delta":
+                assert block_type == "text"
+            elif delta_type == "input_json_delta":
+                assert block_type == "tool_use"
+
+
 class TestProcessEventTextDeltaWithoutOutputItemAdded:
     """Streams that skip response.output_item.added (e.g. LMStudio) must still
     open a text block before any delta and never emit index -1."""
@@ -77,3 +93,82 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestProcessEventReasoningDeltaBlockType:
+    def test_reasoning_delta_after_text_block_opens_thinking_block(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "message", "id": "m1"},
+                },
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "Hi"},
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs1",
+                    "delta": "Thinking",
+                },
+            ]
+        )
+
+        assert [(c["type"], c["index"]) for c in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_start", 1),
+            ("content_block_delta", 1),
+        ]
+        assert chunks[2]["content_block"] == {"type": "thinking", "thinking": ""}
+        assert chunks[3]["delta"] == {
+            "type": "thinking_delta",
+            "thinking": "Thinking",
+        }
+        _assert_delta_block_types_are_valid(chunks)
+
+    def test_reasoning_delta_without_output_item_added_opens_thinking_block(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs1",
+                    "delta": "Thinking",
+                },
+            ]
+        )
+
+        assert [(c["type"], c["index"]) for c in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+        ]
+        assert chunks[0]["content_block"] == {"type": "thinking", "thinking": ""}
+        assert chunks[1]["delta"] == {
+            "type": "thinking_delta",
+            "thinking": "Thinking",
+        }
+        _assert_delta_block_types_are_valid(chunks)
+
+    def test_text_delta_after_reasoning_block_opens_text_block(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "reasoning", "id": "rs1"},
+                },
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs1",
+                    "delta": "Thinking",
+                },
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "Hi"},
+            ]
+        )
+
+        assert [(c["type"], c["index"]) for c in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_start", 1),
+            ("content_block_delta", 1),
+        ]
+        assert chunks[2]["content_block"] == {"type": "text", "text": ""}
+        assert chunks[3]["delta"] == {"type": "text_delta", "text": "Hi"}
+        _assert_delta_block_types_are_valid(chunks)

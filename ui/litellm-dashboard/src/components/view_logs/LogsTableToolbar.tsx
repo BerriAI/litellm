@@ -19,6 +19,8 @@ interface LogsTableToolbarProps {
   onSelectedTimeIntervalChange: (value: { value: number; unit: string }) => void;
   isLiveTail: boolean;
   onIsLiveTailChange: (value: boolean) => void;
+  showAnalytics: boolean;
+  onShowAnalyticsChange: (value: boolean) => void;
   currentPage: number;
   onCurrentPageChange: (updater: number | ((prev: number) => number)) => void;
   pageSize: number;
@@ -42,6 +44,8 @@ export function LogsTableToolbar({
   onSelectedTimeIntervalChange,
   isLiveTail,
   onIsLiveTailChange,
+  showAnalytics,
+  onShowAnalyticsChange,
   currentPage,
   onCurrentPageChange,
   pageSize,
@@ -154,6 +158,11 @@ export function LogsTableToolbar({
                 <Switch checked={isLiveTail} defaultChecked={true} onChange={onIsLiveTailChange} />
               </div>
 
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-900">Analytics</span>
+                <Switch checked={showAnalytics} onChange={onShowAnalyticsChange} />
+              </div>
+
               <Button
                 type="default"
                 icon={<SyncOutlined spin={isButtonLoading} />}
@@ -166,7 +175,7 @@ export function LogsTableToolbar({
             </div>
 
             {isCustomDate && (
-              <div className="flex items-center gap-2">
+              <div data-testid="logs-custom-date-range" className="flex items-center gap-2">
                 <div>
                   <input
                     type="datetime-local"

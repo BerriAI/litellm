@@ -366,7 +366,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         with pytest.raises(ProxyRateLimitError) as exc_info:
             handler.raise_rate_limit_error(additional_details="key-over-rpm")
         e = exc_info.value
-        assert e.status_code == 429
+        assert e.status_code == 402
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
         # The helper must populate retry-after so clients can back off.
         assert e.headers is not None
@@ -479,7 +479,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         with pytest.raises(ProxyRateLimitError) as exc_info:
             handler._handle_rate_limit_error(response, descriptors)
         e = exc_info.value
-        assert e.status_code == 429
+        assert e.status_code == 402
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
         # v3 helper attaches retry-after, rate_limit_type and reset_at.
         assert e.headers is not None
@@ -537,7 +537,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
                     call_type="",
                 )
         e = exc_info.value
-        assert e.status_code == 429
+        assert e.status_code == 402
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
         assert isinstance(e, RateLimitError)
         assert isinstance(e, HTTPException)
@@ -576,7 +576,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
                     call_type="completion",
                 )
         e = exc_info.value
-        assert e.status_code == 429
+        assert e.status_code == 402
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
         assert "max budget" in str(e.detail).lower()
 
@@ -924,7 +924,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
                     call_type="completion",
                 )
         e = exc_info.value
-        assert e.status_code == 429
+        assert e.status_code == 402
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
         assert "session" in str(e.detail).lower()
 
@@ -1466,11 +1466,11 @@ class TestBudgetExceededErrorSurfacesUnifiedFields:
         )
         assert e.llm_provider == "anthropic"
 
-    def test_should_keep_existing_status_code_and_message(self):
-        # Backward-compat guard: existing callers depend on `status_code=429`
-        # and the canonical message format.
+    def test_should_use_non_retryable_status_code_and_keep_message(self):
+        # Budget exhaustion is not a transient rate limit, so clients should
+        # see a non-retryable status while the canonical message stays intact.
         e = litellm.BudgetExceededError(current_cost=0.000109, max_budget=0.0001)
-        assert e.status_code == 429
+        assert e.status_code == 402
         assert "Current cost: 0.000109" in e.message
         assert "Max budget: 0.0001" in e.message
 
@@ -1494,7 +1494,7 @@ class TestBudgetExceededErrorSurfacesUnifiedFields:
         info = StandardLoggingPayloadSetup.get_error_information(e)
         assert info["error_rate_limit_category"] == "litellm_rate_limit"
         assert info["error_rate_limit_type"] == "budget"
-        assert info["error_code"] == "429"
+        assert info["error_code"] == "402"
         assert info["error_class"] == "BudgetExceededError"
 
     def test_should_propagate_llm_provider_to_standard_logging_payload(self):

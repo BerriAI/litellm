@@ -2,7 +2,6 @@ import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { useQuery } from "@tanstack/react-query";
-import { Switch } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
@@ -68,7 +67,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   const [showFilters, setShowFilters] = useState(false);
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
-  const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
+  const filterByCurrentUser = !!(userRole && internalUserRoles.includes(userRole));
   const [activeTab, setActiveTab] = useState("request logs");
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [selectedErrorCategories, setSelectedErrorCategories] = useState<string[]>([]);
@@ -97,7 +96,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   }, [isLiveTail]);
 
   // Timestamp for forcing FilterComponent remount during live tail
-  const [liveTailTimestamp, setLiveTailTimestamp] = useState<number>(Date.now());
+  const [liveTailTimestamp, setLiveTailTimestamp] = useState<number>(() => Date.now());
 
   useEffect(() => {
     if (isLiveTail && !isCustomDate) {
@@ -124,12 +123,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     fetchKeyInfo();
   }, [selectedKeyIdInfoView, accessToken]);
 
-  useEffect(() => {
-    if (userRole && internalUserRoles.includes(userRole)) {
-      setFilterByCurrentUser(true);
-    }
-  }, [userRole]);
-
   const {
     logsQuery,
     filteredLogs,
@@ -143,7 +136,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     userID,
     filters,
     setFilters,
-    filterByCurrentUser: !!filterByCurrentUser,
+    filterByCurrentUser,
     activeTab,
     isLiveTail,
     startTime,
@@ -241,6 +234,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   });
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFailureLogsAnalyticsCurrentPage(1);
   }, [selectedErrorCategories, startTime, endTime, filters]);
 
@@ -295,39 +289,24 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
       {},
     );
 
-    const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
-    for (const log of searchedLogs) {
-      if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
-      const isMcp = MCP_CALL_TYPES.includes(log.call_type);
-      const existing = sessionRepresentativeMap.get(log.session_id);
-      if (!existing || (existing.isMcp && !isMcp)) {
-        sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
-      }
-    }
-
-    return searchedLogs
-      .map((log) => {
-        const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
-        return {
-          ...log,
-          request_duration_ms: log.request_duration_ms,
-          session_llm_count: sessionComposition?.llm ?? undefined,
-          session_mcp_count: sessionComposition?.mcp ?? undefined,
-          session_agent_count: sessionComposition?.agent ?? undefined,
-          onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-          onSessionClick: (sessionId: string) => {
-            if (sessionId) {
-              setSelectedSessionId(sessionId);
-              setSelectedLog(log);
-              setIsDrawerOpen(true);
-            }
-          },
-        };
-      })
-      .filter((log) => {
-        if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-        return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
-      });
+    return searchedLogs.map((log) => {
+      const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
+      return {
+        ...log,
+        request_duration_ms: log.request_duration_ms,
+        session_llm_count: sessionComposition?.llm ?? undefined,
+        session_mcp_count: sessionComposition?.mcp ?? undefined,
+        session_agent_count: sessionComposition?.agent ?? undefined,
+        onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
+        onSessionClick: (sessionId: string) => {
+          if (sessionId) {
+            setSelectedSessionId(sessionId);
+            setSelectedLog(log);
+            setIsDrawerOpen(true);
+          }
+        },
+      };
+    });
   }, [filteredLogs.data, searchTerm]);
 
   const deferredData = useDeferredValue(filteredData);
@@ -414,6 +393,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     onSelectedTimeIntervalChange={setSelectedTimeInterval}
                     isLiveTail={isLiveTail}
                     onIsLiveTailChange={setIsLiveTail}
+                    showAnalytics={showAnalytics}
+                    onShowAnalyticsChange={setShowAnalytics}
                     currentPage={currentPage}
                     onCurrentPageChange={setCurrentPage}
                     pageSize={pageSize}
@@ -429,10 +410,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     filteredLogs={filteredLogs}
                     showPagination={!showAnalytics}
                   />
-                  <div className="border-b px-6 py-3 flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-900">Analytics</span>
-                    <Switch checked={showAnalytics} onChange={setShowAnalytics} />
-                  </div>
                   {showAnalytics ? (
                     <>
                       <ErrorStatsTable

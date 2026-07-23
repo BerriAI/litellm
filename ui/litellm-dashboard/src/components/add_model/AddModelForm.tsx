@@ -4,7 +4,7 @@ import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Switch, Text } from "@tremor/react";
 import type { FormInstance } from "antd";
-import { Select as AntdSelect, Button, Card, Col, Form, Modal, Row, Tooltip, Typography, Alert } from "antd";
+import { Select as AntdSelect, Button, Card, Col, Form, InputNumber, Modal, Row, Tooltip, Typography, Alert } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import React, { useEffect, useMemo, useState } from "react";
 import TeamDropdown from "../common_components/team_dropdown";
@@ -278,6 +278,24 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
                   <div className="grow border-t border-gray-200"></div>
                 </div>
+                {/* Sticky Weight - mandatory relative capacity for sticky-least-busy routing */}
+                <Form.Item
+                  label="Sticky Weight"
+                  name="sticky_weight"
+                  className="mb-4"
+                  tooltip="Relative hardware capacity for sticky-least-busy routing (e.g. 1 for H200, 2 for B300). Higher = more traffic routed to this deployment and higher load tolerance before rebalancing."
+                  rules={[
+                    { required: true, message: "Sticky weight is required" },
+                    {
+                      validator: (_, value) =>
+                        value === undefined || value === null || Number(value) > 0
+                          ? Promise.resolve()
+                          : Promise.reject(new Error("Sticky weight must be greater than 0")),
+                    },
+                  ]}
+                >
+                  <InputNumber min={0} step={0.1} style={{ width: "100%" }} placeholder="e.g. 1 for H200, 2 for B300" />
+                </Form.Item>
                 {/* Team-only Model Switch - Only show for proxy admins, not team admins */}
                 {(isAdmin || !isTeamAdmin) && (
                   <Form.Item

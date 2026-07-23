@@ -362,6 +362,13 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        // Override sticky_weight (relative capacity for sticky-least-busy routing)
+        if (values.sticky_weight !== undefined && values.sticky_weight !== null) {
+          updatedModelInfo = {
+            ...updatedModelInfo,
+            sticky_weight: Number(values.sticky_weight),
+          };
+        }
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
         return;
@@ -741,6 +748,7 @@ export default function ModelInfoView({
                         : undefined,
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
+                    sticky_weight: localModelData.model_info?.sticky_weight,
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
@@ -855,6 +863,32 @@ export default function ModelInfoView({
                                   localModelData?.model_info?.cache_creation_input_token_cost !== null
                                 ? (localModelData.model_info.cache_creation_input_token_cost * 1_000_000).toFixed(4)
                                 : "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">Sticky Weight</Text>
+                        {isEditing ? (
+                          <Form.Item
+                            name="sticky_weight"
+                            className="mb-0"
+                            tooltip="Relative hardware capacity for sticky-least-busy routing (e.g. 1 for H200, 2 for B300). Higher = more traffic and higher load tolerance before rebalancing."
+                            rules={[
+                              { required: true, message: "Sticky weight is required" },
+                              {
+                                validator: (_, value) =>
+                                  value === undefined || value === null || Number(value) > 0
+                                    ? Promise.resolve()
+                                    : Promise.reject(new Error("Sticky weight must be greater than 0")),
+                              },
+                            ]}
+                          >
+                            <NumericalInput min={0} step={0.1} placeholder="e.g. 1 for H200, 2 for B300" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData?.model_info?.sticky_weight ?? "Not Set"}
                           </div>
                         )}
                       </div>

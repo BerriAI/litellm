@@ -16,6 +16,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
+    is_free_model,
     log_db_metrics,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -118,6 +119,9 @@ class _ProxyDBLogger(CustomLogger):
             )
             error_information = (
                 sl_object.get("error_information") if sl_object is not None else None
+            )
+            error_information = _sanitize_error_information_for_spend_logs(
+                error_information
             )
 
             # Timing can arrive as None on the failure path (and
@@ -397,6 +401,10 @@ class _ProxyDBLogger(CustomLogger):
                         request_tags=tags,
                     )
 
+                    is_free_model_request = _is_free_model_cost_tracking_request(
+                        kwargs=kwargs
+                    )
+
                     # update cache (fire-and-forget for backward compat:
                     # cached object fields, soft budget alerts, etc.)
                     asyncio.create_task(
@@ -404,20 +412,23 @@ class _ProxyDBLogger(CustomLogger):
                             token=user_api_key,
                             user_id=user_id,
                             end_user_id=end_user_id,
-                            response_cost=response_cost,
+                            response_cost=0.0
+                            if is_free_model_request
+                            else response_cost,
                             team_id=team_id,
                             parent_otel_span=parent_otel_span,
                             tags=tags,
                         )
                     )
 
-                    await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
-                        token=user_api_key,
-                        key_alias=key_alias,
-                        end_user_id=end_user_id,
-                        response_cost=response_cost,
-                        max_budget=end_user_max_budget,
-                    )
+                    if not is_free_model_request:
+                        await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
+                            token=user_api_key,
+                            key_alias=key_alias,
+                            end_user_id=end_user_id,
+                            response_cost=response_cost,
+                            max_budget=end_user_max_budget,
+                        )
                 elif budget_reservation is not None:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
@@ -610,6 +621,40 @@ def _get_request_tags_for_cost_tracking(
     return None
 
 
+def _is_free_model_cost_tracking_request(kwargs: dict) -> bool:
+    models_to_check: List[Any] = []
+
+    request_model = kwargs.get("model")
+    if request_model is not None:
+        models_to_check.append(request_model)
+
+    request_model_group = kwargs.get("model_group")
+    if request_model_group is not None:
+        models_to_check.append(request_model_group)
+
+    litellm_params = kwargs.get("litellm_params", {}) or {}
+    if isinstance(litellm_params, dict):
+        litellm_model = litellm_params.get("model")
+        if litellm_model is not None:
+            models_to_check.append(litellm_model)
+        litellm_model_group = litellm_params.get("model_group")
+        if litellm_model_group is not None:
+            models_to_check.append(litellm_model_group)
+
+    sl_object: Optional[StandardLoggingPayload] = kwargs.get(
+        "standard_logging_object", None
+    )
+    if sl_object is not None:
+        standard_model = sl_object.get("model")
+        if standard_model is not None:
+            models_to_check.append(standard_model)
+        standard_model_group = sl_object.get("model_group")
+        if standard_model_group is not None:
+            models_to_check.append(standard_model_group)
+
+    return any(is_free_model(str(model)) for model in models_to_check)
+
+
 async def _update_database_and_spend_counters(
     proxy_logging_obj: Any,
     increment_spend_counters: Any,
@@ -652,6 +697,11 @@ async def _update_database_and_spend_counters(
                         "Failed to invalidate budget reservation counters after release failed"
                     )
         raise
+
+    if _is_free_model_cost_tracking_request(kwargs=kwargs):
+        if budget_reservation is not None:
+            await _release_budget_reservation(budget_reservation=budget_reservation)
+        return
 
     try:
         await increment_spend_counters(

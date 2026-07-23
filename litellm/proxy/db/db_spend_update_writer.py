@@ -181,6 +181,7 @@ class DBSpendUpdateWriter:
             # Check both the payload model (actual provider model) and request model (alias).
             request_kwargs = kwargs or {}
             _payload_model = payload.get("model")
+            _payload_model_group = payload.get("model_group")
             _request_model = request_kwargs.get("model")
 
             _litellm_model = None
@@ -189,14 +190,20 @@ class DBSpendUpdateWriter:
                 _litellm_model = litellm_params.get("model")
 
             free_models_env = os.getenv("FREE_MODELS", "")
-            free_models = [m.strip() for m in free_models_env.split(",") if m.strip()]
+            free_models = {
+                m.strip().lower() for m in free_models_env.split(",") if m.strip()
+            }
 
             is_free_model = False
             matched_free_model = None
             if free_models:
-                free_models_lower = [m.lower() for m in free_models]
-                for model_name in [_payload_model, _request_model, _litellm_model]:
-                    if model_name and str(model_name).lower() in free_models_lower:
+                for model_name in [
+                    _payload_model,
+                    _payload_model_group,
+                    _request_model,
+                    _litellm_model,
+                ]:
+                    if model_name and str(model_name).strip().lower() in free_models:
                         is_free_model = True
                         matched_free_model = model_name
                         break

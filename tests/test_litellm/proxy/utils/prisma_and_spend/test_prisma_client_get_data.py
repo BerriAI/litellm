@@ -497,6 +497,35 @@ async def test_get_data_user_find_unique_returns_user_row(
 
 
 @pytest.mark.asyncio
+async def test_get_data_user_reset_query_includes_null_reset_at_with_duration(
+    prisma_client: PrismaClient,
+) -> None:
+    reset_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+
+    result = await prisma_client.get_data(
+        table_name="user",
+        query_type="find_all",
+        reset_at=reset_at,
+    )
+
+    assert result == []
+    prisma_client.db.litellm_usertable.find_many.assert_awaited_once_with(
+        where={
+            "OR": [
+                {"budget_reset_at": {"lt": reset_at}},
+                {
+                    "AND": [
+                        {"budget_reset_at": None},
+                        {"NOT": {"budget_duration": None}},
+                    ]
+                },
+            ]
+        }
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_data_logs_and_raises_on_db_error(
     prisma_client: PrismaClient,
 ) -> None:

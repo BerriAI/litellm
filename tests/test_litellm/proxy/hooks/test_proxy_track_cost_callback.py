@@ -474,6 +474,95 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
 
 
 @pytest.mark.asyncio
+async def test_update_database_and_spend_counters_skips_counters_for_free_model(
+    monkeypatch,
+):
+    monkeypatch.setenv("FREE_MODELS", "glm-latest")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    increment_spend_counters = AsyncMock()
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id="test_end_user_id",
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={
+            "model": "hosted_vllm/nvidia/GLM-5.2-NVFP4",
+            "litellm_params": {"model": "provider-model"},
+            "standard_logging_object": {
+                "model": "hosted_vllm/nvidia/GLM-5.2-NVFP4",
+                "model_group": "GLM-LATEST",
+            },
+        },
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        response_cost=0.2,
+        budget_reservation=None,
+        request_tags=["tag-a"],
+    )
+
+    proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+    increment_spend_counters.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_proxy_track_cost_callback_updates_cache_with_zero_for_free_model(
+    monkeypatch,
+):
+    monkeypatch.setenv("FREE_MODELS", "glm-latest")
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "model": "hosted_vllm/nvidia/GLM-5.2-NVFP4",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test_api_key",
+                "user_api_key_user_id": "test_user_id",
+                "user_api_key_team_id": "test_team_id",
+            }
+        },
+        "standard_logging_object": {
+            "model": "hosted_vllm/nvidia/GLM-5.2-NVFP4",
+            "model_group": "GLM-LATEST",
+            "response_cost": 10.0,
+            "request_tags": ["tag-a"],
+            "metadata": {},
+        },
+    }
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            new_callable=AsyncMock,
+        ) as mock_increment,
+        patch(
+            "litellm.proxy.proxy_server.update_cache",
+            new_callable=AsyncMock,
+        ) as mock_update_cache,
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+    ):
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response={"id": "free-model-call"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    mock_increment.assert_not_awaited()
+    assert mock_update_cache.call_args.kwargs["response_cost"] == 0.0
+    mock_proxy_logging.slack_alerting_instance.customer_spend_alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_database_and_spend_counters_invalidates_reservation_when_counter_update_fails():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()

@@ -65,7 +65,7 @@ async def test_budget_per_session_under_budget_passes():
 async def test_budget_per_session_exceeds_budget():
     """
     After accumulating spend beyond max_budget_per_session, the next
-    pre-call check should raise 429.
+    pre-call check should raise a non-retryable budget error.
     """
     local_cache = DualCache()
     handler = _PROXY_MaxBudgetPerSessionHandler(
@@ -94,7 +94,7 @@ async def test_budget_per_session_exceeds_budget():
                 data={"metadata": {"session_id": session_id}},
                 call_type="",
             )
-        assert exc_info.value.status_code == 429
+        assert exc_info.value.status_code == 402
         assert "budget exceeded" in str(exc_info.value.detail).lower()
 
 
@@ -131,7 +131,7 @@ async def test_budget_per_session_independent_sessions():
                 data={"metadata": {"session_id": "session-A"}},
                 call_type="",
             )
-        assert exc_info.value.status_code == 429
+        assert exc_info.value.status_code == 402
 
         # Session B should still pass
         result = await handler.async_pre_call_hook(

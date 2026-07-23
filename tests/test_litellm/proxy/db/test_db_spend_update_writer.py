@@ -1386,6 +1386,70 @@ async def test_update_database_creates_single_task():
         assert mock_create_task.call_count == 1
 
 
+@pytest.mark.parametrize(
+    "request_model,payload_model,payload_model_group,expected_skip_spend_counters",
+    [
+        ("hosted_vllm/nvidia/GLM-5.2-NVFP4", "provider-model", "GLM-LATEST", True),
+        ("paid-model", "paid-model", "paid-model", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_database_free_models_controls_budget_counter_updates(
+    monkeypatch,
+    request_model,
+    payload_model,
+    payload_model_group,
+    expected_skip_spend_counters,
+):
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    monkeypatch.setenv("FREE_MODELS", " glm-latest ")
+
+    fake_payload = {
+        "startTime": datetime.now(timezone.utc),
+        "endTime": datetime.now(timezone.utc),
+        "model": payload_model,
+        "model_group": payload_model_group,
+        "custom_llm_provider": "openai",
+        "request_tags": '["prod-tag"]',
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=fake_payload,
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id="test-end-user",
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            team_id="test-team",
+            org_id="test-org",
+            completion_response=MagicMock(),
+            response_cost=0.1,
+            kwargs={
+                "model": request_model,
+                "custom_llm_provider": "openai",
+            },
+        )
+
+    await asyncio.sleep(0)
+
+    db_writer._insert_spend_log_to_db.assert_awaited_once()
+    assert (
+        db_writer._batch_database_updates.call_args.kwargs["skip_spend_counters"]
+        is expected_skip_spend_counters
+    )
+
+
 @pytest.mark.asyncio
 async def test_batch_database_updates_isolation_on_failure():
     """

@@ -24,6 +24,11 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm import Router
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    MAX_STRING_LENGTH_PROMPT_IN_DB,
+    REDACTED_BY_LITELM_STRING,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
@@ -187,6 +192,54 @@ async def test_status_failure_even_when_litellm_metadata_present():
 
     mock_insert.assert_called_once()
     assert mock_insert.call_args.kwargs["payload"]["status"] == "failure"
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+async def test_per_attempt_failure_sanitizes_error_information_before_spend_log(
+    mock_should_store,
+):
+    """Per-attempt failure rows must honor spend-log prompt redaction and caps."""
+    mock_should_store.return_value = False
+    args = await _capture_attempt_kwargs()
+    logger = _ProxyDBLogger()
+
+    leaked_prompt = "super-secret-user-prompt"
+    huge_traceback = "traceback: " + ("x" * (MAX_STRING_LENGTH_PROMPT_IN_DB * 2))
+    error_information = {
+        "error_code": "400",
+        "error_class": "BadRequestError",
+        "llm_provider": "openai",
+        "error_message": (
+            'ProviderError - {"error":{"message":"validation failed",'
+            f'"input":[{{"role":"user","content":"{leaked_prompt}"}}]}}}}'
+        ),
+        "traceback": huge_traceback,
+    }
+    kwargs = {
+        **args["kwargs"],
+        "standard_logging_object": {
+            **args["kwargs"]["standard_logging_object"],
+            "error_information": error_information,
+        },
+    }
+
+    with patch(_INSERT_TARGET, new_callable=AsyncMock) as mock_insert:
+        await logger.async_log_failure_event(
+            kwargs=kwargs, response_obj=None, **_timing(args)
+        )
+
+    mock_insert.assert_called_once()
+    payload = mock_insert.call_args.kwargs["payload"]
+    md = json.loads(payload["metadata"])
+    logged_error_information = md["error_information"]
+    logged_error_json = json.dumps(logged_error_information)
+
+    assert leaked_prompt not in logged_error_json
+    assert REDACTED_BY_LITELM_STRING in logged_error_information["error_message"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in logged_error_information["traceback"]
 
 
 @pytest.mark.asyncio

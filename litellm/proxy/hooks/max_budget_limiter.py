@@ -70,6 +70,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                     rate_limit_type=RateLimitType.BUDGET,
                     model=resolved_model,
                     llm_provider=llm_provider,
+                    status_code=402,
                 )
         except HTTPException as e:
             raise e

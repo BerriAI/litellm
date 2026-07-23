@@ -3436,7 +3436,15 @@ class PrismaClient:
                 elif query_type == "find_all" and reset_at is not None:
                     response = await UserRepository(self).table.find_many(
                         where={  # type: ignore
-                            "budget_reset_at": {"lt": reset_at},
+                            "OR": [
+                                {"budget_reset_at": {"lt": reset_at}},
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                            ]
                         }
                     )
                 elif query_type == "find_all" and user_id_list is not None:

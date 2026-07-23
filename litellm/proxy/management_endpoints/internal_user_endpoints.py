@@ -19,6 +19,7 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape as html_escape
 from typing import Any, Dict, List, Optional, Union, cast
 
 import fastapi
@@ -2518,14 +2519,20 @@ def _build_service_account_key_rotation_email(
     deleted_user_identifiers: List[str],
 ) -> str:
     """Build HTML email body for key rotation notification for a single SA."""
+    escaped_deleted_users = [
+        html_escape(str(identifier), quote=True)
+        for identifier in deleted_user_identifiers
+    ]
+    escaped_sa_identifier = html_escape(str(sa_identifier), quote=True)
+
     html = "<h2>Service Account Owner Removed — Action Required</h2>"
     html += (
         "<p>A co-owner of your service account has been removed "
-        f"(deleted users: {', '.join(deleted_user_identifiers)}).</p>"
+        f"(deleted users: {', '.join(escaped_deleted_users)}).</p>"
     )
     html += (
         "<p>The following keys for service account "
-        f"<strong>{sa_identifier}</strong> have had their expiry shortened to "
+        f"<strong>{escaped_sa_identifier}</strong> have had their expiry shortened to "
         "<strong>7 days from now</strong>. Please rotate them before expiry or "
         "they will become unusable.</p>"
     )
@@ -2535,10 +2542,13 @@ def _build_service_account_key_rotation_email(
         "<tr><th>Key Name</th><th>Key Alias</th><th>New Expiry (UTC)</th></tr>"
     )
     for key in keys_info:
+        key_name = html_escape(str(key.get("key_name", "")), quote=True)
+        key_alias = html_escape(str(key.get("key_alias", "")), quote=True)
+        new_expiry = html_escape(str(key.get("new_expiry", "")), quote=True)
         html += (
-            f"<tr><td>{key['key_name']}</td>"
-            f"<td>{key['key_alias']}</td>"
-            f"<td>{key['new_expiry']}</td></tr>"
+            f"<tr><td>{key_name}</td>"
+            f"<td>{key_alias}</td>"
+            f"<td>{new_expiry}</td></tr>"
         )
     html += "</table>"
     html += "<p><em>This is an automated message from the LiteLLM Proxy.</em></p>"

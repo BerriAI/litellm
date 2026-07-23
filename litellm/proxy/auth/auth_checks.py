@@ -479,6 +479,8 @@ def is_model_info_route(route: str) -> bool:
     """Check if the route is a read-only model info/listing route exempt from budget checks."""
     if route in MODEL_DISCOVERY_ROUTES:
         return True
+    if RouteChecks.is_llm_api_route(route=route):
+        return False
     if route.startswith("/models/") or route.startswith("/v1/models/"):
         return True
     return False
@@ -486,7 +488,9 @@ def is_model_info_route(route: str) -> bool:
 
 def _get_free_models_from_env() -> set[str]:
     free_models_env = os.getenv("FREE_MODELS", "")
-    return {model.strip() for model in free_models_env.split(",") if model.strip()}
+    return {
+        model.strip().lower() for model in free_models_env.split(",") if model.strip()
+    }
 
 
 def is_free_model(model: Optional[Union[str, List[str]]]) -> bool:
@@ -497,8 +501,10 @@ def is_free_model(model: Optional[Union[str, List[str]]]) -> bool:
     if not free_models:
         return False
     if isinstance(model, list):
-        return len(model) > 0 and all(m in free_models for m in model)
-    return model in free_models
+        return len(model) > 0 and all(
+            str(m).strip().lower() in free_models for m in model
+        )
+    return str(model).strip().lower() in free_models
 
 
 async def common_checks(
@@ -649,12 +655,8 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            # 4.1 personal budget, if personal key
-            if (
-                (team_object is None or team_object.team_id is None)
-                and user_object is not None
-                and user_object.max_budget is not None
-            ):
+            # 4.1 user budget, for both personal and team keys.
+            if user_object is not None and user_object.max_budget is not None:
                 from litellm.proxy.proxy_server import get_current_spend
 
                 user_budget = user_object.max_budget

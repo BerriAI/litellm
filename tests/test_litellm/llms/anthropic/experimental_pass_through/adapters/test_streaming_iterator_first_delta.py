@@ -340,3 +340,93 @@ def test_trigger_delta_has_content_branches(processed_chunk, expected):
     assert (
         AnthropicStreamWrapper._trigger_delta_has_content(processed_chunk) is expected
     )
+
+
+def _block_type_by_index(events: List[dict]) -> dict:
+    return {
+        e["index"]: e["content_block"]["type"]
+        for e in events
+        if e.get("type") == "content_block_start"
+    }
+
+
+def _delta_types_by_index(events: List[dict]) -> List[tuple]:
+    return [
+        (e["index"], e["delta"]["type"])
+        for e in events
+        if e.get("type") == "content_block_delta"
+    ]
+
+
+def _assert_deltas_match_block_types(events: List[dict]) -> None:
+    """Every ``*_delta`` must land in a block whose declared type accepts it.
+
+    This is exactly the invariant Claude/Codex clients enforce when raising
+    "Content block is not a thinking block".
+    """
+    allowed = {
+        "thinking": {"thinking_delta", "signature_delta"},
+        "text": {"text_delta"},
+        "tool_use": {"input_json_delta"},
+    }
+    block_types = _block_type_by_index(events)
+    for index, delta_type in _delta_types_by_index(events):
+        block_type = block_types[index]
+        assert delta_type in allowed[block_type], (
+            f"block index {index} opened as {block_type!r} received {delta_type!r}"
+        )
+
+
+def test_reasoning_bundled_with_first_text_does_not_leak_into_text_block_sync():
+    """Regression for upstream PR #33241.
+
+    NVIDIA NIM Nemotron 3 Ultra can bundle the tail of its reasoning together
+    with the first visible text token. The content-block detector must keep
+    that mixed chunk in the thinking block while the delta translator emits
+    thinking_delta.
+    """
+    chunks = [
+        _make_chunk(Delta(reasoning_content="The", content=None)),
+        _make_chunk(Delta(reasoning_content=" assistant.", content="! I'm an")),
+        _make_chunk(Delta(reasoning_content=None, content=" AI assistant.")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    _assert_deltas_match_block_types(events)
+
+    thinking = "".join(
+        e["delta"]["thinking"]
+        for e in events
+        if e.get("type") == "content_block_delta"
+        and e["delta"].get("type") == "thinking_delta"
+    )
+    assert thinking == "The assistant."
+    assert "".join(_text_deltas(events)) == " AI assistant."
+
+
+@pytest.mark.asyncio
+async def test_reasoning_bundled_with_first_text_does_not_leak_into_text_block_async():
+    """Async path mirrors the sync regression for upstream PR #33241."""
+    chunks = [
+        _make_chunk(Delta(reasoning_content="The", content=None)),
+        _make_chunk(Delta(reasoning_content=" assistant.", content="! I'm an")),
+        _make_chunk(Delta(reasoning_content=None, content=" AI assistant.")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(chunks), model="claude-x"
+    )
+    events = await _drain_async(wrapper)
+
+    _assert_deltas_match_block_types(events)
+
+    thinking = "".join(
+        e["delta"]["thinking"]
+        for e in events
+        if e.get("type") == "content_block_delta"
+        and e["delta"].get("type") == "thinking_delta"
+    )
+    assert thinking == "The assistant."
+    assert "".join(_text_deltas(events)) == " AI assistant."

@@ -173,7 +173,7 @@ class UserAPIKeyAuthExceptionHandler:
                     message=e.message,
                     type=ProxyErrorTypes.budget_exceeded,
                     param=None,
-                    code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+                    code=getattr(e, "status_code", status.HTTP_402_PAYMENT_REQUIRED),
                 )
             if isinstance(e, HTTPException):
                 raise ProxyException(

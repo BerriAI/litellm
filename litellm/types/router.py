@@ -133,6 +133,11 @@ class ModelInfo(BaseModel):
     base_model: Optional[str] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Optional[Literal["free", "paid"]] = None
 
+    # relative hardware capacity for sticky-least-busy routing: scales the
+    # deployment's share of the consistent hash ring AND its load tolerance
+    # before rebalancing. Defaults to 1.0 (equal weight) when unset.
+    sticky_weight: Optional[float] = None
+
     """
     Team Model Specific Fields
     """
@@ -741,6 +746,7 @@ class RoutingStrategy(enum.Enum):
     LEAST_BUSY = "least-busy"
     STICKY_LEAST_BUSY = "sticky-least-busy"
     STICKY_LEAST_BUSY_REDIS = "sticky-least-busy-redis"
+    STICKY_LEAST_BUSY_WEIGHTED = "sticky-least-busy-weighted"
     LATENCY_BASED = "latency-based-routing"
     COST_BASED = "cost-based-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"

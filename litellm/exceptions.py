@@ -959,6 +959,9 @@ LITELLM_EXCEPTION_TYPES = [
 ]
 
 
+BUDGET_EXCEEDED_STATUS_CODE = 402
+
+
 class BudgetExceededError(Exception):
     def __init__(
         self,
@@ -969,7 +972,7 @@ class BudgetExceededError(Exception):
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
-        self.status_code = 429
+        self.status_code = BUDGET_EXCEEDED_STATUS_CODE
         self.llm_provider = llm_provider or ""
         # Surface unified rate-limit fields without joining the RateLimitError
         # hierarchy so existing `except BudgetExceededError:` handlers keep

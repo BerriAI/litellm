@@ -94,12 +94,12 @@ def _coerce_message(detail: Any) -> str:
 #   * `headers` is `Mapping[str, str] | None` on HTTPException; we narrow it
 #     to `Optional[Dict[str, str]]` on RateLimitError because we always carry
 #     a stringified dict.
-# Both narrowings are intentional and handled at construction time — every
-# instance always has status_code == 429 and a Dict-typed headers — so we
-# silence the ATTR-overlap check rather than relax the annotations.
+# Both narrowings are intentional and handled at construction time. Most
+# instances have status_code == 429; budget limiters can opt into a
+# non-retryable status while preserving the same structured labels.
 class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
     """
-    A 429 raised by litellm's proxy-side rate limiting hooks.
+    A proxy-side limiter error, usually HTTP 429.
 
     This class deliberately inherits from BOTH
     :class:`litellm.exceptions.RateLimitError` and :class:`fastapi.HTTPException`
@@ -148,6 +148,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         model: Optional[str] = None,
         llm_provider: Optional[str] = "litellm_proxy",
+        status_code: int = 429,
     ):
         # Normalize None → safe defaults so callers (and the resolver helper
         # in `rate_limiter_utils`) can pass `None` without producing an
@@ -164,7 +165,7 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         # RateLimitError.__init__ runs and possibly overrides them.
         HTTPException.__init__(
             self,
-            status_code=429,
+            status_code=status_code,
             detail=detail,
             headers=stringified_headers,
         )
@@ -189,4 +190,6 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         # instance gets back exactly what the limiter passed in.
         self.headers = stringified_headers
         self.detail = detail
-        self.status_code = 429
+        self.status_code = status_code
+        self.response.status_code = status_code
+        self.code = str(status_code)

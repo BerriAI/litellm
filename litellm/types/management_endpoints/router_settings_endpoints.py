@@ -86,6 +86,7 @@ ROUTING_STRATEGY_DESCRIPTIONS: Dict[str, str] = {
     "cost-based-routing": "Routes to the deployment with the lowest cost per token.",
     "usage-based-routing": "Routes to the deployment with the lowest TPM (Tokens Per Minute) usage. (deprecated)",
     "usage-based-routing-v2": "Improved version of usage-based routing with better tracking.",
+    "sticky-least-busy-weighted": "Sticky routing with a weighted hash ring: same conversation sticks to one deployment, and each deployment's share scales with its model_info.sticky_weight (relative hardware capacity, e.g. 1 for H200, 2 for B300). Rebalances on capacity-normalized load.",
 }
 
 

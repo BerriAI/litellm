@@ -23,6 +23,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
+    _build_service_account_key_rotation_email,
     _resolve_user_email_metadata,
     _update_internal_user_params,
     batch_update_user_budgets,
@@ -34,6 +35,30 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
+
+
+def test_service_account_key_rotation_email_escapes_user_controlled_values():
+    html = _build_service_account_key_rotation_email(
+        sa_identifier='sa@example.com"><img src=x onerror=alert(1)>',
+        deleted_user_identifiers=[
+            'deleted@example.com<script>alert("x")</script>',
+        ],
+        keys_info=[
+            {
+                "key_name": 'prod-key"><img src=x onerror=alert(2)>',
+                "key_alias": '<a href="https://phish.example">rotate here</a>',
+                "new_expiry": '2026-07-28T00:00:00+00:00"><svg onload=alert(3)>',
+            }
+        ],
+    )
+
+    assert "<img" not in html
+    assert "<script" not in html
+    assert "<a href" not in html
+    assert "<svg" not in html
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html
+    assert "deleted@example.com&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html
+    assert "&lt;a href=&quot;https://phish.example&quot;&gt;rotate here&lt;/a&gt;" in html
 
 
 # A real ASCII-armored OpenPGP public key for service-account creation tests.

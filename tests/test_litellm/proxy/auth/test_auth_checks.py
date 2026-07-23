@@ -47,6 +47,8 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_soft_budget_check,
     get_key_object,
     get_user_object,
+    is_free_model,
+    is_model_info_route,
     vector_store_access_check,
 )
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -3890,6 +3892,43 @@ async def test_model_discovery_route_bypasses_team_budget(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/models/gemini-2.0-flash:generateContent",
+        "/models/gemini-1.5-pro:streamGenerateContent",
+        "/v1beta/models/gemini-2.0-flash:generateContent",
+        "/v1beta/models/gemini-1.5-pro:streamGenerateContent",
+    ],
+)
+def test_gemini_inference_routes_are_not_model_discovery_routes(route):
+    assert is_model_info_route(route) is False
+
+
+@pytest.mark.asyncio
+async def test_gemini_inference_route_does_not_bypass_team_budget():
+    """Gemini inference routes share the /models/ prefix but are paid LLM calls."""
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", new=AsyncMock(return_value=150.0)):
+        with pytest.raises(litellm.BudgetExceededError):
+            await common_checks(
+                request_body={},
+                team_object=team_object,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/models/gemini-2.0-flash:generateContent",
+                llm_router=None,
+                proxy_logging_obj=AsyncMock(),
+                valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+                request=MagicMock(),
+            )
+
+
 @pytest.mark.asyncio
 async def test_model_discovery_route_bypasses_user_budget():
     """Regression for #27923: an exhausted user budget must not block model discovery."""
@@ -3912,6 +3951,105 @@ async def test_model_discovery_route_bypasses_user_budget():
     )
 
     assert result is True
+
+
+def test_free_models_env_matches_public_model_names_case_insensitively(monkeypatch):
+    monkeypatch.setenv("FREE_MODELS", " glm-latest , public-model ")
+
+    assert is_free_model("GLM-LATEST") is True
+    assert is_free_model(" public-model ") is True
+    assert is_free_model(["GLM-LATEST", "PUBLIC-MODEL"]) is True
+    assert is_free_model(["GLM-LATEST", "paid-model"]) is False
+    assert is_free_model([]) is False
+    assert is_free_model(None) is False
+
+
+@pytest.mark.asyncio
+async def test_team_key_non_free_model_enforces_user_budget(monkeypatch):
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    monkeypatch.setenv("FREE_MODELS", "glm-latest")
+    team_object = LiteLLM_TeamTable(team_id="test-team", models=["*"])
+    user_object = LiteLLM_UserTable(
+        user_id="test-user",
+        spend=0.0,
+        max_budget=10.0,
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=25.0),
+    ) as mock_get_current_spend:
+        with patch(
+            "litellm.proxy.auth.auth_checks._check_team_member_model_access",
+            new=AsyncMock(),
+        ):
+            with pytest.raises(litellm.BudgetExceededError):
+                await common_checks(
+                    request_body={"model": "paid-model"},
+                    team_object=team_object,
+                    user_object=user_object,
+                    end_user_object=None,
+                    global_proxy_spend=None,
+                    general_settings={},
+                    route="/v1/chat/completions",
+                    llm_router=None,
+                    proxy_logging_obj=AsyncMock(),
+                    valid_token=UserAPIKeyAuth(
+                        token="test-token",
+                        user_id="test-user",
+                        team_id="test-team",
+                    ),
+                    request=MagicMock(),
+                )
+
+    mock_get_current_spend.assert_any_await(
+        counter_key="spend:user:test-user",
+        fallback_spend=0.0,
+        max_budget=10.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_key_free_model_skips_user_budget(monkeypatch):
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    monkeypatch.setenv("FREE_MODELS", "glm-latest")
+    team_object = LiteLLM_TeamTable(team_id="test-team", models=["*"])
+    user_object = LiteLLM_UserTable(
+        user_id="test-user",
+        spend=100.0,
+        max_budget=10.0,
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=100.0),
+    ) as mock_get_current_spend:
+        with patch(
+            "litellm.proxy.auth.auth_checks._check_team_member_model_access",
+            new=AsyncMock(),
+        ):
+            result = await common_checks(
+                request_body={"model": "GLM-LATEST"},
+                team_object=team_object,
+                user_object=user_object,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=AsyncMock(),
+                valid_token=UserAPIKeyAuth(
+                    token="test-token",
+                    user_id="test-user",
+                    team_id="test-team",
+                ),
+                request=MagicMock(),
+            )
+
+    assert result is True
+    mock_get_current_spend.assert_not_awaited()
 
 
 @pytest.mark.asyncio

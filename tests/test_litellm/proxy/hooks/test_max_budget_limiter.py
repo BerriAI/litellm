@@ -74,7 +74,7 @@ async def test_over_budget_rejects_without_reservation():
                 call_type="completion",
             )
 
-    assert exc_info.value.status_code == 429
+    assert exc_info.value.status_code == 402
     assert "Max budget limit reached." in exc_info.value.detail
 
 
@@ -84,7 +84,7 @@ async def test_skips_when_user_counter_is_reserved():
     Reservation atomically pre-fills `spend:user:{user_id}` and admits the
     request. The legacy `>=` check must not double-enforce on the same
     counter — that's what produced the boundary regression where a fresh
-    user with no `max_tokens` cap got 429'd on their first request.
+    user with no `max_tokens` cap got rejected on their first request.
     """
     handler = _PROXY_MaxBudgetLimiter()
     user_api_key_dict = _make_user_api_key_auth(
@@ -159,7 +159,7 @@ async def test_does_not_skip_when_reservation_covers_a_different_counter():
                 call_type="completion",
             )
 
-    assert exc_info.value.status_code == 429
+    assert exc_info.value.status_code == 402
 
 
 @pytest.mark.asyncio

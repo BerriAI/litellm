@@ -6,14 +6,17 @@ counters that are emitted by parallel_request_limiter_v3.py via print() statemen
 """
 
 import os
-import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
+
+from litellm.integrations.gcp_logging_helpers.parallel_requests_metrics import (
+    encode_metric_field,
+    parse_parallel_requests_metric_log_line,
+)
 
 # Try to import google-cloud-logging
 try:
     from google.cloud.logging import Client as LoggingClient
-    from google.oauth2 import service_account
 
     GCP_LOGGING_AVAILABLE = True
 except ImportError:
@@ -22,18 +25,6 @@ except ImportError:
         "[gcp_logs_query] google-cloud-logging not installed. "
         "Install with: pip install google-cloud-logging"
     )
-
-# Regex pattern to parse the METRICS log line
-METRICS_LOG_PATTERN = re.compile(
-    r'\[METRICS\] Emitting parallel_requests metric: '
-    r'token=(?P<token>[^,]+), '
-    r'key_alias=(?P<key_alias>[^,]+), '
-    r'previous_count=(?P<previous_count>-?\d+), '
-    r'current_count=(?P<current_count>-?\d+), '
-    r'operation=(?P<operation>[^,]+), '
-    r'timestamp=(?P<timestamp>[\d.]+)'
-)
-
 
 def get_gcp_logging_client(project_id: Optional[str] = None):
     """
@@ -76,22 +67,7 @@ def parse_metrics_log_line(text_payload: str) -> Optional[Dict]:
     Returns:
         Dictionary with parsed fields or None if parsing fails
     """
-    match = METRICS_LOG_PATTERN.search(text_payload)
-    if not match:
-        return None
-
-    try:
-        return {
-            "token": match.group("token"),
-            "key_alias": match.group("key_alias") if match.group("key_alias") != "None" else None,
-            "previous_count": int(match.group("previous_count")),
-            "current_count": int(match.group("current_count")),
-            "operation": match.group("operation"),
-            "timestamp": float(match.group("timestamp")),
-        }
-    except (ValueError, IndexError) as e:
-        print(f"[gcp_logs_query] Failed to parse log line: {e}")
-        return None
+    return parse_parallel_requests_metric_log_line(text_payload)
 
 
 async def query_parallel_requests_metrics_last_n_seconds(
@@ -154,13 +130,13 @@ async def query_parallel_requests_metrics_last_n_seconds(
 
         if api_key_filter:
             # Add token filter - escape quotes for safety
-            escaped_token = api_key_filter.replace('"', '\\"')
+            escaped_token = encode_metric_field(api_key_filter)
             filter_parts.append(f'textPayload:"token={escaped_token}"')
 
         if key_alias_filter:
             # Add key_alias filter - escape quotes for safety
             # Note: This does partial match since log line contains key_alias=value
-            escaped_alias = key_alias_filter.replace('"', '\\"')
+            escaped_alias = encode_metric_field(key_alias_filter)
             filter_parts.append(f'textPayload:"key_alias={escaped_alias}"')
 
         filter_str = " AND ".join(filter_parts)
@@ -374,10 +350,10 @@ async def count_parallel_request_operations(
             'textPayload:"[METRICS] Emitting parallel_requests metric"',
         ]
         if token_filter:
-            escaped_token = token_filter.replace('"', '\\"')
+            escaped_token = encode_metric_field(token_filter)
             filter_parts.append(f'textPayload:"token={escaped_token}"')
         if key_alias_filter:
-            escaped_alias = key_alias_filter.replace('"', '\\"')
+            escaped_alias = encode_metric_field(key_alias_filter)
             filter_parts.append(f'textPayload:"key_alias={escaped_alias}"')
         filter_str = " AND ".join(filter_parts)
 
@@ -389,7 +365,7 @@ async def count_parallel_request_operations(
             f"[gcp_logs_query] Counting parallel_requests operations from "
             f"{start_rfc3339} to {end_rfc3339} "
             f"(token_filter={'set' if token_filter else 'none'}, "
-            f"key_alias_filter={key_alias_filter or 'none'})"
+            f"key_alias_filter={'set' if key_alias_filter else 'none'})"
         )
 
         truncated = False
@@ -496,10 +472,10 @@ async def get_parallel_request_metric_series(
             'textPayload:"[METRICS] Emitting parallel_requests metric"',
         ]
         if token_filter:
-            escaped_token = token_filter.replace('"', '\\"')
+            escaped_token = encode_metric_field(token_filter)
             filter_parts.append(f'textPayload:"token={escaped_token}"')
         if key_alias_filter:
-            escaped_alias = key_alias_filter.replace('"', '\\"')
+            escaped_alias = encode_metric_field(key_alias_filter)
             filter_parts.append(f'textPayload:"key_alias={escaped_alias}"')
         filter_str = " AND ".join(filter_parts)
 
