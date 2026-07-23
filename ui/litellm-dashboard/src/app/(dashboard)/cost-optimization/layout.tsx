@@ -1,40 +1,26 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
 import { PiggyBank, Info } from "lucide-react";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  costOptimizationTabHref,
-  slugFromPathname,
-  type CostOptimizationTabSlug,
-} from "@/app/(dashboard)/cost-optimization/tabRoutes";
+import { costOptimizationRoutes } from "@/app/(dashboard)/cost-optimization/tabRoutes";
+import { useTabRouting } from "@/app/(dashboard)/hooks/useTabRouting";
+import { TabRouteBar } from "@/app/(dashboard)/components/TabRouteBar";
 
 const BASE_TAB_KEY = "usage";
 
-const ORDERED_KEYS: Array<"" | CostOptimizationTabSlug> = ["", "compression", "autorouter", "caching"];
-
-const TAB_LABELS: Record<"" | CostOptimizationTabSlug, string> = {
-  "": "Usage",
-  compression: "Prompt Compression",
-  autorouter: "Autorouter",
-  caching: "Prompt Caching",
-};
+const TABS = [
+  { key: BASE_TAB_KEY, label: "Usage" },
+  { key: "compression", label: "Prompt Compression" },
+  { key: "autorouter", label: "Autorouter" },
+  { key: "caching", label: "Prompt Caching" },
+] as const;
 
 export default function CostOptimizationLayout({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
-  const router = useRouter();
-
-  const activeSlug = slugFromPathname(pathname);
-  const isKnownSlug = ORDERED_KEYS.some((slug) => slug === activeSlug);
-  const activeKey = isKnownSlug ? activeSlug || BASE_TAB_KEY : BASE_TAB_KEY;
-
-  useEffect(() => {
-    if (activeSlug !== "" && !isKnownSlug) {
-      window.location.replace(costOptimizationTabHref(""));
-    }
-  }, [activeSlug, isKnownSlug]);
+  const { activeKey } = useTabRouting({
+    routes: costOptimizationRoutes,
+    baseTabKey: BASE_TAB_KEY,
+    visibleKeys: costOptimizationRoutes.slugs,
+  });
 
   return (
     <div className="w-full space-y-6 p-6">
@@ -63,18 +49,7 @@ export default function CostOptimizationLayout({ children }: { children: ReactNo
         </span>
       </div>
 
-      <Tabs
-        value={activeKey}
-        onValueChange={(key) => router.push(costOptimizationTabHref(key === BASE_TAB_KEY ? "" : key))}
-      >
-        <TabsList variant="line">
-          {ORDERED_KEYS.map((slug) => (
-            <TabsTrigger key={slug || BASE_TAB_KEY} value={slug || BASE_TAB_KEY}>
-              {TAB_LABELS[slug]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <TabRouteBar routes={costOptimizationRoutes} baseTabKey={BASE_TAB_KEY} activeKey={activeKey} tabs={TABS} />
 
       <div>{children}</div>
     </div>

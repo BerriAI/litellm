@@ -33,36 +33,24 @@ describe("CostOptimizationLayout", () => {
     };
   });
 
-  it("renders the tab bar and the active tab's page content", () => {
+  it("renders the four tabs and the active tab's page content", () => {
     const { getByRole, getByTestId } = renderLayout();
-    expect(getByRole("tab", { name: "Usage" })).toBeInTheDocument();
-    expect(getByRole("tab", { name: "Prompt Compression" })).toBeInTheDocument();
-    expect(getByRole("tab", { name: "Autorouter" })).toBeInTheDocument();
-    expect(getByRole("tab", { name: "Prompt Caching" })).toBeInTheDocument();
+    for (const name of ["Usage", "Prompt Compression", "Autorouter", "Prompt Caching"]) {
+      expect(getByRole("tab", { name })).toBeInTheDocument();
+    }
     expect(getByTestId("tab-content")).toHaveTextContent("CHILD");
   });
 
   it("marks the base route's Usage tab active", () => {
     const { getByRole } = renderLayout();
     expect(getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
-    expect(getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "false");
   });
 
-  it("navigates to a tab's path when its tab is clicked", async () => {
+  it("derives the active tab from a nested pathname", () => {
+    navState.pathname = "/ui/cost-optimization/compression";
     const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Prompt Compression" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/cost-optimization\/compression\/$/));
-  });
-
-  it("routes the base tab back to the cost-optimization root (no slug)", async () => {
-    navState.pathname = "/cost-optimization/autorouter";
-    const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Usage" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/cost-optimization\/$/));
+    expect(getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "true");
+    expect(getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("redirects to the base cost-optimization path when the tab slug is unknown", async () => {
