@@ -23,7 +23,7 @@ from typing import Callable
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 
 from batch_client import (
     UPLOAD_FILENAME,
@@ -702,14 +702,7 @@ class TestBedrockBatchAssumeRole:
     def test_unified_batch_create_with_assume_role(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
-        (role_arn,) = require_env("AWS_ROLE_NAME")
-        require_env(
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_REGION",
-            "AWS_BATCH_S3_BUCKET",
-            "AWS_BATCH_ROLE_ARN",
-        )
+        role_arn = os.environ["AWS_ROLE_NAME"]
         session_name = f"e2e-batch-sts-{unique_marker()}"[:64]
         model_name = batch_model_name("bedrock-sts-batch")
 
@@ -819,7 +812,7 @@ class TestHostedVllmBatch:
     def test_unified_file_and_batch_create(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
-        (api_base,) = require_env("HOSTED_VLLM_API_BASE")
+        api_base = os.environ["HOSTED_VLLM_API_BASE"]
         api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
         model_id = (
             os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"

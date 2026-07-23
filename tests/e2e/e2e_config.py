@@ -99,22 +99,6 @@ ANOMALY_SPEND_SETTLE_SECONDS = float(
 )
 
 
-def require_env(*names: str) -> tuple[str, ...]:
-    """Return the non-empty values for each env name, or hard-fail naming which are missing.
-
-    Live e2e never skips for missing credentials: a missing key is a red run so
-    ops knows the suite cannot prove the product path.
-    """
-    missing = tuple(name for name in names if not (os.environ.get(name) or "").strip())
-    if missing:
-        joined = ", ".join(missing)
-        raise AssertionError(
-            f"missing required env for e2e: {joined}. "
-            "Add them to tests/e2e/.env locally and to litellm ops for stage/CI."
-        )
-    return tuple((os.environ.get(name) or "").strip() for name in names)
-
-
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
     """Regional Datadog remote MCP endpoint for this process's DD_SITE.
 

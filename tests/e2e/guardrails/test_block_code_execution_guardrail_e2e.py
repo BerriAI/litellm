@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import unwrap
 from guardrails_client import BlockCodeExecutionParamsBody, GuardrailsClient
 from lifecycle import ResourceManager
@@ -46,7 +46,6 @@ class TestBlockCodeExecutionGuardrail:
     def test_blocks_execution_request_but_allows_explanation(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        require_env("GEMINI_API_KEY")
         model = client.create_backend_model(resources, prefix="e2e-blockcode-backend")
 
         name = f"e2e-block-code-{unique_marker()}"
