@@ -22,12 +22,6 @@ const renderBadge = (value: string, maxWidthClassName?: string) =>
     </TooltipProvider>,
   );
 
-const openTooltip = (value: string) => {
-  const trigger = screen.getByText(value).parentElement!;
-  fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
-  fireEvent.mouseEnter(trigger);
-};
-
 describe("CopyableBadge", () => {
   it("renders the value truncated in the badge", () => {
     renderBadge("app-aigateway-inference-producttech-product-default");
@@ -36,20 +30,13 @@ describe("CopyableBadge", () => {
     expect(label.className).toContain("max-w-[130px]");
   });
 
-  it("reveals the full value and copies it from the hover tooltip", async () => {
+  it("copies the full value from the copy button on the badge", async () => {
     renderBadge("team-alias-long-name");
 
-    openTooltip("team-alias-long-name");
-
-    const copyButton = await screen.findByRole("button", { name: "Copy team-alias-long-name" });
+    const copyButton = screen.getByRole("button", { name: "Copy team-alias-long-name" });
     fireEvent.click(copyButton);
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("team-alias-long-name"));
-  });
-
-  it("does not expose the copy affordance until hovered", () => {
-    renderBadge("my-team");
-    expect(screen.queryByRole("button", { name: "Copy my-team" })).not.toBeInTheDocument();
   });
 
   it("honors a custom max width", () => {
