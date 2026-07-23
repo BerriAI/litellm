@@ -3613,6 +3613,129 @@ class TestGuardrailSpanParenting(unittest.TestCase):
             )
 
 
+class TestOpenTelemetrySpanLifecycleOrdering(unittest.TestCase):
+    """Issue #33511: the litellm_request span must stay open until every
+    child span (raw_gen_ai_request, guardrail) has been created and ended.
+
+    Even though exported start/end timestamps are explicit and look
+    correctly nested, processors that track the active parent (e.g.
+    Langfuse) rely on the on_start / on_end callback ORDER. If
+    litellm_request.on_end fires before raw_gen_ai_request.on_start, the
+    child is treated as a new root."""
+
+    def _build_kwargs_and_response(self, with_guardrail: bool):
+        guardrail_info = {
+            "guardrail_name": "pii_filter",
+            "guardrail_mode": "pre_call",
+            "guardrail_response": "ok",
+            "start_time": time.time(),
+            "end_time": time.time() + 0.1,
+        }
+        std_log = {
+            "id": "test-lifecycle-id",
+            "call_type": "completion",
+            "metadata": {},
+            "hidden_params": {},
+        }
+        if with_guardrail:
+            std_log["guardrail_information"] = [guardrail_info]
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+            "standard_logging_object": std_log,
+        }
+        response_obj = {
+            "id": "chatcmpl-test",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {"content": "Hi!", "role": "assistant"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+            },
+        }
+        return kwargs, response_obj
+
+    def _run_and_record(self, with_guardrail: bool):
+        from opentelemetry.sdk.trace import SpanProcessor
+
+        events = []
+
+        class RecordingSpanProcessor(SpanProcessor):
+            def on_start(self, span, parent_context=None):
+                events.append((span.name, "start"))
+
+            def on_end(self, span):
+                events.append((span.name, "end"))
+
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(RecordingSpanProcessor())
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+        otel.message_logging = True
+
+        kwargs, response_obj = self._build_kwargs_and_response(with_guardrail)
+
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_success(kwargs, response_obj, start, end)
+        return events
+
+    def test_raw_request_child_starts_and_ends_within_parent(self):
+        events = self._run_and_record(with_guardrail=False)
+
+        self.assertIn(("litellm_request", "start"), events)
+        self.assertIn(("raw_gen_ai_request", "start"), events)
+        self.assertIn(("raw_gen_ai_request", "end"), events)
+        self.assertIn(("litellm_request", "end"), events)
+
+        parent_start = events.index(("litellm_request", "start"))
+        parent_end = events.index(("litellm_request", "end"))
+        child_start = events.index(("raw_gen_ai_request", "start"))
+        child_end = events.index(("raw_gen_ai_request", "end"))
+
+        self.assertLess(
+            parent_start,
+            child_start,
+            "litellm_request must start before its raw_gen_ai_request child",
+        )
+        self.assertLess(
+            child_end,
+            parent_end,
+            "litellm_request must end AFTER its raw_gen_ai_request child ends "
+            "(Issue #33511)",
+        )
+
+    def test_all_children_end_before_parent(self):
+        events = self._run_and_record(with_guardrail=True)
+
+        parent_end = events.index(("litellm_request", "end"))
+        child_names = ("raw_gen_ai_request", "guardrail")
+        child_end_indices = [
+            idx
+            for idx, (name, phase) in enumerate(events)
+            if phase == "end" and name in child_names
+        ]
+
+        self.assertTrue(child_end_indices, "Expected child spans to be recorded")
+        for idx in child_end_indices:
+            self.assertLess(
+                idx,
+                parent_end,
+                "Every child span must end before litellm_request ends "
+                "(Issue #33511)",
+            )
+
+
 class TestResponseIdFallback(unittest.TestCase):
     """Issue #8: gen_ai.response.id should be set for embeddings and image gen
     using standard_logging_payload['id'] as fallback."""

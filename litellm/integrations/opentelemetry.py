@@ -1200,41 +1200,49 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
         should_create_primary_span = parent_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
 
-        if should_create_primary_span:
-            # Create a new litellm_request span
-            span = self._start_primary_span(kwargs, response_obj, start_time, end_time, ctx)
-            # Raw-request sub-span (if enabled) - child of litellm_request span
-            self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
-            # Do NOT duplicate attributes onto the parent proxy-request span.
-            # The child litellm_request span already carries all attributes;
-            # copying them to the parent doubles storage and complicates
-            # search (Issue #4).
-        else:
-            # Do not create primary span (keep hierarchy shallow when parent exists)
-            from opentelemetry.trace import Status, StatusCode
+        span = None
+        try:
+            if should_create_primary_span:
+                # Create a new litellm_request span. It is left open here and
+                # ended in the finally block below so its on_end lifecycle
+                # callback fires after every child span, keeping processors
+                # that track the active parent (e.g. Langfuse) correctly
+                # nested (Issue #33511).
+                span = self._start_primary_span(kwargs, response_obj, start_time, ctx)
+                # Raw-request sub-span (if enabled) - child of litellm_request span
+                self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
+                # Do NOT duplicate attributes onto the parent proxy-request span.
+                # The child litellm_request span already carries all attributes;
+                # copying them to the parent doubles storage and complicates
+                # search (Issue #4).
+            else:
+                # Do not create primary span (keep hierarchy shallow when parent exists)
+                from opentelemetry.trace import Status, StatusCode
 
-            span = None
-            # Only set attributes if the span is still recording (not closed)
-            # Note: parent_span is guaranteed to be not None here
-            if hasattr(parent_span, "set_status"):
-                parent_span.set_status(Status(StatusCode.OK))
-                self.set_attributes(parent_span, kwargs, response_obj)
-            # Raw-request as direct child of parent_span
-            self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, parent_span)
+                # Only set attributes if the span is still recording (not closed)
+                # Note: parent_span is guaranteed to be not None here
+                if hasattr(parent_span, "set_status"):
+                    parent_span.set_status(Status(StatusCode.OK))
+                    self.set_attributes(parent_span, kwargs, response_obj)
+                # Raw-request as direct child of parent_span
+                self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, parent_span)
 
-        # 3. Guardrail span — ensure guardrails are always parented to an
-        #    existing span so they never become orphaned root spans (Issue #5).
-        guardrail_ctx = self._resolve_guardrail_context(span=span, parent_span=parent_span, fallback_ctx=ctx)
-        self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
+            # 3. Guardrail span — ensure guardrails are always parented to an
+            #    existing span so they never become orphaned root spans (Issue #5).
+            guardrail_ctx = self._resolve_guardrail_context(span=span, parent_span=parent_span, fallback_ctx=ctx)
+            self._create_guardrail_span(kwargs=kwargs, context=guardrail_ctx)
 
-        # 4. Metrics & cost recording
-        self._record_metrics(kwargs, response_obj, start_time, end_time)
+            # 4. Metrics & cost recording
+            self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        # 5. Semantic logs.
-        if self.config.enable_events:
-            log_span = span if span is not None else parent_span
-            if log_span is not None:
-                self._emit_semantic_logs(kwargs, response_obj, log_span)
+            # 5. Semantic logs.
+            if self.config.enable_events:
+                log_span = span if span is not None else parent_span
+                if log_span is not None:
+                    self._emit_semantic_logs(kwargs, response_obj, log_span)
+        finally:
+            if span is not None:
+                span.end(end_time=self._to_ns(end_time))
 
         # 6. Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
@@ -1262,7 +1270,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         kwargs,
         response_obj,
         start_time,
-        end_time,
         context,
     ):
         from opentelemetry.trace import Status, StatusCode
@@ -1280,7 +1287,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         span.set_status(Status(StatusCode.OK))
         self.set_attributes(span, kwargs, response_obj)
-        span.end(end_time=self._to_ns(end_time))
         return span
 
     def _maybe_log_raw_request(self, kwargs, response_obj, start_time, end_time, parent_span):
