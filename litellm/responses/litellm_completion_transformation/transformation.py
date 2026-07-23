@@ -167,6 +167,30 @@ class LiteLLMCompletionResponsesConfig:
         return tool_choice
 
     @staticmethod
+    def _transform_tool_choice_for_responses_api_response(
+        tool_choice: Any,
+    ) -> str | dict[str, Any] | None:
+        """
+        Inverse of ``_transform_tool_choice``: normalizes tool_choice into the
+        shape ``ResponsesAPIResponse.tool_choice`` accepts (flat
+        ``{"type": "function", "name": "..."}``), not Chat Completion's nested
+        ``{"type": "function", "function": {"name": "..."}}``, which fails
+        Pydantic validation on this field.
+        """
+        normalized = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+
+        if normalized is None or isinstance(normalized, str):
+            return normalized
+
+        if isinstance(normalized, dict) and normalized.get("type") == "function":
+            function_name = normalized.get("function", {}).get("name") or normalized.get("name")
+            if function_name:
+                return {"type": "function", "name": function_name}
+
+        # Return as-is for unknown formats
+        return normalized
+
+    @staticmethod
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: str | None) -> bool:
         """
         A Responses ``web_search`` built-in tool is derived into a ``web_search_options`` param.
@@ -1617,7 +1641,10 @@ class LiteLLMCompletionResponsesConfig:
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
             temperature=getattr(chat_completion_response, "temperature", 0),
-            tool_choice=getattr(chat_completion_response, "tool_choice", "auto"),
+            tool_choice=LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                getattr(chat_completion_response, "tool_choice", "auto")
+            )
+            or "auto",
             tools=getattr(chat_completion_response, "tools", []),
             top_p=getattr(chat_completion_response, "top_p", None),
             max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),

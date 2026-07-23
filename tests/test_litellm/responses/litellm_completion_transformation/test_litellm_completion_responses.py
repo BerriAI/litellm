@@ -2811,3 +2811,145 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
         id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
     )
     assert convert(openai)["id"] == "call_tokyo"
+
+
+class TestToolChoiceForResponsesAPIResponse:
+    """
+    Forcing a named tool call (e.g. {"type": "function", "function": {"name": "..."}},
+    the Chat Completion shape) crashed ResponsesAPIResponse's Pydantic validation
+    (one error per member of the tool_choice union), since that field only accepts
+    strings or the flat Responses API shape ({"type": "function", "name": "..."}).
+    Reproduced on Bedrock/Anthropic models, which route through this litellm_completion
+    bridge for the Responses API (OpenAI/Azure models use a native Responses API path
+    and never hit this code).
+    """
+
+    def test_transform_tool_choice_for_responses_api_response_rewrites_chat_completion_shape(self):
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            {"type": "function", "function": {"name": "delivery_gpt_web_search_tool"}}
+        )
+        assert result == {"type": "function", "name": "delivery_gpt_web_search_tool"}
+
+    def test_transform_tool_choice_for_responses_api_response_passes_through_flat_shape(self):
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            {"type": "function", "name": "delivery_gpt_web_search_tool"}
+        )
+        assert result == {"type": "function", "name": "delivery_gpt_web_search_tool"}
+
+    def test_transform_tool_choice_for_responses_api_response_passes_through_strings(self):
+        for value in ("auto", "none", "required"):
+            assert (
+                LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(value) == value
+            )
+
+    def test_transform_tool_choice_for_responses_api_response_none(self):
+        assert LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(None) is None
+
+    def test_transform_tool_choice_for_responses_api_response_normalizes_cursor_ide_dict_modes(self):
+        """
+        Cursor IDE dict modes like {"type": "tool"} or {"type": "function"} without a
+        name must still be normalized to a valid Literal string, not passed through
+        unchanged - regression for a review finding on the initial fix, which only
+        handled the named-function case and let these fall through to "return as-is",
+        failing ResponsesAPIResponse's Pydantic validation just like the original bug.
+        """
+        cases = {
+            "auto": "auto",
+            "none": "none",
+            "required": "required",
+            "tool": "required",
+            "any": "required",
+            "function": "required",  # "function" type with no name - same as "tool"
+        }
+        for type_value, expected in cases.items():
+            result = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                {"type": type_value}
+            )
+            assert result == expected, f"type={type_value!r} expected {expected!r}, got {result!r}"
+
+    def test_transform_tool_choice_for_responses_api_response_cursor_ide_dict_modes_do_not_crash_validation(self):
+        """
+        Every Cursor-IDE-style dict mode must produce a value ResponsesAPIResponse
+        actually accepts, not just a normalized-looking one.
+        """
+        import time
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        for type_value in ("auto", "none", "required", "tool", "any", "function"):
+            normalized = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                {"type": type_value}
+            )
+            ResponsesAPIResponse(
+                id="resp_1",
+                created_at=int(time.time()),
+                model="x",
+                object="response",
+                output=[],
+                parallel_tool_calls=True,
+                tool_choice=normalized,
+                tools=[],
+            )
+
+    def test_streaming_response_created_event_does_not_crash_on_forced_tool_choice(self):
+        """
+        Regression test for the exact crash: building the synthetic
+        response.created event with a Chat-Completion-shaped forced tool_choice
+        in responses_api_request must not raise a Pydantic ValidationError.
+        """
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        mock_stream_wrapper.logging_obj = Mock()
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="anthropic/claude-opus-4-6",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input="test",
+            responses_api_request={
+                "tool_choice": {"type": "function", "function": {"name": "delivery_gpt_web_search_tool"}},
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        event = iterator.create_response_created_event()
+
+        assert event.response.tool_choice == {"type": "function", "name": "delivery_gpt_web_search_tool"}
+
+    def test_non_streaming_response_does_not_crash_on_forced_tool_choice(self):
+        """
+        Regression test for the non-streaming path: transforming a Chat
+        Completion response whose tool_choice is the Chat-Completion-nested
+        shape into a ResponsesAPIResponse must not raise a Pydantic ValidationError.
+        """
+        chat_completion_response = ModelResponse(
+            id="chatcmpl-test",
+            created=1234567890,
+            model="anthropic/claude-opus-4-6",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(content="", role="assistant"),
+                )
+            ],
+            usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        )
+        chat_completion_response.tool_choice = {
+            "type": "function",
+            "function": {"name": "delivery_gpt_web_search_tool"},
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert result.tool_choice == {"type": "function", "name": "delivery_gpt_web_search_tool"}
