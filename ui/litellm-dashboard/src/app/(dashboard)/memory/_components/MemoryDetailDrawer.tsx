@@ -32,7 +32,7 @@ export function MemoryDetailDrawer({ row, onClose }: MemoryDetailDrawerProps) {
         if (!open) onClose();
       }}
     >
-      <SheetContent className="overflow-y-auto data-[side=right]:w-[720px] data-[side=right]:sm:max-w-[720px]">
+      <SheetContent className="overflow-y-auto data-[side=right]:w-full data-[side=right]:max-w-full data-[side=right]:sm:w-[720px] data-[side=right]:sm:max-w-full">
         <SheetHeader className="border-b">
           <SheetTitle>{row ? <code className={CODE_CLASS}>{row.key}</code> : "Memory"}</SheetTitle>
         </SheetHeader>
