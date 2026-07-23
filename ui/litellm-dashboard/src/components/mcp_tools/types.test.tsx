@@ -7,6 +7,7 @@ import {
   handleTransport,
   handleAuth,
   getMcpOAuthMode,
+  gatewayMintsClientFor,
   getOAuthAuthorizationIdentity,
   isHeldOAuthTokenStale,
   oauth2FlowToFormValue,
@@ -99,6 +100,41 @@ describe("constants", () => {
   it("should define the backend M2M flow value", () => {
     expect(MCP_OAUTH2_FLOW_M2M).toBe("client_credentials");
   });
+});
+
+describe("gatewayMintsClientFor", () => {
+  // The authoritative client-acquisition matrix: for each (auth_type, dcr_bridge) cell, does the
+  // gateway mint the OAuth client at /authorize (browser skips its own register) or not (browser
+  // registers)? This MUST equal the backend resolve_ephemeral_dcr_client mint set exactly, which
+  // test_discoverable_endpoints.py::test_resolve_ephemeral_dcr_client_mint_set_is_exact pins against
+  // the same predicate. A divergence in either direction dead-ends a mode (skip a register the
+  // gateway never performs) or double-registers, so both sides are enumerated against this table.
+  const MATRIX: Array<{ auth_type: string; dcr_bridge: boolean | null | undefined; mints: boolean }> = [
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: true, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: undefined, mints: true },
+    // The one interactive-sign-in cell the gateway must NOT mint (browser front-door register).
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.API_KEY, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BEARER_TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BASIC, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.NONE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.AWS_SIGV4, dcr_bridge: false, mints: false },
+  ];
+
+  it.each(MATRIX)(
+    "mints=$mints for auth_type=$auth_type dcr_bridge=$dcr_bridge",
+    ({ auth_type, dcr_bridge, mints }) => {
+      expect(gatewayMintsClientFor({ auth_type, dcr_bridge })).toBe(mints);
+    },
+  );
 });
 
 describe("getMcpOAuthMode", () => {
