@@ -49,6 +49,35 @@ def reset_mock_cache():
     _model_cache.flush_cache()
 
 
+def test_remove_strict_from_schema_preserves_property_named_strict():
+    from litellm.utils import _remove_strict_from_schema
+
+    schema = {
+        "type": "object",
+        "strict": True,
+        "properties": {
+            "strict": {"type": "boolean"},
+            "field": {"type": "string", "strict": True},
+        },
+        "patternProperties": {
+            "strict": {"type": "number", "strict": True},
+        },
+        "$defs": {
+            "strict": {"type": "object", "strict": True},
+        },
+        "required": ["strict", "field"],
+    }
+
+    result = _remove_strict_from_schema(schema)
+
+    assert "strict" not in result
+    assert result["properties"]["strict"] == {"type": "boolean"}
+    assert result["properties"]["field"] == {"type": "string"}
+    assert result["patternProperties"]["strict"] == {"type": "number"}
+    assert result["$defs"]["strict"] == {"type": "object"}
+    assert result["required"] == ["strict", "field"]
+
+
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
     litellm._turn_on_debug()
