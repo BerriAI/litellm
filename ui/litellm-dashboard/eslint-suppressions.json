@@ -1143,14 +1143,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
-    "no-restricted-imports": {
-      "count": 3
-    },
-    "react-hooks/preserve-manual-memoization": {
-      "count": 4
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.test.tsx": {
     "max-params": {
       "count": 1
@@ -1857,21 +1849,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/search-tools/_components/SearchConnectionTest.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/search-tools/_components/SearchToolTester.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/search-tools/_components/SearchToolView.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
