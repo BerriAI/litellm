@@ -241,14 +241,16 @@ async def create_batch(
             from litellm.proxy.proxy_server import prisma_client
 
             if prisma_client is not None:
+                import inspect
                 from litellm.repositories.table_repositories import (
                     ManagedFileRepository,
                 )
 
-                db_file = await ManagedFileRepository(prisma_client).table.find_first(
+                db_file_res = ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": unified_file_id}
                 )
-                if db_file is not None and db_file.storage_url:
+                db_file = await db_file_res if inspect.isawaitable(db_file_res) else db_file_res
+                if db_file is not None and getattr(db_file, "storage_url", None):
                     _create_batch_data["input_file_id"] = db_file.storage_url
 
             response = await llm_router.acreate_batch(**_create_batch_data)
