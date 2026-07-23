@@ -18,7 +18,6 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Literal, Optional, Union, cast
 from urllib.parse import urlparse
 
-import anyio
 import httpx
 from fastapi import HTTPException
 from httpx import HTTPStatusError
@@ -198,6 +197,23 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
     MCPAuth.true_passthrough,
     MCPAuth.oauth_delegate,
 )
+
+_MCP_TOOL_LISTING_TASKS_MAX_SIZE = 100
+_MCP_TOOL_LISTING_TASKS: set[asyncio.Task[list[MCPTool]]] = set()
+
+
+def _consume_tool_listing_task_result(task: asyncio.Task[list[MCPTool]]) -> None:
+    _MCP_TOOL_LISTING_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is not None:
+        verbose_logger.debug("MCP tool-listing task finished with error: %s", exception)
+
+
+def _track_tool_listing_task(task: asyncio.Task[list[MCPTool]]) -> None:
+    _MCP_TOOL_LISTING_TASKS.add(task)
+    task.add_done_callback(_consume_tool_listing_task_result)
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -4058,8 +4074,8 @@ class MCPServerManager:
         """
         Fetch tools from MCP client with timeout and error handling.
 
-        Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
-        with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
+        Uses a detached asyncio task so cancellation-resistant MCP SDK cleanup
+        cannot extend the caller-visible timeout.
 
         Failures never return an empty tool list. An upstream 401 or 403 raises
         :class:`MCPUpstreamAuthError` carrying the upstream's own
@@ -4080,17 +4096,39 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
+        if len(_MCP_TOOL_LISTING_TASKS) >= _MCP_TOOL_LISTING_TASKS_MAX_SIZE:
+            verbose_logger.warning(
+                "Skipping tool listing for %s because the worker already has %d active MCP tool-listing tasks",
+                server_name,
+                _MCP_TOOL_LISTING_TASKS_MAX_SIZE,
+            )
+            raise MCPServerListError(ServerListFault(tag="internal"), server_name)
+
+        list_tools_task = asyncio.create_task(client.list_tools(raise_on_error=True))
+        _track_tool_listing_task(list_tools_task)
         try:
-            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools(raise_on_error=True)
-                verbose_logger.debug(f"Tools from {server_name}: {tools}")
-                return tools
+            done, _ = await asyncio.wait((list_tools_task,), timeout=MCP_TOOL_LISTING_TIMEOUT)
+            if list_tools_task not in done:
+                list_tools_task.cancel()
+                raise TimeoutError
+            tools = await list_tools_task
+            verbose_logger.debug(f"Tools from {server_name}: {tools}")
+            return tools
         except TimeoutError as e:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError as e:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                list_tools_task.cancel()
+                verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
+                raise
+            if list_tools_task.cancelled():
+                verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
+                raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
+            list_tools_task.cancel()
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
-            raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
+            raise
         except ConnectionError as e:
             verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e

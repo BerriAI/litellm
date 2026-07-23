@@ -1,14 +1,21 @@
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
+import asyncio
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 sys.path.insert(0, "../../../../../")
 
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server import (
+    mcp_server_manager as mcp_server_manager_module,
+)
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _extract_upstream_auth_failure,
@@ -207,6 +214,155 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
 
     tools = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
     assert tools == [tool]
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_timeout_does_not_wait_for_cancellation_cleanup():
+    manager = MCPServerManager()
+    cancellation_started = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    listing_tasks_before = set(mcp_server_manager_module._MCP_TOOL_LISTING_TASKS)
+
+    async def list_tools(*args, **kwargs):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancellation_started.set()
+            await asyncio.sleep(0.2)
+            cleanup_finished.set()
+            raise
+
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(side_effect=list_tools)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT",
+        0.01,
+    ):
+        started_at = asyncio.get_running_loop().time()
+        with pytest.raises(MCPServerListError) as exc_info:
+            await manager._fetch_tools_with_timeout(mock_client, "slow_server")
+        elapsed = asyncio.get_running_loop().time() - started_at
+
+    assert exc_info.value.fault.tag == "timeout"
+    assert elapsed < 0.1
+    await asyncio.wait_for(cancellation_started.wait(), timeout=0.1)
+    detached_tasks = (
+        mcp_server_manager_module._MCP_TOOL_LISTING_TASKS - listing_tasks_before
+    )
+    assert len(detached_tasks) == 1
+    await asyncio.wait_for(cleanup_finished.wait(), timeout=0.5)
+    await asyncio.sleep(0)
+    assert detached_tasks.isdisjoint(
+        mcp_server_manager_module._MCP_TOOL_LISTING_TASKS
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_rejects_new_listing_at_task_capacity():
+    manager = MCPServerManager()
+    cancellation_started = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    active_task_count = len(mcp_server_manager_module._MCP_TOOL_LISTING_TASKS)
+
+    async def slow_list_tools(*args, **kwargs):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancellation_started.set()
+            await asyncio.sleep(0.2)
+            cleanup_finished.set()
+            raise
+
+    slow_client = MagicMock()
+    slow_client.list_tools = AsyncMock(side_effect=slow_list_tools)
+    rejected_client = MagicMock()
+    rejected_client.list_tools = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_TOOL_LISTING_TIMEOUT",
+            0.01,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager._MCP_TOOL_LISTING_TASKS_MAX_SIZE",
+            active_task_count + 1,
+        ),
+    ):
+        with pytest.raises(MCPServerListError) as timeout_exc:
+            await manager._fetch_tools_with_timeout(slow_client, "slow_server")
+        assert timeout_exc.value.fault.tag == "timeout"
+        await asyncio.wait_for(cancellation_started.wait(), timeout=0.1)
+        with pytest.raises(MCPServerListError) as capacity_exc:
+            await manager._fetch_tools_with_timeout(rejected_client, "other_server")
+        assert capacity_exc.value.fault.tag == "internal"
+
+    rejected_client.list_tools.assert_not_called()
+    assert len(mcp_server_manager_module._MCP_TOOL_LISTING_TASKS) == active_task_count + 1
+    await asyncio.wait_for(cleanup_finished.wait(), timeout=0.5)
+    await asyncio.sleep(0)
+    assert len(mcp_server_manager_module._MCP_TOOL_LISTING_TASKS) == active_task_count
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_propagates_external_cancellation():
+    manager = MCPServerManager()
+    listing_started = asyncio.Event()
+    listing_finished = asyncio.Event()
+
+    async def list_tools(*args, **kwargs):
+        listing_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            listing_finished.set()
+
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(side_effect=list_tools)
+    fetch_task = asyncio.create_task(
+        manager._fetch_tools_with_timeout(mock_client, "cancelled_server")
+    )
+    await asyncio.wait_for(listing_started.wait(), timeout=0.1)
+
+    fetch_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await fetch_task
+
+    await asyncio.wait_for(listing_finished.wait(), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_prioritizes_external_cancellation_over_child_cancellation():
+    manager = MCPServerManager()
+    listing_started = asyncio.Event()
+    listing_finished = asyncio.Event()
+    listing_tasks_before = set(mcp_server_manager_module._MCP_TOOL_LISTING_TASKS)
+
+    async def list_tools(*args, **kwargs):
+        listing_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            listing_finished.set()
+
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(side_effect=list_tools)
+    fetch_task = asyncio.create_task(
+        manager._fetch_tools_with_timeout(mock_client, "cancelled_server")
+    )
+    await asyncio.wait_for(listing_started.wait(), timeout=0.1)
+    child_tasks = (
+        mcp_server_manager_module._MCP_TOOL_LISTING_TASKS - listing_tasks_before
+    )
+    assert len(child_tasks) == 1
+    child_task = child_tasks.pop()
+    child_task.add_done_callback(lambda _: fetch_task.cancel())
+    child_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await fetch_task
+
+    await asyncio.wait_for(listing_finished.wait(), timeout=0.1)
 
 
 def test_to_http_exception_preserves_upstream_www_authenticate():
