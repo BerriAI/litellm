@@ -45,6 +45,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint 
     ExchangedToken,
     ExchangedTokenCache,
     TokenEndpointClient,
+    TokenEndpointRejection,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
     TokenExchanger,
@@ -209,6 +210,7 @@ class UpstreamCredentialProvider:
                         config.client_id,
                         leg2_params,
                         config.client_auth,
+                        classify_rejection=partial(_classify_resource_as_rejection, config.client_id),
                     )
 
         match await self._exchanged_tokens.get_or_compute(cache_key, _exchange):
@@ -295,6 +297,37 @@ class UpstreamCredentialProvider:
             return await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
         except TokenStoreUnavailable:
             return None
+
+
+def _classify_resource_as_rejection(client_id: str, rejection: TokenEndpointRejection) -> CredError | None:
+    """A resource-AS §5.2 rejection of the jwt-bearer leg, diagnosed per code so the message
+    never claims more than the code proves: client-authentication codes name the registration,
+    invalid_target names the audience/resource configuration, and invalid_grant (which the EMA
+    profile mandates for a client_id-claim mismatch but also covers assertion-validation
+    failures like clock skew or key propagation) lists both, mismatch first. Anything else,
+    including a 5xx (never parsed into a rejection), keeps the retryable default mapping."""
+    described = f" ({rejection.error_description})" if rejection.error_description else ""
+    prefix = f"the resource authorization server rejected the ID-JAG with {rejection.error}{described}; "
+    if rejection.error in ("invalid_client", "unauthorized_client"):
+        return CredError.of_misconfigured(
+            prefix + f"the gateway client {client_id!r} failed to authenticate or is not authorized "
+            "for the jwt-bearer grant at the resource authorization server; check its client "
+            "registration and credentials there"
+        )
+    if rejection.error == "invalid_target":
+        return CredError.of_misconfigured(
+            prefix + "the requested target was not accepted; check the server's audience and "
+            "id_jag_resource configuration against what the resource authorization server serves"
+        )
+    if rejection.error == "invalid_grant":
+        return CredError.of_misconfigured(
+            prefix + f"the assertion was rejected; most commonly the gateway client {client_id!r} "
+            "is not the client named in the ID-JAG's client_id claim (the IdP and the resource "
+            "server must share the gateway's client registration), though an assertion-validation "
+            "failure such as clock skew or signing-key propagation produces the same code, so "
+            "retry once before changing configuration"
+        )
+    return None
 
 
 def _id_jag_cache_key(subject_token: str, server_id: str, config: IdJagConfig) -> str:

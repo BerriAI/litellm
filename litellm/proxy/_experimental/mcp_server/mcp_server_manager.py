@@ -45,7 +45,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
-from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, validate_url
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -196,6 +196,10 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
     MCPAuth.true_passthrough,
     MCPAuth.oauth_delegate,
 )
+
+# draft-ietf-oauth-identity-assertion-authz-grant: the grant profile an authorization server
+# advertises in authorization_grant_profiles_supported when it can redeem ID-JAG assertions.
+_ID_JAG_GRANT_PROFILE = "urn:ietf:params:oauth:grant-profile:id-jag"
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -1056,6 +1060,61 @@ class MCPServerManager:
         """
         return auth_type == MCPAuth.oauth2_token_exchange and not (token_exchange_endpoint or token_url)
 
+    @staticmethod
+    def _id_jag_needs_endpoint_discovery(
+        auth_type: MCPAuthType | None,
+        id_jag_resource_token_endpoint: str | None,
+    ) -> bool:
+        """An ``oauth2_id_jag`` server with no pinned leg-2 endpoint can have its resource
+        authorization server's token endpoint discovered (RFC 9728 -> RFC 8414), the same chain
+        the OBO flow uses; a pinned ``id_jag_resource_token_endpoint`` is the operator's explicit
+        assertion and skips both the round-trip and the grant-profile gate."""
+        return auth_type == MCPAuth.oauth2_id_jag and not id_jag_resource_token_endpoint
+
+    @classmethod
+    def _gated_id_jag_endpoint(
+        cls,
+        metadata: MCPOAuthMetadata | None,
+        server_id: str,
+        server_url: str | None = None,
+    ) -> str | None:
+        """The discovered leg-2 endpoint, released only when the authorization server passes the
+        enterprise-managed-authorization capability gate: the document must be advertised (never an
+        origin-fallback guess), must list the id-jag grant profile, and a cross-authority endpoint
+        must clear SSRF validation, since the value came from the upstream's own metadata and will
+        later receive a POST carrying the gateway's client authentication and a minted assertion.
+        A same-authority endpoint (the server's own origin) is no pivot beyond the server the
+        gateway already talks to, which keeps intentional internal deployments working. A rejected
+        discovery leaves the field unset, so the existing fail-closed misconfigured error at client
+        build names the gap."""
+        if metadata is None or metadata.from_origin_fallback or not metadata.token_url:
+            return None
+        if not metadata.grant_profiles or _ID_JAG_GRANT_PROFILE not in metadata.grant_profiles:
+            verbose_logger.warning(
+                "MCP server %s: discovered authorization server %s does not advertise the "
+                "id-jag grant profile (%s); refusing to autofill id_jag_resource_token_endpoint. "
+                "The upstream's authorization server must support enterprise-managed authorization, "
+                "or pin the endpoint explicitly.",
+                server_id,
+                metadata.discovered_issuer or metadata.token_url,
+                _ID_JAG_GRANT_PROFILE,
+            )
+            return None
+        if server_url and cls._is_same_authority_metadata_url(metadata.token_url, server_url):
+            return metadata.token_url
+        try:
+            validate_url(metadata.token_url)
+        except SSRFError as exc:
+            verbose_logger.warning(
+                "MCP server %s: discovered ID-JAG resource token endpoint was rejected by SSRF "
+                "validation and will not be autofilled (%s). Pin the endpoint explicitly if this "
+                "internal authorization server is intentional.",
+                server_id,
+                exc,
+            )
+            return None
+        return metadata.token_url
+
     def __init__(
         self,
         cred_provider: Optional[UpstreamCredentialProvider] = None,
@@ -1283,7 +1342,12 @@ class MCPServerManager:
                 manual_registration_url,
             )
             should_discover = _has_oauth_discovery_source(server_url, use_issuer_anchor) and (
-                is_discovery_auth_type or obo_needs_discovery
+                is_discovery_auth_type
+                or obo_needs_discovery
+                or self._id_jag_needs_endpoint_discovery(
+                    auth_type,
+                    server_config.get("id_jag_resource_token_endpoint"),
+                )
             )
             if not should_discover:
                 mcp_oauth_metadata = None
@@ -1414,7 +1478,12 @@ class MCPServerManager:
                     DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
                 # ID-JAG fields
-                id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
+                id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None)
+                or self._gated_id_jag_endpoint(
+                    gated_oauth_metadata if auth_type == MCPAuth.oauth2_id_jag else None,
+                    server_name or server_id,
+                    server_url=server_url,
+                ),
                 id_jag_resource=server_config.get("id_jag_resource", None),
                 client_private_key=server_config.get("client_private_key", None),
                 client_private_key_id=server_config.get("client_private_key_id", None),
@@ -1681,11 +1750,13 @@ class MCPServerManager:
         use_issuer_anchor: bool,
         scopes: Optional[list[str]],
         token_exchange_endpoint: Optional[str],
+        id_jag_resource_token_endpoint: str | None = None,
     ) -> Optional[MCPOAuthMetadata]:
         has_all_upstream_oauth_fields = bool(manual_authorization_url and manual_token_url and scopes)
         needs_discovery = _has_oauth_discovery_source(server_url, use_issuer_anchor) and (
             (is_discovery_auth_type and not has_all_upstream_oauth_fields)
             or self._obo_needs_endpoint_discovery(auth_type, token_exchange_endpoint, manual_token_url)
+            or self._id_jag_needs_endpoint_discovery(auth_type, id_jag_resource_token_endpoint)
         )
         if not needs_discovery:
             mcp_oauth_metadata: Optional[MCPOAuthMetadata] = None
@@ -1802,6 +1873,7 @@ class MCPServerManager:
         manual_token_url = _blank_to_none(mcp_server.token_url)
         manual_registration_url = _blank_to_none(mcp_server.registration_url)
         is_discovery_auth_type = auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+        manual_id_jag_endpoint = credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
         token_exchange_endpoint = mcp_server.token_exchange_endpoint or (
             credentials_dict.get("token_exchange_endpoint") if credentials_dict else None
         )
@@ -1824,6 +1896,7 @@ class MCPServerManager:
             use_issuer_anchor=use_issuer_anchor,
             scopes=scopes,
             token_exchange_endpoint=token_exchange_endpoint,
+            id_jag_resource_token_endpoint=manual_id_jag_endpoint,
         )
 
         resolved_scopes = scopes or (gated_oauth_metadata.scopes if gated_oauth_metadata else None)
@@ -1897,8 +1970,11 @@ class MCPServerManager:
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
             # ID-JAG fields — read from credentials JSON blob
-            id_jag_resource_token_endpoint=(
-                credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
+            id_jag_resource_token_endpoint=manual_id_jag_endpoint
+            or self._gated_id_jag_endpoint(
+                gated_oauth_metadata if auth_type == MCPAuth.oauth2_id_jag else None,
+                mcp_server.server_id,
+                server_url=server_url,
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
             client_private_key=self._decrypt_credential_field(
@@ -1935,7 +2011,58 @@ class MCPServerManager:
                 metadata=gated_oauth_metadata,
                 is_issuer_anchored=use_issuer_anchor,
             )
+            await self._persist_discovered_id_jag_endpoint(
+                server_id=mcp_server.server_id,
+                auth_type=auth_type,
+                existing_endpoint=manual_id_jag_endpoint,
+                discovered_endpoint=new_server.id_jag_resource_token_endpoint,
+            )
         return new_server
+
+    async def _persist_discovered_id_jag_endpoint(
+        self,
+        *,
+        server_id: str,
+        auth_type: MCPAuthType | None,
+        existing_endpoint: str | None,
+        discovered_endpoint: str | None,
+    ) -> None:
+        """Write a gate-passing discovered ID-JAG leg-2 endpoint into the credentials blob.
+
+        Same contract as ``_persist_discovered_obo_token_url``: fires at most once per server
+        (skipped once a value exists), best-effort, and makes ``_id_jag_needs_endpoint_discovery``
+        read False on the next build on every pod, so a transient discovery outage cannot strand
+        the server once one build has succeeded. The blob is the field's one home (there is no
+        column), which also keeps it inside the master-key rotation that re-encrypts the blob.
+        """
+        if auth_type != MCPAuth.oauth2_id_jag:
+            return
+        if existing_endpoint or not discovered_endpoint:
+            return
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # db.py imports this module at load
+            update_mcp_server,
+        )
+        from litellm.proxy._types import UpdateMCPServerRequest  # noqa: PLC0415  # heavy module; import at call time
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime value, set after startup
+
+        if prisma_client is None:
+            return
+        try:
+            await update_mcp_server(
+                prisma_client=prisma_client,
+                data=UpdateMCPServerRequest.model_validate(
+                    {
+                        "server_id": server_id,
+                        "credentials": {"id_jag_resource_token_endpoint": discovered_endpoint},
+                    }
+                ),
+                touched_by="mcp_oauth_discovery",
+            )
+            verbose_logger.info("Persisted discovered ID-JAG resource token endpoint for MCP server %s", server_id)
+        except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
+            verbose_logger.warning(
+                "Failed to persist discovered ID-JAG resource token endpoint for MCP server %s: %s", server_id, exc
+            )
 
     async def _persist_discovered_obo_token_url(
         self,
@@ -3775,6 +3902,7 @@ class MCPServerManager:
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
                 discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
+                grant_profiles=self._extract_scopes(data.get("authorization_grant_profiles_supported")),
             )
 
             if any(
