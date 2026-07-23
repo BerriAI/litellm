@@ -823,6 +823,7 @@ async def _auto_register_jwt_mapping(
     if auto_registered_key is not None:
         auto_registered_key.org_id = org_id
         auto_registered_key.end_user_id = end_user_id
+        auto_registered_key.api_key = auto_registered_key.token
     return auto_registered_key
 
 
@@ -1279,6 +1280,7 @@ async def _user_api_key_auth_builder(
                             api_key=None,
                             user_role=LitellmUserRoles.PROXY_ADMIN,
                             user_id=user_id,
+                            user_email=(user_object.user_email if user_object is not None else None),
                             team_id=team_id,
                             team_alias=(team_object.team_alias if team_object is not None else None),
                             team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
@@ -1304,6 +1306,7 @@ async def _user_api_key_auth_builder(
                             else LitellmUserRoles.INTERNAL_USER
                         ),
                         user_id=user_id,
+                        user_email=(user_object.user_email if user_object is not None else None),
                         org_id=org_id,
                         parent_otel_span=parent_otel_span,
                         end_user_id=end_user_id,
@@ -1345,6 +1348,8 @@ async def _user_api_key_auth_builder(
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
+                            if auto_registered.user_email is None and user_object is not None:
+                                auto_registered.user_email = user_object.user_email
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
 

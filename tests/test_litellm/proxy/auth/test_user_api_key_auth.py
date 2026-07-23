@@ -1417,6 +1417,246 @@ def test_proxy_admin_jwt_auth_handles_no_team_object():
     assert result.end_user_id is None
 
 
+@pytest.mark.asyncio
+async def test_standard_jwt_auth_propagates_user_email():
+    """
+    Standard (non-mapped) JWT auth must copy user_email from the resolved
+    LiteLLM_UserTable onto the returned UserAPIKeyAuth so spend logs attribute
+    user_api_key_user_email. Regression: this branch built
+    UserAPIKeyAuth(api_key=None, ...) with user_id but never user_email, so
+    the email was silently dropped even though the DB user row had it.
+    """
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+    general_settings = {"enable_jwt_auth": True}
+    user_api_key_cache = DualCache()
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_object = LiteLLM_UserTable(
+        user_id="jwt-human-user",
+        user_email="human@example.com",
+        user_role="internal_user",
+    )
+    mock_jwt_result = {
+        "is_proxy_admin": False,
+        "team_object": None,
+        "user_object": user_object,
+        "end_user_object": None,
+        "org_object": None,
+        "token": jwt_token,
+        "team_id": None,
+        "user_id": "jwt-human-user",
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "user1", "email": "human@example.com"},
+    }
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=mock_jwt_result,
+        ),
+    ):
+        result = await _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=jwt_token,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-4o-mini"},
+        )
+
+    assert result.user_id == "jwt-human-user"
+    assert result.user_email == "human@example.com"
+    assert result.api_key is None
+
+
+@pytest.mark.asyncio
+async def test_auto_register_binds_api_key_to_token_hash():
+    """
+    The first auto-registered JWT request must return a UserAPIKeyAuth whose
+    api_key is bound to the new key's token hash. Regression: the auto-register
+    path built the object from the DB row (token set, api_key None) and the JWT
+    branch early-returned it without going through _return_user_api_key_auth_obj,
+    so litellm_pre_call_utils logged user_api_key_hash=None on that first request.
+    """
+    from litellm.proxy.auth.auth_method import AuthMethod
+    from litellm.proxy.auth.resolvers.models import CredentialRef
+    from litellm.proxy.auth.resolvers.store import IdentityStore
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    plaintext = "sk-auto-registered-plaintext"
+    token_hash = hash_token(plaintext)
+
+    resolved_key = UserAPIKeyAuth(
+        token=token_hash,
+        user_id="validated-user",
+        team_id="validated-team",
+    )
+    principal = IdentityStore._principal_from_key(
+        resolved_key,
+        auth_method=AuthMethod.API_KEY,
+        credential_ref=CredentialRef(token_id=token_hash),
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_mapping_cache_ttl=300)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"token": plaintext},
+        ),
+        patch(
+            "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+            new_callable=AsyncMock,
+            return_value=principal,
+        ),
+    ):
+        result = await _auto_register_jwt_mapping(
+            virtual_key_claim_field="sub",
+            claim_value="user1",
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            cache_key="jwt_key_mapping:sub:user1",
+            team_id="validated-team",
+            user_id="validated-user",
+            org_id="validated-org",
+            end_user_id="validated-end-user",
+        )
+
+    assert result is not None
+    assert result.token == token_hash
+    assert result.api_key == token_hash
+    assert result.org_id == "validated-org"
+    assert result.end_user_id == "validated-end-user"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_first_request_propagates_user_email():
+    """
+    The first auto-registered JWT request must also carry user_email (resolved
+    from the validated LiteLLM_UserTable), so attribution is consistent with the
+    subsequent mapped-key requests. Regression: the auto-registered object was
+    returned with user_email unset, logging user_api_key_user_email=None on the
+    very first request even though the user identity was known.
+    """
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+    general_settings = {"enable_jwt_auth": True}
+    user_api_key_cache = DualCache()
+    prisma_client = MagicMock()
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        virtual_key_mapping_cache_ttl=300,
+    )
+    auto_registered_key = UserAPIKeyAuth(
+        token="hashed-auto-key",
+        api_key="hashed-auto-key",
+        team_id="validated-team",
+        user_id="validated-user",
+    )
+    user_object = LiteLLM_UserTable(
+        user_id="validated-user",
+        user_email="validated@example.com",
+        user_role="internal_user",
+    )
+    mock_jwt_result = {
+        "is_proxy_admin": False,
+        "team_object": None,
+        "user_object": user_object,
+        "end_user_object": None,
+        "org_object": None,
+        "token": jwt_token,
+        "team_id": "validated-team",
+        "user_id": "validated-user",
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "user1"},
+    }
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+            new_callable=AsyncMock,
+            return_value=_PendingAutoRegister(
+                claim_field="sub",
+                claim_value="user1",
+                cache_key="jwt_key_mapping:sub:user1",
+            ),
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=mock_jwt_result,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._auto_register_jwt_mapping",
+            new_callable=AsyncMock,
+            return_value=auto_registered_key,
+        ),
+    ):
+        result = await _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=jwt_token,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-4o-mini"},
+        )
+
+    assert result.user_id == "validated-user"
+    assert result.user_email == "validated@example.com"
+    assert result.api_key == "hashed-auto-key"
+
+
 class TestJWTOAuth2Coexistence:
     """
     Test that JWT and OAuth2 auth can coexist on the same instance.

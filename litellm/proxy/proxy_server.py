@@ -4294,6 +4294,16 @@ class ProxyConfig:
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
+        _misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
+        if _misplaced_jwt_keys:
+            verbose_proxy_logger.warning(
+                "Ignoring top-level config key(s) %s. JWT auth settings must live under "
+                "'general_settings' (e.g. general_settings.enable_jwt_auth, "
+                "general_settings.litellm_jwtauth); placed at the top level they are silently "
+                "dropped and JWT auth (and JWT-to-virtual-key mapping) will not engage.",
+                ", ".join(_misplaced_jwt_keys),
+            )
+
         self._load_environment_variables(config=config)
 
         ## Coordination Redis (before cache init, so the explicit block wins)
