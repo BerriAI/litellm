@@ -54,6 +54,13 @@ from .guardrail_initializers import (
     initialize_tool_permission,
 )
 
+
+def _normalize_model_group_allowlist(values: list[str] | None) -> frozenset[str]:
+    if not values:
+        return frozenset()
+    return frozenset(str(v).strip().lower() for v in values if str(v).strip())
+
+
 guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
@@ -492,6 +499,11 @@ class InMemoryGuardrailHandler:
             configured_run_in_parallel = getattr(litellm_params, "run_in_parallel", None)
             if configured_run_in_parallel is not None:
                 custom_guardrail_callback.run_in_parallel = bool(configured_run_in_parallel)
+            setattr(
+                custom_guardrail_callback,
+                "apply_guardrail_to_model_groups",
+                _normalize_model_group_allowlist(getattr(litellm_params, "apply_guardrail_to_model_groups", None)),
+            )
 
         parsed_guardrail = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
