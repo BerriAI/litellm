@@ -97,15 +97,17 @@ async def test_apply_guardrail_mask_replaces_scanned_text(guardrail_and_client, 
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_targets_only_the_flagged_slot(guardrail_and_client, make_request_data):
-    """MASK rewrites the ``texts`` entry of the flagged segment in place; the
-    other scanned entries survive untouched. Confirms positional 1:1 mapping."""
+async def test_apply_guardrail_mask_reconstructs_only_the_flagged_message_part(guardrail_and_client, make_request_data):
+    """Request side joins the message parts into one document, scans once, and on
+    MASK reconstructs per-part masked text by aligning the join against the
+    masked document. Only the flagged part changes; the others survive."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
         r = Mock()
-        r.action = "MASK" if prompt == "sensitive content" else "NO_ACTION"
-        r.action_text = "[REDACTED]"
+        # One joined call: mask just the sensitive part inside the joined doc.
+        r.action = "MASK"
+        r.action_text = prompt.replace("sensitive content", "[REDACTED]")
         r.detections = []
         r.correlation_id = None
         return r
@@ -118,6 +120,7 @@ async def test_apply_guardrail_mask_targets_only_the_flagged_slot(guardrail_and_
         input_type="request",
     )
     assert out["texts"] == ["first", "ack", "[REDACTED]"]
+    client.evaluate_prompt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -130,7 +133,7 @@ async def test_apply_guardrail_scans_non_user_role_segments(guardrail_and_client
 
     def evaluate(prompt, **kwargs):
         r = Mock()
-        r.action = "BLOCK" if prompt == "disallowed system instruction" else "NO_ACTION"
+        r.action = "BLOCK" if "disallowed system instruction" in prompt else "NO_ACTION"
         r.detections = []
         r.correlation_id = None
         return r
@@ -274,11 +277,10 @@ async def test_apply_guardrail_response_path_passes_app_id(make_guardrail, make_
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_evaluates_every_text_without_structured_messages(
-    guardrail_and_client, make_request_data
-):
-    """With no structured_messages to identify roles, every text entry is
-    scanned (over-scan is safe); the old code scanned only the last."""
+async def test_apply_guardrail_joins_all_message_parts_into_one_call(guardrail_and_client, make_request_data):
+    """Every message part is scanned, but as a single joined document in ONE
+    Alice call (call volume scales with size, not message count). The join uses
+    a plain newline so cross-part content is seen whole."""
     guardrail, client = guardrail_and_client
     result_obj = Mock()
     result_obj.action = "NO_ACTION"
@@ -291,10 +293,8 @@ async def test_apply_guardrail_evaluates_every_text_without_structured_messages(
         request_data=make_request_data(),
         input_type="request",
     )
-    prompts = {c.kwargs["prompt"] for c in client.evaluate_prompt.call_args_list}
-    assert {"t1", "t2", "t3"} <= prompts
-    # Adjacent text segments also get a cross-segment junction window each.
-    assert {"t1t2", "t2t3"} <= prompts
+    client.evaluate_prompt.assert_awaited_once()
+    assert client.evaluate_prompt.call_args.kwargs["prompt"] == "t1\nt2\nt3"
 
 
 @pytest.mark.asyncio
@@ -306,7 +306,7 @@ async def test_apply_guardrail_blocks_on_earlier_user_turn(guardrail_and_client,
 
     def evaluate(prompt, **kwargs):
         r = Mock()
-        r.action = "BLOCK" if prompt == "disallowed" else "NO_ACTION"
+        r.action = "BLOCK" if "disallowed" in prompt else "NO_ACTION"
         r.detections = []
         r.correlation_id = None
         return r
@@ -376,3 +376,125 @@ async def test_apply_guardrail_no_text_short_circuits(guardrail_and_client, make
     assert out == {"texts": []}
     client.evaluate_prompt.assert_not_awaited()
     client.evaluate_response.assert_not_awaited()
+
+
+# ----------------------------- join: cross-part visibility -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_phrase_split_across_message_parts(guardrail_and_client, make_request_data):
+    """Two content parts that individually look benign are joined into one
+    document, so a phrase split across the part boundary is seen in a single
+    scan and still BLOCKs (the join replaces the old cross-segment windows)."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        # Neither part alone contains the whole phrase; the joined document does.
+        r.action = "BLOCK" if ("make a b" in prompt and "omb" in prompt) else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["how to make a b", "omb please"]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+    client.evaluate_prompt.assert_awaited_once()
+
+
+# ----------------------------- join: MASK reconstruction write-back -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_mask_writes_back_to_the_correct_message(guardrail_and_client, make_request_data):
+    """A real PII MASK on the joined document reconstructs per-part masked text
+    and writes it back to the message that carried the PII, leaving the others
+    intact."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "MASK"
+        r.action_text = prompt.replace("john@example.com", "[EMAIL]")
+        r.detections = []
+        r.correlation_id = "corr-mask"
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    out = await guardrail.apply_guardrail(
+        inputs={"texts": ["hello there", "my email is john@example.com", "thanks"]},
+        request_data=make_request_data(),
+        input_type="request",
+    )
+    assert out["texts"] == ["hello there", "my email is [EMAIL]", "thanks"]
+    client.evaluate_prompt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_mask_reconstruction_failure_fails_closed(guardrail_and_client, make_request_data):
+    """If masking destroys a joiner (parts would merge), reconstruction cannot
+    safely attribute the redaction, so the request is blocked rather than
+    silently misassigned or passed through unmasked."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "MASK"
+        r.action_text = prompt.replace("\n", "")  # destroys the joiner -> parts merge
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["alpha", "beta"]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+
+
+# ----------------------------- total-work cap -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_rejects_over_segment_cap_without_scanning(make_guardrail, make_request_data):
+    guardrail, client = make_guardrail(max_scan_segments=3)
+    guardrail._client_cache["default-api-key"] = client
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["a", "b", "c", "d"]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["limit"] == "max_scan_segments"
+    client.evaluate_prompt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_cap_is_not_bypassed_by_fail_open(make_guardrail, make_request_data):
+    """The cap is a config/abuse guard, never fail-open: an oversized request
+    is rejected 400 even with fail_open=True and the SDK is never called."""
+    guardrail, client = make_guardrail(max_scan_chars=10, fail_open=True)
+    guardrail._client_cache["default-api-key"] = client
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["x" * 50]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["limit"] == "max_scan_chars"
+    client.evaluate_prompt.assert_not_awaited()

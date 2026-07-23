@@ -1,6 +1,10 @@
-"""Pure transforms for Alice WonderFence: context build, user-text mapping, verdict apply."""
+"""Pure transforms for Alice WonderFence: context build, scan-piece gathering,
+joined-document masked reconstruction, response-side verdict apply, total-work cap."""
 
-from typing import Any, Callable
+from collections.abc import Sequence
+from difflib import SequenceMatcher
+from itertools import accumulate
+from typing import Callable
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -8,9 +12,11 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .chunked_evaluation import SegmentVerdict
 from .credentials import get_metadata
-from .exceptions import WonderFenceBlockedError
+from .exceptions import WonderFenceBlockedError, WonderFenceScanBudgetExceeded
 
 logger = verbose_proxy_logger.getChild("alice_wonderfence")
+
+JOINER = "\n"
 
 
 def build_analysis_context(
@@ -54,7 +60,10 @@ def tool_call_arg_segments(
     ``inputs["tool_calls"]`` entries are dicts shaped
     ``{"function": {"arguments": "<json string>"}}``; the argument string is the
     caller- or model-controlled payload that reaches the model/client, so it is
-    scanned like any other segment.
+    scanned. ``indices`` is only used on the response side, where a MASK verdict
+    is written back in place; on the request side the argument strings are
+    appended to the joined document as detection-only pieces (see
+    ``apply_guardrail``).
     """
     tool_calls = inputs.get("tool_calls") or []
     indices: list[int] = []
@@ -68,84 +77,156 @@ def tool_call_arg_segments(
     return indices, segments
 
 
-def _description_strings(root: object, root_prefix: list[Any]) -> list[tuple[list[Any], str]]:
-    """Collect ``(path, text)`` for every non-blank ``description`` string under
-    ``root`` (a tool's ``function`` dict), walking nested JSON-schema parameters
-    so parameter descriptions are included, not just the top one.
+def _description_texts(fn: object) -> list[str]:
+    """Collect every non-blank ``description`` string under a tool's ``function``
+    dict, walking nested JSON-schema parameters so parameter descriptions are
+    included, not just the top one.
 
     Iterative (explicit stack) rather than recursive: caller-supplied tool
     schemas can nest arbitrarily, and unbounded recursion on request input is a
-    DoS / stack-overflow risk.
+    DoS / stack-overflow risk. Only the strings are returned (no write-back
+    paths): tool/function descriptions are scanned detection-only, so there is
+    nothing to mask back into the schema.
     """
-    out: list[tuple[list[Any], str]] = []
-    stack: list[tuple[Any, list[Any]]] = [(root, root_prefix)]
+    out: list[str] = []
+    stack: list[object] = [fn]
     while stack:
-        obj, prefix = stack.pop()
+        obj = stack.pop()
         if isinstance(obj, dict):
             for key, value in obj.items():
                 if key == "description" and isinstance(value, str) and value.strip():
-                    out.append((prefix + [key], value))
+                    out.append(value)
                 elif isinstance(value, (dict, list)):
-                    stack.append((value, prefix + [key]))
+                    stack.append(value)
         elif isinstance(obj, list):
-            for idx, item in enumerate(obj):
-                if isinstance(item, (dict, list)):
-                    stack.append((item, prefix + [idx]))
+            stack.extend(item for item in obj if isinstance(item, (dict, list)))
     return out
 
 
-def tool_definition_segments(
-    inputs: GenericGuardrailAPIInputs,
-) -> tuple[list[list[Any]], list[str]]:
-    """Return (paths, texts) for free-text in tool definitions.
+def tool_definition_segments(inputs: GenericGuardrailAPIInputs) -> list[str]:
+    """Return description texts from ``inputs["tools"]`` (detection-only).
 
     The chat translation layer passes caller-supplied ``inputs["tools"]`` to the
     model verbatim, so a tool's ``function.description`` and its nested parameter
-    descriptions are scanned like any other request segment. Each path locates
-    the string within ``inputs["tools"]`` so a MASK verdict can be written back.
+    descriptions are scanned. Detection-only: they are rendered into the joined
+    document as extra pieces and can BLOCK/DETECT but are never masked back
+    (there is no faithful place to splice a redaction into a schema).
     """
     tools = inputs.get("tools") or []
-    paths: list[list[Any]] = []
-    segments: list[str] = []
-    for i, tool in enumerate(tools):
-        fn = tool.get("function") if isinstance(tool, dict) else None
-        if not isinstance(fn, dict):
-            continue
-        for sub_path, text in _description_strings(fn, ["function"]):
-            paths.append([i, *sub_path])
-            segments.append(text)
-    return paths, segments
+    return [
+        text
+        for tool in tools
+        if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
+        for text in _description_texts(tool["function"])
+    ]
 
 
-def function_definition_segments(
-    request_data: dict,
-) -> tuple[list[list[Any]], list[str]]:
-    """Description paths and texts from the deprecated ``functions[]`` parameter.
+def function_definition_segments(request_data: dict) -> list[str]:
+    """Return description texts from the deprecated top-level ``functions[]``.
 
-    Each entry is shaped like a tool's ``function`` object so the same
-    description walker applies. Returns ``(paths, segments)`` so MASK verdicts
-    can be written back into ``request_data["functions"]`` the same way
-    ``tool_def_paths`` are used for ``inputs["tools"]``.
+    Each entry is shaped like a tool's ``function`` object, so the same
+    description walker applies. Detection-only, same rationale as
+    ``tool_definition_segments``.
     """
     functions = request_data.get("functions") or []
-    paths: list[list[Any]] = []
-    segments: list[str] = []
-    for i, fn in enumerate(functions):
-        if isinstance(fn, dict):
-            for sub_path, text in _description_strings(fn, []):
-                paths.append([i, *sub_path])
-                segments.append(text)
-    return paths, segments
+    return [text for fn in functions if isinstance(fn, dict) for text in _description_texts(fn)]
 
 
-def _set_by_path(root: Any, path: list[Any], value: object) -> None:
-    obj = root
-    for key in path[:-1]:
-        obj = obj[key]
-    obj[path[-1]] = value
+def check_scan_budget(
+    segments: list[str],
+    max_scan_chars: int | None,
+    max_scan_segments: int | None,
+) -> None:
+    """Fail-closed total-work cap; raises ``WonderFenceScanBudgetExceeded`` when
+    the combined scan characters or segment count exceed the configured limits.
+
+    WonderFence has no batch API (one HTTP POST per string), so without a cap a
+    single crafted request with thousands of tiny parts or huge content could
+    amplify into an unbounded number of upstream calls. This check runs before
+    any WonderFence call and is never subject to ``fail_open`` — a caller must
+    not be able to bypass scanning by overflowing the cap.
+    """
+    n = len(segments)
+    if max_scan_segments is not None and n > max_scan_segments:
+        raise WonderFenceScanBudgetExceeded(
+            {
+                "error": f"Alice WonderFence scan budget exceeded: {n} segments > max_scan_segments={max_scan_segments}",
+                "type": "alice_wonderfence_scan_budget_exceeded",
+                "limit": "max_scan_segments",
+                "max_scan_segments": max_scan_segments,
+                "segments": n,
+            }
+        )
+    total_chars = sum(len(s) for s in segments)
+    if max_scan_chars is not None and total_chars > max_scan_chars:
+        raise WonderFenceScanBudgetExceeded(
+            {
+                "error": f"Alice WonderFence scan budget exceeded: {total_chars} chars > max_scan_chars={max_scan_chars}",
+                "type": "alice_wonderfence_scan_budget_exceeded",
+                "limit": "max_scan_chars",
+                "max_scan_chars": max_scan_chars,
+                "chars": total_chars,
+            }
+        )
 
 
-def _block_detail(blocked: list[SegmentVerdict], guardrail_name: str, block_message: str) -> dict:
+def _map_index(x: int, ops: Sequence[tuple[str, int, int, int, int]], masked_len: int) -> int | None:
+    """Map an index in the original joined document to its index in ``masked``.
+
+    Uses the ``SequenceMatcher`` opcodes: an index inside (or at the end of) an
+    ``equal`` block maps positionally; a boundary that lands at the very start
+    of a changed block still maps (the range simply begins there); a boundary
+    that lands *inside* a changed block is ambiguous and returns ``None`` so the
+    caller fails closed rather than misassigning.
+    """
+    for tag, i1, i2, j1, _j2 in ops:
+        if i1 <= x < i2 or (x == i2 and tag == "equal"):
+            if tag == "equal":
+                return j1 + (x - i1)
+            return j1 if x == i1 else None
+    return masked_len
+
+
+def reconstruct(parts: list[str], masked: str) -> list[str] | None:
+    """Recover per-part masked text from the masked joined document.
+
+    ``parts`` were joined with ``JOINER`` (a plain ``"\\n"``) into the document
+    that was scanned; ``masked`` is the service's masked version of that same
+    document. We align original-vs-masked with ``difflib.SequenceMatcher`` (no
+    sentinel injected) and map each part's char range through the alignment.
+
+    Fails closed (returns ``None``) when the structure is not recoverable: every
+    ``JOINER`` between parts must survive the mask as an unmodified ``\\n`` (a
+    mask spanning a joiner would merge parts), and no part boundary may land
+    inside a changed block. Returns one masked string per input part, in order;
+    ``[]`` for no parts. Assumes masking is span substitution that preserves the
+    non-masked characters; if the service reflows whitespace the joiner-survival
+    check trips and we fail closed rather than misassign.
+    """
+    if not parts:
+        return []
+
+    original = JOINER.join(parts)
+    starts = [0, *accumulate(len(p) + len(JOINER) for p in parts)][: len(parts)]
+    ranges = [(s, s + len(p)) for s, p in zip(starts, parts)]
+    joiners = [end for (_s, end) in ranges[:-1]]
+
+    ops = SequenceMatcher(None, original, masked, autojunk=False).get_opcodes()
+
+    joiner_survives = all(
+        any(tag == "equal" and i1 <= j < i2 and masked[j1 + (j - i1)] == JOINER for tag, i1, i2, j1, _j2 in ops)
+        for j in joiners
+    )
+    if not joiner_survives:
+        return None
+
+    mapped = [(_map_index(s, ops, len(masked)), _map_index(e, ops, len(masked))) for s, e in ranges]
+    if any(ms is None or me is None or ms > me for ms, me in mapped):
+        return None
+    return [masked[ms:me] for ms, me in mapped]
+
+
+def block_detail(blocked: list[SegmentVerdict], guardrail_name: str, block_message: str) -> dict:
     detections: list = []
     correlation_ids: list[str] = []
     for v in blocked:
@@ -162,6 +243,14 @@ def _block_detail(blocked: list[SegmentVerdict], guardrail_name: str, block_mess
     if detections:
         detail["detections"] = [d.model_dump() if hasattr(d, "model_dump") else d for d in detections]
     return detail
+
+
+def raise_if_blocked(verdicts: list[SegmentVerdict], guardrail_name: str, block_message: str) -> None:
+    """Raise ``WonderFenceBlockedError`` if any verdict is BLOCK, aggregating
+    detections / correlation ids across all blocked verdicts."""
+    blocked = [v for v in verdicts if v.action == "BLOCK"]
+    if blocked:
+        raise WonderFenceBlockedError(block_detail(blocked, guardrail_name, block_message))
 
 
 def _masked_value(verdict: SegmentVerdict, guardrail_name: str, label: str) -> str | None:
@@ -187,51 +276,28 @@ def _masked_value(verdict: SegmentVerdict, guardrail_name: str, label: str) -> s
     return None
 
 
-def apply_verdicts(
+def apply_response_verdicts(
     inputs: GenericGuardrailAPIInputs,
-    indices: list[int],
-    verdicts: list[SegmentVerdict],
+    text_verdicts: list[SegmentVerdict],
+    tool_indices: list[int],
+    tool_verdicts: list[SegmentVerdict],
     guardrail_name: str,
     block_message: str,
-    tool_indices: list[int] | None = None,
-    tool_verdicts: list[SegmentVerdict] | None = None,
-    tool_def_paths: list[list[Any]] | None = None,
-    tool_def_verdicts: list[SegmentVerdict] | None = None,
-    function_def_paths: list[list[Any]] | None = None,
-    function_def_verdicts: list[SegmentVerdict] | None = None,
-    function_def_request_data: dict | None = None,
 ) -> GenericGuardrailAPIInputs:
-    """Apply per-segment verdicts back onto request text, tool-call args,
-    tool-definition descriptions, and legacy function-definition descriptions.
+    """Response-side write-back: index-aligned MASK into ``texts`` (per choice)
+    and ``tool_calls[i].function.arguments`` (model-generated).
 
-    Any BLOCK across any group raises ``WonderFenceBlockedError`` with
-    detections/correlation ids aggregated across all blocked segments. Otherwise
-    each MASK verdict rewrites the slot its segment came from and DETECT is
-    logged.
+    BLOCK across any segment raises first. Response text is written per-index
+    (never joined) because the handler's response write-back is purely
+    positional over the returned ``texts`` list and has no ``structured_messages``
+    path, so collapsing choices into one string would dump every choice's text
+    into choice 0.
     """
-    tool_indices = tool_indices or []
-    tool_verdicts = tool_verdicts or []
-    tool_def_paths = tool_def_paths or []
-    tool_def_verdicts = tool_def_verdicts or []
-    function_def_paths = function_def_paths or []
-    function_def_verdicts = function_def_verdicts or []
-
-    blocked = [
-        v
-        for v in (
-            *verdicts,
-            *tool_verdicts,
-            *tool_def_verdicts,
-            *function_def_verdicts,
-        )
-        if v.action == "BLOCK"
-    ]
-    if blocked:
-        raise WonderFenceBlockedError(_block_detail(blocked, guardrail_name, block_message))
+    raise_if_blocked([*text_verdicts, *tool_verdicts], guardrail_name, block_message)
 
     texts = inputs.get("texts") or []
-    for idx, verdict in zip(indices, verdicts):
-        masked = _masked_value(verdict, guardrail_name, "request text")
+    for idx, verdict in enumerate(text_verdicts):
+        masked = _masked_value(verdict, guardrail_name, "response text")
         if masked is not None:
             texts[idx] = masked
     inputs["texts"] = texts
@@ -241,17 +307,5 @@ def apply_verdicts(
         masked = _masked_value(verdict, guardrail_name, "tool_call args")
         if masked is not None:
             tool_calls[idx]["function"]["arguments"] = masked
-
-    tools = inputs.get("tools") or []
-    for path, verdict in zip(tool_def_paths, tool_def_verdicts):
-        masked = _masked_value(verdict, guardrail_name, "tool definition")
-        if masked is not None:
-            _set_by_path(tools, path, masked)
-
-    functions = (function_def_request_data or {}).get("functions") or []
-    for path, verdict in zip(function_def_paths, function_def_verdicts):
-        masked = _masked_value(verdict, guardrail_name, "function definition")
-        if masked is not None and functions:
-            _set_by_path(functions, path, masked)
 
     return inputs

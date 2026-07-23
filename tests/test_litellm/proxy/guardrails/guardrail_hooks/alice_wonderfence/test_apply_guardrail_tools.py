@@ -44,15 +44,17 @@ async def test_apply_guardrail_blocks_on_tool_call_arguments(guardrail_and_clien
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_tool_call_arguments_in_place(guardrail_and_client, make_request_data):
-    """MASK on a tool-call argument string rewrites
-    inputs['tool_calls'][i]['function']['arguments']."""
+async def test_apply_guardrail_request_tool_call_args_are_detection_only(guardrail_and_client, make_request_data):
+    """On the request side, tool-call args are rendered into the joined document
+    as detection-only pieces: they can BLOCK/DETECT but a MASK is never spliced
+    back into the arguments string (the joined form is not the wire format).
+    Message text still masks; the args survive untouched."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
         r = Mock()
-        r.action = "MASK" if "secret" in prompt else "NO_ACTION"
-        r.action_text = '{"body": "[REDACTED]"}'
+        r.action = "MASK"
+        r.action_text = prompt.replace("secret value", "[REDACTED]")
         r.detections = []
         r.correlation_id = None
         return r
@@ -68,8 +70,9 @@ async def test_apply_guardrail_masks_tool_call_arguments_in_place(guardrail_and_
         request_data=make_request_data(),
         input_type="request",
     )
-    assert out["tool_calls"][0]["function"]["arguments"] == '{"body": "[REDACTED]"}'
+    assert out["tool_calls"][0]["function"]["arguments"] == '{"body": "secret value"}'
     assert out["texts"] == ["benign"]
+    client.evaluate_prompt.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -208,13 +211,15 @@ async def test_apply_guardrail_blocks_on_tool_parameter_description(guardrail_an
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_tool_definition_description_in_place(guardrail_and_client, make_request_data):
+async def test_apply_guardrail_tool_definitions_are_detection_only(guardrail_and_client, make_request_data):
+    """Tool definitions are scanned detection-only (they can BLOCK/DETECT) but a
+    MASK is never written back into the schema; the description survives."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
         r = Mock()
-        r.action = "MASK" if "secret" in prompt else "NO_ACTION"
-        r.action_text = "[REDACTED]"
+        r.action = "MASK"
+        r.action_text = prompt.replace("secret", "[REDACTED]")
         r.detections = []
         r.correlation_id = None
         return r
@@ -226,7 +231,7 @@ async def test_apply_guardrail_masks_tool_definition_description_in_place(guardr
         "tools": [_tool_def(description="contains secret stuff")],
     }
     out = await guardrail.apply_guardrail(inputs=inputs, request_data=make_request_data(), input_type="request")
-    assert out["tools"][0]["function"]["description"] == "[REDACTED]"
+    assert out["tools"][0]["function"]["description"] == "contains secret stuff"
 
 
 @pytest.mark.asyncio
@@ -361,15 +366,15 @@ async def test_apply_guardrail_legacy_function_detect_does_not_mutate(guardrail_
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_legacy_function_description_in_place(guardrail_and_client, make_request_data):
-    """A MASK verdict on a functions[] description must be written back into
-    request_data['functions'], not left as the original unredacted text."""
+async def test_apply_guardrail_legacy_function_definitions_are_detection_only(guardrail_and_client, make_request_data):
+    """Legacy functions[] descriptions are scanned detection-only; a MASK is
+    never spliced back into request_data['functions']."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
         r = Mock()
-        r.action = "MASK" if "secret" in prompt else "NO_ACTION"
-        r.action_text = "[REDACTED]"
+        r.action = "MASK"
+        r.action_text = prompt.replace("secret", "[REDACTED]")
         r.detections = []
         r.correlation_id = None
         return r
@@ -382,4 +387,4 @@ async def test_apply_guardrail_masks_legacy_function_description_in_place(guardr
         request_data=request_data,
         input_type="request",
     )
-    assert request_data["functions"][0]["description"] == "[REDACTED]"
+    assert request_data["functions"][0]["description"] == "contains secret stuff"

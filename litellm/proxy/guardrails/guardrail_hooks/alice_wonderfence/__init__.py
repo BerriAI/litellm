@@ -44,6 +44,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         init_kwargs["debug"] = litellm_params.debug
     if litellm_params.allow_request_metadata_override is not None:
         init_kwargs["allow_request_metadata_override"] = litellm_params.allow_request_metadata_override
+    if litellm_params.max_scan_chars is not None:
+        init_kwargs["max_scan_chars"] = litellm_params.max_scan_chars
+    if litellm_params.max_scan_segments is not None:
+        init_kwargs["max_scan_segments"] = litellm_params.max_scan_segments
 
     wonderfence_guardrail = WonderFenceGuardrail(**init_kwargs)
 

@@ -3,6 +3,7 @@
 import logging
 import os
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import HTTPException
@@ -23,16 +24,24 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .chunked_evaluation import (
     DEFAULT_MAX_CONCURRENCY,
-    WindowConfig,
     evaluate_segments,
 )
 from .client_cache import ClientBuildSpec, get_or_create_client, load_sdk
 from .credentials import CredentialConfig, resolve_credentials
-from .exceptions import WonderFenceBlockedError, WonderFenceMissingSecrets
+from .exceptions import (
+    WonderFenceBlockedError,
+    WonderFenceMissingSecrets,
+    WonderFenceScanBudgetExceeded,
+)
 from .processing import (
-    apply_verdicts,
+    JOINER,
+    apply_response_verdicts,
+    block_detail,
     build_analysis_context,
+    check_scan_budget,
     function_definition_segments,
+    raise_if_blocked,
+    reconstruct,
     tool_call_arg_segments,
     tool_definition_segments,
 )
@@ -77,6 +86,8 @@ class WonderFenceGuardrail(CustomGuardrail):
         max_cached_clients: int | None = None,
         connection_pool_limit: int | None = None,
         allow_request_metadata_override: bool = False,
+        max_scan_chars: int | None = None,
+        max_scan_segments: int | None = None,
         event_hook: (GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None) = None,
         default_on: bool = True,
         **kwargs: Any,
@@ -102,6 +113,12 @@ class WonderFenceGuardrail(CustomGuardrail):
                 ``metadata.alice_wonderfence_app_id`` as a last-resort source
                 (after API-key and team metadata). Defaults to False so
                 caller-controlled fields cannot bypass admin-pinned credentials.
+            max_scan_chars: Fail-closed total-work cap on combined scan
+                characters per request/response. Default 1_000_000. Env:
+                ALICE_MAX_SCAN_CHARS.
+            max_scan_segments: Fail-closed total-work cap on scan segment count
+                per request/response. Default 1_000. Env:
+                ALICE_MAX_SCAN_SEGMENTS.
             event_hook: Event hook mode.
             default_on: Whether the guardrail is enabled by default.
         """
@@ -116,6 +133,16 @@ class WonderFenceGuardrail(CustomGuardrail):
         self.fail_open = fail_open
         self.block_message = block_message
         self.allow_request_metadata_override = allow_request_metadata_override
+        env_max_chars = os.environ.get("ALICE_MAX_SCAN_CHARS")
+        self.max_scan_chars: int | None = (
+            max_scan_chars if max_scan_chars is not None else (int(env_max_chars) if env_max_chars else 1_000_000)
+        )
+        env_max_segments = os.environ.get("ALICE_MAX_SCAN_SEGMENTS")
+        self.max_scan_segments: int | None = (
+            max_scan_segments
+            if max_scan_segments is not None
+            else (int(env_max_segments) if env_max_segments else 1_000)
+        )
 
         if debug:
             logger.setLevel(logging.DEBUG)
@@ -174,16 +201,29 @@ class WonderFenceGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        """Apply WonderFence guardrail using V2 client + per-request app_id."""
+        """Apply WonderFence guardrail using V2 client + per-request app_id.
+
+        Request side joins all scan pieces (message text plus detection-only
+        tool-call args and tool/function descriptions) into one document and
+        scans it in ~1 call (chunked only when it exceeds the size limit), so
+        call volume scales with total size rather than message count. Response
+        side stays per-segment (independent choices / model tool-call args)
+        because the handler's response write-back is purely positional and has
+        no ``structured_messages`` path.
+        """
         texts = inputs.get("texts") or []
-        tool_indices, tool_segments = tool_call_arg_segments(inputs)
-        tool_def_paths, tool_def_segments = tool_definition_segments(inputs)
+        tool_indices, tool_arg_segments = tool_call_arg_segments(inputs)
+        tool_def_texts = tool_definition_segments(inputs)
         # Legacy top-level functions[] only exist on the request body; the
         # translation layer does not surface them in inputs, so read request_data.
-        function_def_paths, function_def_segments = (
-            function_definition_segments(request_data) if input_type == "request" else ([], [])
-        )
-        if not texts and not tool_segments and not tool_def_segments and not function_def_segments:
+        function_def_texts = function_definition_segments(request_data) if input_type == "request" else []
+
+        if input_type == "request":
+            scan_pieces = [*texts, *tool_arg_segments, *tool_def_texts, *function_def_texts]
+        else:
+            scan_pieces = [*texts, *tool_arg_segments]
+
+        if not scan_pieces:
             logger.debug(
                 "Alice WonderFence (apply_guardrail): nothing to scan for %s",
                 input_type,
@@ -191,6 +231,7 @@ class WonderFenceGuardrail(CustomGuardrail):
             return inputs
 
         try:
+            check_scan_budget(scan_pieces, self.max_scan_chars, self.max_scan_segments)
             api_key, app_id = resolve_credentials(
                 request_data,
                 input_type,
@@ -203,12 +244,14 @@ class WonderFenceGuardrail(CustomGuardrail):
             )
             client = await self._get_client(api_key)
             context = build_analysis_context(request_data, self.platform, self._AnalysisContext)
+            max_concurrency = self._connection_pool_limit or DEFAULT_MAX_CONCURRENCY
 
             if input_type == "request":
 
                 async def evaluate(text: str) -> object:
                     return await client.evaluate_prompt(app_id=app_id, prompt=text, context=context, custom_fields=None)
 
+                await self._scan_request(inputs, scan_pieces, len(texts), evaluate, max_concurrency, app_id)
             else:
 
                 async def evaluate(text: str) -> object:
@@ -219,46 +262,12 @@ class WonderFenceGuardrail(CustomGuardrail):
                         custom_fields=None,
                     )
 
-            segments = [
-                *texts,
-                *tool_segments,
-                *tool_def_segments,
-                *function_def_segments,
-            ]
-            logger.debug(
-                "Alice WonderFence (apply_guardrail): evaluating %d text + %d tool-call + %d tool-def + %d function-def segment(s) app_id=%s guardrail=%s input_type=%s",
-                len(texts),
-                len(tool_segments),
-                len(tool_def_segments),
-                len(function_def_segments),
-                app_id,
-                self.guardrail_name,
-                input_type,
-            )
-            verdicts = await evaluate_segments(
-                segments,
-                evaluate,
-                max_concurrency=self._connection_pool_limit or DEFAULT_MAX_CONCURRENCY,
-                windows=WindowConfig(text_segment_count=len(texts)),
-            )
-            n_text = len(texts)
-            n_tool = len(tool_segments)
-            n_tool_def = len(tool_def_segments)
-            apply_verdicts(
-                inputs,
-                list(range(n_text)),
-                verdicts[:n_text],
-                self.guardrail_name,
-                self.block_message,
-                tool_indices=tool_indices,
-                tool_verdicts=verdicts[n_text : n_text + n_tool],
-                tool_def_paths=tool_def_paths,
-                tool_def_verdicts=verdicts[n_text + n_tool : n_text + n_tool + n_tool_def],
-                function_def_paths=function_def_paths,
-                function_def_verdicts=verdicts[n_text + n_tool + n_tool_def :],
-                function_def_request_data=request_data,
-            )
+                await self._scan_response(inputs, texts, tool_indices, tool_arg_segments, evaluate, max_concurrency)
 
+        except WonderFenceScanBudgetExceeded as e:
+            # Fail-closed config/abuse guard: reject before any provider call and
+            # never fall through to the fail_open path below.
+            raise HTTPException(status_code=400, detail=e.detail)
         except WonderFenceBlockedError as e:
             raise HTTPException(status_code=400, detail=e.detail)
         except WonderFenceMissingSecrets as e:
@@ -309,6 +318,92 @@ class WonderFenceGuardrail(CustomGuardrail):
 
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
         return inputs
+
+    async def _scan_request(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        pieces: list[str],
+        n_text: int,
+        evaluate: "Callable[[str], Awaitable[object]]",
+        max_concurrency: int,
+        app_id: str,
+    ) -> None:
+        """Scan the joined request document and write MASK back to ``texts``.
+
+        The first ``n_text`` pieces are maskable message-text parts; the rest are
+        detection-only tool-call args and tool/function descriptions. On MASK we
+        reconstruct per-part masked text by aligning the join against the masked
+        document and write the recovered message-text parts back to
+        ``inputs["texts"]`` (positional write-back / "Path B"): the handler
+        already maps that list onto the right message parts, so there is no need
+        to rebuild ``structured_messages``. Reconstruction failure fails closed
+        (block) rather than misassigning a redaction.
+        """
+        document = JOINER.join(pieces)
+        logger.debug(
+            "Alice WonderFence (apply_guardrail request): scanning joined document of %d piece(s) "
+            "(%d text + %d detection-only), %d chars, guardrail=%s app_id=%s",
+            len(pieces),
+            n_text,
+            len(pieces) - n_text,
+            len(document),
+            self.guardrail_name,
+            app_id,
+        )
+        verdict = (await evaluate_segments([document], evaluate, max_concurrency=max_concurrency))[0]
+        raise_if_blocked([verdict], self.guardrail_name, self.block_message)
+
+        correlation_id = verdict.correlation_ids[0] if verdict.correlation_ids else None
+        if verdict.action == "MASK":
+            recovered = reconstruct(pieces, verdict.masked_text or "")
+            if recovered is None:
+                logger.warning(
+                    "Alice WonderFence (apply_guardrail request): MASK reconstruction failed "
+                    "(a joiner or part boundary landed inside a masked span); failing closed. guardrail=%s correlation_id=%s",
+                    self.guardrail_name,
+                    correlation_id,
+                )
+                raise WonderFenceBlockedError(block_detail([verdict], self.guardrail_name, self.block_message))
+            inputs["texts"] = recovered[:n_text]
+            logger.info(
+                "Alice WonderFence (apply_guardrail request): MASK applied to request text guardrail=%s correlation_id=%s",
+                self.guardrail_name,
+                correlation_id,
+            )
+        elif verdict.action == "DETECT":
+            logger.warning(
+                "Alice WonderFence (apply_guardrail request): DETECT on joined document guardrail=%s correlation_id=%s",
+                self.guardrail_name,
+                correlation_id,
+            )
+
+    async def _scan_response(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        texts: list[str],
+        tool_indices: list[int],
+        tool_arg_segments: list[str],
+        evaluate: "Callable[[str], Awaitable[object]]",
+        max_concurrency: int,
+    ) -> None:
+        """Scan response segments per-index and write masks back in place."""
+        segments = [*texts, *tool_arg_segments]
+        logger.debug(
+            "Alice WonderFence (apply_guardrail response): evaluating %d text + %d tool-call segment(s) guardrail=%s",
+            len(texts),
+            len(tool_arg_segments),
+            self.guardrail_name,
+        )
+        verdicts = await evaluate_segments(segments, evaluate, max_concurrency=max_concurrency)
+        n_text = len(texts)
+        apply_response_verdicts(
+            inputs,
+            verdicts[:n_text],
+            tool_indices,
+            verdicts[n_text:],
+            self.guardrail_name,
+            self.block_message,
+        )
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

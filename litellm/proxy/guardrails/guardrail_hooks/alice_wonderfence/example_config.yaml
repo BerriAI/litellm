@@ -7,6 +7,8 @@
 #   ALICE_API_KEY                  - Default WonderFence API key (overridable per request)
 #   ALICE_MAX_CACHED_CLIENTS       - Optional: max cached V2 SDK clients (default 10)
 #   ALICE_CONNECTION_POOL_LIMIT    - Optional: HTTP pool size per client
+#   ALICE_MAX_SCAN_CHARS           - Optional: total-work cap, max scan chars (default 1000000)
+#   ALICE_MAX_SCAN_SEGMENTS        - Optional: total-work cap, max scan segments (default 1000)
 #   OPENAI_API_KEY                 - API key for OpenAI
 #
 # Per-key / per-team metadata keys (admin-controlled):
@@ -48,6 +50,13 @@ guardrails:
       # set this to false to scan them too. skip_tool_message_in_guardrail is
       # the matching knob for tool messages.
       skip_system_message_in_guardrail: true
+
+      # Fail-closed total-work cap (DoS backstop). WonderFence has no batch API,
+      # so the request side joins all scan pieces into one document and scans it
+      # in ~1 call (chunked only past the size limit); these bounds reject an
+      # abusive request before any provider call and are never fail-open.
+      # max_scan_chars: 1000000
+      # max_scan_segments: 1000
 
       # connection_pool_limit: 20
 

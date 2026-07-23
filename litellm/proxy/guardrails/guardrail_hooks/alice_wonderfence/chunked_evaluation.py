@@ -36,13 +36,15 @@ class SegmentVerdict:
 class WindowConfig:
     """Tuning for the detection-only overlap windows.
 
-    ``overlap`` sizes the chunk- and segment-boundary windows; ``text_segment_count``
-    is how many leading segments are ordered prompt texts the model concatenates,
-    bounding the cross-segment windows (see ``_cross_segment_windows``).
+    ``overlap`` sizes the per-segment chunk-boundary windows (see
+    ``_boundary_windows``). There are no cross-segment windows: on the request
+    side message parts are concatenated into one joined document before
+    scanning (so their junctions are interior chunk seams, covered by
+    ``_boundary_windows``); on the response side each segment is an independent
+    choice or tool-call arg that the model never concatenates.
     """
 
     overlap: int = CHUNK_OVERLAP_CHARS
-    text_segment_count: int = 0
 
 
 def _split_text(text: str, max_chars: int) -> list[str]:
@@ -91,28 +93,6 @@ def _boundary_windows(chunks: list[str], overlap: int) -> list[str]:
     return [chunks[i][-overlap:] + chunks[i + 1][:overlap] for i in range(len(chunks) - 1)]
 
 
-def _cross_segment_windows(segments: list[str], text_segment_count: int, overlap: int) -> list[tuple[int, str]]:
-    """Detection-only windows spanning each adjacent pair of prompt-text segments.
-
-    The chat translation layer emits each message content part as its own
-    ``texts`` entry, but the model concatenates them (a multimodal message's text
-    parts join with no separator at all), so a blocked phrase split across two
-    adjacent segments is seen whole by neither. We also scan a window joining the
-    tail of one to the head of the next. Only the first ``text_segment_count``
-    segments (the ordered prompt texts) are paired; tool-call args and tool /
-    function definitions are not concatenated into the prompt. Each window is
-    tagged with its left segment index so a BLOCK/DETECT folds into that
-    segment's verdict; windows never mask, since content cannot be redacted
-    across a segment boundary.
-    """
-    if overlap <= 0:
-        return []
-    n = min(text_segment_count, len(segments))
-    return [
-        (i, segments[i][-overlap:] + segments[i + 1][:overlap]) for i in range(n - 1) if segments[i] and segments[i + 1]
-    ]
-
-
 def _aggregate(
     chunks: list[str],
     chunk_results: list[Any],
@@ -155,15 +135,16 @@ async def evaluate_segments(
 
     Each segment is split into <= ``max_chars`` disjoint chunks; multi-chunk
     segments also get a detection-only window spanning each chunk boundary (see
-    ``_boundary_windows``). Adjacent prompt-text segments (the first
-    ``windows.text_segment_count``) additionally get a detection-only window
-    spanning their junction (see ``_cross_segment_windows``) so a phrase split
-    across two segments is still seen whole. Every chunk and window across every
-    segment is
-    evaluated through a single ``asyncio.gather`` behind one shared
-    ``Semaphore(max_concurrency)``. Results are grouped back per segment with
-    action precedence BLOCK > MASK > DETECT > NO_ACTION; masking uses the
-    disjoint chunks only so the lossless rejoin holds.
+    ``_boundary_windows``) so a phrase split across a chunk seam is still seen
+    whole. Every chunk and window across every segment is evaluated through a
+    single ``asyncio.gather`` behind one shared ``Semaphore(max_concurrency)``.
+    Results are grouped back per segment with action precedence
+    BLOCK > MASK > DETECT > NO_ACTION; masking uses the disjoint chunks only so
+    the lossless rejoin holds.
+
+    The request side passes a single joined document here (one segment) so the
+    common case is one call; the response side passes one segment per choice /
+    tool-call arg. There is no cross-segment window (see ``WindowConfig``).
     """
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -175,7 +156,6 @@ async def evaluate_segments(
     ov = min(windows.overlap, max_chars // 2)
     seg_chunks = [_split_text(s, max_chars) for s in segments]
     seg_boundaries = [_boundary_windows(chunks, ov) for chunks in seg_chunks]
-    cross_windows = _cross_segment_windows(segments, windows.text_segment_count, ov)
 
     index: list[tuple[str, int, int]] = []
     tasks = []
@@ -186,9 +166,6 @@ async def evaluate_segments(
         for bi, window in enumerate(seg_boundaries[si]):
             index.append(("bound", si, bi))
             tasks.append(run(window))
-    for left_idx, window in cross_windows:
-        index.append(("cross", left_idx, 0))
-        tasks.append(run(window))
     results = await asyncio.gather(*tasks)
 
     chunk_res: list[list[Any]] = [[None] * len(c) for c in seg_chunks]
@@ -198,8 +175,5 @@ async def evaluate_segments(
             chunk_res[si][idx] = res
         elif kind == "bound":
             bound_res[si][idx] = res
-    cross_res: list[list[Any]] = [
-        [res for (kind, si, _), res in zip(index, results) if kind == "cross" and si == s] for s in range(len(segments))
-    ]
 
-    return [_aggregate(seg_chunks[si], chunk_res[si], bound_res[si] + cross_res[si]) for si in range(len(segments))]
+    return [_aggregate(seg_chunks[si], chunk_res[si], bound_res[si]) for si in range(len(segments))]

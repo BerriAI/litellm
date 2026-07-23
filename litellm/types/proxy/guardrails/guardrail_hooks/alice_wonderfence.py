@@ -62,6 +62,14 @@ class WonderFenceGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="Max connections per SDK client HTTP pool. Env: ALICE_CONNECTION_POOL_LIMIT.",
     )
+    max_scan_chars: Optional[int] = Field(
+        default=1_000_000,
+        description="Total-work cap (fail-closed DoS backstop): reject a request/response whose combined scan characters (message text plus tool-call args and tool/function descriptions) exceed this before any WonderFence call. Bounds upstream call amplification since WonderFence has no batch API. Env: ALICE_MAX_SCAN_CHARS.",
+    )
+    max_scan_segments: Optional[int] = Field(
+        default=1_000,
+        description="Total-work cap (fail-closed DoS backstop): reject a request/response carrying more than this many scan segments (message text parts, tool-call args, tool/function descriptions) before any WonderFence call. Env: ALICE_MAX_SCAN_SEGMENTS.",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
