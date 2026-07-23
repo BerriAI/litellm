@@ -2367,3 +2367,106 @@ async def test_same_user_different_keys_can_access_batch():
     assert "batch_id" in result2
     # Both keys should get the same result
     assert result1["batch_id"] == result2["batch_id"]
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_persists_request_identity():
+    """
+    store_unified_object_id must persist the creating key's hashed token, team, and request
+    tags onto the managed object so CheckBatchCost can later attribute the batch-cost SpendLogs
+    row. Regression for batches whose cost row was dropped because identity was never carried.
+    """
+    from prisma import Json
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import LiteLLMBatch
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.upsert = AsyncMock(
+        return_value=MagicMock()
+    )
+    internal_usage_cache = MagicMock()
+    internal_usage_cache.async_set_cache = AsyncMock()
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+
+    batch_object = LiteLLMBatch(
+        id="batch-123",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="gs://bucket/in.jsonl",
+        object="batch",
+        status="validating",
+    )
+
+    await proxy_managed_files.store_unified_object_id(
+        unified_object_id="unified-123",
+        file_object=batch_object,
+        litellm_parent_otel_span=None,
+        model_object_id="batch-123",
+        file_purpose="batch",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="user-1", team_id="team-1", api_key="hashed-key-abc"
+        ),
+        request_tags=["tag-a", "tag-b"],
+    )
+
+    create_data = prisma_client.db.litellm_managedobjecttable.upsert.call_args.kwargs[
+        "data"
+    ]["create"]
+    assert create_data["api_key"] == "hashed-key-abc"
+    assert create_data["created_by"] == "user-1"
+    assert create_data["team_id"] == "team-1"
+    assert create_data["request_tags"] == Json(["tag-a", "tag-b"])
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_no_tags_omits_request_tags():
+    """When no request tags are present the request_tags key must be omitted from the create
+    payload. Passing None to a Prisma Json? field raises MissingRequiredValueError, which would
+    break every non-tagged batch/file/response store."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import LiteLLMBatch
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedobjecttable.upsert = AsyncMock(
+        return_value=MagicMock()
+    )
+    internal_usage_cache = MagicMock()
+    internal_usage_cache.async_set_cache = AsyncMock()
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache,
+        prisma_client=prisma_client,
+    )
+
+    batch_object = LiteLLMBatch(
+        id="batch-123",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="gs://bucket/in.jsonl",
+        object="batch",
+        status="validating",
+    )
+
+    await proxy_managed_files.store_unified_object_id(
+        unified_object_id="unified-123",
+        file_object=batch_object,
+        litellm_parent_otel_span=None,
+        model_object_id="batch-123",
+        file_purpose="batch",
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1", api_key="hashed-key-abc"),
+    )
+
+    create_data = prisma_client.db.litellm_managedobjecttable.upsert.call_args.kwargs[
+        "data"
+    ]["create"]
+    assert "request_tags" not in create_data
+    assert create_data["api_key"] == "hashed-key-abc"
+
+
