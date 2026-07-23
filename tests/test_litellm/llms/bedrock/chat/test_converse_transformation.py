@@ -633,7 +633,8 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
         )
 
         assert data["additionalModelRequestFields"]["tool_choice"] == {
-            "disable_parallel_tool_use": True
+            "type": "auto",
+            "disable_parallel_tool_use": True,
         }
     finally:
         litellm.model_cost = old_cost
@@ -4251,6 +4252,49 @@ def test_parallel_tool_calls_older_model_drops_disable_flag():
     assert "parallel_tool_calls" not in additional
 
 
+@pytest.mark.parametrize(
+    "parallel_tool_calls, expected_disable",
+    [(True, False), (False, True)],
+)
+def test_parallel_tool_calls_emits_typed_auto_tool_choice(parallel_tool_calls, expected_disable):
+    config = AmazonConverseConfig()
+    model = "us.anthropic.claude-opus-4-8"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": parallel_tool_calls, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request_data["additionalModelRequestFields"]["tool_choice"] == {
+        "type": "auto",
+        "disable_parallel_tool_use": expected_disable,
+    }
+
+
+def test_parallel_tool_use_merge_preserves_user_tool_choice_type():
+    merged = AmazonConverseConfig._merge_parallel_tool_use_config(
+        {"tool_choice": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": False}},
+        {"tool_choice": {"type": "auto", "disable_parallel_tool_use": True}},
+    )
+
+    assert merged["tool_choice"] == {
+        "type": "tool",
+        "name": "get_weather",
+        "disable_parallel_tool_use": True,
+    }
+
+
 class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
@@ -5671,3 +5715,169 @@ async def test_grounding_source_and_query_rendered_as_text():
     user_content = result[0]["content"]
     assert {"text": "Tokyo is the capital of Japan."} in user_content
     assert {"text": "What is the capital of Japan?"} in user_content
+
+
+def _agentic_messages_with_ttl(ttl_target: str):
+    """A tool-loop conversation with `ttl: 1h` cache_control at `ttl_target`:
+    'user', 'tool_call' (per-tool-call, on the assistant's tool call), or
+    'tool' (message-level, on the tool result - where
+    `cache_control_injection_points` with `index: -1` lands mid-loop).
+
+    Message-level cache_control on a content-less assistant message emits no
+    cachePoint at all today (a separate gap, orthogonal to ttl); per-tool-call
+    placement covers that message, so it's excluded from the params below."""
+    user: dict = {"role": "user", "content": "optimize this kernel " * 60}
+    assistant: dict = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "evaluate", "arguments": "{}"},
+            }
+        ],
+    }
+    tool: dict = {"role": "tool", "tool_call_id": "call_1", "content": "score: 42"}
+    ttl_cc = {"type": "ephemeral", "ttl": "1h"}
+    if ttl_target == "user":
+        user["cache_control"] = ttl_cc
+    elif ttl_target == "tool_call":
+        assistant["tool_calls"][0]["cache_control"] = ttl_cc
+    elif ttl_target == "tool":
+        tool["cache_control"] = ttl_cc
+    return [user, assistant, tool]
+
+
+def _collect_cache_points(result):
+    return [
+        block["cachePoint"]
+        for message in result
+        for block in message.get("content") or []
+        if "cachePoint" in block
+    ]
+
+
+@pytest.mark.parametrize("ttl_target", ["user", "tool_call", "tool"])
+@pytest.mark.asyncio
+async def test_message_level_cache_control_honors_ttl_for_supported_model(
+    ttl_target,
+):
+    """Message- and tool-call-level cache_control must carry `ttl` onto the
+    emitted cachePoint for models that support extended caching, mirroring the
+    system-message path. Regression test for the gap left by the system-only
+    fix: the message paths called `_get_cache_point_block` without `model` (or
+    hardcoded `{"type": "default"}`), silently downgrading 1h to 5m."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = _agentic_messages_with_ttl(ttl_target)
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="global.anthropic.claude-opus-4-7",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="global.anthropic.claude-opus-4-7",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    cache_points = _collect_cache_points(result)
+    assert len(cache_points) == 1
+    assert cache_points[0].get("ttl") == "1h"
+
+
+@pytest.mark.parametrize("ttl_target", ["user", "tool_call", "tool"])
+def test_message_level_cache_control_drops_ttl_for_unsupported_model(ttl_target):
+    """Models outside the extended-caching allow-list must keep emitting the
+    plain `{"type": "default"}` cachePoint (Bedrock rejects `ttl` for them)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    result = _bedrock_converse_messages_pt(
+        messages=_agentic_messages_with_ttl(ttl_target),
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    cache_points = _collect_cache_points(result)
+    assert len(cache_points) == 1
+    assert "ttl" not in cache_points[0]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-haiku-4-5",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-5",
+    ],
+)
+def test_adaptive_thinking_translated_to_legacy_on_pre_46_converse(model):
+    """Raw thinking={type: adaptive} from callers like Claude Code must be
+    translated to legacy thinking={type: enabled, budget_tokens} for pre-4.6
+    models on Bedrock Converse rather than forwarded as-is and rejected."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    thinking = optional_params.get("thinking")
+    assert thinking is not None
+    assert thinking["type"] == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert thinking["budget_tokens"] < 8192
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_adaptive_thinking_passes_through_on_46_plus_converse(model):
+    """thinking={type: adaptive} must be forwarded unchanged for 4.6+ models
+    that natively support adaptive thinking."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params.get("thinking") == {"type": "adaptive"}
+
+
+def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
+    """When max_tokens can't fit even the minimum thinking budget, the raw
+    adaptive block must be dropped entirely rather than translated, so the
+    Bedrock Converse request still succeeds."""
+    from litellm.constants import ANTHROPIC_MIN_THINKING_BUDGET_TOKENS
+
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "max_tokens": ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+        },
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5",
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params

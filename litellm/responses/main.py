@@ -127,7 +127,7 @@ def mock_responses_api_response(
                 "input_tokens": 36,
                 "input_tokens_details": {"cached_tokens": 0},
                 "output_tokens": 87,
-                "output_tokens_details": {"reasoning_tokens": 0},
+                "output_tokens_details": {},
                 "total_tokens": 123,
             },
             "user": None,
@@ -261,7 +261,7 @@ async def aresponses_api_with_mcp(
             pre_processed_mcp_tools=original_mcp_tools,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+        mcp_streaming_response = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
             all_tools=all_tools,
@@ -272,6 +272,10 @@ async def aresponses_api_with_mcp(
             tool_server_map=tool_server_map,
             **kwargs,
         )
+        await mcp_streaming_response._create_initial_response_iterator()
+        if mcp_streaming_response._initial_creation_error is not None:
+            raise mcp_streaming_response._initial_creation_error
+        return mcp_streaming_response
 
     # Determine if we should auto-execute tools
     should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
@@ -490,7 +494,14 @@ async def aresponses(
                 prompt_label=kwargs.get("prompt_label", None),
                 prompt_version=kwargs.get("prompt_version", None),
             )
-            input = cast(Union[str, ResponseInputParam], merged_input)
+            input = cast(
+                Union[str, ResponseInputParam],
+                ResponsesAPIRequestUtils.merge_prompt_management_input(
+                    original_input=input,
+                    client_input=client_input,
+                    merged_input=merged_input,
+                ),
+            )
             if model != original_model:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
             kwargs.pop("prompt_id", None)
@@ -605,7 +616,14 @@ def _apply_prompt_management_to_responses_call(
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
         )
-        input = cast(Union[str, ResponseInputParam], merged_input)
+        input = cast(
+            Union[str, ResponseInputParam],
+            ResponsesAPIRequestUtils.merge_prompt_management_input(
+                original_input=input,
+                client_input=client_input,
+                merged_input=merged_input,
+            ),
+        )
         local_vars["input"] = input
         local_vars["model"] = model
         if model != original_model:
@@ -1066,11 +1084,13 @@ def responses(
             )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -1892,11 +1912,13 @@ def compact_responses(
         )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=None,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         # Pre Call logging

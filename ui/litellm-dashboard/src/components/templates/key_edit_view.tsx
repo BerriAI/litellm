@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
@@ -18,6 +19,13 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import {
+  TagRateLimitEditor,
+  TagRateLimitEntry,
+  tagLimitsToRows,
+  tagRowsToLimits,
+} from "../key_team_helpers/TagRateLimitEditor";
+import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
@@ -109,6 +117,9 @@ export function KeyEditView({
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
     Array.isArray(keyData.budget_limits) ? keyData.budget_limits : [],
   );
+  const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>(
+    tagLimitsToRows(keyData.metadata?.tag_rpm_limit),
+  );
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
@@ -132,11 +143,11 @@ export function KeyEditView({
           // Fetch user models if no team
           const model_available = await modelAvailableCall(accessToken, userID, userRole);
           const available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-          setAvailableModels(available_model_names);
+          setAvailableModels(excludeProxyWideSentinel(available_model_names));
         } else if (team?.team_id) {
           // Fetch team models if team exists
           const models = await fetchTeamModels(userID, userRole, accessToken, team.team_id);
-          setAvailableModels(Array.from(new Set([...team.models, ...models])));
+          setAvailableModels(excludeProxyWideSentinel(Array.from(new Set([...team.models, ...models]))));
         }
       } catch (error) {
         console.error("Error fetching models:", error);
@@ -162,15 +173,16 @@ export function KeyEditView({
     form.setFieldValue("disabled_callbacks", disabledCallbacks);
   }, [form, disabledCallbacks]);
 
-  // Convert API budget duration to form format
+  // Normalize any legacy word-form budget duration to the canonical value the dropdown uses
   const getBudgetDuration = (duration: string | null) => {
     if (!duration) return null;
-    const durationMap: Record<string, string> = {
-      "24h": "daily",
-      "7d": "weekly",
-      "30d": "monthly",
+    const wordToCanonical: Record<string, string> = {
+      hourly: "1h",
+      daily: "24h",
+      weekly: "7d",
+      monthly: "30d",
     };
-    return durationMap[duration] || null;
+    return wordToCanonical[duration] ?? duration;
   };
 
   // Set initial form values
@@ -297,18 +309,38 @@ export function KeyEditView({
       }
 
       // Reconcile multi-window budget limits from the editor state, dropping
-      // incomplete entries (no max_budget). Sending [] tells the backend to clear
-      // all stored windows, so only send it when the user removed every window;
-      // when entries remain but are still incomplete, omit the field so the saved
-      // windows are left untouched (JSON.stringify drops the undefined key).
+      // incomplete entries (no max_budget). The backend treats any budget_limits
+      // in a /key/update request as an admin-only budget change, so re-sending
+      // the stored windows on an unrelated edit 403s a non-admin key owner
+      // (issue #33246). Only send the field when the user actually changed the
+      // windows, mirroring how allowed_routes is dropped above when unchanged:
+      // compare on (duration, cap), ignoring server-owned reset_at and order.
+      // Sending [] clears every window, so send it only when the user removed
+      // the last one; otherwise leave the field off (JSON.stringify drops the
+      // undefined key) so an unchanged or incomplete editor state never touches
+      // storage.
+      const windowSignature = (windows: Array<{ budget_duration: string; max_budget: number | null }> | undefined) =>
+        (windows ?? [])
+          .filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined)
+          .map((w) => `${w.budget_duration}:${w.max_budget}`)
+          .sort()
+          .join("|");
       const validWindows = budgetLimits.filter(
         (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
       );
-      if (validWindows.length > 0) {
+      const budgetLimitsUnchanged = windowSignature(keyData.budget_limits) === windowSignature(validWindows);
+      if (budgetLimitsUnchanged) {
+        // no-op: leave budget_limits off the payload
+      } else if (validWindows.length > 0) {
         values.budget_limits = validWindows;
       } else if (budgetLimits.length === 0) {
         values.budget_limits = [];
       }
+
+      // Always send the current per-tag limit map so removing every row
+      // clears the stored limits ({} overwrites the metadata field).
+      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
+      values.tag_rpm_limit = tag_rpm_limit;
 
       const hadExistingFallbacks = keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
       if (Object.keys(budgetFallbacks).length > 0) {
@@ -357,12 +389,23 @@ export function KeyEditView({
                   style={{ width: "100%" }}
                   disabled={isDisabled}
                   value={isDisabled ? [] : models}
-                  onChange={(value) => setFieldValue("models", value)}
+                  onChange={(value) => {
+                    if (value.includes("all-team-models")) {
+                      setFieldValue("models", ["all-team-models"]);
+                    } else if (value.includes("all-proxy-models")) {
+                      setFieldValue("models", ["all-proxy-models"]);
+                    } else {
+                      setFieldValue("models", value);
+                    }
+                  }}
                 >
-                  {/* Only show All Team Models if team has models */}
-                  {availableModels.length > 0 && <Select.Option value="all-team-models">All Team Models</Select.Option>}
+                  {keyData.team_id != null ? (
+                    team != null && <Select.Option value="all-team-models">All Team Models</Select.Option>
+                  ) : (
+                    <Select.Option value="all-proxy-models">All Proxy Models</Select.Option>
+                  )}
                   {availableModels.map((model) => (
-                    <Select.Option key={model} value={model}>
+                    <Select.Option key={model} value={model} disabled={hasAllModelsSentinel(models)}>
                       {model}
                     </Select.Option>
                   ))}
@@ -465,11 +508,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <Select placeholder="n/a">
-          <Select.Option value="daily">Daily</Select.Option>
-          <Select.Option value="weekly">Weekly</Select.Option>
-          <Select.Option value="monthly">Monthly</Select.Option>
-        </Select>
+        <BudgetDurationDropdown />
       </Form.Item>
 
       <Form.Item
@@ -539,6 +578,19 @@ export function KeyEditView({
 
       <Form.Item label="Model RPM Limit" name="model_rpm_limit">
         <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Per-Tag Rate Limits{" "}
+            <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
       </Form.Item>
 
       <Form.Item label="Guardrails" name="guardrails">

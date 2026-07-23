@@ -1029,6 +1029,8 @@ jobs:
       - *python312_image
     working_directory: ~/project
     resource_class: large
+    environment:
+      REQUEST_TIMEOUT: "180"
 
     steps:
       - checkout
@@ -1058,7 +1060,8 @@ jobs:
                 -v -x \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
-                -n 8"
+                -n 8 \
+                --reruns 1 --only-rerun Timeout"
           no_output_timeout: 15m
 
       # Store test results
@@ -2728,7 +2731,7 @@ jobs:
             - ~/.cache/uv
       - restore_cache:
           keys:
-            - ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+            - ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
       - run:
           name: Install Node dependencies and Playwright
           # The cimg/python:3.12-browsers image already ships the Chromium system
@@ -2739,11 +2742,14 @@ jobs:
           command: |
             cd ui/litellm-dashboard
             npm ci
+            cd ../../tests/e2e/ui
+            npm ci
             npx playwright install chromium
       - save_cache:
-          key: ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          key: ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
           paths:
             - ui/litellm-dashboard/node_modules
+            - tests/e2e/ui/node_modules
             - ~/.cache/ms-playwright
       - run:
           name: Build UI from source
@@ -2774,10 +2780,10 @@ jobs:
           name: Seed database
           command: |
             PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
-              -f ui/litellm-dashboard/e2e_tests/fixtures/seed.sql
+              -f tests/e2e/ui/fixtures/seed.sql
       - run:
           name: Start mock LLM server
-          command: uv run --no-sync python ui/litellm-dashboard/e2e_tests/fixtures/mock_llm_server/server.py
+          command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
           background: true
       - run:
           name: Start LiteLLM proxy
@@ -2795,7 +2801,7 @@ jobs:
           command: |
             LITELLM_LICENSE="$LITELLM_LICENSE" \
               uv run --no-sync python -m litellm.proxy.proxy_cli \
-                --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+                --config tests/e2e/ui/fixtures/config.yml \
                 --port 4000
           background: true
       - run:
@@ -2816,15 +2822,15 @@ jobs:
           # Forward LITELLM_LICENSE so license.spec.ts can detect that the
           # proxy was launched with a license and assert premium_user=true.
           command: |
-            cd ui/litellm-dashboard
+            cd tests/e2e/ui
             LITELLM_LICENSE="$LITELLM_LICENSE" \
-              npx playwright test --config e2e_tests/playwright.config.ts
+              npx playwright test --config playwright.config.ts
           no_output_timeout: 10m
       - store_artifacts:
-          path: ui/litellm-dashboard/test-results
+          path: tests/e2e/ui/test-results
           destination: e2e-test-results
       - store_artifacts:
-          path: ui/litellm-dashboard/playwright-report
+          path: tests/e2e/ui/playwright-report
           destination: e2e-playwright-report
 
   e2e_ui_testing_server_root_path:
@@ -2867,17 +2873,20 @@ jobs:
             - ~/.cache/uv
       - restore_cache:
           keys:
-            - ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+            - ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
       - run:
           name: Install Node dependencies and Playwright
           command: |
             cd ui/litellm-dashboard
             npm ci
+            cd ../../tests/e2e/ui
+            npm ci
             npx playwright install chromium
       - save_cache:
-          key: ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          key: ui-e2e-node-deps-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
           paths:
             - ui/litellm-dashboard/node_modules
+            - tests/e2e/ui/node_modules
             - ~/.cache/ms-playwright
       - run:
           name: Build UI from source
@@ -2899,10 +2908,10 @@ jobs:
           name: Seed database
           command: |
             PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
-              -f ui/litellm-dashboard/e2e_tests/fixtures/seed.sql
+              -f tests/e2e/ui/fixtures/seed.sql
       - run:
           name: Start mock LLM server
-          command: uv run --no-sync python ui/litellm-dashboard/e2e_tests/fixtures/mock_llm_server/server.py
+          command: uv run --no-sync python tests/e2e/ui/fixtures/mock_llm_server/server.py
           background: true
       - run:
           name: Start LiteLLM proxy under a server root path
@@ -2915,7 +2924,7 @@ jobs:
           command: |
             LITELLM_LICENSE="$LITELLM_LICENSE" \
               uv run --no-sync python -m litellm.proxy.proxy_cli \
-                --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+                --config tests/e2e/ui/fixtures/config.yml \
                 --port 4000
           background: true
       - run:
@@ -2934,15 +2943,15 @@ jobs:
       - run:
           name: Run migration smoke under SERVER_ROOT_PATH
           command: |
-            cd ui/litellm-dashboard
+            cd tests/e2e/ui
             LITELLM_LICENSE="$LITELLM_LICENSE" \
-              npx playwright test --config e2e_tests/migration.serverRootPath.config.ts
+              npx playwright test --config migration.serverRootPath.config.ts
           no_output_timeout: 10m
       - store_artifacts:
-          path: ui/litellm-dashboard/test-results
+          path: tests/e2e/ui/test-results
           destination: e2e-server-root-path-test-results
       - store_artifacts:
-          path: ui/litellm-dashboard/playwright-report
+          path: tests/e2e/ui/playwright-report
           destination: e2e-server-root-path-playwright-report
 
   build_docker_database_image:

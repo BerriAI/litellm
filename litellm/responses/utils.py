@@ -19,7 +19,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ResponseAPIUsage,
+    ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponseText,
@@ -35,6 +37,57 @@ from litellm.types.utils import (
 
 class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
+
+    @staticmethod
+    def merge_prompt_management_input(
+        original_input: str | ResponseInputParam,
+        client_input: list[AllMessageValues],
+        merged_input: list[AllMessageValues],
+    ) -> list[object]:
+        if isinstance(original_input, str):
+            return [*merged_input]
+
+        original_items = tuple(original_input)
+        client_item_ids = frozenset(id(item) for item in client_input)
+        message_positions = tuple(index for index, item in enumerate(original_items) if id(item) in client_item_ids)
+
+        if len(message_positions) == len(original_items):
+            return [*merged_input]
+        if not message_positions:
+            verbose_logger.warning(
+                "Prompt management hook returned messages without Responses API input messages; merged messages were ignored"
+            )
+            return [*original_items]
+
+        corresponding_messages = len(client_input) == len(merged_input) and all(
+            original.get("role") == merged.get("role")
+            and (not isinstance(original.get("id"), str) or original.get("id") == merged.get("id"))
+            for original, merged in zip(client_input, merged_input)
+        )
+        if corresponding_messages:
+            merged_by_position = dict(zip(message_positions, merged_input))
+            return [
+                merged_by_position[index] if index in merged_by_position else item
+                for index, item in enumerate(original_items)
+            ]
+
+        all_messages_preserved = all(any(original is merged for merged in merged_input) for original in client_input)
+        if all_messages_preserved:
+            prefixes = {
+                id(original_items[position]): original_items[
+                    message_positions[index - 1] + 1 if index else 0 : position
+                ]
+                for index, position in enumerate(message_positions)
+            }
+            trailing_items = original_items[message_positions[-1] + 1 :]
+            return [item for merged in merged_input for item in (*prefixes.get(id(merged), ()), merged)] + list(
+                trailing_items
+            )
+
+        verbose_logger.warning(
+            "Prompt management hook replaced Responses API messages; non-message input items were dropped"
+        )
+        return [*merged_input]
 
     @staticmethod
     def _check_valid_arg(
@@ -65,6 +118,7 @@ class ResponsesAPIRequestUtils:
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: Optional[List[str]] = None,
+        drop_params: bool | None = None,
     ) -> Dict:
         """
         Get optional parameters for the responses API.
@@ -83,12 +137,14 @@ class ResponsesAPIRequestUtils:
         # Get supported parameters for the model
         supported_params = responses_api_provider_config.get_supported_openai_params(model)
 
+        should_drop_params = litellm.drop_params or drop_params is True
+
         non_default_params = cast(Dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
             supported_params=supported_params + (allowed_openai_params or []),
             non_default_params=non_default_params,
-            drop_params=litellm.drop_params,
+            drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
             model=model,
         )
@@ -97,7 +153,7 @@ class ResponsesAPIRequestUtils:
         mapped_params = responses_api_provider_config.map_openai_params(
             response_api_optional_params=response_api_optional_params,
             model=model,
-            drop_params=litellm.drop_params,
+            drop_params=should_drop_params,
         )
 
         # add any allowed_openai_params to the mapped_params
@@ -202,6 +258,9 @@ class ResponsesAPIRequestUtils:
 
         # If no response_id, return the response as-is (likely an error response)
         if response_id is None:
+            return responses_api_response
+
+        if ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):
             return responses_api_response
 
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
@@ -469,6 +528,14 @@ class ResponsesAPIRequestUtils:
                 model_id=None,
                 response_id=response_id,
             )
+
+    @staticmethod
+    def _is_litellm_encoded_response_id(response_id: str) -> bool:
+        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+        return (
+            decoded_response_id.get("model_id") is not None
+            or decoded_response_id.get("custom_llm_provider") is not None
+        )
 
     @staticmethod
     def get_model_id_from_response_id(response_id: Optional[str]) -> Optional[str]:

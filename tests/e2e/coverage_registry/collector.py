@@ -12,14 +12,18 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
+from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import pytest
+from pydantic import BaseModel
 
 from .registry import load_registry
-from .schema import MODULE_ORDER, ROLLUP, Cell, Tier
+from .schema import MODULE_ORDER, Cell, Tier, dashboard_module, loki_module_label
 
 E2E_DIR = Path(__file__).resolve().parent.parent
 
@@ -33,12 +37,13 @@ class _CoversSink:
         self.collection_errors: tuple[str, ...] = ()
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
-        self.covered_ids = frozenset(
-            arg
+        marker_args: tuple[tuple[object, ...], ...] = tuple(
+            marker.args
             for item in session.items
             for marker in item.iter_markers(name="covers")
-            for arg in marker.args
-            if isinstance(arg, str)
+        )
+        self.covered_ids = frozenset(
+            arg for args in marker_args for arg in args if isinstance(arg, str)
         )
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
@@ -46,12 +51,21 @@ class _CoversSink:
             self.collection_errors = (*self.collection_errors, report.nodeid)
 
 
-def collect_covered_ids(e2e_dir: Path = E2E_DIR) -> tuple[frozenset[str], tuple[str, ...]]:
+def collect_covered_ids(
+    e2e_dir: Path = E2E_DIR,
+) -> tuple[frozenset[str], tuple[str, ...]]:
     """Return (covered cell ids, nodeids that failed to import)."""
     sink = _CoversSink()
     with contextlib.redirect_stdout(io.StringIO()):
         pytest.main(
-            ["--collect-only", "-qq", "--continue-on-collection-errors", "-p", "no:cacheprovider", str(e2e_dir)],
+            [
+                "--collect-only",
+                "-qq",
+                "--continue-on-collection-errors",
+                "-p",
+                "no:cacheprovider",
+                str(e2e_dir),
+            ],
             plugins=[sink],
         )
     return sink.covered_ids, sink.collection_errors
@@ -65,6 +79,10 @@ class ModuleCoverage:
     p0_total: int
     p0_covered: int
 
+    @property
+    def coverage_percent(self) -> float:
+        return _percent(self.covered, self.total)
+
 
 @dataclass(frozen=True, slots=True)
 class CoverageReport:
@@ -77,9 +95,19 @@ class CoverageReport:
     orphan_markers: tuple[str, ...]
     collection_errors: tuple[str, ...]
 
+    @property
+    def coverage_percent(self) -> float:
+        return _percent(self.covered, self.total)
 
-def _module_coverage(module: str, cells: tuple[Cell, ...], covered: frozenset[str]) -> ModuleCoverage:
-    in_module = tuple(c for c in cells if ROLLUP[c.module] == module)
+
+def _percent(covered: int, total: int) -> float:
+    return (100.0 * covered / total) if total else 0.0
+
+
+def _module_coverage(
+    module: str, cells: tuple[Cell, ...], covered: frozenset[str]
+) -> ModuleCoverage:
+    in_module = tuple(c for c in cells if dashboard_module(c) == module)
     p0 = tuple(c for c in in_module if c.tier is Tier.P0)
     return ModuleCoverage(
         module=module,
@@ -109,27 +137,26 @@ def compute_coverage(
     )
 
 
-def _row(label: str, covered: int, total: int, p0_covered: int, p0_total: int) -> str:
+def _row(label: str, covered: int, total: int) -> str:
     frac = f"{covered}/{total}"
-    p0 = f"{p0_covered}/{p0_total}"
-    return f"{label:30}{frac:>12}{p0:>14}"
+    return f"{label:30}{frac:>12}{_percent(covered, total):>11.1f}%"
 
 
 def render(report: CoverageReport) -> str:
-    rows = tuple(_row(m.module, m.covered, m.total, m.p0_covered, m.p0_total) for m in report.modules)
-    pct = (100.0 * report.p0_covered / report.p0_total) if report.p0_total else 0.0
+    rows = tuple(_row(m.module, m.covered, m.total) for m in report.modules)
     lines = (
-        f"{'MODULE':30}{'COVERED':>12}{'P0 COVERED':>14}",
+        f"{'MODULE':30}{'COVERED':>12}{'COVERAGE':>12}",
         *rows,
-        "-" * 56,
-        _row("ALL", report.covered, report.total, report.p0_covered, report.p0_total),
+        "-" * 54,
+        _row("ALL", report.covered, report.total),
         "",
-        f"Headline (P0 coverage): {report.p0_covered}/{report.p0_total}  ({pct:.1f}%)",
+        f"Headline coverage: {report.covered}/{report.total}  ({report.coverage_percent:.1f}%)",
     )
     orphans = (
         (
             f"\n{len(report.orphan_markers)} marker(s) point at ids not in the registry "
-            f"(reconcile: fix the marker or add the cell):\n  " + "\n  ".join(report.orphan_markers),
+            f"(reconcile: fix the marker or add the cell):\n  "
+            + "\n  ".join(report.orphan_markers),
         )
         if report.orphan_markers
         else ()
@@ -137,7 +164,8 @@ def render(report: CoverageReport) -> str:
     warning = (
         (
             f"\nWARNING: {len(report.collection_errors)} node(s) failed to import during "
-            f"collection, so coverage may undercount:\n  " + "\n  ".join(report.collection_errors),
+            f"collection, so coverage may undercount:\n  "
+            + "\n  ".join(report.collection_errors),
         )
         if report.collection_errors
         else ()
@@ -145,10 +173,132 @@ def render(report: CoverageReport) -> str:
     return "\n".join((*lines, *orphans, *warning))
 
 
+def _report_dict(report: CoverageReport) -> dict[str, object]:
+    return {
+        "covered": report.covered,
+        "total": report.total,
+        "coverage_percent": report.coverage_percent,
+        "modules": [
+            {
+                "module": m.module,
+                "covered": m.covered,
+                "total": m.total,
+                "coverage_percent": m.coverage_percent,
+                "p0_covered": m.p0_covered,
+                "p0_total": m.p0_total,
+            }
+            for m in report.modules
+        ],
+        "orphan_markers": list(report.orphan_markers),
+        "collection_errors": list(report.collection_errors),
+    }
+
+
+def render_json(report: CoverageReport) -> str:
+    return json.dumps(_report_dict(report), indent=2, sort_keys=True)
+
+
+def _label_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def render_prometheus(report: CoverageReport) -> str:
+    lines = [
+        "# HELP litellm_e2e_coverage_cells E2E coverage registry cells by module and state.",
+        "# TYPE litellm_e2e_coverage_cells gauge",
+    ]
+    for module in report.modules:
+        label = _label_value(module.module)
+        lines.append(
+            f'litellm_e2e_coverage_cells{{module="{label}",state="covered"}} {module.covered}'
+        )
+        lines.append(
+            f'litellm_e2e_coverage_cells{{module="{label}",state="total"}} {module.total}'
+        )
+    lines.extend(
+        [
+            f'litellm_e2e_coverage_cells{{module="ALL",state="covered"}} {report.covered}',
+            f'litellm_e2e_coverage_cells{{module="ALL",state="total"}} {report.total}',
+            "# HELP litellm_e2e_coverage_percent E2E coverage percent by module.",
+            "# TYPE litellm_e2e_coverage_percent gauge",
+        ]
+    )
+    for module in report.modules:
+        label = _label_value(module.module)
+        lines.append(
+            f'litellm_e2e_coverage_percent{{module="{label}"}} {module.coverage_percent:.6f}'
+        )
+    lines.extend(
+        [
+            f'litellm_e2e_coverage_percent{{module="ALL"}} {report.coverage_percent:.6f}',
+            "# HELP litellm_e2e_coverage_orphan_markers Coverage markers not found in the registry.",
+            "# TYPE litellm_e2e_coverage_orphan_markers gauge",
+            f"litellm_e2e_coverage_orphan_markers {len(report.orphan_markers)}",
+            "# HELP litellm_e2e_coverage_collection_errors Pytest nodes that failed during collection.",
+            "# TYPE litellm_e2e_coverage_collection_errors gauge",
+            f"litellm_e2e_coverage_collection_errors {len(report.collection_errors)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def render_loki(report: CoverageReport) -> str:
+    lines = [
+        (
+            f"COVERAGE_TOTAL percent={report.coverage_percent:.1f} "
+            f"covered={report.covered} total={report.total}"
+        )
+    ]
+    lines.extend(
+        (
+            f"COVERAGE_MODULE module={loki_module_label(module.module)} "
+            f"percent={module.coverage_percent:.1f} "
+            f"covered={module.covered} total={module.total}"
+        )
+        for module in report.modules
+    )
+    return "\n".join(lines)
+
+
+class _CliArgs(BaseModel):
+    format: Literal["text", "json", "prometheus", "loki"]
+    strict: bool
+    fail_on_collection_errors: bool
+
+
 def main() -> int:
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--format",
+        choices=("text", "json", "prometheus", "loki"),
+        default="text",
+        help="Output format. Use loki for structured stdout lines in the e2e job.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero if markers outside the registry are found.",
+    )
+    parser.add_argument(
+        "--fail-on-collection-errors",
+        action="store_true",
+        help="Exit non-zero if pytest collection errors are found.",
+    )
+    args = _CliArgs.model_validate(vars(parser.parse_args()))
     cells = load_registry()
     covered, errors = collect_covered_ids()
-    print(render(compute_coverage(cells, covered, errors)))  # noqa: T201  # CLI entrypoint output
+    report = compute_coverage(cells, covered, errors)
+    output = {
+        "text": render,
+        "json": render_json,
+        "prometheus": render_prometheus,
+        "loki": render_loki,
+    }[args.format](report)
+    print(output)  # noqa: T201  # CLI entrypoint output
+    if args.strict and report.orphan_markers:
+        return 1
+    if args.fail_on_collection_errors and report.collection_errors:
+        return 1
     return 0
 
 

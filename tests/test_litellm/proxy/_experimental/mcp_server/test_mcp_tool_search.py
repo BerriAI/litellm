@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy._experimental.mcp_server.tool_search import (
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
@@ -381,7 +382,7 @@ class TestCallToolRestApiVirtualTools:
         with patch(
             "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
             new_callable=AsyncMock,
-            return_value=[mock_tool],
+            return_value=AggregateToolListing(tools=[mock_tool], outcomes={}),
         ):
             result = await self._get_call_fn()(
                 request=request,
@@ -433,7 +434,7 @@ class TestCallToolRestApiVirtualTools:
                 return_value=fake_result,
             ) as mock_execute,
             patch(
-                "litellm.proxy._experimental.mcp_server.rest_endpoints._fire_mcp_success_logging",
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._fire_mcp_tool_call_logging",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("logging failed"),
             ) as mock_fire_logging,
@@ -508,7 +509,7 @@ class TestCallToolRestApiVirtualTools:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
                 new_callable=AsyncMock,
-                return_value=[],
+                return_value=AggregateToolListing(tools=[], outcomes={}),
             ) as mock_list,
         ):
             await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
@@ -788,6 +789,47 @@ class TestCaptureHostProgressCallback:
         host.request_context.meta.progressToken = "tok12345"
         host.request_context.session = MagicMock()
         assert callable(_capture_host_progress_callback(host))
+
+    def test_returns_callable_when_token_is_integer(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = 12345
+        host.request_context.session = MagicMock()
+        assert callable(_capture_host_progress_callback(host))
+
+    def test_returns_callable_when_token_is_zero(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = 0
+        host.request_context.session = MagicMock()
+        assert callable(_capture_host_progress_callback(host))
+
+    @pytest.mark.asyncio
+    async def test_forwarded_progress_token_preserves_integer_value(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = 12345
+        session = AsyncMock()
+        host.request_context.session = session
+
+        callback = _capture_host_progress_callback(host)
+        assert callback is not None
+        await callback(0.5, 1.0)
+
+        session.send_progress_notification.assert_awaited_once_with(
+            progress_token=12345,
+            progress=0.5,
+            total=1.0,
+        )
 
 
 class TestHandleListToolsVirtual:

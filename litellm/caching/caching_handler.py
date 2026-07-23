@@ -85,6 +85,22 @@ class CachingHandlerResponse(BaseModel):
 in_memory_cache_obj = InMemoryCache()
 
 
+def _drop_logging_obj_from_kwargs(request_kwargs: dict[str, object]) -> dict[str, object]:
+    """
+    The caching handler is stored on the Logging object
+    (``logging_obj._llm_caching_handler``), so keeping ``litellm_logging_obj``
+    inside ``request_kwargs`` closes a reference cycle
+    (Logging -> LLMCachingHandler -> kwargs -> Logging) that keeps the full
+    request payload (messages included) alive until a generational GC pass
+    instead of being freed by refcount when the request ends. Nothing in the
+    caching layer reads the logging object from these kwargs; cache-key
+    generation ignores litellm-internal params.
+    """
+    if "litellm_logging_obj" not in request_kwargs:
+        return request_kwargs
+    return {k: v for k, v in request_kwargs.items() if k != "litellm_logging_obj"}
+
+
 def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     cached_id = cached_result.get("id")
     if isinstance(cached_id, str) and cached_id.startswith("chatcmpl"):
@@ -118,7 +134,7 @@ class LLMCachingHandler:
 
         self.async_streaming_chunks: List[ModelResponse] = []
         self.sync_streaming_chunks: List[ModelResponse] = []
-        self.request_kwargs = request_kwargs
+        self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
         self.preset_cache_key: Optional[str] = None
         self.original_function = original_function
         self.start_time = start_time
@@ -297,7 +313,7 @@ class LLMCachingHandler:
                 new_kwargs.pop("metadata", None)
             if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
                 new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
-            self.request_kwargs = new_kwargs
+            self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
             cached_result = litellm.cache.get_cache(**new_kwargs)
             if cached_result is not None:
@@ -693,7 +709,7 @@ class LLMCachingHandler:
             new_kwargs.pop("metadata", None)
         if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
-        self.request_kwargs = new_kwargs
+        self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
         cached_result: Optional[Any] = None
         if call_type == CallTypes.aembedding.value:
             if isinstance(new_kwargs["input"], str):

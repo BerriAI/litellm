@@ -115,6 +115,7 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            compression_savings=None,
             litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
@@ -136,7 +137,7 @@ def _get_spend_logs_metadata(
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
     )
-    clean_metadata["guardrail_information"] = guardrail_information
+    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -373,6 +374,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             if isinstance(v, BaseModel):
                 v = v.model_dump()
             additional_usage_values.update({k: v})
+    if "cache_read_input_tokens" not in additional_usage_values:
+        prompt_tokens_details = additional_usage_values.get("prompt_tokens_details")
+        if isinstance(prompt_tokens_details, dict):
+            cached_tokens = prompt_tokens_details.get("cached_tokens")
+            if isinstance(cached_tokens, int) and cached_tokens > 0:
+                additional_usage_values["cache_read_input_tokens"] = cached_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
 
     if litellm.cache is not None:
@@ -866,6 +873,82 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
             # carrier, leave intact and resume after the key match.
             pos = v_start
     return "".join(out)
+
+
+def _sanitize_guardrail_information_for_spend_logs(
+    guardrail_information: Optional[List[StandardLoggingGuardrailInformation]],
+) -> Optional[List[StandardLoggingGuardrailInformation]]:
+    """
+    When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
+    (``guardrail_request``, ``guardrail_response``, ``match_details``,
+    ``classification``) before they land in ``LiteLLM_SpendLogs.metadata``.
+
+    Guardrail hooks may echo the LLM request payload back into
+    ``guardrail_response``, and two first-party hooks
+    (``block_code_execution``, ``litellm_content_filter``) inline user-prompt
+    substrings into ``match_details`` / ``classification`` too, so the flag
+    must cover all four fields. Every other typed field on the entry (name,
+    provider, mode, status, timings, action, violation_categories, risk_score,
+    masked_entity_count, ...) is preserved so guardrail dashboards keep
+    working.
+
+    ``guardrail_information`` is typed ``Optional[List[...]]`` but at least
+    one writer (``xecguard``) assigns a bare dict, so normalize to a list
+    here to match OTEL's defensive read pattern; otherwise iteration would
+    yield the dict's keys and crash the whole spend-log write.
+    """
+    if guardrail_information is None or _should_store_prompts_and_responses_in_spend_logs():
+        return guardrail_information
+    entries = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
+    return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
+
+
+_PROMPT_CARRYING_GUARDRAIL_FIELDS = (
+    "guardrail_request",
+    "guardrail_response",
+    "match_details",
+    "classification",
+)
+
+_NUMERIC_COMPRESSION_STAT_KEYS = (
+    "tokens_before",
+    "tokens_after",
+    "tokens_saved",
+    "compression_ratio",
+)
+
+
+def _numeric_compression_stats_from_guardrail_response(
+    guardrail_response: object,
+) -> dict[str, int | float] | None:
+    if not isinstance(guardrail_response, dict):
+        return None
+    stats = {
+        key: value
+        for key, value in guardrail_response.items()
+        if key in _NUMERIC_COMPRESSION_STAT_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    return stats or None
+
+
+def _redact_prompt_fields_in_guardrail_entry(
+    entry: StandardLoggingGuardrailInformation,
+) -> StandardLoggingGuardrailInformation:
+    """
+    Replace prompt-carrying fields with the redaction marker. Purely numeric
+    compression stats inside ``guardrail_response`` (e.g. Headroom's
+    ``tokens_saved``) cannot carry prompt content, so they are preserved as a
+    stats-only dict; spend aggregation reads them via
+    ``extract_compression_saved_tokens``.
+    """
+    preserved_stats = _numeric_compression_stats_from_guardrail_response(entry.get("guardrail_response"))
+    redacted: StandardLoggingGuardrailInformation = {
+        **entry,
+        **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+    }
+    if preserved_stats is None:
+        return redacted
+    return {**redacted, "guardrail_response": preserved_stats}
 
 
 def _sanitize_error_information_for_spend_logs(

@@ -21,8 +21,14 @@ from typing_extensions import assert_never
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
+    ClientAuth,
+    ClientCredentialsConfig,
+    ClientSecretAuth,
     CredError,
+    IdJagConfig,
     NoneConfig,
+    PassthroughConfig,
+    PrivateKeyJwtAuth,
     ServerSpec,
     SharedKey,
     Subject,
@@ -33,6 +39,9 @@ from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+_TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT = "urn:ietf:params:oauth:token-type:access_token"
+_ID_JAG_SUBJECT_TOKEN_DEFAULT = "urn:ietf:params:oauth:token-type:id_token"
 
 
 def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]) -> Subject:
@@ -62,9 +71,10 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
     modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
-    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), and
-    ``oauth2_token_exchange`` (OBO); client_credentials (M2M), delegated/passthrough
-    oauth2, and SigV4 return None and stay on v1.
+    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), ``oauth2`` M2M
+    (``client_credentials``), ``oauth2_token_exchange`` (OBO), and the client-forwarded token
+    modes ``true_passthrough`` / ``oauth_delegate`` (``PassthroughConfig``); delegated/passthrough
+    oauth2 and SigV4 return None and stay on v1.
     """
     if server.is_byok:
         return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
@@ -86,19 +96,57 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
         case MCPAuth.basic:
             return _shared_key_spec(server, resource, "Authorization", "Basic", encode=True)
         case MCPAuth.oauth2:
-            if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
-                return ServerSpec(
-                    server_id=server.server_id,
-                    resource=resource,
-                    config=AuthorizationCodeConfig(),
-                )
-            # client_credentials (M2M) and delegate/passthrough oauth2 stay on v1
-            return None
+            return _oauth2_spec(server, resource)
+        case MCPAuth.oauth2_id_jag:
+            return _id_jag_spec(server, resource)
+        case MCPAuth.true_passthrough | MCPAuth.oauth_delegate:
+            return ServerSpec(server_id=server.server_id, resource=resource, config=PassthroughConfig())
         case MCPAuth.oauth2_token_exchange:
             return _token_exchange_spec(server, resource)
         case MCPAuth.aws_sigv4:
             return None  # SigV4 is not migrated yet -> defer to v1
     assert_never(auth_type)
+
+
+def _oauth2_spec(server: MCPServer, resource: str) -> ServerSpec | None:
+    """Dispatch the oauth2 auth_type across its sub-modes: M2M, gateway-managed interactive, or v1.
+
+    ``client_credentials`` (the explicit ``oauth2_flow`` opt-in) builds the M2M spec, per-user
+    ``authorization_code`` without upstream delegation builds the interactive spec, and the
+    delegate/passthrough shapes defer to v1 (None).
+    """
+    if server.has_client_credentials:
+        return _client_credentials_spec(server, resource)
+    if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
+        return ServerSpec(
+            server_id=server.server_id,
+            resource=resource,
+            config=AuthorizationCodeConfig(),
+        )
+    return None
+
+
+def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
+    """Build a client_credentials (M2M) spec; the explicit ``oauth2_flow`` opt-in owns the server.
+
+    Missing grant fields (``client_id``/``client_secret``/``token_url``) are NOT a reason to defer:
+    v1 would connect unauthenticated and the upstream's 401 gets absorbed into an empty tool list,
+    so the arm fails closed with ``misconfigured`` instead, naming the missing fields (mirrors the
+    OBO ownership rule). ``audience`` is forwarded only when the operator set it; a missing one is
+    omitted, not derived, since a fabricated value risks the IdP rejecting the grant.
+    """
+    return ServerSpec(
+        server_id=server.server_id,
+        resource=resource,
+        config=ClientCredentialsConfig(
+            client_id=server.client_id,
+            client_secret=SecretStr(server.client_secret) if server.client_secret else None,
+            token_url=server.token_url,
+            scopes=tuple(server.scopes or ()),
+            audience=server.audience,
+            token_endpoint_auth_method=server.token_endpoint_auth_method,
+        ),
+    )
 
 
 def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
@@ -161,6 +209,58 @@ def _shared_key_spec(
             key_source=SharedKey(value=SecretStr(value)),
         ),
     )
+
+
+def _id_jag_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
+    """Build an ID-JAG spec from the v1 server's raw fields, or defer (None) if half-configured.
+
+    The enum already routes here, but a server missing an endpoint, ``client_id``, or any client-auth
+    secret would make ``IdJagConfig`` raise at construction; returning None instead defers to v1 so a
+    partially configured server does not 500. ``token_exchange_endpoint`` is leg 1 (the IdP org AS);
+    leg 2 is ``id_jag_resource_token_endpoint`` (the upstream resource AS).
+    """
+    org_token_endpoint = server.token_exchange_endpoint
+    resource_token_endpoint = server.id_jag_resource_token_endpoint
+    client_id = server.client_id
+    client_auth = _id_jag_client_auth(server)
+    if not org_token_endpoint or not resource_token_endpoint or not client_id or client_auth is None:
+        return None
+    return ServerSpec(
+        server_id=server.server_id,
+        resource=resource,
+        config=IdJagConfig(
+            org_token_endpoint=org_token_endpoint,
+            resource_token_endpoint=resource_token_endpoint,
+            client_id=client_id,
+            client_auth=client_auth,
+            subject_token_type=_id_jag_subject_token_type(server),
+            audience=server.audience,
+            resource=server.id_jag_resource,
+            scopes=tuple(server.scopes or ()),
+        ),
+    )
+
+
+def _id_jag_client_auth(server: MCPServer) -> Optional[ClientAuth]:
+    """Private-key JWT when a key is configured, else client_secret, else None (defer to v1)."""
+    if server.client_private_key:
+        return PrivateKeyJwtAuth(
+            private_key=SecretStr(server.client_private_key),
+            key_id=server.client_private_key_id,
+            signing_alg=server.client_assertion_signing_alg,
+        )
+    if server.client_secret:
+        return ClientSecretAuth(client_secret=SecretStr(server.client_secret))
+    return None
+
+
+def _id_jag_subject_token_type(server: MCPServer) -> str:
+    """ID-JAG asserts the user's id_token, so the token-exchange access_token default maps to id_token;
+    an explicitly configured value (e.g. a SAML2 assertion type) is honored verbatim."""
+    configured = server.subject_token_type
+    if configured and configured != _TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT:
+        return configured
+    return _ID_JAG_SUBJECT_TOKEN_DEFAULT
 
 
 def raise_public(error: CredError) -> NoReturn:

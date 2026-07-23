@@ -1622,6 +1622,10 @@ async def ui_view_spend_logs(
         default=None,
         description="request_id to get spend logs for specific request_id",
     ),
+    session_id: str | None = fastapi.Query(
+        default=None,
+        description="Filter spend logs by session_id (partial string match)",
+    ),
     team_id: str | None = fastapi.Query(
         default=None,
         description="Filter spend logs by team_id",
@@ -1643,7 +1647,7 @@ async def ui_view_spend_logs(
         description="Time till which to view key spend",
     ),
     page: int = fastapi.Query(default=1, description="Page number for pagination", ge=1),
-    page_size: int = fastapi.Query(default=50, description="Number of items per page", ge=1, le=100),
+    page_size: int = fastapi.Query(default=50, description="Number of items per page", ge=1, le=1000),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
@@ -1905,6 +1909,12 @@ async def ui_view_spend_logs(
             sql_params.append(permitted_team_ids)
             p += 2
             sql_conditions.append(or_clause)
+
+        if session_id is not None and isinstance(session_id, str):
+            like_escaped_session_id = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            sql_conditions.append(f"session_id LIKE ${p}")
+            sql_params.append(f"%{like_escaped_session_id}%")
+            p += 1
 
         # Status filter
         if status_filter is not None:
@@ -3382,7 +3392,7 @@ async def _build_ui_spend_logs_response(
             )
             count_map = {r["session_id"]: r["_count"]["session_id"] for r in counts if r.get("session_id")}
 
-    mcp_spend_map: dict[str, dict[str, Union[int, float]]] = {}
+    session_spend_map: dict[str, dict[str, Union[int, float]]] = {}
     if enrich_session_counts and session_ids:
         from prisma.errors import PrismaError
 
@@ -3400,19 +3410,24 @@ async def _build_ui_spend_logs_response(
             rows = await prisma_client.db.query_raw(
                 """
                 SELECT session_id,
-                       COUNT(*)::int AS mcp_tool_call_count,
-                       COALESCE(SUM(spend), 0)::double precision AS mcp_tool_call_spend
+                       COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
+                       COUNT(*) FILTER (
+                           WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                       )::int AS mcp_tool_call_count,
+                       COALESCE(SUM(spend) FILTER (
+                           WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                       ), 0)::double precision AS mcp_tool_call_spend
                 FROM "LiteLLM_SpendLogs"
                 WHERE session_id = ANY($1::text[])
                   AND api_key = ANY($2::text[])
-                  AND call_type IN ('call_mcp_tool', 'list_mcp_tools')
                 GROUP BY session_id
                 """,
                 session_ids,
                 authorized_api_keys,
             )
-            mcp_spend_map = {
+            session_spend_map = {
                 row["session_id"]: {
+                    "session_total_spend": float(row.get("session_total_spend") or 0.0),
                     "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
                     "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
                 }
@@ -3421,7 +3436,7 @@ async def _build_ui_spend_logs_response(
             }
         except PrismaError:
             verbose_proxy_logger.debug(
-                "Failed to enrich MCP session spend aggregates for spend logs UI",
+                "Failed to enrich session spend aggregates for spend logs UI",
                 exc_info=True,
             )
 
@@ -3431,10 +3446,12 @@ async def _build_ui_spend_logs_response(
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
             row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
-            mcp_stats = mcp_spend_map.get(sid) if sid else None
-            if mcp_stats:
-                row_dict["mcp_tool_call_count"] = mcp_stats["mcp_tool_call_count"]
-                row_dict["mcp_tool_call_spend"] = mcp_stats["mcp_tool_call_spend"]
+            session_stats = session_spend_map.get(sid) if sid else None
+            if session_stats:
+                row_dict["session_total_spend"] = session_stats["session_total_spend"]
+                if session_stats["mcp_tool_call_count"]:
+                    row_dict["mcp_tool_call_count"] = session_stats["mcp_tool_call_count"]
+                    row_dict["mcp_tool_call_spend"] = session_stats["mcp_tool_call_spend"]
             enriched.append(row_dict)
         response_data: list = enriched
     else:
