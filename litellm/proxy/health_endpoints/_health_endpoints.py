@@ -1780,7 +1780,9 @@ async def test_model_connection(
     Note: 
     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.) 
       will be automatically loaded from the config (with resolved environment variables).
-    - You can override specific params by including them in the request.
+    - You can override specific params by including them in the request. If the
+      model is configured in proxy_config.yaml, the configured provider model is
+      used for the connection test.
     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
       which will be resolved automatically (same as in proxy_config.yaml).
     
@@ -1862,6 +1864,8 @@ async def test_model_connection(
         # Merge: config params (from proxy config) as base, request params override
         # This allows users to override specific params while using config for credentials
         litellm_params = {**config_litellm_params, **request_litellm_params}
+        if config_litellm_params.get("model") is not None:
+            litellm_params["model"] = config_litellm_params["model"]
 
         ## Auth check
         auth_model_info = loaded_model_info if loaded_model_info is not None else model_info

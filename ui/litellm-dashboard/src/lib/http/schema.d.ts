@@ -6041,7 +6041,9 @@ export interface paths {
          *     Note:
          *     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.)
          *       will be automatically loaded from the config (with resolved environment variables).
-         *     - You can override specific params by including them in the request.
+         *     - You can override specific params by including them in the request. If the
+         *       model is configured in proxy_config.yaml, the configured provider model is
+         *       used for the connection test.
          *     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
          *       which will be resolved automatically (same as in proxy_config.yaml).
          *
@@ -44657,13 +44659,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *     Every rate-limit condition surfaced by litellm — whether it originated from
-             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *     max-iterations, etc.) — is raised as an instance of this class.
+             *         Every rate-limit condition surfaced by litellm — whether it originated from
+             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *         max-iterations, etc.) — is raised as an instance of this class.
              *
-             *     The :attr:`category` attribute lets callers distinguish the source. See
-             *     :class:`RateLimitErrorCategory` for the available values.
+             *         The :attr:`category` attribute lets callers distinguish the source. See
+             *         :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
