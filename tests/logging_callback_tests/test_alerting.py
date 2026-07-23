@@ -226,6 +226,72 @@ async def test_budget_alerts_crossed_again(slack_alerting):
         mock_send_alert.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_budget_alerts_concurrent_requests_use_atomic_redis_claim():
+    class AtomicRedisCache:
+        def __init__(self):
+            self.values = {}
+            self.lock = asyncio.Lock()
+            self.set_calls = []
+
+        async def async_set_cache(self, key, value, **kwargs):
+            self.set_calls.append((key, kwargs))
+            await asyncio.sleep(0)
+            async with self.lock:
+                if kwargs.get("nx") is True and key in self.values:
+                    return None
+                self.values[key] = value
+                return True
+
+        async def async_get_cache(self, key, **kwargs):
+            await asyncio.sleep(0)
+            return self.values.get(key)
+
+        async def async_delete_cache(self, key):
+            self.values.pop(key, None)
+
+    async def slow_send_alert(*args, **kwargs):
+        await asyncio.sleep(0.01)
+
+    redis_cache = AtomicRedisCache()
+    slack_alerting = SlackAlerting(
+        alerting=["slack"],
+        alerting_args={"budget_alert_ttl": 60},
+        internal_usage_cache=DualCache(redis_cache=redis_cache),
+    )
+    user_info = CallInfo(
+        token="test_token",
+        spend=101,
+        max_budget=100,
+        team_id="team-atomic",
+        event_group=Litellm_EntityType.TEAM,
+    )
+
+    with patch.object(
+        slack_alerting,
+        "send_alert",
+        new=AsyncMock(side_effect=slow_send_alert),
+    ) as mock_send_alert:
+        await asyncio.gather(
+            *(
+                slack_alerting.budget_alerts(
+                    "team_budget",
+                    user_info=user_info,
+                )
+                for _ in range(20)
+            )
+        )
+
+        mock_send_alert.assert_awaited_once()
+
+    cache_key = "budget_alerts:budget_crossed:team-atomic"
+    assert redis_cache.values[cache_key] == "SENT"
+    assert len(redis_cache.set_calls) == 20
+    assert all(call[0] == cache_key for call in redis_cache.set_calls)
+    assert all(call[1]["nx"] is True for call in redis_cache.set_calls)
+    assert all(call[1]["ttl"] == 60 for call in redis_cache.set_calls)
+
+
 # Test for send_alert - should be called once
 @pytest.mark.asyncio
 async def test_send_alert(slack_alerting):
