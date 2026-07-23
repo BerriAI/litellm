@@ -2111,6 +2111,63 @@ def test_translate_system_message_preserves_cache_control():
     assert result[0]["cache_control"] == {"type": "ephemeral"}
 
 
+def test_translate_system_message_handles_bare_dict_content():
+    """
+    Test that translate_system_message treats a bare content-part dict (not
+    wrapped in a list) as a single-element content list instead of silently
+    dropping the system prompt.
+
+    Regression test: {"role": "system", "content": {"type": "text", "text": "..."}}
+    used to match neither the str nor the list branch, so the system message
+    was removed from `messages` but no content was ever added to the
+    returned anthropic system message list - the system prompt vanished
+    with no error, causing the model to lose its instructions entirely.
+    """
+    config = AnthropicConfig()
+
+    messages = [
+        {
+            "role": "system",
+            "content": {"type": "text", "text": "You are a helpful assistant."},
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "text"
+    assert result[0]["text"] == "You are a helpful assistant."
+    # System message must still be removed from messages
+    assert all(m["role"] != "system" for m in messages)
+
+
+def test_translate_system_message_handles_bare_dict_content_with_cache_control():
+    """
+    Bare-dict content that also carries cache_control should preserve it,
+    matching the behavior of the equivalent single-element list content.
+    """
+    config = AnthropicConfig()
+
+    messages = [
+        {
+            "role": "system",
+            "content": {
+                "type": "text",
+                "text": "Cached content",
+                "cache_control": {"type": "ephemeral"},
+            },
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert len(result) == 1
+    assert result[0]["text"] == "Cached content"
+    assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+
 # ============ Dynamic max_tokens Tests ============
 
 
