@@ -11513,6 +11513,11 @@ class Router:
             and allowed_fails_policy.BadRequestErrorAllowedFails is not None
         ):
             return allowed_fails_policy.BadRequestErrorAllowedFails
+        if (
+            isinstance(exception, litellm.InternalServerError)
+            and allowed_fails_policy.InternalServerErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.InternalServerErrorAllowedFails
 
     def _initialize_alerting(self):
         from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
