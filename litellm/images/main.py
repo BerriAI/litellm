@@ -392,6 +392,7 @@ def image_generation(
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
             litellm.LlmProviders.OPENROUTER,
+            litellm.LlmProviders.CHATGPT,
             litellm.LlmProviders.DASHSCOPE,
         ):
             if image_generation_config is None:

@@ -21164,6 +21164,15 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "chatgpt/gpt-image-2": {
+        "litellm_provider": "chatgpt",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true
+    },
     "gigachat/GigaChat-2-Lite": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",

@@ -299,6 +299,8 @@ LLM_CONFIG_NAMES = (
     "GithubCopilotResponsesAPIConfig",
     "ChatGPTConfig",
     "ChatGPTResponsesAPIConfig",
+    "ChatGPTImageGenerationConfig",
+    "ChatGPTImageEditConfig",
     "ManusResponsesAPIConfig",
     "GithubCopilotEmbeddingConfig",
     "NebiusConfig",
@@ -1148,6 +1150,14 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "ChatGPTResponsesAPIConfig": (
         ".llms.chatgpt.responses.transformation",
         "ChatGPTResponsesAPIConfig",
+    ),
+    "ChatGPTImageGenerationConfig": (
+        ".llms.chatgpt.image_generation.generation_transformation",
+        "ChatGPTImageGenerationConfig",
+    ),
+    "ChatGPTImageEditConfig": (
+        ".llms.chatgpt.image_edit.transformation",
+        "ChatGPTImageEditConfig",
     ),
     "NebiusConfig": (".llms.nebius.chat.transformation", "NebiusConfig"),
     "WandbConfig": (".llms.wandb.chat.transformation", "WandbConfig"),
