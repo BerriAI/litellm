@@ -15,7 +15,10 @@ from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    _count_recorded_guardrail_entries,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
@@ -141,14 +144,19 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
+        entries_before = _count_recorded_guardrail_entries(data)
         data = await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
             litellm_logging_obj=data.get("litellm_logging_obj"),
         )
 
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
+        if not guardrail_to_apply.records_own_guardrail_information or (
+            _count_recorded_guardrail_entries(data) > entries_before
+        ):
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+            )
         return data
 
     async def async_moderation_hook(
@@ -258,6 +266,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
+        entries_before = _count_recorded_guardrail_entries(data)
         try:
             response = await endpoint_translation.process_output_response(
                 response=response,  # type: ignore
@@ -274,8 +283,12 @@ class UnifiedLLMGuardrails(CustomLogger):
             if e.original_response is None:
                 e.original_response = response
             raise
-        # Add guardrail to applied guardrails header
-        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
+        if not guardrail_to_apply.records_own_guardrail_information or (
+            _count_recorded_guardrail_entries(data) > entries_before
+        ):
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+            )
 
         return response
 

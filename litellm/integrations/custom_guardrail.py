@@ -102,6 +102,8 @@ class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
 
+    records_own_guardrail_information: ClassVar[bool] = False
+
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
@@ -1186,6 +1188,17 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
+def _count_recorded_guardrail_entries(request_data: dict) -> int:
+    total = 0
+    for container_key in ("metadata", "litellm_metadata"):
+        container = request_data.get(container_key)
+        if isinstance(container, dict):
+            entries = container.get("standard_logging_guardrail_information")
+            if isinstance(entries, list):
+                total += len(entries)
+    return total
+
+
 def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
     """Merge guardrail entries into a single litellm_params dict."""
     if not isinstance(lp, dict):
@@ -1240,6 +1253,16 @@ def log_guardrail_information(func):
     case (which would emit two spans, two Datadog records, two spend-log
     entries, etc.), snapshot the entry count before invocation: if the
     wrapped function already appended its own entry, skip the auto-record.
+
+    A guardrail that only records an entry when it actually runs (e.g.
+    ``HeadroomGuardrail``, which returns the inputs untouched on an endpoint
+    whose payload it cannot act on) sets
+    ``records_own_guardrail_information = True`` so the auto-record is skipped
+    on every return path. Otherwise a no-op early return would be logged as an
+    "allow"/"success" run even though the guardrail did nothing (a passthrough
+    request reporting a compression guardrail as succeeded is the motivating
+    bug). The exception branch below still records so a genuine failure is not
+    lost.
     """
     import functools
     import inspect
@@ -1259,16 +1282,6 @@ def log_guardrail_information(func):
             return GuardrailEventHooks.post_call
         return None
 
-    def _count_recorded_guardrail_entries(request_data: dict) -> int:
-        total = 0
-        for container_key in ("metadata", "litellm_metadata"):
-            container = request_data.get(container_key)
-            if isinstance(container, dict):
-                entries = container.get("standard_logging_guardrail_information")
-                if isinstance(entries, list):
-                    total += len(entries)
-        return total
-
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
@@ -1285,7 +1298,9 @@ def log_guardrail_information(func):
         entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = await func(*args, **kwargs)
-            if _count_recorded_guardrail_entries(request_data) > entries_before:
+            if self.records_own_guardrail_information or (
+                _count_recorded_guardrail_entries(request_data) > entries_before
+            ):
                 return response
             return self._process_response(
                 response=response,
@@ -1326,7 +1341,9 @@ def log_guardrail_information(func):
         entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = func(*args, **kwargs)
-            if _count_recorded_guardrail_entries(request_data) > entries_before:
+            if self.records_own_guardrail_information or (
+                _count_recorded_guardrail_entries(request_data) > entries_before
+            ):
                 return response
             return self._process_response(
                 response=response,
