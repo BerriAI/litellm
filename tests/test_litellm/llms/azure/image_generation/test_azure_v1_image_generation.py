@@ -1,12 +1,15 @@
+import pytest
+
 from litellm.llms.azure.azure import AzureChatCompletion
 
 
-def test_azure_image_generation_v1_url_and_model_payload():
+@pytest.mark.parametrize("api_version", ("v1", "preview"))
+def test_azure_image_generation_v1_and_preview_url_and_model_payload(api_version):
     azure_chat = AzureChatCompletion()
     url = azure_chat.create_azure_base_url(
         azure_client_params={
             "azure_endpoint": "https://my-resource.openai.azure.com",
-            "api_version": "v1",
+            "api_version": api_version,
         },
         model="image-deployment",
         base_model="gpt-image-1",
