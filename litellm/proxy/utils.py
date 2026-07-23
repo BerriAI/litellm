@@ -661,6 +661,10 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            # Surface the per-MCP-server rate-limit identity so the
+            # ParallelRequestLimiterV3 hook can apply mcp_rpm_limit on the
+            # synthetic call_mcp_tool payload (otherwise a key with
+            # mcp_rpm_limit could exceed it via the MCP path).
             "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
@@ -5687,13 +5691,25 @@ def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
 
-def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Router]) -> dict:
+def _check_and_merge_model_level_guardrails(
+    data: dict,
+    llm_router: Optional[Router],
+    trust_client_model_info: bool = True,
+) -> dict:
     """
     Check if the model has guardrails defined and merge them with existing guardrails in the request data.
 
     Args:
         data: The request data dict
         llm_router: The LLM router instance to get deployment info from
+        trust_client_model_info: If False, ignore metadata.model_info.id and
+            resolve guardrails by alias-union only. Set to False on the
+            pre_call path because add_litellm_data_to_request preserves
+            client-supplied model_info when allow_client_pricing_override is
+            set, so a caller could spoof an unguarded model_info.id while
+            requesting a guarded alias and bypass guardrails (veria-ai HIGH
+            on #29654). Defaults to True for post_call paths where the
+            router has populated model_info.id itself.
 
     Returns:
         Modified data dict with merged guardrails (if any model-level guardrails exist)
@@ -5701,20 +5717,57 @@ def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Rou
     if llm_router is None:
         return data
 
-    # Get the model ID from the data
     metadata = data.get("metadata") or {}
+    litellm_metadata = data.get("litellm_metadata") or {}
     model_info = metadata.get("model_info") or {}
-    model_id = model_info.get("id", None)
+    model_id = model_info.get("id") if trust_client_model_info else None
+    # route_request resolves team-scoped public model names with the
+    # server-populated team id; pre_call lookup must do the same so
+    # team-scoped guardrails are not silently skipped (greptile/veria-ai
+    # Medium on #29654).
+    team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
 
-    if model_id is None:
-        return data
-
-    # Check if the model has guardrails
-    deployment = llm_router.get_deployment(model_id=model_id)
-    if deployment is None:
-        return data
-
-    model_level_guardrails = deployment.litellm_params.get("guardrails")
+    model_level_guardrails: Optional[list] = None
+    if model_id is not None:
+        deployment = llm_router.get_deployment(model_id=model_id)
+        if deployment is None:
+            return data
+        deployment_guardrails = deployment.litellm_params.get("guardrails")
+        # Bare-string guardrail names were truthy-accepted before; preserve
+        # that contract so post_call callers don't silently lose them.
+        if isinstance(deployment_guardrails, list):
+            model_level_guardrails = deployment_guardrails
+        elif deployment_guardrails:
+            model_level_guardrails = [deployment_guardrails]
+    else:
+        # Pre_call paths run before route_request picks a deployment, so we
+        # don't know which deployment's litellm_params.guardrails will apply.
+        # Take the UNION across all deployments in the group so a guardrail
+        # set on ANY eligible deployment still fires (#29652; addresses
+        # veria-ai HIGH on the single-deployment fallback that would skip
+        # non-first deployments).
+        model_alias = data.get("model")
+        if not isinstance(model_alias, str) or not model_alias:
+            return data
+        # Pass team_id so team-scoped public model names resolve the same way
+        # route_request resolves them; otherwise team-scoped deployments are
+        # invisible to this lookup and their guardrails are silently dropped.
+        deployments = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
+        seen: set = set()
+        union: list = []
+        for dep in deployments:
+            litellm_params_dep = dep.get("litellm_params") or {}
+            guardrails = litellm_params_dep.get("guardrails")
+            if isinstance(guardrails, str):
+                guardrails = [guardrails]
+            elif not isinstance(guardrails, list):
+                continue
+            for g in guardrails:
+                key = g if isinstance(g, str) else repr(g)
+                if key not in seen:
+                    seen.add(key)
+                    union.append(g)
+        model_level_guardrails = union or None
 
     if model_level_guardrails is None:
         return data
