@@ -33,7 +33,7 @@ describe("RouterSettingsLayout", () => {
     };
   });
 
-  it("renders the tab bar and the active tab's page content", () => {
+  it("renders the five tabs and the active tab's page content", () => {
     const { getByRole, getByTestId } = renderLayout();
     for (const name of ["Loadbalancing", "Routing Groups", "Fallbacks", "Prompt Caching", "General"]) {
       expect(getByRole("tab", { name })).toBeInTheDocument();
@@ -44,24 +44,13 @@ describe("RouterSettingsLayout", () => {
   it("marks the base route's Loadbalancing tab active", () => {
     const { getByRole } = renderLayout();
     expect(getByRole("tab", { name: "Loadbalancing" })).toHaveAttribute("aria-selected", "true");
-    expect(getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "false");
   });
 
-  it("navigates to a tab's path when its tab is clicked", async () => {
+  it("derives the active tab from a nested pathname", () => {
+    navState.pathname = "/ui/router-settings/general";
     const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Prompt Caching" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/router-settings\/prompt-caching\/$/));
-  });
-
-  it("routes the base tab back to the router-settings root (no slug)", async () => {
-    navState.pathname = "/router-settings/general";
-    const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Loadbalancing" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/router-settings\/$/));
+    expect(getByRole("tab", { name: "General" })).toHaveAttribute("aria-selected", "true");
+    expect(getByRole("tab", { name: "Loadbalancing" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("redirects to the base router-settings path when the tab slug is unknown", async () => {

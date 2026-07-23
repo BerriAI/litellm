@@ -1,63 +1,36 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  routerSettingsTabHref,
-  slugFromPathname,
-  type RouterSettingsTabSlug,
-} from "@/app/(dashboard)/router-settings/tabRoutes";
+import { routerSettingsRoutes } from "@/app/(dashboard)/router-settings/tabRoutes";
+import { useTabRouting } from "@/app/(dashboard)/hooks/useTabRouting";
+import { TabRouteBar } from "@/app/(dashboard)/components/TabRouteBar";
 
 const BASE_TAB_KEY = "loadbalancing";
 
-const ORDERED_KEYS: Array<"" | RouterSettingsTabSlug> = [
-  "",
-  "routing-groups",
-  "fallbacks",
-  "prompt-caching",
-  "general",
-];
-
-const TAB_LABELS: Record<"" | RouterSettingsTabSlug, string> = {
-  "": "Loadbalancing",
-  "routing-groups": "Routing Groups",
-  fallbacks: "Fallbacks",
-  "prompt-caching": "Prompt Caching",
-  general: "General",
-};
+const TABS = [
+  { key: BASE_TAB_KEY, label: "Loadbalancing" },
+  { key: "routing-groups", label: "Routing Groups" },
+  { key: "fallbacks", label: "Fallbacks" },
+  { key: "prompt-caching", label: "Prompt Caching" },
+  { key: "general", label: "General" },
+] as const;
 
 export default function RouterSettingsLayout({ children }: { children: ReactNode }) {
-  const pathname = usePathname();
-  const router = useRouter();
-
-  const activeSlug = slugFromPathname(pathname);
-  const isKnownSlug = ORDERED_KEYS.some((slug) => slug === activeSlug);
-  const activeKey = isKnownSlug ? activeSlug || BASE_TAB_KEY : BASE_TAB_KEY;
-
-  useEffect(() => {
-    if (activeSlug !== "" && !isKnownSlug) {
-      window.location.replace(routerSettingsTabHref(""));
-    }
-  }, [activeSlug, isKnownSlug]);
+  const { activeKey } = useTabRouting({
+    routes: routerSettingsRoutes,
+    baseTabKey: BASE_TAB_KEY,
+    visibleKeys: routerSettingsRoutes.slugs,
+  });
 
   return (
     <div className="w-full">
-      <Tabs
-        value={activeKey}
-        onValueChange={(key) => router.push(routerSettingsTabHref(key === BASE_TAB_KEY ? "" : key))}
+      <TabRouteBar
+        routes={routerSettingsRoutes}
+        baseTabKey={BASE_TAB_KEY}
+        activeKey={activeKey}
+        tabs={TABS}
         className="px-8 pt-4"
-      >
-        <TabsList variant="line">
-          {ORDERED_KEYS.map((slug) => (
-            <TabsTrigger key={slug || BASE_TAB_KEY} value={slug || BASE_TAB_KEY}>
-              {TAB_LABELS[slug]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-
+      />
       <div className="px-8 py-6">{children}</div>
     </div>
   );
