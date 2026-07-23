@@ -895,9 +895,8 @@ class AmazonConverseConfig(BaseConfig):
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
             if param == "parallel_tool_calls":
-                disable_parallel = not value
                 optional_params["_parallel_tool_use_config"] = {
-                    "tool_choice": {"disable_parallel_tool_use": disable_parallel}
+                    "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
             if param == "thinking":
                 if (
@@ -1208,6 +1207,18 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
+    @staticmethod
+    def _merge_parallel_tool_use_config(additional_request_params: dict, parallel_tool_use_config: dict) -> dict:
+        merged_entries = {
+            key: (
+                {**value, **additional_request_params[key]}
+                if isinstance(additional_request_params.get(key), dict) and isinstance(value, dict)
+                else value
+            )
+            for key, value in parallel_tool_use_config.items()
+        }
+        return {**additional_request_params, **merged_entries}
+
     def _prepare_request_params(
         self, optional_params: dict, model: str, drop_params: bool = False
     ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
@@ -1276,15 +1287,9 @@ class AmazonConverseConfig(BaseConfig):
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
         if parallel_tool_use_config is not None and bedrock_converse_supports_parallel_tool_use_config(model):
-            for key, value in parallel_tool_use_config.items():
-                if (
-                    key in additional_request_params
-                    and isinstance(additional_request_params[key], dict)
-                    and isinstance(value, dict)
-                ):
-                    additional_request_params[key].update(value)
-                else:
-                    additional_request_params[key] = value
+            additional_request_params = self._merge_parallel_tool_use_config(
+                additional_request_params, parallel_tool_use_config
+            )
 
         additional_request_params.pop("parallel_tool_calls", None)
 
