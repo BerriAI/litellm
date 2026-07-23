@@ -18,7 +18,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    validate_budget_duration,
+)
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
@@ -70,6 +73,8 @@ async def new_budget(
             status_code=400,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
+
+    validate_budget_duration(budget_obj.budget_duration)
 
     # Validate model_max_budget if present
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
@@ -151,6 +156,8 @@ async def update_budget(
             status_code=400,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
+
+    validate_budget_duration(budget_obj.budget_duration)
 
     # Validate model_max_budget if present in update
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
