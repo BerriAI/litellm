@@ -4372,7 +4372,15 @@ def add_provider_specific_params_to_optional_params(
     if custom_llm_provider in ["openai", "azure", "text-completion-openai"] + litellm.openai_compatible_providers:
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
-            extra_body = dict(passed_params.pop("extra_body", None) or {})
+            # Deep-copy so neither top-level key insertion below nor any
+            # downstream in-place mutation of nested dicts (e.g.
+            # chat_template_kwargs) can write through to the caller's /
+            # Router's stored deployment extra_body object.
+            _passed_extra_body = passed_params.pop("extra_body", None) or {}
+            try:
+                extra_body = copy.deepcopy(_passed_extra_body)
+            except Exception:
+                extra_body = dict(_passed_extra_body)
             for k in passed_params.keys():
                 if k not in openai_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]

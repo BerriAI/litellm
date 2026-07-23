@@ -1737,6 +1737,12 @@ class Router:
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
             litellm_params = deployment["litellm_params"].copy()
+            # Deep-copy nested mutable params (e.g. extra_body) so per-request
+            # param processing cannot mutate the Router's stored deployment config.
+            if isinstance(litellm_params.get("extra_body"), dict):
+                litellm_params["extra_body"] = copy.deepcopy(
+                    litellm_params["extra_body"]
+                )
             silent_model = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
@@ -2781,6 +2787,12 @@ class Router:
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
             litellm_params = deployment["litellm_params"].copy()
+            # Deep-copy nested mutable params (e.g. extra_body) so per-request
+            # param processing cannot mutate the Router's stored deployment config.
+            if isinstance(litellm_params.get("extra_body"), dict):
+                litellm_params["extra_body"] = copy.deepcopy(
+                    litellm_params["extra_body"]
+                )
             silent_model = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
@@ -4480,6 +4492,11 @@ class Router:
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
                 kwargs=kwargs, model=model, model_name=model_name
             )
+
+            # Deep-copy nested mutable params (e.g. extra_body) so per-request
+            # param processing cannot mutate the Router's stored deployment config.
+            if isinstance(data.get("extra_body"), dict):
+                data["extra_body"] = copy.deepcopy(data["extra_body"])
 
             # Get custom_llm_provider from deployment params
             try:
