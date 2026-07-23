@@ -91,6 +91,32 @@ describe("CacheLeakageCard", () => {
     ].forEach((info) => expect(getByLabelText(info)).toBeInTheDocument());
   });
 
+  it("sorts by the clicked column, worst cache hit rate first", () => {
+    const { getAllByRole, getByText } = renderWith([
+      dayWithKeys("2026-07-12", {
+        "hash-a": key("alpha", {
+          prompt_tokens: 10000,
+          cache_read_input_tokens: 9000,
+          prompt_caching_savings_spend: 9.0,
+        }),
+        "hash-b": key("bravo", {
+          prompt_tokens: 500,
+          cache_read_input_tokens: 50,
+          prompt_caching_savings_spend: 0.05,
+        }),
+      }),
+    ]);
+    const firstDataRow = () => getAllByRole("row")[1];
+
+    expect(firstDataRow()).toHaveTextContent("alpha");
+
+    fireEvent.click(getByText("Cache hit rate"));
+    expect(firstDataRow()).toHaveTextContent("bravo");
+
+    fireEvent.click(getByText("Cache hit rate"));
+    expect(firstDataRow()).toHaveTextContent("alpha");
+  });
+
   it("switches to the model view and lists only Anthropic models", () => {
     const { getByText, queryByText } = renderWith([
       dayWithModels("2026-07-12", {
