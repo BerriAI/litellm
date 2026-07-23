@@ -44,6 +44,7 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     context: Union[bool, dict]  # Optional - format results for LLMs
     moderation: bool  # Optional - enable content moderation, default false
     contents: dict  # Optional - content retrieval options
+    outputSchema: dict  # Optional - output schema definition
 
 
 class ExaAISearchConfig(BaseSearchConfig):
@@ -189,7 +190,12 @@ class ExaAISearchConfig(BaseSearchConfig):
             )
             results.append(search_result)
 
-        return SearchResponse(
+        extra: dict = {}
+        if "output" in response_json:
+            extra["output"] = response_json["output"]
+        search_response = SearchResponse(
             results=results,
             object="search",
+            **extra,
         )
+        return search_response
