@@ -495,7 +495,7 @@ Cursor is not supported: it has no equivalent file-based config to hot-patch thi
 
 #### Install the CLI
 
-`lite autoroute up` builds and runs a throwaway litellm proxy locally, so unlike the rest of this CLI it needs the proxy server runtime, not just the thin `litellm[cli]` client. Install `litellm[proxy]` (which ships the `lite` command too) with a single curl command -- no existing Python tooling required, `uv` is bootstrapped automatically if missing:
+`lite autoroute up` builds and runs a throwaway litellm proxy locally, so unlike the rest of this CLI it needs the proxy server runtime, not just the thin `litellm[cli]` client. The quickest way to get everything up front is to install `litellm[proxy]` (which ships the `lite` command too) with a single curl command -- no existing Python tooling required, `uv` is bootstrapped automatically if missing:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
@@ -508,7 +508,7 @@ curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch-or-commit>/
   LITELLM_CLI_REF=<branch-or-commit> sh
 ```
 
-The thin `scripts/install-cli.sh` installs only `litellm[cli]`, which is enough for `lite login`, `lite claude`, and `lite up`, but not for `lite autoroute up`; running it against a `litellm[cli]` install fails fast with a message telling you to install the proxy runtime.
+The thin `scripts/install-cli.sh` installs only `litellm[cli]`, which is all `lite login`, `lite claude`, and `lite up` need. It works for `lite autoroute up` too: the first `up` on a thin install provisions the proxy runtime on demand, running `uv pip install` for litellm's `proxy` dependencies (read from the installed distribution, so a branch/QA install pulls that branch's own pinned versions) before it launches the local proxy. Installing `litellm[proxy]` up front just front-loads that step so the first `up` starts instantly.
 
 Point the CLI at your real proxy and key before running any `lite model-groups` or `lite autoroute` command -- like every other command in this CLI, they read `LITELLM_PROXY_URL`/`LITELLM_PROXY_API_KEY` (or `--base-url`/`--api-key`), no `lite login` required:
 

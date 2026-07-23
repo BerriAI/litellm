@@ -19,7 +19,9 @@ from .process import (
     LOG_PATH,
     PidRecord,
     ProcessLaunchError,
+    ProxyRuntimeInstallError,
     clear_pid_record,
+    install_proxy_runtime,
     is_port_available,
     is_running,
     launch_proxy,
@@ -70,6 +72,31 @@ def _ensure_master_key() -> str:
     return master_key
 
 
+def _ensure_proxy_runtime() -> None:
+    """Provision the proxy-server runtime that ``up`` needs but the thin ``litellm[cli]`` install lacks.
+
+    A no-op once the runtime is present, so repeat ``up`` runs pay nothing.
+    """
+    missing = missing_proxy_runtime_modules()
+    if not missing:
+        return
+    click.echo(
+        "lite autoroute up launches a local litellm proxy, which needs the proxy runtime that the "
+        f"thin litellm[cli] install omits (missing: {', '.join(missing)}). Installing it now with uv..."
+    )
+    try:
+        install_proxy_runtime()
+    except ProxyRuntimeInstallError as e:
+        raise click.ClickException(str(e))
+    still_missing = missing_proxy_runtime_modules()
+    if still_missing:
+        raise click.ClickException(
+            "Installed the litellm proxy runtime but these modules are still missing: "
+            f"{', '.join(still_missing)}. Install it manually with `uv tool install --force 'litellm[proxy]'`."
+        )
+    click.echo("Proxy runtime installed.")
+
+
 @click.group(name="autoroute")
 def autoroute_group() -> None:
     """QA complexity-based auto-routing against models your key can already use"""
@@ -95,15 +122,7 @@ def up(port: int) -> None:
     if not CONFIG_PATH.exists():
         raise click.ClickException("No config found. Run `lite autoroute configure` first.")
 
-    missing = missing_proxy_runtime_modules()
-    if missing:
-        raise click.ClickException(
-            "lite autoroute up launches a local litellm proxy, which needs the proxy runtime that the "
-            f"thin `litellm[cli]` install does not include (missing: {', '.join(missing)}). Install the "
-            "proxy runtime with `uv tool install --force 'litellm[proxy]'`, or to QA a branch, "
-            "`curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/scripts/install.sh | "
-            "LITELLM_CLI_REF=<branch> sh`."
-        )
+    _ensure_proxy_runtime()
 
     try:
         existing_pid = read_pid_record()

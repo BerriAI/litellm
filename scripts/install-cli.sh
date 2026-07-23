@@ -4,8 +4,10 @@
 #
 # Installs only litellm[cli]: the `lite` command for authenticating to a LiteLLM
 # proxy and running coding agents (lite claude / codex / opencode) through it.
-# None of the proxy server runtime is pulled in. To run a proxy server instead,
-# use scripts/install.sh, which installs litellm[proxy].
+# None of the proxy server runtime is pulled in. `lite autoroute up` still works
+# on this thin install -- it provisions the proxy runtime on demand the first time
+# it runs. To pull the full proxy server up front instead, use scripts/install.sh,
+# which installs litellm[proxy].
 #
 # Needs only curl: uv is bootstrapped if missing, and uv provisions a compatible
 # Python itself (honouring litellm's requires-python), downloading a managed one

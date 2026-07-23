@@ -1,18 +1,23 @@
 import contextlib
+import importlib
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 
 import click
 import requests
+from packaging.requirements import Requirement
 from pydantic import TypeAdapter, ValidationError
 
 from ..up import UpError, secure_create
@@ -46,10 +51,91 @@ def missing_proxy_runtime_modules() -> tuple[str, ...]:
 
     ``launch_proxy`` runs the full ``litellm.proxy.proxy_cli`` server, whose dependencies live in
     the ``proxy`` extra, not the ``cli`` extra that installs the ``lite`` command. On a thin
-    ``litellm[cli]`` install the subprocess dies with a bare ``ModuleNotFoundError``; detecting the
-    gap here lets ``up`` fail with an actionable message instead.
+    ``litellm[cli]`` install the subprocess would die with a bare ``ModuleNotFoundError``; detecting
+    the gap here lets ``up`` install the runtime on demand (see ``install_proxy_runtime``).
     """
     return tuple(name for name in _PROXY_RUNTIME_MODULES if importlib.util.find_spec(name) is None)
+
+
+class ProxyRuntimeInstallError(Exception):
+    """Raised when the litellm proxy runtime cannot be installed on demand for ``lite autoroute up``."""
+
+
+@dataclass(frozen=True, slots=True)
+class CommandResult:
+    returncode: int
+    output: str
+
+
+def proxy_extra_requirements() -> tuple[str, ...]:
+    """The dependency specifiers behind litellm's ``proxy`` extra, read from the installed distribution.
+
+    Reading them from metadata (rather than hardcoding them) keeps them in lockstep with the
+    running litellm: a branch/QA install via ``LITELLM_CLI_REF`` reports that branch's own proxy
+    dependencies at their pinned versions. Only extra-gated requirements are returned and their
+    markers are dropped, so the ``sys_platform != 'win32'`` guards on a couple of them resolve to
+    install on the macOS/Linux hosts the ``lite`` installer supports.
+    """
+    raw_requirements = metadata.metadata("litellm").get_all("Requires-Dist") or ()
+    parsed = tuple(Requirement(str(raw)) for raw in raw_requirements)
+    return tuple(
+        f"{req.name}{req.specifier}"
+        for req in parsed
+        if req.marker is not None and req.marker.evaluate({"extra": "proxy"}) and not req.marker.evaluate({"extra": ""})
+    )
+
+
+def find_uv() -> str | None:
+    """Locate the uv executable, falling back to the path its official installer writes to."""
+    on_path = shutil.which("uv")
+    if on_path is not None:
+        return on_path
+    fallback = Path.home() / ".local" / "bin" / "uv"
+    return str(fallback) if os.access(fallback, os.X_OK) else None
+
+
+def _run_uv_install(uv: str, requirements: tuple[str, ...]) -> CommandResult:
+    completed = subprocess.run(
+        [uv, "pip", "install", "--python", sys.executable, *requirements],
+        capture_output=True,
+        text=True,
+    )
+    return CommandResult(
+        returncode=completed.returncode,
+        output=completed.stderr.strip() or completed.stdout.strip(),
+    )
+
+
+def install_proxy_runtime(
+    find_uv_bin: Callable[[], str | None] = find_uv,
+    requirements: Callable[[], tuple[str, ...]] = proxy_extra_requirements,
+    run_install: Callable[[str, tuple[str, ...]], CommandResult] = _run_uv_install,
+) -> None:
+    """Install litellm's ``proxy`` extra into the running interpreter so ``up`` can launch the server.
+
+    The thin ``litellm[cli]`` install omits the proxy-server runtime, so ``up`` provisions it on
+    first use. litellm itself is deliberately excluded from the install set so its already-installed
+    version (release or QA branch) is never swapped out from under the running command.
+    """
+    uv = find_uv_bin()
+    if uv is None:
+        raise ProxyRuntimeInstallError(
+            "Could not find uv to install the proxy runtime. Install it manually with "
+            "`uv tool install --force 'litellm[proxy]'`."
+        )
+    specifiers = requirements()
+    if not specifiers:
+        raise ProxyRuntimeInstallError(
+            "Could not read litellm's proxy dependencies from its installed metadata. Install the "
+            "runtime manually with `uv tool install --force 'litellm[proxy]'`."
+        )
+    result = run_install(uv, specifiers)
+    if result.returncode != 0:
+        raise ProxyRuntimeInstallError(
+            f"Installing the proxy runtime failed:\n{result.output}\n"
+            "Install it manually with `uv tool install --force 'litellm[proxy]'`."
+        )
+    importlib.invalidate_caches()
 
 
 DEFAULT_AUTOROUTE_PORT = 5483
@@ -182,13 +268,18 @@ __all__ = [
     "DEFAULT_AUTOROUTE_PORT",
     "LOG_PATH",
     "PID_RECORD_PATH",
+    "CommandResult",
     "PidRecord",
     "ProcessLaunchError",
+    "ProxyRuntimeInstallError",
     "clear_pid_record",
+    "find_uv",
+    "install_proxy_runtime",
     "is_port_available",
     "is_running",
     "launch_proxy",
     "missing_proxy_runtime_modules",
+    "proxy_extra_requirements",
     "poll_liveliness",
     "read_pid_record",
     "secure_create",
