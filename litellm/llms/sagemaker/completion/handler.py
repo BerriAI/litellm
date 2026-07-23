@@ -216,7 +216,7 @@ class SagemakerLLM(BaseAWSLLM):
 
                 decoder = AWSEventStreamDecoder(model="")
 
-                completion_stream = decoder.iter_bytes(sync_response.iter_bytes(chunk_size=1024))
+                completion_stream = decoder.iter_bytes(sync_response.iter_bytes())
                 streaming_response = CustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
@@ -358,7 +358,7 @@ class SagemakerLLM(BaseAWSLLM):
                 raise SagemakerError(status_code=response.status_code, message=response.text)
 
             decoder = AWSEventStreamDecoder(model="")
-            completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+            completion_stream = decoder.aiter_bytes(response.aiter_bytes())
 
             return completion_stream
 

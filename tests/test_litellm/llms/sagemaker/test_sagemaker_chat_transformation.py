@@ -207,3 +207,29 @@ def test_signed_body_includes_stream_flag():
     )
     assert signed_body is not None
     assert json.loads(signed_body)["stream"] is True
+
+
+@pytest.mark.parametrize("split_size", [1, 3, 7, 64, 4096])
+def test_decoder_reassembles_frames_across_arbitrary_byte_boundaries(split_size):
+    """Correctness must not depend on chunk boundaries falling on frame edges.
+
+    Removing `chunk_size=1024` lets httpx yield raw transport reads, so in
+    production a single read can straddle several frames or split one frame in
+    half. This re-chunks the concatenated stream at boundaries that deliberately
+    ignore frame edges and asserts every delta still decodes, in order, exactly
+    once - the guarantee botocore's EventStreamBuffer provides.
+    """
+    from litellm.llms.sagemaker.chat.transformation import AWSEventStreamDecoder
+
+    frames = _make_frames(24)
+    blob = b"".join(frames)
+    chunks = [blob[i : i + split_size] for i in range(0, len(blob), split_size)]
+
+    decoder = AWSEventStreamDecoder(model="phi-4", is_messages_api=True)
+    texts = [
+        _content_of(chunk)
+        for chunk in decoder.iter_bytes(iter(chunks))
+        if chunk is not None and _content_of(chunk) is not None
+    ]
+
+    assert texts == [f"token{i} " for i in range(len(frames))]
