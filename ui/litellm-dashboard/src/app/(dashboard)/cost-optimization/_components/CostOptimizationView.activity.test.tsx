@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const mockUserDailyActivityCall = vi.fn();
 
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: () => ({ data: undefined, isLoading: false, isFetching: false, error: null }),
+}));
+
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
   getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], total_spend: 0, start_date: null, end_date: null }),
