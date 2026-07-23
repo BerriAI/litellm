@@ -4445,3 +4445,30 @@ async def test_global_spend_refresh_disconnects_client_on_failure(monkeypatch):
 
     assert result["status"] == "failure"
     fake_client.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_global_spend_refresh_swallows_disconnect_error(monkeypatch):
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        global_spend_refresh,
+    )
+
+    fake_singleton = MagicMock()
+    fake_singleton.db = MagicMock()
+    fake_singleton.db.query_raw = AsyncMock(
+        return_value=[{"relname": "MonthlyGlobalSpend", "relkind": "m"}]
+    )
+    monkeypatch.setattr(ps, "prisma_client", fake_singleton)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost:5432/db")
+
+    fake_client = MagicMock()
+    fake_client.db = MagicMock()
+    fake_client.db.connect = AsyncMock()
+    fake_client.db.query_raw = AsyncMock(return_value=None)
+    fake_client.disconnect = AsyncMock(side_effect=Exception("disconnect failed"))
+
+    with patch("litellm.proxy.utils.PrismaClient", return_value=fake_client):
+        result = await global_spend_refresh()
+
+    assert result["status"] == "success"
+    fake_client.disconnect.assert_awaited_once()

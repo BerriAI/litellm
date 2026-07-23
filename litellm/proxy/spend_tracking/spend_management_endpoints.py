@@ -2549,9 +2549,7 @@ async def global_spend_refresh():
                 try:
                     await new_client.disconnect()
                 except Exception:
-                    verbose_proxy_logger.exception(
-                        "Failed to disconnect MonthlyGlobalSpend refresh client"
-                    )
+                    verbose_proxy_logger.exception("Failed to disconnect MonthlyGlobalSpend refresh client")
 
 
 async def global_spend_for_internal_user(
