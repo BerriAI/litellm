@@ -1075,69 +1075,41 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
-class ChatCompletionCustomToolCallPayload(OpenAIObject):
+class _CustomToolCallAccess(OpenAIObject):
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
+class ChatCompletionCustomToolCallPayload(_CustomToolCallAccess):
     name: str
     input: str
 
-    def __contains__(self, key):
-        return hasattr(self, key)
 
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-
-class ChatCompletionDeltaCustomToolCallPayload(OpenAIObject):
+class ChatCompletionDeltaCustomToolCallPayload(_CustomToolCallAccess):
     name: str | None = None
     input: str | None = None
 
-    def __contains__(self, key):
-        return hasattr(self, key)
 
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-
-class ChatCompletionMessageCustomToolCall(OpenAIObject):
+class ChatCompletionMessageCustomToolCall(_CustomToolCallAccess):
     id: str
     type: Literal["custom"] = "custom"
     custom: ChatCompletionCustomToolCallPayload
 
-    def __contains__(self, key):
-        return hasattr(self, key)
 
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        setattr(self, key, value)
-
-
-class ChatCompletionDeltaCustomToolCall(OpenAIObject):
+class ChatCompletionDeltaCustomToolCall(_CustomToolCallAccess):
     id: str | None = None
     type: str | None = None
     custom: ChatCompletionDeltaCustomToolCallPayload
     index: int
-
-    def __contains__(self, key):
-        return hasattr(self, key)
-
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        setattr(self, key, value)
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
