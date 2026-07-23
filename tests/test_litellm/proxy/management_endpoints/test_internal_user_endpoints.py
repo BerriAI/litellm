@@ -2032,6 +2032,41 @@ def test_generate_request_base_validator():
     assert req.max_budget is None
 
 
+def test_generate_request_base_normalizes_empty_budget_duration():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/32474
+
+    Clearing budget_duration from the UI sends an empty string; downstream duration
+    parsing rejects "" with "Invalid duration format". The request model must normalize
+    empty/whitespace-only values to None so resetting a budget to unlimited succeeds.
+    """
+    from litellm.proxy._types import GenerateRequestBase
+
+    assert GenerateRequestBase(budget_duration="").budget_duration is None
+    assert GenerateRequestBase(budget_duration="   ").budget_duration is None
+    assert GenerateRequestBase(budget_duration=None).budget_duration is None
+    assert GenerateRequestBase(budget_duration="30d").budget_duration == "30d"
+
+
+def test_update_internal_user_params_reset_budget_duration_to_unlimited():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/32474
+
+    Sending an empty budget_duration alongside an empty max_budget (what the UI sends
+    when resetting a user's budget to unlimited) must not raise "Invalid duration format"
+    and must not fabricate a budget_reset_at.
+    """
+    data = UpdateUserRequest(user_id="test_user", max_budget="", budget_duration="")
+    assert data.max_budget is None
+    assert data.budget_duration is None
+
+    non_default_values = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+
+    assert non_default_values["max_budget"] is None
+    assert non_default_values.get("budget_duration") is None
+    assert "budget_reset_at" not in non_default_values
+
+
 @pytest.mark.asyncio
 async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeypatch):
     """
