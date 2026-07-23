@@ -5721,6 +5721,7 @@ class BaseLLMHTTPHandler:
         error_headers = getattr(e, "headers", None)
         if isinstance(e, httpx.HTTPStatusError):
             from litellm.llms.custom_httpx.http_handler import _safe_get_response_text
+
             error_text = _safe_get_response_text(e.response)
             status_code = e.response.status_code
         else:
@@ -5730,7 +5731,12 @@ class BaseLLMHTTPHandler:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
             from litellm.llms.custom_httpx.http_handler import _safe_get_response_text
-            error_text = _safe_get_response_text(error_response) if isinstance(error_response, httpx.Response) else getattr(error_response, "text", error_text)
+
+            error_text = (
+                _safe_get_response_text(error_response)
+                if isinstance(error_response, httpx.Response)
+                else getattr(error_response, "text", error_text)
+            )
         if error_headers:
             error_headers = dict(error_headers)
         else:
