@@ -12,6 +12,7 @@ from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
 from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
 from .commands.credentials import credentials
+from .commands.db import db
 from .commands.encryption import encryption
 from .commands.http import http
 from .commands.keys import keys
@@ -113,6 +114,8 @@ def version(ctx: click.Context):
 cli.add_command(login)
 cli.add_command(logout)
 cli.add_command(whoami)
+# Add the db command group
+cli.add_command(db)
 # Add the auth command group (e.g. `lite auth print-token`, used as Claude Code's apiKeyHelper)
 cli.add_command(auth_group, name="auth")
 # Add the models command group
