@@ -3018,6 +3018,47 @@ def test_failure_handler_runs_sync_callbacks_for_non_pass_through_requests(
     dummy_logger.log_failure_event.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_async_failure_handler_runs_callbacks_and_restores_correlation_context(logging_obj):
+    """await logging_obj.async_failure_handler(...) must dispatch async failure callbacks
+    and, once its own body completes, restore trace_id/session_id contextvars via
+    _restore_correlation_context() (the fix for the nested-call context leak)."""
+    from litellm._logging import session_id_var, trace_id_var
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.call_type = "acompletion"
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.async_log_failure_event = AsyncMock()
+
+    trace_id_var.set("pre-existing-trace")
+    session_id_var.set("pre-existing-session")
+    try:
+        with patch.object(
+            logging_obj,
+            "get_combined_callback_list",
+            return_value=[dummy_logger],
+        ):
+            await logging_obj.async_failure_handler(
+                exception=Exception("test error"),
+                traceback_exception="",
+            )
+
+        dummy_logger.async_log_failure_event.assert_called_once()
+        assert logging_obj._correlation_context_restored is True
+        assert trace_id_var.get() == "pre-existing-trace"
+        assert session_id_var.get() == "pre-existing-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 def test_merge_hidden_params_from_response_into_metadata_populates_metadata():
     """Streaming completion path should mirror non-stream: metadata.hidden_params from response."""
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
