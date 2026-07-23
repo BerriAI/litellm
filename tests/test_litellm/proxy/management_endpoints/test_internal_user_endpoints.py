@@ -3550,3 +3550,42 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
     assert result == {}
     find_many.assert_not_called()
+
+
+def test_update_internal_user_params_initializes_budget_limits():
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    data = UpdateUserRequest(
+        user_id="test-user",
+        budget_limits=[
+            {"budget_duration": "1hr", "max_budget": 5.0},
+            {"budget_duration": "1d", "max_budget": 50.0},
+        ],
+    )
+    data_json = data.model_dump(exclude_unset=True)
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    import json
+
+    parsed = json.loads(non_default_values["budget_limits"])
+    assert len(parsed) == 2
+    assert parsed[0]["budget_duration"] == "1hr"
+    assert parsed[0]["reset_at"] is not None
+    assert parsed[1]["budget_duration"] == "1d"
+    assert parsed[1]["reset_at"] is not None
+
+
+def test_update_internal_user_params_empty_budget_limits_not_included():
+    from litellm.proxy._types import UpdateUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    data = UpdateUserRequest(user_id="test-user", budget_limits=[])
+    data_json = data.model_dump(exclude_unset=True)
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    assert "budget_limits" not in non_default_values

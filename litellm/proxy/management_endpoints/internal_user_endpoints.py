@@ -1117,6 +1117,20 @@ def _update_internal_user_params(
                 budget_duration=non_default_values["budget_duration"]
             )
 
+    if "budget_limits" in non_default_values:
+        raw_windows = non_default_values["budget_limits"]
+        if raw_windows:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            initialized_windows = []
+            for window in raw_windows:
+                w = window if isinstance(window, dict) else window.model_dump()
+                w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
+                initialized_windows.append(w)
+            non_default_values["budget_limits"] = json.dumps(initialized_windows)
+        else:
+            non_default_values["budget_limits"] = json.dumps(None)
+
     return non_default_values
 
 
@@ -1247,7 +1261,7 @@ async def _update_single_user_helper(
     )
     _is_self_update = _target_user_id is not None and user_api_key_dict.user_id == _target_user_id
     if _is_self_update and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        _protected_fields = ("max_budget", "soft_budget", "spend")
+        _protected_fields = ("max_budget", "soft_budget", "spend", "budget_limits")
         for _field in _protected_fields:
             if _field in non_default_values:
                 raise HTTPException(

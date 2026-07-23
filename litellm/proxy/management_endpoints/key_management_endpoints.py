@@ -3689,6 +3689,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "sso_user_id": sso_user_id,
             "object_permission_id": object_permission_id,
+            "budget_limits": budget_limits_json,
         }
         if teams is not None:
             user_data["teams"] = teams
