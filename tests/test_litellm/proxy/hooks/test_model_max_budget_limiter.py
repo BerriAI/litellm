@@ -174,3 +174,37 @@ async def test_group_budget_matches_bare_request_when_member_is_provider_qualifi
     with pytest.raises(litellm.BudgetExceededError, match="model group=gpt4-family"):
         await limiter.is_key_within_model_budget(key, "gpt-4o")
     assert await limiter.is_key_within_model_budget(key, "gpt-5.5") is True
+
+
+@pytest.mark.asyncio
+async def test_group_without_budget_limit_never_blocks():
+    no_limit_group = {
+        "opus-family": {
+            "models": ["anthropic-opus-4-7", "anthropic-opus-4-8"],
+            "time_period": "30d",
+        }
+    }
+    limiter = _make_limiter()
+    key = _make_key(no_limit_group)
+
+    await _log_spend(limiter, "anthropic-opus-4-7", 999.0, no_limit_group)
+
+    assert await limiter.is_key_within_model_budget(key, "anthropic-opus-4-7") is True
+    assert await limiter.is_key_within_model_budget(key, "anthropic-opus-4-8") is True
+
+
+@pytest.mark.asyncio
+async def test_group_without_time_period_does_not_track_or_block():
+    no_duration_group = {
+        "opus-family": {
+            "models": ["anthropic-opus-4-7", "anthropic-opus-4-8"],
+            "budget_limit": 10.0,
+        }
+    }
+    limiter = _make_limiter()
+    key = _make_key(no_duration_group)
+
+    await _log_spend(limiter, "anthropic-opus-4-7", 999.0, no_duration_group)
+
+    assert limiter.dual_cache.in_memory_cache.cache_dict == {}
+    assert await limiter.is_key_within_model_budget(key, "anthropic-opus-4-7") is True
