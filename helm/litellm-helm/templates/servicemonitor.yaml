@@ -31,6 +31,20 @@ spec:
     interval: {{ .interval }}
     scrapeTimeout: {{ .scrapeTimeout }}
     scheme: http
+    {{- if .authSecret.enabled }}
+    authorization:
+      type: Bearer
+      credentials:
+        {{- if .authSecret.name }}
+        name: {{ .authSecret.name }}
+        key: {{ required "serviceMonitor.authSecret.key is required when serviceMonitor.authSecret.name is set" .authSecret.key }}
+        {{- else if .authSecret.useMasterKey }}
+        name: {{ $.Values.masterkeySecretName | default (printf "%s-masterkey" (include "litellm.fullname" $)) }}
+        key: {{ $.Values.masterkeySecretKey | default "masterkey" }}
+        {{- else }}
+        {{- fail "The proxy requires a bearer token to scrape /metrics. Set serviceMonitor.authSecret.name and serviceMonitor.authSecret.key to a secret holding a dedicated virtual key (recommended), or set serviceMonitor.authSecret.useMasterKey=true to scrape with the master key, or set serviceMonitor.authSecret.enabled=false if the proxy runs with require_auth_for_metrics_endpoint: false" }}
+        {{- end }}
+    {{- end }}
   {{- if .relabelings }}
     relabelings:
 {{- toYaml .relabelings | nindent 4 }}
