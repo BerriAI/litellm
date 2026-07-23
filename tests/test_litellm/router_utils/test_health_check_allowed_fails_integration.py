@@ -790,3 +790,90 @@ class TestSharedCacheTransientErrorFilter:
 
         unhealthy_ids = router.health_state_cache.get_unhealthy_deployment_ids()
         assert "deploy-1" in unhealthy_ids
+
+
+class TestAllowedFailsPolicyZeroThreshold:
+    """
+    Regression tests for allowed_fails_policy thresholds set to 0.
+
+    A configured value of 0 must be honored (cooldown on the first matching
+    failure) instead of being treated as falsy and silently falling back to
+    the router-level allowed_fails default.
+    """
+
+    def test_zero_threshold_cooldowns_on_first_failure(self):
+        """RateLimitErrorAllowedFails=0 with default router allowed_fails should
+        cooldown on the first 429 (1 > 0), not fall back to litellm.allowed_fails=3."""
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+        )
+        assert router.allowed_fails == litellm.allowed_fails
+
+        rate_exc = litellm.RateLimitError(
+            message="rate limited", model="gpt-4", llm_provider="openai"
+        )
+
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=rate_exc,
+        )
+        assert result is True
+
+    def test_zero_threshold_honored_over_nonzero_router_default(self):
+        """An explicit router allowed_fails must not override a policy value of 0."""
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(AuthenticationErrorAllowedFails=0),
+            allowed_fails=5,
+        )
+
+        auth_exc = litellm.AuthenticationError(
+            message="Invalid key", model="gpt-4", llm_provider="openai"
+        )
+
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=auth_exc,
+        )
+        assert result is True
+
+    def test_unmatched_exception_still_falls_back_to_router_default(self):
+        """When the policy returns None (no matching field), the router-level
+        allowed_fails default is still used as the fallback."""
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+            allowed_fails=2,
+        )
+
+        generic_exc = Exception("some other error")
+
+        for _ in range(2):
+            result = should_cooldown_based_on_allowed_fails_policy(
+                litellm_router_instance=router,
+                deployment="deploy-1",
+                original_exception=generic_exc,
+            )
+            assert result is False
+
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=generic_exc,
+        )
+        assert result is True
