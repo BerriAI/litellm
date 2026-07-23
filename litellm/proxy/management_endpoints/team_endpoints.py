@@ -47,6 +47,7 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     OrgMember,
+    PatchTeamRequest,
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
@@ -1956,6 +1957,7 @@ async def update_team(
 )
 async def patch_team(
     team_id: str,
+    data: PatchTeamRequest,
     http_request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     litellm_changed_by: Annotated[
@@ -1968,11 +1970,12 @@ async def patch_team(
     """
     Partially update a team using RFC 7386 JSON Merge Patch semantics.
 
-    `team_id` is taken from the path. `metadata` is merged with the team's stored
-    metadata rather than replacing it: an omitted key is preserved, `key: null`
-    deletes it, and any other value overwrites (recursing into nested objects).
-    Every other field behaves exactly like `POST /team/update` (omitted preserves,
-    a value overwrites). Returns the full updated team.
+    `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+    matches. `metadata` is merged with the team's stored metadata rather than replacing
+    it: an omitted key is preserved, `key: null` deletes it, and any other value
+    overwrites (recursing into nested objects). Every other field behaves exactly like
+    `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+    updated team.
 
     ```
     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
@@ -1992,21 +1995,15 @@ async def patch_team(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        try:
-            body = await http_request.json()
-        except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-
-        body_team_id = body.pop("team_id", None)
-        if body_team_id is not None and body_team_id != team_id:
+        if data.team_id is not None and data.team_id != team_id:
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"team_id in body ({body_team_id}) does not match team_id in path ({team_id})"},
+                detail={"error": f"team_id in body ({data.team_id}) does not match team_id in path ({team_id})"},
             )
 
-        if "metadata" in body:
+        patch_fields = data.model_dump(exclude_unset=True, exclude={"team_id"})
+
+        if "metadata" in patch_fields:
             existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if existing_team_row is None:
                 raise HTTPException(
@@ -2014,9 +2011,9 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            body["metadata"] = apply_json_merge_patch(existing_metadata, body["metadata"])
+            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
 
-        update_request = UpdateTeamRequest(team_id=team_id, **body)
+        update_request = UpdateTeamRequest(team_id=team_id, **patch_fields)
 
         result = await update_team(
             data=update_request,
