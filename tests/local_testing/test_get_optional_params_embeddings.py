@@ -163,3 +163,82 @@ def test_openai_non_text_embedding_3_drop_params_global():
         assert "dimensions" not in optional_params
     finally:
         litellm.drop_params = prev_drop_params
+
+
+def test_azure_and_openai_compatible_drop_params():
+    """
+    Verify that dimensions parameter is correctly dropped on Azure and OpenAI compatible calls
+    when drop_params is True (either per-call or globally), and raises UnsupportedParamsError
+    otherwise.
+    """
+    from litellm.exceptions import UnsupportedParamsError
+
+    prev_drop_params = litellm.drop_params
+
+    # 1. Test Azure drop_params=True (per-call)
+    litellm.drop_params = False
+    model, custom_llm_provider, _, _ = get_llm_provider(
+        model="azure/dummy-model"
+    )
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        custom_llm_provider=custom_llm_provider,
+        drop_params=True,
+    )
+    assert "dimensions" not in optional_params
+
+    # 2. Test Azure drop_params=True (global)
+    litellm.drop_params = True
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert "dimensions" not in optional_params
+
+    # 3. Test Azure drop_params=False (preserves dimensions parameter)
+    litellm.drop_params = False
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert "dimensions" in optional_params
+    assert optional_params["dimensions"] == 512
+
+    # 4. Test OpenAI compatible (Together AI) drop_params=True (per-call)
+    model, custom_llm_provider, _, _ = get_llm_provider(
+        model="together_ai/dummy-model"
+    )
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        custom_llm_provider=custom_llm_provider,
+        drop_params=True,
+    )
+    assert "dimensions" not in optional_params
+
+    # 5. Test OpenAI compatible (Together AI) drop_params=True (global)
+    litellm.drop_params = True
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert "dimensions" not in optional_params
+
+    # 6. Test OpenAI compatible (Together AI) drop_params=False (preserves dimensions parameter)
+    litellm.drop_params = False
+    optional_params = get_optional_params_embeddings(
+        model=model,
+        dimensions=512,
+        custom_llm_provider=custom_llm_provider,
+    )
+    assert "dimensions" in optional_params
+    assert optional_params["dimensions"] == 512
+
+    # Restore state
+    litellm.drop_params = prev_drop_params
+
+
