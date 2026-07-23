@@ -325,6 +325,9 @@ def get_llm_provider(
                     elif endpoint == "https://llm.chutes.ai/v1/":
                         custom_llm_provider = "chutes"
                         dynamic_api_key = get_secret_str("CHUTES_API_KEY")
+                    elif endpoint == "https://api.tokenmix.ai/v1":
+                        custom_llm_provider = "tokenmix"
+                        dynamic_api_key = get_secret_str("TOKENMIX_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
                         dynamic_api_key = get_secret_str("V0_API_KEY")

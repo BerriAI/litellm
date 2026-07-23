@@ -716,6 +716,7 @@ openai_compatible_endpoints: List = [
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
     "https://llm.chutes.ai/v1/",
+    "https://api.tokenmix.ai/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -771,6 +772,7 @@ openai_compatible_providers: List = [
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "tokenmix",  # TokenMix - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
     "featherless_ai",

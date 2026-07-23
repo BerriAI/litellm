@@ -3487,6 +3487,7 @@ class LlmProviders(str, Enum):
     NANOGPT = "nano-gpt"
     POE = "poe"
     CHUTES = "chutes"
+    TOKENMIX = "tokenmix"
     NEOSANTARA = "neosantara"
     PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
