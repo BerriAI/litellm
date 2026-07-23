@@ -545,3 +545,42 @@ def test_output_format_removed_from_bedrock_invoke_request():
     assert (
         "output_format" not in result
     ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_transform_request_injects_tool_search_beta_for_every_claude_model(model):
+    """
+    Regression: the tool-search beta header used to be injected only for
+    models matching an ``opus-4`` name pattern. Haiku/Sonnet requests carrying
+    a ``tool_search_tool_regex_20251119`` tool were forwarded without the
+    header and Bedrock rejected the tool type with a 400.
+    """
+    config = AmazonAnthropicClaudeConfig()
+
+    result = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 64,
+            "tools": [
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex",
+                }
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    betas = result.get("anthropic_beta") or []
+    assert "tool-search-tool-2025-10-19" in betas, (
+        f"tool-search beta header must be injected for {model}; got {betas}"
+    )
