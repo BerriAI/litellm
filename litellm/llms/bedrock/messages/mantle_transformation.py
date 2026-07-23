@@ -17,6 +17,10 @@ from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+    AnthropicUsage,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -102,6 +106,25 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             {"stream": True} if anthropic_messages_optional_request_params.get("stream") is True else {}
         )
         return {**request, "model": model_id, **stream_fields}
+
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> AnthropicMessagesResponse:
+        response = super().transform_anthropic_messages_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+        existing_usage: AnthropicUsage = response.get("usage") or AnthropicUsage()
+        normalized_usage: AnthropicUsage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            **existing_usage,
+        }
+        return {**response, "usage": normalized_usage}
 
     def get_async_streaming_response_iterator(
         self,
