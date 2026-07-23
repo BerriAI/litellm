@@ -13910,7 +13910,8 @@ async def _generate_onboarding_ui_session_token(user_obj: Any) -> str:
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
-        reset_password_required=getattr(user_obj, "reset_password_required", False),
+        reset_password_required=getattr(user_obj, "reset_password_required", False)
+        is True,
     )
     assert master_key is not None
     return jwt.encode(  # type: ignore
