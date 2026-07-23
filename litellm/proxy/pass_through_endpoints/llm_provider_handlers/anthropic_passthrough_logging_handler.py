@@ -27,6 +27,7 @@ from litellm.types.utils import (
     LiteLLMBatch,
     Message,
     ModelResponse,
+    StandardPassThroughResponseObject,
     TextCompletionResponse,
 )
 
@@ -71,6 +72,12 @@ class AnthropicPassthroughLoggingHandler:
                 request_body=request_body,
                 **kwargs,
             )
+
+        if not isinstance(response_body.get("content"), list):
+            return {
+                "result": StandardPassThroughResponseObject(response=response_body),
+                "kwargs": kwargs,
+            }
 
         model = response_body.get("model", "")
         anthropic_config = get_anthropic_config(url_route)
