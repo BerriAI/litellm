@@ -1614,6 +1614,7 @@ async def _user_api_key_auth_builder(
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
+            _user_api_key_obj.via_virtual_key = True
 
             return _user_api_key_obj
 

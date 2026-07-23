@@ -2620,10 +2620,11 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         default=False,
         exclude=True,
         description=(
-            "Server-only marker set exclusively by the DB virtual-key auth path via post-construction "
-            "assignment. Stripped from validated input so custom auth handlers, JWT claims, or key "
-            "metadata cannot forge it. Gates overwrite_user_with_key_hash stamping: only a credential "
-            "the proxy itself validated as a virtual key may be forwarded as the provider-facing user id."
+            "Server-only marker set exclusively by the DB virtual-key and master-key auth paths via "
+            "post-construction assignment. Stripped from validated input so custom auth handlers, JWT "
+            "claims, or key metadata cannot forge it. Gates overwrite_user_with_key_hash stamping: only "
+            "a credential the proxy itself validated as a key may be forwarded as the provider-facing "
+            "user id."
         ),
     )
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)

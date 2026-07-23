@@ -5377,3 +5377,47 @@ def test_via_virtual_key_cannot_be_forged_from_validated_input():
 
     from_dict = UserAPIKeyAuth.model_validate({"api_key": "b" * 64, "via_virtual_key": True})
     assert from_dict.via_virtual_key is False
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_stamps_master_key_alias(monkeypatch):
+    """Master-key requests carry the stable alias instead of a hash (so the master
+    key never propagates anywhere); the alias is the stampable id for them."""
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+    user_api_key_dict.via_virtual_key = True
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "attacker-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_rejects_alias_without_marker(monkeypatch):
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+    assert user_api_key_dict.via_virtual_key is False
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"

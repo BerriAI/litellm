@@ -1291,6 +1291,75 @@ async def test_scim_deactivated_user_key_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_master_key_auth_sets_via_virtual_key_marker():
+    """Master-key requests must also be stamped by overwrite_user_with_key_hash;
+    the auth path substitutes the stable alias for api_key and must mark the
+    result as proxy-validated."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    master_key = "sk-master-key"
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = (
+        AsyncMock()
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs_to_set = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": master_key,
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _original_values = {
+        attr: getattr(_proxy_server_mod, attr, None) for attr in _attrs_to_set
+    }
+    try:
+        for attr, val in _attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {master_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+        assert isinstance(result, UserAPIKeyAuth)
+        assert result.via_virtual_key is True
+        assert result.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+    finally:
+        for attr, val in _original_values.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
 async def test_db_virtual_key_auth_sets_via_virtual_key_marker():
     """via_virtual_key gates overwrite_user_with_key_hash stamping and is
     forge-stripped from validated input, so the DB auth path setting it by

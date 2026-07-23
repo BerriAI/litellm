@@ -13,7 +13,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS, PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     iter_client_callback_metadata_dicts,
@@ -53,12 +53,15 @@ _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
-    """Only DB-validated virtual keys are stamped, proven by the unforgeable
-    via_virtual_key marker AND the sha256-hex shape UserAPIKeyAuth stores them in.
+    """Only proxy-validated keys are stamped, proven by the unforgeable
+    via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
+    UserAPIKeyAuth stores virtual keys in, or the master key's stable alias.
     Custom-auth credentials arrive raw (never forward auth material) and hashed
     JWTs rotate on re-issue (useless as a stable ban id), so both are skipped."""
     api_key = user_api_key_dict.api_key
-    if user_api_key_dict.via_virtual_key and api_key is not None and _SHA256_HEX_RE.fullmatch(api_key):
+    if not user_api_key_dict.via_virtual_key or api_key is None:
+        return None
+    if api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or _SHA256_HEX_RE.fullmatch(api_key):
         return api_key
     return None
 
