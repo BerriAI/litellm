@@ -9813,7 +9813,6 @@ async def _drive_team_write(
     raw_body=None,
     user=None,
     find_returns_none=False,
-    json_side_effect=None,
 ):
     """Drive POST ``update_team`` or PATCH ``patch_team`` against a mocked team.
 
@@ -9828,6 +9827,7 @@ async def _drive_team_write(
     from litellm.proxy._types import (
         LiteLLM_TeamTable,
         LitellmUserRoles,
+        PatchTeamRequest,
         UpdateTeamRequest,
         UserAPIKeyAuth,
     )
@@ -9873,14 +9873,10 @@ async def _drive_team_write(
                 litellm_changed_by=None,
             )
         else:
-            if json_side_effect is not None:
-                req.json = AsyncMock(side_effect=json_side_effect)
-            else:
-                req.json = AsyncMock(
-                    return_value=raw_body if raw_body is not None else dict(payload or {})
-                )
+            body = raw_body if raw_body is not None else dict(payload or {})
             result = await patch_team(
                 team_id=_PATCH_TEAM_ID,
+                data=PatchTeamRequest.model_validate(body),
                 http_request=req,
                 user_api_key_dict=auth,
                 litellm_changed_by=None,
@@ -10028,25 +10024,36 @@ async def test_patch_strips_system_managed_metadata_key_like_post():
     assert patch_meta == {"cost_center": "9999"}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("raw_body", [["not", "an", "object"], "a-string", 42, True])
-async def test_patch_rejects_non_object_body(raw_body):
-    from litellm.proxy._types import ProxyException
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"json": ["not", "an", "object"]},
+        {"json": "a-string"},
+        {"json": 42},
+        {"content": b"{not json"},
+        {"json": {"tpm_limit": "not-an-int"}},
+    ],
+    ids=["list", "string", "number", "malformed-json", "wrong-field-type"],
+)
+def test_patch_rejects_a_malformed_body_with_422(kwargs):
+    """The body is a declared parameter, so FastAPI rejects a malformed one before the
+    handler runs. This is the same 422 POST /team/update already returns; the route
+    previously answered 400 here and 500 for a wrongly typed field, reporting a caller
+    mistake as a server fault."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
-    with pytest.raises(ProxyException) as exc:
-        await _drive_team_write("patch", existing_metadata={"a": 1}, raw_body=raw_body)
-    assert exc.value.code == "400" or exc.value.code == 400
+    from litellm.proxy._types import PatchTeamRequest
 
+    app = FastAPI()
 
-@pytest.mark.asyncio
-async def test_patch_rejects_invalid_json_body():
-    from litellm.proxy._types import ProxyException
+    @app.patch("/team/{team_id}")
+    async def _route(team_id: str, data: PatchTeamRequest):  # pragma: no cover - schema only
+        return {}
 
-    with pytest.raises(ProxyException) as exc:
-        await _drive_team_write(
-            "patch", existing_metadata={"a": 1}, json_side_effect=ValueError("no body")
-        )
-    assert exc.value.code == "400" or exc.value.code == 400
+    response = TestClient(app).patch("/team/abc", **kwargs)
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -10116,3 +10123,103 @@ async def test_patch_returns_full_team_object_not_wrapper():
     )
     assert isinstance(result, LiteLLM_TeamTable)
     assert result.team_id == _PATCH_TEAM_ID
+
+
+# ---------------------------------------------------------------------------
+# PATCH body is validated through PatchTeamRequest before it is handed to
+# update_team. The write below must stay byte-identical to what the untyped
+# **body construction produced, or a partial update starts writing columns the
+# caller never mentioned.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_patch_writes_only_the_keys_the_caller_sent():
+    """An omitted field must not reach the DB write at all. If validation ever
+    materialises defaults, every unmentioned column gets overwritten with null."""
+    _, update_mock = await _drive_team_write("patch", raw_body={"tpm_limit": 5})
+    written = update_mock.call_args.kwargs["data"]
+
+    assert written["tpm_limit"] == 5
+    for untouched in ("rpm_limit", "max_budget", "models", "blocked", "budget_duration"):
+        assert untouched not in written, f"{untouched} was written despite not being sent"
+
+
+@pytest.mark.asyncio
+async def test_patch_preserves_explicit_null_as_a_clear():
+    """null is a clear, not an omission: it has to survive validation and reach the write."""
+    _, update_mock = await _drive_team_write("patch", raw_body={"max_budget": None})
+    written = update_mock.call_args.kwargs["data"]
+
+    assert "max_budget" in written
+    assert written["max_budget"] is None
+
+
+def _patch_body_to_update_request(body: dict):
+    """The exact reshaping patch_team performs between the raw body and update_team."""
+    from litellm.proxy._types import PatchTeamRequest, UpdateTeamRequest
+
+    parsed = PatchTeamRequest.model_validate(body)
+    return UpdateTeamRequest(
+        team_id=_PATCH_TEAM_ID,
+        **parsed.model_dump(exclude_unset=True, exclude={"team_id"}),
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"tpm_limit": 5},
+        {"max_budget": None},
+        {"object_permission": {"vector_stores": []}},
+        {"metadata": {"a": 1, "b": None}},
+        {"models": ["gpt-4"], "blocked": False},
+    ],
+    ids=["scalar", "explicit-null", "partial-nested", "metadata-with-null", "list-and-false"],
+)
+def test_patch_body_reshaping_adds_no_keys_the_caller_did_not_send(body):
+    """Validating through PatchTeamRequest must be shape-preserving. If it ever
+    materialises defaults, a partial update silently overwrites untouched columns,
+    and for the merge-only object_permission it would wipe sibling sub-keys."""
+    reshaped = _patch_body_to_update_request(body)
+    dumped = reshaped.model_dump(exclude_unset=True, exclude={"team_id"})
+
+    assert dumped == body
+    assert reshaped.model_fields_set == set(body) | {"team_id"}
+
+
+@pytest.mark.asyncio
+async def test_patch_ignores_unknown_body_keys():
+    """Unknown keys were silently dropped by the previous construction; keep that."""
+    _, update_mock = await _drive_team_write(
+        "patch", raw_body={"tpm_limit": 5, "not_a_team_field": "x"}
+    )
+    written = update_mock.call_args.kwargs["data"]
+
+    assert written["tpm_limit"] == 5
+    assert "not_a_team_field" not in written
+
+
+def test_patch_team_request_makes_team_id_optional():
+    """PATCH takes team_id from the path, so the body model must not require it,
+    while still inheriting every UpdateTeamRequest field."""
+    from litellm.proxy._types import PatchTeamRequest, UpdateTeamRequest
+
+    parsed = PatchTeamRequest.model_validate({"tpm_limit": 5})
+
+    assert parsed.team_id is None
+    assert parsed.model_fields_set == {"tpm_limit"}
+    assert set(UpdateTeamRequest.model_fields).issubset(set(PatchTeamRequest.model_fields))
+
+
+def test_patch_team_route_publishes_its_request_body_schema():
+    """The dashboard's generated client types this call off the OpenAPI spec, which
+    FastAPI can only emit because the body is a declared parameter."""
+    from litellm.proxy.proxy_server import app
+
+    operation = app.openapi()["paths"]["/team/{team_id}"]["patch"]
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+
+    assert schema == {"$ref": "#/components/schemas/PatchTeamRequest"}
+    properties = app.openapi()["components"]["schemas"]["PatchTeamRequest"]["properties"]
+    assert "tpm_limit" in properties and "metadata" in properties
