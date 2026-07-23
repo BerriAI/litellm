@@ -29,7 +29,9 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    sanitize_input_schema_for_anthropic,
+)
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -478,10 +480,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         Filter out unsupported fields from JSON schema for Anthropic's output_format API.
 
-        Anthropic's output_format doesn't support certain JSON schema properties:
-        - maxItems/minItems: Not supported for array types
-        - minimum/maximum: Not supported for numeric types
-        - minLength/maxLength: Not supported for string types
+        Anthropic's output_format doesn't support certain JSON schema properties.
+        These are constraints that cannot be enforced by the constrained-decoding
+        grammar Anthropic compiles the schema into, so the API rejects them with a
+        400 ``invalid_request_error`` (e.g. "output_format.schema: For 'array' type,
+        property 'uniqueItems' is not supported"):
+        - maxItems/minItems/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
+        - minimum/maximum/exclusiveMinimum/exclusiveMaximum/multipleOf: numeric constraints
+        - minLength/maxLength: string constraints
+        - minProperties/maxProperties/patternProperties/propertyNames: object constraints
+        - dependentRequired/dependentSchemas/unevaluatedProperties: object constraints
+        - if/then/else/not: conditional and negation keywords
+
+        ``oneOf`` is also rejected ("Schema type 'oneOf' is not supported") and is
+        rewritten to ``anyOf``, matching the Anthropic SDK. Unknown keywords are
+        ignored by the API, so anything not listed here passes through untouched.
 
         This mirrors the transformation done by the Anthropic Python SDK.
         See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
@@ -502,33 +515,53 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not isinstance(schema, dict):
             return schema
 
-        # All numeric/string/array constraints not supported by Anthropic
-        unsupported_fields = {
-            "maxItems",
-            "minItems",  # array constraints
-            "minimum",
-            "maximum",  # numeric constraints
-            "exclusiveMinimum",
-            "exclusiveMaximum",  # numeric constraints
-            "minLength",
-            "maxLength",  # string constraints
-        }
-
-        # Build description additions from removed constraints
-        constraint_descriptions: list = []
         constraint_labels = {
             "minItems": "minimum number of items: {}",
             "maxItems": "maximum number of items: {}",
+            "uniqueItems": "all array items must be unique",
+            "contains": "array must contain an item matching: {}",
+            "minContains": "minimum number of matching items: {}",
+            "maxContains": "maximum number of matching items: {}",
+            "prefixItems": "leading items must match, in order: {}",
             "minimum": "minimum value: {}",
             "maximum": "maximum value: {}",
             "exclusiveMinimum": "exclusive minimum value: {}",
             "exclusiveMaximum": "exclusive maximum value: {}",
+            "multipleOf": "must be a multiple of {}",
             "minLength": "minimum length: {}",
             "maxLength": "maximum length: {}",
+            "minProperties": "minimum number of properties: {}",
+            "maxProperties": "maximum number of properties: {}",
+            "patternProperties": "properties whose names match each pattern must satisfy: {}",
+            "propertyNames": "property names must satisfy: {}",
+            "dependentRequired": "dependent required properties: {}",
+            "dependentSchemas": "dependent schemas: {}",
+            "unevaluatedProperties": "unevaluated properties must satisfy: {}",
+            "if": "conditional (if): {}",
+            "then": "conditional (then): {}",
+            "else": "conditional (else): {}",
+            "not": "must not match: {}",
         }
-        for field in unsupported_fields:
-            if field in schema:
-                constraint_descriptions.append(constraint_labels[field].format(schema[field]))
+        unsupported_fields = set(constraint_labels)
+
+        # Build description additions from removed constraints. Iterating
+        # constraint_labels (not the set) keeps the note order deterministic across
+        # processes, so identical requests serialize identically regardless of
+        # PYTHONHASHSEED and stay cache-friendly.
+        constraint_descriptions: list = []
+        for field, label in constraint_labels.items():
+            if field not in schema:
+                continue
+            value = schema[field]
+            # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
+            # real requirement, so don't add a misleading advisory note for it.
+            if isinstance(value, bool) and not value:
+                continue
+            # Sub-schema constraints (e.g. ``contains``) are serialized as JSON so
+            # the advisory note preserves what the constraint actually required,
+            # instead of just noting that it existed.
+            note_value = json.dumps(value) if isinstance(value, (dict, list)) else value
+            constraint_descriptions.append(label.format(note_value))
 
         result: Dict[str, Any] = {}
 
@@ -555,11 +588,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif key == "$defs" and isinstance(value, dict):
                 result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
             elif key == "anyOf" and isinstance(value, list):
-                result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+                result["anyOf"] = result.get("anyOf", []) + [
+                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
+                ]
             elif key == "allOf" and isinstance(value, list):
                 result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
             elif key == "oneOf" and isinstance(value, list):
-                result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+                # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
+                # the Anthropic SDK rewrites it to anyOf, so do the same.
+                result["anyOf"] = result.get("anyOf", []) + [
+                    AnthropicConfig.filter_anthropic_output_schema(item) for item in value
+                ]
             else:
                 result[key] = value
 
@@ -634,7 +673,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         mcp_server: Optional[AnthropicMcpServerTool] = None
 
         if tool["type"] == "function" or tool["type"] == "custom":
-            _input_schema: dict = tool["function"].get(
+            _input_schema = tool["function"].get(
                 "parameters",
                 {
                     "type": "object",
@@ -642,28 +681,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 },
             )
 
-            # Anthropic requires input_schema.type to be "object". Normalize
-            # schemas from external sources (MCP servers, OpenAI callers) that
-            # may omit the type field or use a non-object type.
-            if _input_schema.get("type") != "object":
-                litellm.verbose_logger.debug(
-                    "_map_tool_helper: coercing input_schema type from %r to "
-                    "'object' for Anthropic compatibility (tool: %s)",
-                    _input_schema.get("type"),
-                    tool["function"].get("name"),
-                )
-                _input_schema = dict(_input_schema)  # avoid mutating caller's dict
-                _input_schema["type"] = "object"
-                if "properties" not in _input_schema:
-                    _input_schema["properties"] = {}
-
-            # Inline legacy / OpenAPI $refs before the allow-list filter strips
-            # their backing def blocks (https://github.com/BerriAI/litellm/issues/26692).
-            _input_schema = unpack_legacy_defs(_input_schema, copy=True)
-
-            _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
-            input_schema_filtered = {k: v for k, v in _input_schema.items() if k in _allowed_properties}
-            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(**input_schema_filtered)
+            input_anthropic_schema = sanitize_input_schema_for_anthropic(_input_schema)
 
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
@@ -1441,24 +1459,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if any(
-                    substring in model
-                    for substring in {
-                        "sonnet-4.5",
-                        "sonnet-4-5",
-                        "opus-4.1",
-                        "opus-4-1",
-                        "opus-4.5",
-                        "opus-4-5",
-                        "opus-4.6",
-                        "opus-4-6",
-                        "opus-4.7",
-                        "opus-4-7",
-                        "sonnet-4.6",
-                        "sonnet-4-6",
-                        "sonnet_4.6",
-                        "sonnet_4_6",
-                    }
+                if AnthropicConfig._supports_model_capability(
+                    model,
+                    "supports_native_structured_output",
+                    self._resolved_provider,
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:

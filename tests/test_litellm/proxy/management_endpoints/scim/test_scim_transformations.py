@@ -15,6 +15,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIMEnterpriseUser,
+    SCIMMultiValuedAttribute,
     SCIMPatchOperation,
     SCIMUser,
 )
@@ -180,6 +181,74 @@ class TestScimTransformations:
             assert SCIM_ENTERPRISE_USER_SCHEMA in scim_user.schemas
 
     @pytest.mark.asyncio
+    async def test_transform_user_with_entitlements_and_roles_metadata(
+        self, mock_prisma_client
+    ):
+        mock_client, mock_find_unique = mock_prisma_client
+        mock_find_unique.return_value = None
+
+        user = LiteLLM_UserTable(
+            user_id="user-entitled",
+            user_email="entitled@example.com",
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={
+                "scim_entitlements": [
+                    {"value": "jira-software", "display": "Jira Software"}
+                ],
+                "scim_roles": [{"value": "engineering-admin", "primary": True}],
+            },
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user
+            )
+
+            assert scim_user.entitlements is not None
+            assert scim_user.entitlements[0].value == "jira-software"
+            assert scim_user.entitlements[0].display == "Jira Software"
+            assert scim_user.roles is not None
+            assert scim_user.roles[0].value == "engineering-admin"
+            assert scim_user.roles[0].primary is True
+
+    @pytest.mark.asyncio
+    async def test_transform_user_with_malformed_directory_metadata_fails_soft(
+        self, mock_prisma_client
+    ):
+        """Metadata is writable outside the SCIM surface; a corrupted value on one
+        user must omit the attribute, not fail the whole directory response"""
+        mock_client, mock_find_unique = mock_prisma_client
+        mock_find_unique.return_value = None
+
+        user = LiteLLM_UserTable(
+            user_id="user-corrupt",
+            user_email="corrupt@example.com",
+            user_alias=None,
+            teams=[],
+            created_at=None,
+            updated_at=None,
+            metadata={
+                "scim_entitlements": [{"display": 123}],
+                "scim_roles": {"value": "not-a-list"},
+                "scim_enterprise": {"manager": 42},
+            },
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
+                user
+            )
+
+            assert scim_user.id == "user-corrupt"
+            assert scim_user.entitlements is None
+            assert scim_user.roles is None
+            assert scim_user.enterprise_user is None
+            assert SCIM_ENTERPRISE_USER_SCHEMA not in scim_user.schemas
+
+    @pytest.mark.asyncio
     async def test_transform_user_without_enterprise_metadata_omits_schema(
         self, mock_user, mock_prisma_client
     ):
@@ -222,6 +291,27 @@ class TestScimTransformations:
         )
         dumped_ent = with_enterprise.model_dump(by_alias=True)
         assert dumped_ent[SCIM_ENTERPRISE_USER_SCHEMA]["costCenter"] == "CC-42"
+
+    def test_scim_user_serialization_omits_absent_entitlements_and_roles(self):
+        without_attrs = SCIMUser(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            id="user-1",
+            userName="user@example.com",
+        )
+        dumped = without_attrs.model_dump(by_alias=True)
+        assert "entitlements" not in dumped
+        assert "roles" not in dumped
+
+        with_attrs = SCIMUser(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            id="user-2",
+            userName="entitled@example.com",
+            entitlements=[SCIMMultiValuedAttribute(value="jira-software")],
+            roles=[SCIMMultiValuedAttribute(value="engineering-admin")],
+        )
+        dumped_attrs = with_attrs.model_dump(by_alias=True)
+        assert dumped_attrs["entitlements"][0]["value"] == "jira-software"
+        assert dumped_attrs["roles"][0]["value"] == "engineering-admin"
 
     @pytest.mark.asyncio
     async def test_transform_litellm_team_to_scim_group(

@@ -1,11 +1,23 @@
 "use client";
 
-import ModelsAndEndpointsView from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useState } from "react";
+import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
+import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
+import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 
-export default function ModelsAndEndpointsPage() {
-  const { premiumUser } = useAuthorized();
-  const { data: teams } = useTeams();
-  return <ModelsAndEndpointsView premiumUser={premiumUser} teams={teams ?? null} />;
+export default function AllModelsPage() {
+  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
+  const { availableModelGroups, availableModelAccessGroups } = useModelDashboardData();
+  const { openModel, openTeam } = useModelDetailRouting();
+
+  return (
+    <AllModelsTab
+      selectedModelGroup={selectedModelGroup}
+      setSelectedModelGroup={setSelectedModelGroup}
+      availableModelGroups={availableModelGroups}
+      availableModelAccessGroups={availableModelAccessGroups}
+      setSelectedModelId={openModel}
+      setSelectedTeamId={openTeam}
+    />
+  );
 }

@@ -11,14 +11,16 @@ import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
 import { PaginationState, SortingState } from "@tanstack/react-table";
 import { useQueryClient } from "@tanstack/react-query";
-import { Grid, TabPanel } from "@tremor/react";
+import { Grid } from "@tremor/react";
 import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
-import debounce from "lodash/debounce";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
 type ModelViewMode = "all" | "current_team";
+
+const SEARCH_DEBOUNCE_WAIT_MS = 200;
 const { Text } = Typography;
 
 interface AllModelsTabProps {
@@ -59,23 +61,17 @@ const AllModelsTab = ({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);
 
-  // Debounce search input
-  const debouncedUpdateSearch = useMemo(
-    () =>
-      debounce((value: string) => {
-        setDebouncedSearch(value);
-        // Reset to page 1 when search changes
-        setCurrentPage(1);
-        setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-      }, 200),
-    [],
+  const debouncedUpdateSearch = useDebouncedCallback(
+    (value: string) => {
+      setDebouncedSearch(value);
+      setCurrentPage(1);
+      setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+    },
+    { wait: SEARCH_DEBOUNCE_WAIT_MS },
   );
 
   useEffect(() => {
     debouncedUpdateSearch(modelNameSearch);
-    return () => {
-      debouncedUpdateSearch.cancel();
-    };
   }, [modelNameSearch, debouncedUpdateSearch]);
 
   // Determine teamId to pass to the query - only pass if not "personal"
@@ -236,7 +232,7 @@ const AllModelsTab = ({
   };
 
   return (
-    <TabPanel>
+    <div className="w-full">
       <Grid>
         <div className="flex flex-col space-y-4">
           <div className="bg-white rounded-lg shadow-sm">
@@ -604,7 +600,7 @@ const AllModelsTab = ({
         onCancel={() => setIsModelSettingsModalVisible(false)}
         onSuccess={() => setIsModelSettingsModalVisible(false)}
       />
-    </TabPanel>
+    </div>
   );
 };
 

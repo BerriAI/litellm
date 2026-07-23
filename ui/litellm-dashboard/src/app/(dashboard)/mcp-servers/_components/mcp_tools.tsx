@@ -4,6 +4,7 @@ import { ToolTestPanel } from "./ToolTestPanel";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import {
   isClientForwardedTokenMode,
+  gatewayMintsClientFor,
   MCPTool,
   MCPToolsViewerProps,
   MCPContent,
@@ -28,6 +29,7 @@ const MCPToolsViewer = ({
   auth_type,
   oauth2_flow,
   delegate_auth_to_upstream,
+  dcr_bridge,
   userRole,
   userID,
   serverAlias,
@@ -76,6 +78,7 @@ const MCPToolsViewer = ({
     serverId,
     serverAlias,
     userId: userID,
+    gatewayMintsClient: gatewayMintsClientFor({ auth_type, dcr_bridge }),
     onSuccess: setOauthToken,
   });
 

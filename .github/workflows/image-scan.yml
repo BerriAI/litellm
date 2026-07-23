@@ -9,6 +9,7 @@ on:
       - "litellm_**"
     paths:
       - docker/Dockerfile.non_root
+      - tests/proxy_migration_tests/test_offline_image_migration.py
       - uv.lock
       - ui/litellm-dashboard/package-lock.json
       - .github/workflows/image-scan.yml
@@ -51,6 +52,23 @@ jobs:
       - name: Build runtime image
         run: docker build -f docker/Dockerfile.non_root -t litellm-image-scan:${{ github.sha }} .
 
+      # The prisma bake must migrate a fresh DB with no egress as an arbitrary
+      # non-root uid (OpenShift restricted-v2 / air-gapped / readOnlyRootFilesystem).
+      # `docker run` as the default uid with network hides a broken bake because
+      # the migration entrypoint exits 0 even when it applied nothing; asserting
+      # the schema was created is what catches it.
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify offline migration as a non-root uid
+        env:
+          LITELLM_IMAGE: litellm-image-scan:${{ github.sha }}
+        run: |
+          python -m pip install "pytest==9.0.3"
+          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py -v
+
       # Scans the whole shipped artifact: OS/apk plus every language package
       # baked into the image, including ones no lockfile declares (e.g. prisma's
       # vendored node engine) that osv-scan cannot see. osv-scan stays the fast
@@ -58,6 +76,8 @@ jobs:
       # free OSS, run as a pinned, checksum-verified binary; no GitHub Action
       # dependency and no vendor SaaS callout.
       - name: Scan image for fixable HIGH/CRITICAL CVEs
+        env:
+          GRYPE_MATCH_PYTHON_USING_CPES: "true"
         run: |
           "$RUNNER_TEMP/grype" litellm-image-scan:${{ github.sha }} \
             --only-fixed \
