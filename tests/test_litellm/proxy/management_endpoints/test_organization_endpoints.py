@@ -983,3 +983,12 @@ def test_build_budget_write_data_no_reset_at_without_duration():
     data = build_budget_write_data({"tpm_limit": None}, "admin-1")
     assert data["tpm_limit"] is None
     assert "budget_reset_at" not in data
+
+
+def test_build_budget_write_data_clears_reset_at_with_null_duration():
+    """Clearing budget_duration also nulls budget_reset_at so no stale reset timestamp survives."""
+    from litellm.proxy.management_endpoints.organization_endpoints import build_budget_write_data
+
+    data = build_budget_write_data({"budget_duration": None}, "admin-1")
+    assert data["budget_duration"] is None
+    assert data["budget_reset_at"] is None

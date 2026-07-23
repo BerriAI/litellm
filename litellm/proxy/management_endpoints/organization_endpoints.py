@@ -111,13 +111,18 @@ _ORG_COLUMN_FIELDS = frozenset({"organization_alias", "models"})
 
 def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: str) -> Mapping[str, object]:
     """
-    Budget-row columns to write. ``budget_reset_at`` is recomputed only when a non-null
-    ``budget_duration`` is sent; other sent fields (including a ``None`` clear) are written as-is.
+    Budget-row columns to write. ``budget_reset_at`` tracks any sent ``budget_duration``:
+    recomputed for a new duration, cleared alongside a ``None`` duration so no stale reset
+    timestamp survives. Other sent fields (including a ``None`` clear) are written as-is.
     """
     budget_duration = budget_updates.get("budget_duration")
     recomputed_reset_at: Mapping[str, object] = (
-        {"budget_reset_at": get_budget_reset_time(budget_duration=budget_duration)}
-        if isinstance(budget_duration, str)
+        {
+            "budget_reset_at": (
+                get_budget_reset_time(budget_duration=budget_duration) if isinstance(budget_duration, str) else None
+            )
+        }
+        if "budget_duration" in budget_updates
         else {}
     )
     return {**budget_updates, **recomputed_reset_at, "updated_by": updated_by}
