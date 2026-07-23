@@ -34,7 +34,7 @@ def extract_key(message: dict, fallback_index: int, used_keys: Set[str]) -> str:
         if match:
             # Use just the filename, not full path
             path = match.group(1)
-            key = path.split("/")[-1]
+            key = re.split(r"[\\/]", path)[-1]
             break
 
     if key is None:
