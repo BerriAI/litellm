@@ -302,7 +302,7 @@ async def authenticate_user(
                 user_email=user_email,
                 user_role=cast(str, user_role),
                 login_method="username_password",
-                reset_password_required=bool(reset_password_required),
+                reset_password_required=reset_password_required is True,
             )
         else:
             raise ProxyException(
