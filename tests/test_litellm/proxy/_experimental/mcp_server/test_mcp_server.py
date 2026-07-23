@@ -805,6 +805,9 @@ async def test_mcp_get_prompt_success():
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
+        # An id_jag server resolves its stored SSO assertion by user id, so dropping the caller
+        # identity here would make prompts fail closed while tools/call still succeeded.
+        user_api_key_auth=user_api_key_auth,
     )
     assert result is prompt_result
 
@@ -866,6 +869,7 @@ async def test_mcp_read_resource_success():
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
+        user_api_key_auth=user_api_key_auth,
     )
     assert result is read_result
 
