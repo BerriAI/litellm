@@ -149,19 +149,23 @@ COPY --from=builder /opt/prisma /opt/prisma
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 
+# XDG_CACHE_HOME is intentionally left unset so it falls back to $HOME/.cache
+# (/app/.cache, writable by the runtime uid). The prisma bake at the read-only
+# /opt/prisma is anchored by PRISMA_BINARY_CACHE_DIR / PRISMA_CLI_PATH, so
+# nothing needs XDG to point there; pointing it at the read-only bake would
+# deny any XDG-aware library that writes a cache at runtime.
 ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     PRISMA_CLI_PATH=/opt/prisma/binaries/node_modules/.bin/prisma \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
     HOME=/app \
     LITELLM_NON_ROOT=true \
-    XDG_CACHE_HOME=/opt/prisma/.cache \
     PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
     PRISMA_OFFLINE_MODE=true
 
-RUN mkdir -p /nonexistent /var/lib/litellm/assets /var/lib/litellm/ui && \
+RUN mkdir -p /nonexistent /app/.cache /var/lib/litellm/assets /var/lib/litellm/ui && \
     chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup "$PRISMA_PATH" && \
