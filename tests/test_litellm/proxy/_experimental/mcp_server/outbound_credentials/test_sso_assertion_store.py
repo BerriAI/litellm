@@ -14,7 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt as pyjwt
 import pytest
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    TokenStoreUnavailable,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    SsoAssertionUnrenewable,
     assertion_from_sso_login,
     ema_assertion_retention_enabled,
     fetch_sso_identity_assertion,
@@ -238,19 +242,35 @@ async def test_fetch_missing_row_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_fetch_undecryptable_row_returns_none():
+async def test_fetch_undecryptable_row_is_unrenewable_not_absent():
+    """A row that will not decrypt (salt-key rotation) is unusable material, not a user who never
+    signed in; the remedy is a fresh sign-in, so it must not read as absence."""
     prisma = _make_prisma({"user-a": "not-an-encrypted-blob"})
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-        assert await fetch_sso_identity_assertion("user-a") is None
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma), pytest.raises(SsoAssertionUnrenewable):
+        await fetch_sso_identity_assertion("user-a")
 
 
 @pytest.mark.asyncio
-async def test_fetch_unparseable_payload_returns_none():
+async def test_fetch_unparseable_payload_is_unrenewable_not_absent():
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
     prisma = _make_prisma({"user-a": encrypt_value_helper("]]not json")})
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-        assert await fetch_sso_identity_assertion("user-a") is None
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma), pytest.raises(SsoAssertionUnrenewable):
+        await fetch_sso_identity_assertion("user-a")
+
+
+@pytest.mark.asyncio
+async def test_fetch_reports_an_unreachable_store_as_unavailable_never_absent():
+    """The reported defect: a transient store outage for a user who DOES have an assertion must be
+    retryable (503), never the precondition-required shape that means "you have never signed in".
+    ``None`` is reserved for the one determinate fact that no row was ever written."""
+    with patch("litellm.proxy.proxy_server.prisma_client", None), pytest.raises(TokenStoreUnavailable):
+        await fetch_sso_identity_assertion("user-a")
+
+    exploding = _make_prisma({})
+    exploding.db.litellm_ssoidentityassertion.find_unique = AsyncMock(side_effect=RuntimeError("db down"))
+    with patch("litellm.proxy.proxy_server.prisma_client", exploding), pytest.raises(TokenStoreUnavailable):
+        await fetch_sso_identity_assertion("user-a")
 
 
 @pytest.mark.asyncio
@@ -350,9 +370,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
     LiveSsoAssertionSource,
     SSOIdentityAssertion,
     SsoAssertionUnrenewable,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (  # noqa: E402
-    TokenStoreUnavailable,
 )
 from pydantic import SecretStr  # noqa: E402
 
@@ -798,9 +815,13 @@ async def test_source_never_memoizes_absence_so_a_fresh_login_is_seen_immediatel
 
 
 @pytest.mark.asyncio
-async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
-    """A store read failure must fail closed as absent (never raise into egress), and a warm
-    memo entry keeps serving through the outage."""
+async def test_source_store_outage_is_retryable_and_a_warm_cache_survives_it():
+    """A warm cache keeps serving through an outage, and once cold the outage is RETRYABLE.
+
+    It must never read as absence: this user has an assertion, so answering "you have never signed
+    in" would send them to a sign-in that fixes nothing while the real remedy is to retry. ``None``
+    is reserved for the one case where no row was ever written.
+    """
     calls = {"n": 0}
     stored = _stored(3600)
 
@@ -828,7 +849,8 @@ async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
     assert await source.fetch_usable("alice") is not None
     assert await source.fetch_usable("alice") is not None
     clock["now"] = clock["now"] + 61.0
-    assert await source.fetch_usable("alice") is None
+    with pytest.raises(TokenStoreUnavailable):
+        await source.fetch_usable("alice")
 
 
 @pytest.mark.asyncio

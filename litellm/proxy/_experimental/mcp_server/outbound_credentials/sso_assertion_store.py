@@ -156,28 +156,35 @@ async def persist_sso_identity_assertion(user_id: str, assertion: SSOIdentityAss
 
 
 async def fetch_sso_identity_assertion(user_id: str) -> SSOIdentityAssertion | None:
-    """The stored assertion for ``user_id``, or ``None`` when absent, undecryptable (salt-key
-    rotation), or unparseable. Expiry is not judged here; the reader owns that policy."""
+    """The stored assertion for ``user_id``, or ``None`` only when no row was ever written.
+
+    ``None`` is reserved for that one determinate fact, so a fault can never be reported as "this
+    user has not signed in". A store that cannot be reached raises ``TokenStoreUnavailable``, which
+    is the contract ``OAuthTokenStore`` already defines for exactly this, and a row that cannot be
+    decrypted (salt-key rotation) or parsed raises ``SsoAssertionUnrenewable`` because the material
+    is unusable and only a fresh sign-in replaces it. Expiry is not judged here; the reader owns
+    that policy.
+    """
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper  # noqa: PLC0415  # runtime global
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global
 
     if prisma_client is None:
-        return None
-    row = await prisma_client.db.litellm_ssoidentityassertion.find_unique(where={"user_id": user_id})
+        raise TokenStoreUnavailable("the assertion store is not connected")
+    try:
+        row = await prisma_client.db.litellm_ssoidentityassertion.find_unique(where={"user_id": user_id})
+    except Exception as exc:  # noqa: BLE001  # an unreadable store is indeterminate, never an absence
+        raise TokenStoreUnavailable("the assertion store could not be read") from exc
     if row is None:
         return None
     raw = _MAYBE_STR_ADAPTER.validate_python(
         decrypt_value_helper(row.assertion_b64, _ASSERTION_DECRYPT_LOG_KEY, exception_type="debug")
     )
     if raw is None:
-        return None
+        raise SsoAssertionUnrenewable("the stored identity assertion could not be decrypted")
     try:
         payload = _StoredAssertionPayload.model_validate_json(raw)
-    except ValidationError:
-        verbose_proxy_logger.warning(
-            "Stored SSO identity assertion for user_id=%s could not be parsed; treating as absent.", user_id
-        )
-        return None
+    except ValidationError as exc:
+        raise SsoAssertionUnrenewable("the stored identity assertion could not be parsed") from exc
     return SSOIdentityAssertion(
         id_token=SecretStr(payload.id_token),
         refresh_token=SecretStr(payload.refresh_token) if payload.refresh_token else None,
@@ -512,11 +519,12 @@ class LiveSsoAssertionSource:
         await self._store.invalidate(user_id, _ASSERTION_SERVER_KEY)
 
     async def fetch_usable(self, user_id: str) -> OAuthToken | None:
-        """The caller's usable assertion, ``None`` when no row was ever stored.
+        """The caller's usable assertion, ``None`` only when no row was ever stored.
 
         ``SsoAssertionUnrenewable`` (re-login) and ``TokenStoreUnavailable`` (retry) propagate, so
-        the arm maps three remedies without a parallel result union. Any other failure is a store
-        outage and fails closed as absent rather than raising into egress.
+        the arm maps three remedies without a parallel result union. ``None`` carries exactly one
+        meaning: anything indeterminate reads as unavailable, so a store outage is a retry rather
+        than a false "this user has never signed in", and never a 500.
         """
         if not user_id:
             return None
@@ -524,11 +532,8 @@ class LiveSsoAssertionSource:
             return await self._store.fetch(user_id, _ASSERTION_SERVER_KEY)
         except (SsoAssertionUnrenewable, TokenStoreUnavailable):
             raise
-        except Exception as exc:  # noqa: BLE001  # a store outage fails closed as absent, never a 500
-            verbose_proxy_logger.warning(
-                "SSO assertion store read failed for user_id=%s; treating as absent: %s", user_id, exc
-            )
-            return None
+        except Exception as exc:  # noqa: BLE001  # indeterminate, so never absence and never a 500
+            raise TokenStoreUnavailable("the stored identity assertion could not be read") from exc
 
 
 async def retain_sso_identity_assertion_for_ema(user_id: str, assertion: SSOIdentityAssertion | None) -> None:
