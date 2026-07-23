@@ -28,3 +28,34 @@ def test_requesty_config_default_base_url():
         api_base=None, api_key="test-key"
     )
     assert api_base == "https://router.requesty.ai/v1"
+
+
+def test_transform_request_extra_body_cannot_override_protected_fields():
+    """Client-controlled extra_body must not clobber canonical model/messages.
+
+    extra_body is caller-supplied and applied after model authorization/request
+    inspection. Allowing it to overwrite `model` or `messages` would let a caller
+    route to an unauthorized model, so those fields must be preserved.
+    """
+    messages = [{"role": "user", "content": "hello"}]
+    optional_params = {
+        "extra_body": {
+            "model": "openai/unauthorized-model",
+            "messages": [{"role": "user", "content": "evil"}],
+            "custom_flag": True,
+        }
+    }
+
+    result = RequestyConfig().transform_request(
+        model="openai/gpt-4o-mini",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Canonical fields resolved by the transform are preserved.
+    assert result["model"] == "openai/gpt-4o-mini"
+    assert result["messages"] == messages
+    # Non-protected extension params still pass through.
+    assert result["custom_flag"] is True
