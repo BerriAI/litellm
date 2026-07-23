@@ -3333,6 +3333,7 @@ class BudgetConfig(BaseModel):
     budget_duration: Optional[str] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    models: Optional[List[str]] = None
 
     def __init__(self, **data: Any) -> None:
         # Map time_period to budget_duration if present

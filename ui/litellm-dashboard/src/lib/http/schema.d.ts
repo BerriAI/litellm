@@ -21395,6 +21395,8 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Models */
+            models?: string[] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Tpm Limit */
