@@ -789,6 +789,41 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
 
 
 @pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_true(monkeypatch):
+    """
+    Regression (issue #32575): with store_model_in_db=True the startup gate skipped
+    init_mcp_servers_from_db entirely, so DB-backed MCP servers created via the Admin
+    UI vanished from GET /v1/mcp/server after a restart until the next write. MCP
+    hydration must run regardless of store_model_in_db.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    mock_proxy_config.add_deployment.assert_awaited()
+    mock_proxy_config.init_mcp_servers_from_db.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_init_mcp_servers_from_db_respects_supported_db_objects(monkeypatch):
     """
     init_mcp_servers_from_db hydrates MCP from the DB by default but skips it when

@@ -3197,6 +3197,12 @@ def get_optional_params_embeddings(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
+        # OpenAI SDKs (and litellm's own client) send encoding_format="float"
+        # by default; float lists are exactly what the vertex API returns, so
+        # the param is a no-op — don't reject the provider default. Other
+        # values (e.g. "base64") stay on the unsupported-param path below.
+        if non_default_params.get("encoding_format") == "float":
+            non_default_params.pop("encoding_format")
         supported_params = get_supported_openai_params(
             model=model,
             custom_llm_provider="vertex_ai",
