@@ -5,8 +5,10 @@ Tests the handler's ability to process input/output for the Responses API
 with guardrail transformations.
 """
 
+import json
 import os
 import sys
+from copy import deepcopy
 from typing import Any, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
@@ -24,8 +26,18 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ResponsesAPIResponse,
+)
+from litellm.types.responses.main import (
+    CustomToolCallOutputItem,
+    GenericResponseOutputItem,
+    OutputText,
+)
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
@@ -181,6 +193,69 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"][0]["content"] is None
         # Empty string should be processed
         assert result["input"][1]["content"] == " [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_process_input_preserves_unchanged_custom_tool(self) -> None:
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        original_tools = [
+            {
+                "type": "custom",
+                "name": "exec",
+                "description": "Execute JavaScript",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "lark",
+                    "definition": "start: /[\\s\\S]+/",
+                },
+            },
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+            {"type": "web_search"},
+        ]
+        data = {
+            "input": "Use a tool",
+            "model": "gpt-4",
+            "tools": deepcopy(original_tools),
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert result["tools"][0] == original_tools[0]
+        assert result["tools"][1]["type"] == "function"
+        assert result["tools"][1]["name"] == "get_weather"
+        assert result["tools"][2] == {"type": "web_search"}
+
+    def test_modified_custom_tool_is_not_restored(self) -> None:
+        handler = OpenAIResponsesHandler()
+        original_tool = {
+            "type": "custom",
+            "name": "exec",
+            "description": "Execute JavaScript",
+            "format": {"type": "text"},
+        }
+        transformed, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [original_tool]
+        )
+        remapped = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            transformed
+        )[0]
+        remapped["description"] = "Redacted by guardrail"
+
+        result = handler._restore_unchanged_custom_tool(
+            original_tool=original_tool,
+            remapped_tool=remapped,
+        )
+
+        assert result == remapped
 
 
 class TestOpenAIResponsesHandlerOutputProcessing:
@@ -626,6 +701,53 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             == '{"location":"Boston, MA","unit":"celsius"}'
         )
 
+    @pytest.mark.parametrize(
+        "output_item",
+        [
+            CustomToolCallOutputItem(
+                call_id="call_exec",
+                id="fc_exec",
+                input='text("OK")',
+                name="exec",
+                status="completed",
+                type="custom_tool_call",
+            ),
+            {
+                "call_id": "call_exec",
+                "id": "fc_exec",
+                "input": 'text("OK")',
+                "name": "exec",
+                "status": "completed",
+                "type": "custom_tool_call",
+            },
+        ],
+    )
+    def test_extract_custom_tool_call(
+        self,
+        output_item: CustomToolCallOutputItem | dict[str, str],
+    ) -> None:
+        handler = OpenAIResponsesHandler()
+        tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
+
+        handler._extract_output_text_and_images(
+            output_item=output_item,
+            output_idx=3,
+            texts_to_check=[],
+            images_to_check=[],
+            task_mappings=[],
+            tool_calls_to_check=tool_calls_to_check,
+        )
+
+        assert len(tool_calls_to_check) == 1
+        tool_call = tool_calls_to_check[0]
+        assert tool_call["id"] == "call_exec"
+        assert tool_call["type"] == "function"
+        assert tool_call["function"]["name"] == "exec"
+        assert tool_call["index"] == 3
+        assert json.loads(tool_call["function"]["arguments"]) == {
+            "content": 'text("OK")'
+        }
+
     @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):
         """Test processing output response containing function tool calls"""
@@ -657,6 +779,33 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
 
         assert exc_info.value.status_code == 400
         assert "Response blocked by guardrail" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_with_custom_tool_call(self) -> None:
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        response = ResponsesAPIResponse(
+            id="resp_custom",
+            created_at=1234567890,
+            model="glm",
+            object="response",
+            status="completed",
+            output=[
+                CustomToolCallOutputItem(
+                    call_id="call_exec",
+                    id="fc_exec",
+                    input='text("OK")',
+                    name="exec",
+                    status="completed",
+                    type="custom_tool_call",
+                )
+            ],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_output_response(response, guardrail)
+
+        assert exc_info.value.status_code == 400
 
     def test_extract_mixed_content_with_text_and_tool_calls(self):
         """Test extracting both text and tool calls from response"""
@@ -835,6 +984,66 @@ class MockPassThroughGuardrail(CustomGuardrail):
 
 class TestOpenAIResponsesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
+
+    @pytest.mark.asyncio
+    async def test_completed_stream_custom_tool_call_runs_guardrail(self) -> None:
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_custom",
+                    "model": "glm",
+                    "output": [
+                        {
+                            "call_id": "call_exec",
+                            "id": "fc_exec",
+                            "input": 'text("OK")',
+                            "name": "exec",
+                            "status": "completed",
+                            "type": "custom_tool_call",
+                        }
+                    ],
+                    "status": "completed",
+                },
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail,
+            )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_output_item_done_custom_tool_call_runs_guardrail(self) -> None:
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        responses_so_far = [
+            {
+                "type": "response.output_item.done",
+                "output_index": 2,
+                "item": {
+                    "call_id": "call_exec",
+                    "id": "fc_exec",
+                    "input": 'text("OK")',
+                    "name": "exec",
+                    "status": "completed",
+                    "type": "custom_tool_call",
+                },
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail,
+            )
+
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_empty_output(self):
@@ -1209,6 +1418,59 @@ class TestOpenAIResponsesHandlerToolInjection:
         ]
         merged = handler._merge_tools_after_guardrail(original, remapped)
         assert [t["name"] for t in merged] == ["a", "b"]
+
+    def test_merge_restores_custom_tool_after_preceding_tool_removed(self) -> None:
+        handler = OpenAIResponsesHandler()
+        custom_tool = {
+            "type": "custom",
+            "name": "exec",
+            "description": "Execute JavaScript",
+            "format": {"type": "text"},
+        }
+        transformed, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [custom_tool]
+        )
+        synthetic_tool = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            transformed
+        )[0]
+        original = [
+            {"type": "function", "name": "removed_tool"},
+            custom_tool,
+        ]
+
+        merged = handler._merge_tools_after_guardrail(original, [synthetic_tool])
+
+        assert merged == [custom_tool]
+
+    def test_merge_restores_reordered_custom_tool_after_prepended_tool(self) -> None:
+        handler = OpenAIResponsesHandler()
+        custom_tool = {
+            "type": "custom",
+            "name": "exec",
+            "description": "Execute JavaScript",
+            "format": {"type": "text"},
+        }
+        transformed, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [custom_tool]
+        )
+        synthetic_tool = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            transformed
+        )[0]
+        original_function = {
+            "type": "function",
+            "name": "get_weather",
+        }
+        prepended_function = {
+            "type": "function",
+            "name": "injected_tool",
+        }
+
+        merged = handler._merge_tools_after_guardrail(
+            [original_function, custom_tool],
+            [prepended_function, synthetic_tool, original_function],
+        )
+
+        assert merged == [prepended_function, custom_tool, original_function]
 
     @pytest.mark.asyncio
     async def test_injected_tool_survives_when_request_already_has_tools(self):
