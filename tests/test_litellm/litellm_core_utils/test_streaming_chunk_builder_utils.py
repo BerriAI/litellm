@@ -597,6 +597,79 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.total_tokens == 77
 
 
+def test_streaming_preserves_prompt_tokens_details_from_earlier_chunk():
+    """
+    prompt_tokens_details is aggregated last-wins across usage-bearing chunks.
+    Some providers (e.g. Gemini via Vertex AI) send a chunk with the detailed
+    breakdown followed by a later chunk whose usage carries only the flat
+    prompt/completion/total counts with prompt_tokens_details=None. Without a
+    None-guard on the reassignment (unlike the analogous completion_tokens_details
+    handling just above it), that later chunk clobbers the real breakdown,
+    leaving prompt_tokens_details=None on the final usage object even though a
+    real breakdown was reported earlier in the stream.
+
+    This silently starves any consumer that assumes usage.prompt_tokens_details
+    is always populated once reported once — e.g. Sentry's openai_agents
+    integration crashes with AttributeError on 'NoneType' object has no
+    attribute 'cached_tokens' when this happens on the Responses API path.
+    """
+    chunk_with_details = ModelResponseStream(
+        id="chatcmpl-mocked-usage-2",
+        created=1745513206,
+        model="gemini/gemini-3-flash-preview",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content=""),
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=3,
+            total_tokens=3,
+            completion_tokens_details=None,
+            prompt_tokens_details=PromptTokensDetails(
+                audio_tokens=None, cached_tokens=0
+            ),
+        ),
+    )
+
+    chunk_without_details = ModelResponseStream(
+        id="chatcmpl-mocked-usage-2",
+        created=1745513207,
+        model="gemini/gemini-3-flash-preview",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=None),
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=50,
+            prompt_tokens=0,
+            total_tokens=53,
+            completion_tokens_details=None,
+            prompt_tokens_details=None,
+        ),
+    )
+
+    chunks = [chunk_with_details, chunk_without_details]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks, model="gemini/gemini-3-flash-preview", completion_output=""
+    )
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 0
+
+
 def test_get_model_from_chunks_azure_model_router():
     """
     Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.
