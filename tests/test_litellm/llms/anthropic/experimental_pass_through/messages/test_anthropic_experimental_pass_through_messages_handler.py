@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.anthropic_interface import messages
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -646,6 +646,83 @@ def test_handler_skips_strip_when_presanitized():
         )
     assert spy.call_count == 0  # skipped the redundant scan
     assert result is not None
+
+
+def test_handler_short_circuits_on_model_response_mock_response():
+    """Regression test for #31976. BedrockGuardrail with
+    disable_exception_on_block=True sets a ModelResponse (not a str) as
+    litellm_params.mock_response to block a request without raising. The
+    handler must honor it instead of silently calling the real model."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    blocked_response = ModelResponse(
+        choices=[Choices(message=Message(content="Blocked by guardrail"))],
+        model="bedrock-guardrail",
+    )
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+    ) as mock_base_handler:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[{"role": "user", "content": "some blocked content"}],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            mock_response=blocked_response,
+        )
+
+    mock_base_handler.assert_not_called()
+    assert result["content"][0]["text"] == "Blocked by guardrail"
+
+
+def test_handler_short_circuits_on_model_response_with_empty_choices():
+    """A ModelResponse mock with no choices must still short-circuit instead
+    of crashing on an unguarded choices[0] access."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    blocked_response = ModelResponse(choices=[], model="bedrock-guardrail")
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+    ) as mock_base_handler:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[{"role": "user", "content": "some blocked content"}],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            mock_response=blocked_response,
+        )
+
+    mock_base_handler.assert_not_called()
+    assert result["content"][0]["text"] == ""
+
+
+def test_handler_short_circuits_on_model_response_with_none_content():
+    """A ModelResponse mock whose message content is None must still
+    short-circuit rather than silently falling through to the real model."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    blocked_response = ModelResponse(
+        choices=[Choices(message=Message(content=None))],
+        model="bedrock-guardrail",
+    )
+
+    with patch.object(
+        handler.base_llm_http_handler,
+        "anthropic_messages_handler",
+    ) as mock_base_handler:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[{"role": "user", "content": "some blocked content"}],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            mock_response=blocked_response,
+        )
+
+    mock_base_handler.assert_not_called()
+    assert result["content"][0]["text"] == ""
 
 
 def test_presanitized_flag_not_leaked_to_provider_params():

@@ -368,6 +368,21 @@ async def anthropic_messages(
     return response
 
 
+def _get_mock_response_content(
+    mock_response: Optional[Union[str, litellm.ModelResponse, Exception, Any]],
+) -> Optional[str]:
+    if isinstance(mock_response, str):
+        return mock_response
+    if isinstance(mock_response, litellm.ModelResponse):
+        if not mock_response.choices:
+            return ""
+        first_choice = mock_response.choices[0]
+        if isinstance(first_choice, litellm.Choices):
+            return first_choice.message.content or ""
+        return ""
+    return None
+
+
 def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
     """
     Validate Anthropic API metadata - This is done to ensure only allowed `metadata` fields are passed to Anthropic API
@@ -477,12 +492,13 @@ def anthropic_messages_handler(
         if kwargs.get("_websearch_interception_converted_stream", False):
             litellm_logging_obj.model_call_details["websearch_interception_converted_stream"] = True
 
-    if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
+    mock_response_content = _get_mock_response_content(litellm_params.mock_response)
+    if mock_response_content is not None:
         return mock_response(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
-            mock_response=litellm_params.mock_response,
+            mock_response=mock_response_content,
         )
 
     # Expand litellm_proxy MCP references through the MCP gateway before dispatch, so every
