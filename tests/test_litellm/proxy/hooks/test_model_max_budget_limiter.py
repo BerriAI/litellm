@@ -155,3 +155,22 @@ async def test_spend_at_exactly_group_budget_passes():
     await _log_spend(limiter, "anthropic-opus-4-7", 10.0, OPUS_GROUP_BUDGET)
 
     assert await limiter.is_key_within_model_budget(key, "anthropic-opus-4-8") is True
+
+
+@pytest.mark.asyncio
+async def test_group_budget_matches_bare_request_when_member_is_provider_qualified():
+    qualified_group_budget = {
+        "gpt4-family": {
+            "models": ["openai/gpt-4", "openai/gpt-4o"],
+            "budget_limit": 10.0,
+            "time_period": "30d",
+        }
+    }
+    limiter = _make_limiter()
+    key = _make_key(qualified_group_budget)
+
+    await _log_spend(limiter, "gpt-4", 11.0, qualified_group_budget)
+
+    with pytest.raises(litellm.BudgetExceededError, match="model group=gpt4-family"):
+        await limiter.is_key_within_model_budget(key, "gpt-4o")
+    assert await limiter.is_key_within_model_budget(key, "gpt-5.5") is True

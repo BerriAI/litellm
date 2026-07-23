@@ -258,7 +258,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return tuple(
             (_group_name, _config)
             for _group_name, _config in internal_model_max_budget.items()
-            if _config.models and (model in _config.models or model_without_provider in _config.models)
+            if _config.models
+            and any(
+                _member == model
+                or _member == model_without_provider
+                or self._get_model_without_custom_llm_provider(_member) == model
+                for _member in _config.models
+            )
         )
 
     def _get_model_without_custom_llm_provider(self, model: str) -> str:
