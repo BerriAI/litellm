@@ -317,6 +317,7 @@ LLM_CONFIG_NAMES = (
     "InceptionChatConfig",
     "HyperbolicChatConfig",
     "VercelAIGatewayConfig",
+    "OrcaRouterConfig",
     "OVHCloudChatConfig",
     "OVHCloudEmbeddingConfig",
     "CometAPIEmbeddingConfig",
@@ -1189,6 +1190,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VercelAIGatewayConfig": (
         ".llms.vercel_ai_gateway.chat.transformation",
         "VercelAIGatewayConfig",
+    ),
+    "OrcaRouterConfig": (
+        ".llms.orcarouter.chat.transformation",
+        "OrcaRouterConfig",
     ),
     "OVHCloudChatConfig": (".llms.ovhcloud.chat.transformation", "OVHCloudChatConfig"),
     "OVHCloudEmbeddingConfig": (

@@ -5939,6 +5939,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "orcarouter":
+            if "ORCAROUTER_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ORCAROUTER_API_KEY")
         elif custom_llm_provider == "vercel_ai_gateway":
             if "VERCEL_AI_GATEWAY_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7676,6 +7681,7 @@ class ProviderConfigManager:
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
             ),
+            LlmProviders.ORCAROUTER: (lambda: litellm.OrcaRouterConfig(), False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),

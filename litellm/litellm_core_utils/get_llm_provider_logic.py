@@ -340,6 +340,9 @@ def get_llm_provider(
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
                         dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                    elif endpoint == "https://api.orcarouter.ai/v1":
+                        custom_llm_provider = "orcarouter"
+                        dynamic_api_key = get_secret_str("ORCAROUTER_API_KEY")
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
@@ -549,6 +552,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.PerplexityChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "orcarouter":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.OrcaRouterConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "aiohttp_openai":
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
