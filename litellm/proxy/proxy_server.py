@@ -2450,13 +2450,32 @@ async def increment_spend_counters(
 
     async def _user_scope(scope_user_id: str) -> None:
         user_counter_key = f"spend:user:{scope_user_id}"
-        if user_counter_key in reserved_counter_keys:
-            return
-        await _init_and_increment_spend_counter(
-            counter_key=user_counter_key,
-            source_cache_key=scope_user_id,
-            increment=cost,
-        )
+        if user_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=user_counter_key,
+                source_cache_key=scope_user_id,
+                increment=cost,
+            )
+
+        user_obj = await user_api_key_cache.async_get_cache(key=scope_user_id)
+        if user_obj is not None:
+            user_budget_limits = getattr(user_obj, "budget_limits", None) or (
+                user_obj.get("budget_limits") if isinstance(user_obj, dict) else None
+            )
+            if isinstance(user_budget_limits, str):
+                user_budget_limits = json.loads(user_budget_limits)
+            if isinstance(user_budget_limits, list):
+                for window in user_budget_limits:
+                    duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+                    user_window_counter = f"spend:user:{scope_user_id}:window:{duration}"
+                    if user_window_counter not in reserved_counter_keys:
+                        await _init_and_increment_window_spend_counter(
+                            counter_key=user_window_counter,
+                            entity_type="User",
+                            entity_id=scope_user_id,
+                            window_start=get_budget_window_start(window),
+                            increment=cost,
+                        )
 
     scope_coros = tuple(
         coro
