@@ -409,6 +409,37 @@ class RouterBudgetLimiting(CustomLogger):
         model_id: str = str(standard_logging_payload.get("model_id", ""))
         custom_llm_provider: str = kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
         if custom_llm_provider is None:
+            # /v1/messages and /v1/embeddings routes do not inject
+            # custom_llm_provider into litellm_params the way
+            # /v1/chat/completions does. Derive it from the model string
+            # so budget tracking is not silently skipped for those routes.
+            # See: https://github.com/BerriAI/litellm/issues/26701
+            _litellm_params = kwargs.get("litellm_params") or {}
+            _model = (
+                _litellm_params.get("model", "")
+                if isinstance(_litellm_params, dict)
+                else getattr(_litellm_params, "model", "") or ""
+            )
+            # litellm_params may not carry `model` for /v1/messages and
+            # /v1/embeddings routes (LoggedLiteLLMParams gap). Fall back to
+            # the top-level model field and then the standard logging payload
+            # so budget enforcement is not silently skipped.
+            # See: https://github.com/BerriAI/litellm/issues/26701
+            if not _model:
+                _model = kwargs.get("model", "") or standard_logging_payload.get("model", "") or ""
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    model=str(_model),
+                    litellm_params=_LiteLLMParamsDictView(_litellm_params if isinstance(_litellm_params, dict) else {}),
+                )
+            except Exception as e:  # noqa: BLE001
+                verbose_router_logger.debug(
+                    "RouterBudgetLimiting: could not derive custom_llm_provider from model string %r: %s",
+                    _model,
+                    e,
+                )
+                custom_llm_provider = None
+        if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required")
 
         budget_config = self._get_budget_config_for_provider(custom_llm_provider)
