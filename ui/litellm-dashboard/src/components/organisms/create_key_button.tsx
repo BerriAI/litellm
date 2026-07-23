@@ -1732,7 +1732,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
             <Title>Save your Key</Title>
             <Col numColSpan={1}>
               {apiKey != null ? (
-                <CreatedKeyDisplay apiKey={apiKey} />
+                <CreatedKeyDisplay apiKey={apiKey} accessToken={accessToken} />
               ) : (
                 <Text>Key being created, this might take 30s</Text>
               )}

@@ -6889,6 +6889,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/key/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Share Key Via Password Link
+         * @description Create a one-time, self-destructing password.link secret for a virtual key and return the shareable link.
+         *
+         *     Encrypts the key client-side (the proxy never uploads plaintext) and stores it on password.link, which
+         *     serves a link that reveals the key once and then deletes it. Send the returned link to the recipient.
+         *
+         *     Requires `PASSWORD_LINK_API_KEY` (a password.link private API key) to be set on the proxy. Admin-only:
+         *     only proxy admins, team admins, or org admins for the key's team can share it.
+         *
+         *     Parameters:
+         *     - key: str - The virtual key to share (sk-... or its hashed value)
+         *     - expiration_hours: int - Hours until the link expires (1-500, default 24)
+         *     - max_views: int - How many times the link can be viewed (1-100, default 1)
+         */
+        post: operations["share_key_via_password_link_key_share_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/key/unblock": {
         parameters: {
             query?: never;
@@ -24669,6 +24700,26 @@ export interface components {
             key_aliases?: string[] | null;
             /** Keys */
             keys?: string[] | null;
+        };
+        /** KeyShareRequest */
+        KeyShareRequest: {
+            /**
+             * Expiration Hours
+             * @default 24
+             */
+            expiration_hours: number;
+            /** Key */
+            key: string;
+            /**
+             * Max Views
+             * @default 1
+             */
+            max_views: number;
+        };
+        /** KeyShareResponse */
+        KeyShareResponse: {
+            /** Share Link */
+            share_link: string;
         };
         /**
          * KeyUpdateFields
@@ -42766,6 +42817,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    share_key_via_password_link_key_share_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyShareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyShareResponse"];
                 };
             };
             /** @description Validation Error */

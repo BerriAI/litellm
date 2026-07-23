@@ -898,6 +898,19 @@ export const keyDeleteCall = async (accessToken: string, user_key: string) => {
   }
 };
 
+export interface KeyShareResponse {
+  share_link: string;
+}
+
+export const keyShareCreateCall = async (accessToken: string, key: string): Promise<KeyShareResponse> => {
+  try {
+    return await apiClient.post<KeyShareResponse>(`/key/share`, { accessToken, body: { key } });
+  } catch (error) {
+    console.error("Failed to create secure share link:", error);
+    throw error;
+  }
+};
+
 export const userDeleteCall = async (accessToken: string, userIds: string[]) => {
   try {
     return await apiClient.post(`/user/delete`, { accessToken, body: { user_ids: userIds } });

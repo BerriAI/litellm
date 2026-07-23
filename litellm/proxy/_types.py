@@ -748,6 +748,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/{team_id}/members/me",
+        "/key/share",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -1897,6 +1898,16 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
 
 class BlockModelRequest(LiteLLMPydanticObjectBase):
     model_id: str  # required
+
+
+class KeyShareRequest(LiteLLMPydanticObjectBase):
+    key: str
+    expiration_hours: int = Field(default=24, ge=1, le=500)
+    max_views: int = Field(default=1, ge=1, le=100)
+
+
+class KeyShareResponse(LiteLLMPydanticObjectBase):
+    share_link: str
 
 
 class AddTeamCallback(LiteLLMPydanticObjectBase):

@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -5928,6 +5929,116 @@ async def _check_key_admin_access(
             f"user_role={user_api_key_dict.user_role}, user_id={user_api_key_dict.user_id}"
         },
     )
+
+
+@router.post(
+    "/key/share",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=KeyShareResponse,
+)
+@management_endpoint_wrapper
+async def share_key_via_password_link(
+    data: KeyShareRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> KeyShareResponse:
+    """
+    Create a one-time, self-destructing password.link secret for a virtual key and return the shareable link.
+
+    Encrypts the key client-side (the proxy never uploads plaintext) and stores it on password.link, which
+    serves a link that reveals the key once and then deletes it. Send the returned link to the recipient.
+
+    Requires `PASSWORD_LINK_API_KEY` (a password.link private API key) to be set on the proxy. Admin-only:
+    only proxy admins, team admins, or org admins for the key's team can share it.
+
+    Parameters:
+    - key: str - The virtual key to share (sk-... or its hashed value)
+    - expiration_hours: int - Hours until the link expires (1-500, default 24)
+    - max_views: int - How many times the link can be viewed (1-100, default 1)
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.proxy.management_helpers.password_link_share import (
+        HttpResponse,
+        PasswordLinkError,
+        PasswordLinkShare,
+        create_password_link_secret,
+    )
+    from litellm.proxy.proxy_server import hash_token, prisma_client, user_api_key_cache
+    from litellm.secret_managers.main import get_secret_str
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    if prisma_client is None:
+        raise ProxyException(
+            message=CommonProxyErrors.db_not_connected_error.value,
+            type=ProxyErrorTypes.no_db_connection,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not is_valid_api_key(data.key):
+        raise ProxyException(
+            message="Invalid key format.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    hashed_token = hash_token(token=data.key) if data.key.startswith("sk-") else data.key
+
+    await _check_key_admin_access(
+        user_api_key_dict=user_api_key_dict,
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route="/key/share",
+    )
+
+    existing_record = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+    if existing_record is None:
+        raise ProxyException(
+            message=f"Key not found: {hashed_token}",
+            type=ProxyErrorTypes.not_found_error,
+            param="key",
+            code=status.HTTP_404_NOT_FOUND,
+        )
+
+    api_key = get_secret_str("PASSWORD_LINK_API_KEY")
+    if not api_key:
+        raise ProxyException(
+            message="password.link sharing is not configured. Set PASSWORD_LINK_API_KEY on the proxy.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="PASSWORD_LINK_API_KEY",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    api_base = get_secret_str("PASSWORD_LINK_API_BASE") or "https://password.link"
+
+    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
+
+    async def _poster(url: str, headers: dict[str, str], body: dict[str, object]) -> HttpResponse:
+        return await client.client.post(url, headers=headers, json=body)
+
+    result = await create_password_link_secret(
+        secret=data.key,
+        api_key=api_key,
+        poster=_poster,
+        api_base=api_base,
+        expiration_hours=data.expiration_hours,
+        max_views=data.max_views,
+    )
+
+    match result:
+        case PasswordLinkShare():
+            return KeyShareResponse(share_link=result.share_link)
+        case PasswordLinkError():
+            raise ProxyException(
+                message=result.message,
+                type=ProxyErrorTypes.internal_server_error,
+                param="key",
+                code=status.HTTP_502_BAD_GATEWAY,
+            )
+        case _:
+            assert_never(result)
 
 
 @router.post("/key/block", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
