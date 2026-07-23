@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     import httpx
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 import litellm
@@ -965,15 +965,8 @@ async def google_login(
             state=cli_state,
             request=request,
         )
-        if return_to is not None and sso_redirect is not None:
-            if SSOAuthenticationHandler._validate_return_to(return_to):
-                sso_redirect.set_cookie(
-                    key="litellm_cp_return_to",
-                    value=return_to,
-                    max_age=600,
-                    httponly=True,
-                    samesite="lax",
-                )
+        if sso_redirect is not None:
+            _persist_return_to_cookie(sso_redirect, return_to)
         return sso_redirect
 
     from fastapi.responses import HTMLResponse
@@ -982,13 +975,19 @@ async def google_login(
         os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
         or general_settings.get("hide_default_credentials_hint", False) is True
     )
-    return HTMLResponse(
+    form_response = HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=True,
             hide_default_credentials_hint=hide_default_credentials_hint,
         ),
         status_code=200,
     )
+    # Preserve return_to across the username/password sign-in too, via the SAME shared, never-raising
+    # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
+    # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
+    # renders, since the helper never raises on a bad return_to).
+    _persist_return_to_cookie(form_response, return_to)
+    return form_response
 
 
 def generic_response_convertor(
@@ -2418,6 +2417,92 @@ async def sso_readiness():
     )
 
 
+def _is_same_origin_return_path(return_to: str) -> bool:
+    """True for a strictly relative return path that stays on the gateway's own origin by
+    construction, and is therefore safe to honor without a configured ``control_plane_url``.
+    Used by the MCP gateway DCR authorize round-trip so a browser sent through login lands
+    back on the authorize request.
+
+    Requires a single leading ``/`` (not protocol-relative ``//``), no backslash (browsers
+    fold ``\\`` to ``/``, so ``/\\evil.com`` would escape the origin), and no control or
+    whitespace characters. Rejecting control chars keeps a ``\\r\\n``/tab-bearing value out
+    of the redirect ``Location`` and the ``litellm_cp_return_to`` cookie entirely, rather
+    than relying on downstream header encoding to neutralize it."""
+    if not return_to.startswith("/") or return_to.startswith("//") or "\\" in return_to:
+        return False
+    return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
+
+
+async def _sso_return_to_redirect(
+    return_to: str | None,
+    jwt_token: str,
+    redis_usage_cache,
+    user_api_key_cache,
+) -> RedirectResponse | None:
+    """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
+
+    Two arms, both clearing the one-shot ``litellm_cp_return_to`` cookie:
+    - **Same-origin relative path** (the MCP gateway DCR authorize round-trip): set the session cookie
+      exactly like the dashboard path, then send the browser back where it came from.
+    - **Control-plane cross-origin** (``control_plane_url``): stash the JWT behind a single-use opaque
+      code (60s TTL) so the token never lands in browser history/logs; the control plane redeems it via
+      ``POST /v3/login/exchange``.
+
+    Extracted from ``get_redirect_response_from_openid`` to keep that method inside the complexity
+    budget; behavior is identical to the inline arms it replaces (including letting
+    ``_validate_return_to`` raise for a mismatched absolute return_to, as before)."""
+    if return_to is None:
+        return None
+
+    if _is_same_origin_return_path(return_to):
+        redirect_response = RedirectResponse(url=return_to, status_code=303)
+        redirect_response.set_cookie(key="token", value=jwt_token)
+        redirect_response.delete_cookie("litellm_cp_return_to")
+        return redirect_response
+
+    if SSOAuthenticationHandler._validate_return_to(return_to):
+        code = secrets.token_urlsafe(32)
+        cache_key = f"login_code:{code}"
+        cache_value = {"token": jwt_token, "redirect_url": return_to}
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+        else:
+            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+
+        separator = "&" if "?" in return_to else "?"
+        redirect_url = return_to + separator + urlencode({"login": "success", "code": code})
+        verbose_proxy_logger.info("Cross-origin SSO: redirecting to control plane with login code")
+        redirect_response = RedirectResponse(url=redirect_url, status_code=303)
+        redirect_response.delete_cookie("litellm_cp_return_to")
+        return redirect_response
+
+    return None
+
+
+def _persist_return_to_cookie(response: Response, return_to: str | None) -> None:
+    """Best-effort: persist a SAFE ``return_to`` on ``response`` as the one-shot ``litellm_cp_return_to``
+    cookie so ANY sign-in path — SSO / Okta / generic OR the username/password form — can resume there
+    afterwards. THIS is the single source of truth, called by every sign-in branch so they cannot
+    diverge (a per-branch reimplementation is exactly how the two drifted before). Honors a strictly
+    relative same-origin path, and (when ``control_plane_url`` is configured) a return_to matching that
+    origin. It NEVER raises: a mismatched or invalid ``return_to`` is simply not stored, so it can never
+    block sign-in — the login entrypoint must always render."""
+    if return_to is None:
+        return
+    try:
+        safe = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler._validate_return_to(return_to)
+    except HTTPException:
+        return  # a non-matching absolute return_to is ignored, never blocks sign-in
+    if safe:
+        response.set_cookie(
+            key="litellm_cp_return_to",
+            value=return_to,
+            max_age=600,
+            httponly=True,
+            samesite="lax",
+        )
+
+
 class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
@@ -3055,7 +3140,6 @@ class SSOAuthenticationHandler:
         return_to: Optional[str] = None,
         sso_assertion: SSOIdentityAssertion | None = None,
     ) -> RedirectResponse:
-        import jwt
 
         from litellm.proxy.proxy_server import (
             general_settings,
@@ -3219,30 +3303,21 @@ class SSOAuthenticationHandler:
             server_root_path=get_server_root_path(),
         )
 
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            master_key or "",
-            algorithm="HS256",
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, master_key or "")
+
+        # Post-SSO return_to handling (the same-origin DCR round-trip and the control-plane
+        # cross-origin code exchange) lives in one shared helper so this method stays inside the
+        # complexity budget. None falls through to the dashboard redirect below.
+        return_to_redirect = await _sso_return_to_redirect(
+            return_to=return_to,
+            jwt_token=jwt_token,
+            redis_usage_cache=redis_usage_cache,
+            user_api_key_cache=user_api_key_cache,
         )
-
-        # Control-plane cross-origin: store JWT behind a single-use opaque
-        # code (60s TTL) so the token never appears in browser history / logs.
-        # The control plane redeems it via POST /v3/login/exchange.
-        if return_to is not None and SSOAuthenticationHandler._validate_return_to(return_to):
-            code = secrets.token_urlsafe(32)
-            cache_key = f"login_code:{code}"
-            cache_value = {"token": jwt_token, "redirect_url": return_to}
-            if redis_usage_cache is not None:
-                await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-            else:
-                await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-
-            separator = "&" if "?" in return_to else "?"
-            redirect_url = return_to + separator + urlencode({"login": "success", "code": code})
-            verbose_proxy_logger.info("Cross-origin SSO: redirecting to control plane with login code")
-            redirect_response = RedirectResponse(url=redirect_url, status_code=303)
-            redirect_response.delete_cookie("litellm_cp_return_to")
-            return redirect_response
+        if return_to_redirect is not None:
+            return return_to_redirect
 
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"

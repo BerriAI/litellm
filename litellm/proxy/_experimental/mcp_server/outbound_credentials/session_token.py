@@ -113,10 +113,12 @@ class MintedSessionToken(BaseModel):
 
 
 class OpenedSessionToken(BaseModel):
-    """A validated session token of either kind: the principal it was minted for."""
+    """A validated session token of either kind: the principal it was minted for, plus the
+    ``jti`` so the token endpoint can enforce single-use rotation on a refresh token."""
 
     model_config = ConfigDict(frozen=True)
     principal: SessionPrincipal
+    jti: str
 
 
 class SessionTokenTooLarge(BaseModel):
@@ -320,7 +322,9 @@ def _open(
         return SessionMalformed()
     if now.timestamp() >= claims.exp:
         return SessionExpired()
-    return OpenedSessionToken(principal=SessionPrincipal(user_id=claims.user_id, client_id=claims.client_id))
+    return OpenedSessionToken(
+        principal=SessionPrincipal(user_id=claims.user_id, client_id=claims.client_id), jti=claims.jti
+    )
 
 
 def _decode_claims(

@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
+    _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
@@ -2197,6 +2198,56 @@ class MCPServerManager:
 
         return [server_id for server_id in submitted_server_ids if self.get_mcp_server_by_id(server_id) is not None]
 
+    async def operator_open_server_ids(
+        self,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        allow_all_server_ids: list[str] | None = None,
+        submitted_server_ids: list[str] | None = None,
+    ) -> set:
+        """Servers reachable through OPEN channels rather than a grant: operator-opened
+        ``allow_all_keys`` servers, plus the caller's own active BYOM submissions when the caller
+        carries no explicit ``mcp_servers`` scope.
+
+        The single owner of that question for BOTH axes. The server union in
+        ``get_allowed_mcp_servers`` adds these ids, and the admitted subject's tool resolution asks
+        the same question to treat an open-channel server as default-open for tools — exactly how a
+        virtual key experiences it. Encoding the channel membership twice is how a server ends up
+        listable but uninvokable.
+
+        Empty inside a toolset scope: toolset_mcp_route / dynamic_mcp_route set
+        ``_mcp_active_toolset_id`` before calling the handler, pinning the request to the toolset's
+        own servers (checking op.mcp_toolsets==[] instead would false-positive on DB-default rows
+        where Postgres initialises the column to ARRAY[]::TEXT[]).
+
+        ``allow_all_server_ids`` / ``submitted_server_ids`` are injectable so the server union,
+        which precomputes both for its fallback path, does not compute them twice."""
+        from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: PLC0415
+            _mcp_active_toolset_id,
+        )
+
+        if _mcp_active_toolset_id.get() is not None:
+            return set()
+        if allow_all_server_ids is None:
+            allow_all_server_ids = self.get_allow_all_keys_server_ids()
+        open_ids = set(allow_all_server_ids)
+        key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
+        # "Explicitly scoped, so do not widen with BYOM" is a rule about a CREDENTIAL that carries
+        # its own mcp_servers list. It does not describe a keyless admitted subject: its
+        # object_permission is the user's own row, whose mcp_servers column is [] by DB default, so
+        # applying this rule would hide almost every admitted user's OWN submitted servers. Their
+        # submissions are theirs by authorship, and their scope comes from the per-source union.
+        has_explicit_object_permission = (
+            not _is_mcp_admitted_user_subject(user_api_key_auth)
+            and key_object_permission is not None
+            and (key_object_permission.mcp_servers is not None)
+        )
+        if not has_explicit_object_permission:
+            if submitted_server_ids is None:
+                submitted_server_ids = await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+            open_ids.update(submitted_server_ids)
+        return open_ids
+
     async def get_allowed_mcp_servers(self, user_api_key_auth: Optional[UserAPIKeyAuth] = None) -> list[str]:
         """
         Get the allowed MCP Servers for the user.
@@ -2210,11 +2261,22 @@ class MCPServerManager:
 
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
 
+        # A keyless admitted subject is resolved per grant source, and channel decisions that are
+        # absolute for a scoped KEY credential are not absolute for it: its own opt-out silences its
+        # own source (handled per source in the resolver), never its teams' grants, and its admin
+        # role does not swallow the grant model — a session bearer is a third-party client
+        # credential, not the dashboard, so an admin signing in through the connect flow gets their
+        # grants like anyone else rather than handing the client the full registry ahead of every
+        # per-team org ceiling.
+        is_admitted_subject = _is_mcp_admitted_user_subject(user_api_key_auth)
+
         # The key explicitly opted out of every MCP server. Return zero before
         # layering on allow_all_keys or submitted servers so the opt-out is absolute.
         key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
-        if key_object_permission is not None and (
-            SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
+        if (
+            not is_admitted_subject
+            and key_object_permission is not None
+            and (SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or []))
         ):
             return []
 
@@ -2234,8 +2296,14 @@ class MCPServerManager:
         )
 
         try:
-            # If admin but NO explicit object permission, get all servers
-            if user_api_key_auth and _user_has_admin_view(user_api_key_auth) and not has_explicit_object_permission:
+            # If admin but NO explicit object permission, get all servers (never for an admitted
+            # subject — see is_admitted_subject above)
+            if (
+                user_api_key_auth
+                and not is_admitted_subject
+                and _user_has_admin_view(user_api_key_auth)
+                and not has_explicit_object_permission
+            ):
                 verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
                 return list(self.get_registry().keys())
 
@@ -2243,19 +2311,13 @@ class MCPServerManager:
             allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
             verbose_logger.debug(f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}")
             combined_servers = set(allowed_mcp_servers)
-            # Only skip allow_all_keys servers when the request is inside a toolset
-            # scope.  toolset_mcp_route / dynamic_mcp_route set _mcp_active_toolset_id
-            # before calling the handler — that ContextVar is the reliable signal.
-            # Using op.mcp_toolsets==[] would false-positive on DB-default rows where
-            # Postgres initialises the column to ARRAY[]::TEXT[].
-            from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: PLC0415
-                _mcp_active_toolset_id,
+            combined_servers.update(
+                await self.operator_open_server_ids(
+                    user_api_key_auth,
+                    allow_all_server_ids=allow_all_server_ids,
+                    submitted_server_ids=submitted_server_ids,
+                )
             )
-
-            in_toolset_scope = _mcp_active_toolset_id.get() is not None
-            if not in_toolset_scope:
-                combined_servers.update(allow_all_server_ids)
-                combined_servers.update(submitted_server_ids)
 
             # For anonymous callers (no user_id, no role), also surface any
             # servers the operator has opted into upstream-delegated auth.
