@@ -2887,6 +2887,45 @@ def test_google_ai_studio_presence_penalty_supported():
 
     assert "presence_penalty" in supported_params
 
+def test_google_ai_studio_penalty_params_not_supported_for_gemini_2_5():
+    """
+    Test that Gemini 2.5 models do not advertise penalty parameters.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/26108
+    """
+    config = GoogleAIStudioGeminiConfig()
+
+    supported_params = config.get_supported_openai_params(
+        model="gemini-2.5-flash"
+    )
+
+    assert "frequency_penalty" not in supported_params
+    assert "presence_penalty" not in supported_params
+
+def test_google_ai_studio_gemini_3_penalty_not_supported():
+    """
+    Test that penalty parameters are not supported for Gemini 3 models.
+    """
+    config = GoogleAIStudioGeminiConfig()
+    supported_params = config.get_supported_openai_params(model="gemini-3-flash")
+
+    assert "frequency_penalty" not in supported_params
+    assert "presence_penalty" not in supported_params
+
+
+def test_google_ai_studio_penalty_params_supported_for_gemini_2_0():
+    """
+    Test that Gemini 2.0 models continue to support penalty parameters.
+    """
+    config = GoogleAIStudioGeminiConfig()
+
+    supported_params = config.get_supported_openai_params(
+        model="gemini-2.0-flash"
+    )
+
+    assert "frequency_penalty" in supported_params
+    assert "presence_penalty" in supported_params
+
 
 # ==================== Tool Type Separation Tests ====================
 # These tests verify that each Tool object contains exactly one type per Vertex AI API spec
