@@ -23,6 +23,28 @@ import litellm
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
 
 
+_AGENTCORE_MODEL = "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent"
+
+
+def _make_sync_sse_response(body: str) -> Mock:
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "text/event-stream"}
+    mock_response.iter_text = Mock(return_value=iter([body]))
+    return mock_response
+
+
+def _make_async_sse_response(body: str) -> Mock:
+    async def _aiter_text():
+        yield body
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "text/event-stream"}
+    mock_response.aiter_text = Mock(return_value=_aiter_text())
+    return mock_response
+
+
 class TestAgentCoreAcceptHeader:
     """Tests for Accept header in AgentCore requests."""
 
@@ -644,3 +666,203 @@ class TestAgentCoreMultimodalContent:
         payload = config.transform_request(messages=messages, **kwargs)
         assert payload["content"] == content
         assert payload["content"] is not content
+
+
+class TestAgentCoreStringSsePayloads:
+    """Regression tests for issue #25691: string SSE payloads from Strands agents."""
+
+    @pytest.fixture
+    def config(self):
+        return AmazonAgentCoreConfig()
+
+    def _complete_sync(self, body: str) -> str:
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+        with patch.object(client, "post", return_value=_make_sync_sse_response(body)):
+            response = litellm.completion(
+                model=_AGENTCORE_MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                client=client,
+                api_key="test-jwt-token",
+            )
+            return "".join(
+                c.choices[0].delta.content
+                for c in response
+                if c.choices[0].delta.content
+            )
+
+    def _complete_non_streaming(self, body: str):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler()
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.headers = {"content-type": "text/event-stream"}
+        mock_response.text = body
+        with patch.object(client, "post", return_value=mock_response):
+            return litellm.completion(
+                model=_AGENTCORE_MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+                client=client,
+                api_key="test-jwt-token",
+            )
+
+    async def _complete_async(self, body: str) -> str:
+        from unittest.mock import AsyncMock
+
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        client = AsyncHTTPHandler()
+        with patch.object(
+            client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=_make_async_sse_response(body),
+        ):
+            response = await litellm.acompletion(
+                model=_AGENTCORE_MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                client=client,
+                api_key="test-jwt-token",
+            )
+            content = ""
+            async for c in response:
+                if c.choices[0].delta.content:
+                    content += c.choices[0].delta.content
+            return content
+
+    def test_sync_stream_quoted_string_payloads(self):
+        assert self._complete_sync('data: "hello"\ndata: " world"\n') == "hello world"
+
+    async def test_async_stream_quoted_string_payloads(self):
+        content = await self._complete_async('data: "hello"\ndata: " world"\n')
+        assert content == "hello world"
+
+    def test_sync_stream_plain_non_json_payload(self):
+        assert self._complete_sync("data: hello\n") == "hello"
+
+    async def test_async_stream_plain_non_json_payload(self):
+        assert await self._complete_async("data: hello\n") == "hello"
+
+    def test_sync_stream_skips_bare_done_sentinel(self):
+        assert self._complete_sync("data: hello\ndata: [DONE]\n") == "hello"
+
+    def test_sync_stream_skips_quoted_done_sentinel(self):
+        assert self._complete_sync('data: "[DONE]"\n') == ""
+
+    def test_non_streaming_sse_aggregator_quoted_string(self, config):
+        parsed = config._parse_sse_stream('data: "hi there"')
+        assert parsed["content"] == "hi there"
+
+    def test_non_streaming_public_path_surfaces_content_and_tokens(self):
+        response = self._complete_non_streaming('data: "hello from agent"\n')
+        assert response.choices[0].message.content == "hello from agent"
+        assert response.usage.completion_tokens > 0
+
+    def test_sync_stream_skips_malformed_json_frame(self):
+        assert self._complete_sync('data: {"event":\n') == ""
+
+    def test_sync_stream_non_dict_event_is_skipped_not_crashed(self):
+        body = "data: " + json.dumps({"event": "not-a-dict"}) + "\n"
+        assert self._complete_sync(body) == ""
+
+    async def test_async_stream_non_dict_event_is_skipped_not_crashed(self):
+        body = "data: " + json.dumps({"event": "not-a-dict"}) + "\n"
+        assert await self._complete_async(body) == ""
+
+    def test_sync_stream_flushes_unterminated_final_line(self):
+        assert self._complete_sync('data: "tail"') == "tail"
+
+    async def test_async_stream_flushes_unterminated_final_line(self):
+        assert await self._complete_async('data: "tail"') == "tail"
+
+    @staticmethod
+    def _content_block_delta_body(text: str) -> str:
+        return (
+            "data: "
+            + json.dumps({"event": {"contentBlockDelta": {"delta": {"text": text}}}})
+            + "\n"
+        )
+
+    @staticmethod
+    def _usage_event_body() -> str:
+        return (
+            "data: "
+            + json.dumps(
+                {
+                    "event": {
+                        "metadata": {
+                            "usage": {
+                                "inputTokens": 5,
+                                "outputTokens": 7,
+                                "totalTokens": 12,
+                            }
+                        }
+                    }
+                }
+            )
+            + "\n"
+        )
+
+    @staticmethod
+    def _usage_chunk_matches(chunks) -> bool:
+        return any(
+            (u := getattr(c, "usage", None)) is not None
+            and u.prompt_tokens == 5
+            and u.completion_tokens == 7
+            and u.total_tokens == 12
+            for c in chunks
+        )
+
+    def test_sync_stream_dict_content_block_delta_still_works(self):
+        assert (
+            self._complete_sync(self._content_block_delta_body("dict path"))
+            == "dict path"
+        )
+
+    async def test_async_stream_dict_content_block_delta_still_works(self):
+        content = await self._complete_async(
+            self._content_block_delta_body("dict path")
+        )
+        assert content == "dict path"
+
+    def test_sync_generator_usage_event_still_surfaces_usage(self, config):
+        chunks = list(
+            config._stream_agentcore_response_sync(
+                _make_sync_sse_response(self._usage_event_body()), "test-model"
+            )
+        )
+        assert self._usage_chunk_matches(chunks)
+
+    async def test_async_generator_usage_event_still_surfaces_usage(self, config):
+        chunks = [
+            c
+            async for c in config._stream_agentcore_response(
+                _make_async_sse_response(self._usage_event_body()), "test-model"
+            )
+        ]
+        assert self._usage_chunk_matches(chunks)
+
+    def test_dict_content_block_delta_empty_text_yields_no_content(self):
+        assert self._complete_sync(self._content_block_delta_body("")) == ""
+
+    def test_non_streaming_final_message_wins_over_deltas(self, config):
+        body = (
+            self._content_block_delta_body("delta text")
+            + "data: "
+            + json.dumps(
+                {"message": {"role": "assistant", "content": [{"text": "final text"}]}}
+            )
+            + "\n"
+        )
+        parsed = config._parse_sse_stream(body)
+        assert parsed["content"] == "final text"
+
+    def test_sync_stream_non_string_non_dict_yields_no_content(self):
+        assert self._complete_sync("data: 123\ndata: [1, 2]\n") == ""
+
+    def test_sync_stream_empty_string_payload_yields_no_content(self):
+        assert self._complete_sync('data: ""\n') == ""
