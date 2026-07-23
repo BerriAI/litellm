@@ -143,13 +143,24 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         client: Union[ClientSession, Callable[[], ClientSession]],
         ssl_verify: Optional[Union[bool, ssl.SSLContext]] = None,
         owns_session: bool = True,
+        session_factory: Callable[[], ClientSession] | None = None,
     ):
         self.client = client
         self._ssl_verify = ssl_verify  # Store for per-request SSL override
         super().__init__(client=client, owns_session=owns_session)
-        # Store the client factory for recreating sessions when needed
-        if callable(client):
-            self._client_factory = client
+        self._client_factory: Callable[[], ClientSession] | None = (
+            session_factory if session_factory is not None else client if callable(client) else None
+        )
+
+    def _new_session(self) -> ClientSession:
+        if self._client_factory is not None:
+            return self._client_factory()
+
+        from litellm.llms.custom_httpx.http_handler import (
+            build_default_aiohttp_client_session,
+        )
+
+        return build_default_aiohttp_client_session()
 
     def _get_valid_client_session(self) -> ClientSession:
         """
@@ -162,20 +173,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         # If we don't have a client or it's not a ClientSession, create one
         if not isinstance(self.client, ClientSession):
-            if hasattr(self, "_client_factory") and callable(self._client_factory):
-                self.client = self._client_factory()
-            else:
-                self.client = ClientSession()
+            self.client = self._new_session()
             # Don't return yet - check if the newly created session is valid
 
         # Check if the session itself is closed
         if self.client.closed:
             verbose_logger.debug("Session is closed, creating new session")
-            # Create a new session
-            if hasattr(self, "_client_factory") and callable(self._client_factory):
-                self.client = self._client_factory()
-            else:
-                self.client = ClientSession()
+            self.client = self._new_session()
             return self.client
 
         # Check if the existing session is still valid for the current event loop
@@ -198,17 +202,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                     verbose_logger.debug(f"Error closing old session: {e}")
 
                 # Create a new session in the current event loop
-                if hasattr(self, "_client_factory") and callable(self._client_factory):
-                    self.client = self._client_factory()
-                else:
-                    self.client = ClientSession()
+                self.client = self._new_session()
 
         except (RuntimeError, AttributeError):
             # If we can't check the loop or session is invalid, recreate it
-            if hasattr(self, "_client_factory") and callable(self._client_factory):
-                self.client = self._client_factory()
-            else:
-                self.client = ClientSession()
+            self.client = self._new_session()
 
         return self.client
 
@@ -303,10 +301,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             if "Session is closed" in str(e):
                 verbose_logger.debug(f"Session closed during request, retrying with new session: {e}")
                 # Force creation of a new session
-                if hasattr(self, "_client_factory") and callable(self._client_factory):
-                    self.client = self._client_factory()
-                else:
-                    self.client = ClientSession()
+                self.client = self._new_session()
                 client_session = self.client
 
                 # Retry the request with the new session

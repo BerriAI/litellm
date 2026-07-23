@@ -1,6 +1,8 @@
 import socket
 from unittest.mock import MagicMock, patch
 
+import aiohttp
+
 
 def _invoke_connector_factory(http_handler_module):
     """
@@ -159,3 +161,104 @@ def test_socket_factory_uses_tcp_keepalive_when_keepidle_unavailable(monkeypatch
         setsockopt_calls[(socket.IPPROTO_TCP, fake_socket_module.TCP_KEEPALIVE)] == 60
     )
     assert (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPIDLE", -1)) not in setsockopt_calls
+
+
+def _last_socket_factory(mock_tcp_connector):
+    return mock_tcp_connector.call_args.kwargs.get("socket_factory")
+
+
+def test_shared_session_transport_recreates_with_socket_factory(monkeypatch):
+    from litellm.llms.custom_httpx import http_handler as http_handler_module
+
+    monkeypatch.setattr(http_handler_module, "AIOHTTP_SO_KEEPALIVE", True)
+    monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
+
+    shared_session = MagicMock(name="shared_session", spec=aiohttp.ClientSession)
+    shared_session.closed = False
+
+    connector_mock = MagicMock(name="connector")
+    session_mock = MagicMock(name="session")
+
+    with patch.object(
+        http_handler_module, "TCPConnector", return_value=connector_mock
+    ) as mock_tcp_connector:
+        with patch.object(
+            http_handler_module, "ClientSession", return_value=session_mock
+        ):
+            transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
+                shared_session=shared_session
+            )
+            assert transport.client is shared_session
+            assert transport._client_factory is not None
+            transport._new_session()
+
+    assert mock_tcp_connector.call_count >= 1
+    assert callable(_last_socket_factory(mock_tcp_connector))
+
+
+def test_new_session_falls_back_to_keepalive_default(monkeypatch):
+    from litellm.llms.custom_httpx import http_handler as http_handler_module
+    from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+
+    monkeypatch.setattr(http_handler_module, "AIOHTTP_SO_KEEPALIVE", True)
+    monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
+
+    concrete_session = object()
+    transport = LiteLLMAiohttpTransport(client=concrete_session, session_factory=None)
+    assert transport._client_factory is None
+
+    connector_mock = MagicMock(name="connector")
+    session_mock = MagicMock(name="session")
+
+    with patch.object(
+        http_handler_module, "TCPConnector", return_value=connector_mock
+    ) as mock_tcp_connector:
+        with patch.object(
+            http_handler_module, "ClientSession", return_value=session_mock
+        ):
+            transport._new_session()
+
+    assert mock_tcp_connector.call_count >= 1
+    assert callable(_last_socket_factory(mock_tcp_connector))
+
+
+def test_build_default_session_includes_socket_factory(monkeypatch):
+    from litellm.llms.custom_httpx import http_handler as http_handler_module
+
+    monkeypatch.setattr(http_handler_module, "AIOHTTP_SO_KEEPALIVE", True)
+    monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
+
+    connector_mock = MagicMock(name="connector")
+    session_mock = MagicMock(name="session")
+
+    with patch.object(
+        http_handler_module, "TCPConnector", return_value=connector_mock
+    ) as mock_tcp_connector:
+        with patch.object(
+            http_handler_module, "ClientSession", return_value=session_mock
+        ):
+            http_handler_module.build_default_aiohttp_client_session()
+
+    assert mock_tcp_connector.call_count >= 1
+    assert callable(_last_socket_factory(mock_tcp_connector))
+
+
+def test_build_default_session_omits_socket_factory_when_disabled(monkeypatch):
+    from litellm.llms.custom_httpx import http_handler as http_handler_module
+
+    monkeypatch.setattr(http_handler_module, "AIOHTTP_SO_KEEPALIVE", False)
+    monkeypatch.setattr(http_handler_module, "_AIOHTTP_SUPPORTS_SOCKET_FACTORY", True)
+
+    connector_mock = MagicMock(name="connector")
+    session_mock = MagicMock(name="session")
+
+    with patch.object(
+        http_handler_module, "TCPConnector", return_value=connector_mock
+    ) as mock_tcp_connector:
+        with patch.object(
+            http_handler_module, "ClientSession", return_value=session_mock
+        ):
+            http_handler_module.build_default_aiohttp_client_session()
+
+    assert mock_tcp_connector.call_count >= 1
+    assert "socket_factory" not in mock_tcp_connector.call_args.kwargs
