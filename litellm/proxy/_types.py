@@ -1670,7 +1670,7 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     )
     model_max_budget: Optional[GenericBudgetConfigType] = Field(
         default=None,
-        description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
+        description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}}). An entry with 'models' set shares one budget across that group of models (e.g. {'opus-family': {'models': ['claude-opus-4-5', 'claude-opus-4-6'], 'max_budget': 10, 'budget_duration': '30d'}})",
     )
     budget_reset_at: Optional[datetime] = Field(
         default=None,
