@@ -11,6 +11,7 @@ import httpx
 
 import litellm
 from litellm import LlmProviders
+from litellm.litellm_core_utils.param_utils import strip_litellm_internal_params
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
@@ -268,17 +269,18 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 "headers": headers,
             },
         )
+        cleaned_data = strip_litellm_internal_params(data)
         if acompletion is True:
             if client is None or not isinstance(client, AsyncHTTPHandler):
                 client = None
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
-                data["stream"] = stream
+                cleaned_data["stream"] = stream
                 return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
-                    data=data,
+                    data=cleaned_data,
                     api_base=api_base,
                     custom_prompt_dict=custom_prompt_dict,
                     model_response=model_response,
@@ -300,7 +302,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 return self.acompletion_function(
                     model=model,
                     messages=messages,
-                    data=data,
+                    data=cleaned_data,
                     api_base=api_base,
                     custom_prompt_dict=custom_prompt_dict,
                     custom_llm_provider=custom_llm_provider,
@@ -326,7 +328,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                     api_base=api_base,
                     headers=headers,
-                    data=json.dumps(data),
+                    data=json.dumps(cleaned_data),
                     model=model,
                     messages=messages,
                     logging_obj=logging_obj,
@@ -345,7 +347,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 if client is None or not isinstance(client, HTTPHandler):
                     client = HTTPHandler(timeout=timeout)  # type: ignore
                 try:
-                    response = client.post(url=api_base, headers=headers, data=json.dumps(data))
+                    response = client.post(url=api_base, headers=headers, data=json.dumps(cleaned_data))
                     response.raise_for_status()
 
                 except httpx.HTTPStatusError as e:
