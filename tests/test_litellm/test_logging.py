@@ -352,8 +352,9 @@ def _make_capture_logger(name: str) -> tuple[logging.Logger, _JsonCapture]:
     return lg, cap
 
 
-def test_trace_id_injected_into_json_record():
+def test_trace_id_injected_into_json_record(monkeypatch):
     """trace_id set via set_trace_id() appears in every JSON record in that context."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     lg, cap = _make_capture_logger("test.trace_inject")
     set_trace_id("trace-abc-123")
     try:
@@ -364,8 +365,9 @@ def test_trace_id_injected_into_json_record():
         trace_id_var.set("")
 
 
-def test_session_id_injected_when_set():
+def test_session_id_injected_when_set(monkeypatch):
     """session_id set via set_session_id() appears in JSON record."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     lg, cap = _make_capture_logger("test.session_inject")
     set_session_id("sess-xyz-456")
     try:
@@ -466,3 +468,27 @@ def test_logging_init_resets_session_id_to_empty_when_absent():
         kwargs={},
     )
     assert session_id_var.get() == ""
+
+
+def test_trace_id_not_in_log_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False (default), trace_id must not appear in JSON records even when set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_capture_logger("test.no_trace_gated")
+    set_trace_id("trace-should-not-appear")
+    try:
+        lg.info("message")
+        assert "trace_id" not in cap.records[0]
+    finally:
+        trace_id_var.set("")
+
+
+def test_session_id_not_in_log_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False (default), session_id must not appear in JSON records even when set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_capture_logger("test.no_session_gated")
+    set_session_id("sess-should-not-appear")
+    try:
+        lg.info("message")
+        assert "session_id" not in cap.records[0]
+    finally:
+        session_id_var.set("")
