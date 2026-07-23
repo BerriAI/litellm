@@ -111,6 +111,7 @@ export default function SSOSettings() {
           label: "User Info Endpoint",
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
+        { label: "Scopes", render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_scope) },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
         isTeamMappingsEnabled
           ? {
@@ -143,6 +144,7 @@ export default function SSOSettings() {
           label: "User Info Endpoint",
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
+        { label: "Scopes", render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_scope) },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
         isTeamMappingsEnabled
           ? {

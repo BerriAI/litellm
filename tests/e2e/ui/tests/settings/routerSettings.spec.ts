@@ -6,7 +6,7 @@ import { Role, users } from "../../fixtures/users";
 // Type-only import of the OpenAPI-generated backend schema, erased at runtime by
 // esbuild. It types the round-trips below so mistakes surface in the editor; the live
 // test against the real proxy is what actually enforces the contract.
-import type { components } from "../../../src/lib/http/schema";
+import type { components } from "../../../../../ui/litellm-dashboard/src/lib/http/schema";
 
 // These tests mutate the proxy's shared router_settings, and the Loadbalancing save
 // echoes the whole settings object, so they must not run concurrently.

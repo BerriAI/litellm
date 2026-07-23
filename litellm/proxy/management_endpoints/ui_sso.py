@@ -12,6 +12,7 @@ import asyncio
 import base64
 import hashlib
 import inspect
+import json
 import os
 import re
 import secrets
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
     import httpx
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 import litellm
@@ -258,11 +259,20 @@ def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dic
         raise HTTPException(status_code=400, detail="Invalid CLI login session id")
 
     cache_key = _get_cli_sso_flow_cache_key(cast(str, login_id))
-    flow = cache.get_cache(key=cache_key)
+    redis_cache = cache.redis_cache
+    if redis_cache is not None:
+        flow = redis_cache.get_cache(key=cache_key)
+    else:
+        flow = cache.get_cache(key=cache_key)
+    if isinstance(flow, str):
+        try:
+            flow = json.loads(flow)
+        except ValueError:
+            flow = None
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
         verbose_proxy_logger.warning(
             "CLI SSO login session not found in cache for login_id=%s. If the proxy runs multiple replicas, "
-            "a shared Redis cache (enable_redis_auth_cache: true) is required for CLI login to work.",
+            "a shared Redis cache is required for CLI login to work.",
             login_id,
         )
         raise HTTPException(
@@ -270,7 +280,7 @@ def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dic
             detail=(
                 "CLI login session not found or expired. Run `litellm-proxy login` again. "
                 "If this happens immediately after starting a login, the proxy is likely running multiple "
-                "replicas without a shared cache; configure Redis with `enable_redis_auth_cache: true` "
+                "replicas without a shared cache; configure a Redis cache "
                 "so every replica can see the login session."
             ),
         )
@@ -278,11 +288,12 @@ def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dic
 
 
 def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
-    cache.set_cache(
-        key=_get_cli_sso_flow_cache_key(login_id),
-        value=flow,
-        ttl=CLI_SSO_SESSION_TTL_SECONDS,
-    )
+    cache_key = _get_cli_sso_flow_cache_key(login_id)
+    redis_cache = cache.redis_cache
+    if redis_cache is not None:
+        redis_cache.set_cache(key=cache_key, value=json.dumps(flow), ttl=CLI_SSO_SESSION_TTL_SECONDS)
+    else:
+        cache.set_cache(key=cache_key, value=flow, ttl=CLI_SSO_SESSION_TTL_SECONDS)
 
 
 def _verify_cli_sso_poll_secret(flow: dict, poll_secret: Optional[str]) -> bool:
@@ -593,11 +604,11 @@ def _render_cli_sso_verification_page(
 
 @router.post("/sso/cli/start", tags=["experimental"], include_in_schema=False)
 async def cli_sso_start(request: Request):
-    from litellm.proxy.proxy_server import general_settings, user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache, general_settings
 
     _check_cli_sso_start_rate_limit(
         request=request,
-        cache=user_api_key_cache,
+        cache=cli_sso_session_cache,
         use_x_forwarded_for=bool((general_settings or {}).get("use_x_forwarded_for", False)),
     )
 
@@ -612,7 +623,7 @@ async def cli_sso_start(request: Request):
         "user_code_verified": False,
         "session_data": None,
     }
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
     verification_uri_complete: str | None = (
         (
@@ -644,9 +655,9 @@ async def cli_sso_complete(request: Request, login_id: str):
     from litellm.proxy.common_utils.html_forms.cli_sso_success import (
         render_cli_sso_success_page,
     )
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache
 
-    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=user_api_key_cache)
+    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=cli_sso_session_cache)
     if not flow.get("sso_complete") or not flow.get("session_data"):
         raise HTTPException(status_code=400, detail="CLI login is not ready")
 
@@ -670,7 +681,7 @@ async def cli_sso_complete(request: Request, login_id: str):
         raise HTTPException(status_code=400, detail="Invalid verification code")
 
     flow["user_code_verified"] = True
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
     html_content = render_cli_sso_success_page()
     return HTMLResponse(content=html_content, status_code=200)
@@ -861,10 +872,10 @@ async def google_login(
     Example:
     """
     from litellm.proxy.proxy_server import (
+        cli_sso_session_cache,
         general_settings,
         premium_user,
         prisma_client,
-        user_api_key_cache,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -912,7 +923,7 @@ async def google_login(
     )
 
     if source == LITELLM_CLI_SOURCE_IDENTIFIER:
-        _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+        _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     # Store CLI login handle in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
@@ -954,15 +965,8 @@ async def google_login(
             state=cli_state,
             request=request,
         )
-        if return_to is not None and sso_redirect is not None:
-            if SSOAuthenticationHandler._validate_return_to(return_to):
-                sso_redirect.set_cookie(
-                    key="litellm_cp_return_to",
-                    value=return_to,
-                    max_age=600,
-                    httponly=True,
-                    samesite="lax",
-                )
+        if sso_redirect is not None:
+            _persist_return_to_cookie(sso_redirect, return_to)
         return sso_redirect
 
     from fastapi.responses import HTMLResponse
@@ -971,13 +975,19 @@ async def google_login(
         os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
         or general_settings.get("hide_default_credentials_hint", False) is True
     )
-    return HTMLResponse(
+    form_response = HTMLResponse(
         content=build_ui_login_form(
             show_deprecation_banner=True,
             hide_default_credentials_hint=hide_default_credentials_hint,
         ),
         status_code=200,
     )
+    # Preserve return_to across the username/password sign-in too, via the SAME shared, never-raising
+    # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
+    # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
+    # renders, since the helper never raises on a bad return_to).
+    _persist_return_to_cookie(form_response, return_to)
+    return form_response
 
 
 def generic_response_convertor(
@@ -1957,6 +1967,7 @@ async def _complete_cli_sso_callback_session(
     user_defined_values: Optional[SSOUserDefinedValues],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
+    cli_sso_session_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
     prefill_user_code: str | None = None,
     sso_assertion: SSOIdentityAssertion | None = None,
@@ -2006,7 +2017,7 @@ async def _complete_cli_sso_callback_session(
     flow["sso_complete"] = True
     browser_complete_token = secrets.token_urlsafe(32)
     flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
-    _set_cli_sso_flow(login_id=key, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=key, cache=cli_sso_session_cache, flow=flow)
 
     verbose_proxy_logger.info(
         f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
@@ -2037,13 +2048,14 @@ async def cli_sso_callback(
     verbose_proxy_logger.info("CLI SSO callback")
 
     from litellm.proxy.proxy_server import (
+        cli_sso_session_cache,
         general_settings,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
-    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -2083,6 +2095,7 @@ async def cli_sso_callback(
             user_defined_values=user_defined_values,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            cli_sso_session_cache=cli_sso_session_cache,
             proxy_logging_obj=proxy_logging_obj,
             prefill_user_code=prefill_user_code,
             sso_assertion=sso_assertion,
@@ -2114,10 +2127,10 @@ async def cli_poll_key(
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
     from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache
 
     try:
-        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
+        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=cli_sso_session_cache)
         if not _verify_cli_sso_poll_secret(flow=flow, poll_secret=x_litellm_cli_poll_secret):
             raise HTTPException(status_code=403, detail="Invalid CLI polling secret")
 
@@ -2192,7 +2205,7 @@ async def cli_poll_key(
             )
 
             # Delete cache entry (single-use)
-            user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
+            cli_sso_session_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
             verbose_proxy_logger.info(f"CLI JWT generated for user: {user_id}, team: {team_id}")
             poll_response = {
@@ -2402,6 +2415,92 @@ async def sso_readiness():
             "message": f"{configured_provider.capitalize()} SSO is configured but missing required environment variables: {', '.join(missing_vars)}",
         },
     )
+
+
+def _is_same_origin_return_path(return_to: str) -> bool:
+    """True for a strictly relative return path that stays on the gateway's own origin by
+    construction, and is therefore safe to honor without a configured ``control_plane_url``.
+    Used by the MCP gateway DCR authorize round-trip so a browser sent through login lands
+    back on the authorize request.
+
+    Requires a single leading ``/`` (not protocol-relative ``//``), no backslash (browsers
+    fold ``\\`` to ``/``, so ``/\\evil.com`` would escape the origin), and no control or
+    whitespace characters. Rejecting control chars keeps a ``\\r\\n``/tab-bearing value out
+    of the redirect ``Location`` and the ``litellm_cp_return_to`` cookie entirely, rather
+    than relying on downstream header encoding to neutralize it."""
+    if not return_to.startswith("/") or return_to.startswith("//") or "\\" in return_to:
+        return False
+    return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
+
+
+async def _sso_return_to_redirect(
+    return_to: str | None,
+    jwt_token: str,
+    redis_usage_cache,
+    user_api_key_cache,
+) -> RedirectResponse | None:
+    """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
+
+    Two arms, both clearing the one-shot ``litellm_cp_return_to`` cookie:
+    - **Same-origin relative path** (the MCP gateway DCR authorize round-trip): set the session cookie
+      exactly like the dashboard path, then send the browser back where it came from.
+    - **Control-plane cross-origin** (``control_plane_url``): stash the JWT behind a single-use opaque
+      code (60s TTL) so the token never lands in browser history/logs; the control plane redeems it via
+      ``POST /v3/login/exchange``.
+
+    Extracted from ``get_redirect_response_from_openid`` to keep that method inside the complexity
+    budget; behavior is identical to the inline arms it replaces (including letting
+    ``_validate_return_to`` raise for a mismatched absolute return_to, as before)."""
+    if return_to is None:
+        return None
+
+    if _is_same_origin_return_path(return_to):
+        redirect_response = RedirectResponse(url=return_to, status_code=303)
+        redirect_response.set_cookie(key="token", value=jwt_token)
+        redirect_response.delete_cookie("litellm_cp_return_to")
+        return redirect_response
+
+    if SSOAuthenticationHandler._validate_return_to(return_to):
+        code = secrets.token_urlsafe(32)
+        cache_key = f"login_code:{code}"
+        cache_value = {"token": jwt_token, "redirect_url": return_to}
+        if redis_usage_cache is not None:
+            await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+        else:
+            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+
+        separator = "&" if "?" in return_to else "?"
+        redirect_url = return_to + separator + urlencode({"login": "success", "code": code})
+        verbose_proxy_logger.info("Cross-origin SSO: redirecting to control plane with login code")
+        redirect_response = RedirectResponse(url=redirect_url, status_code=303)
+        redirect_response.delete_cookie("litellm_cp_return_to")
+        return redirect_response
+
+    return None
+
+
+def _persist_return_to_cookie(response: Response, return_to: str | None) -> None:
+    """Best-effort: persist a SAFE ``return_to`` on ``response`` as the one-shot ``litellm_cp_return_to``
+    cookie so ANY sign-in path — SSO / Okta / generic OR the username/password form — can resume there
+    afterwards. THIS is the single source of truth, called by every sign-in branch so they cannot
+    diverge (a per-branch reimplementation is exactly how the two drifted before). Honors a strictly
+    relative same-origin path, and (when ``control_plane_url`` is configured) a return_to matching that
+    origin. It NEVER raises: a mismatched or invalid ``return_to`` is simply not stored, so it can never
+    block sign-in — the login entrypoint must always render."""
+    if return_to is None:
+        return
+    try:
+        safe = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler._validate_return_to(return_to)
+    except HTTPException:
+        return  # a non-matching absolute return_to is ignored, never blocks sign-in
+    if safe:
+        response.set_cookie(
+            key="litellm_cp_return_to",
+            value=return_to,
+            max_age=600,
+            httponly=True,
+            samesite="lax",
+        )
 
 
 class SSOAuthenticationHandler:
@@ -3041,7 +3140,6 @@ class SSOAuthenticationHandler:
         return_to: Optional[str] = None,
         sso_assertion: SSOIdentityAssertion | None = None,
     ) -> RedirectResponse:
-        import jwt
 
         from litellm.proxy.proxy_server import (
             general_settings,
@@ -3205,30 +3303,21 @@ class SSOAuthenticationHandler:
             server_root_path=get_server_root_path(),
         )
 
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            master_key or "",
-            algorithm="HS256",
+        from litellm.proxy.auth.login_utils import encode_ui_session_jwt
+
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, master_key or "")
+
+        # Post-SSO return_to handling (the same-origin DCR round-trip and the control-plane
+        # cross-origin code exchange) lives in one shared helper so this method stays inside the
+        # complexity budget. None falls through to the dashboard redirect below.
+        return_to_redirect = await _sso_return_to_redirect(
+            return_to=return_to,
+            jwt_token=jwt_token,
+            redis_usage_cache=redis_usage_cache,
+            user_api_key_cache=user_api_key_cache,
         )
-
-        # Control-plane cross-origin: store JWT behind a single-use opaque
-        # code (60s TTL) so the token never appears in browser history / logs.
-        # The control plane redeems it via POST /v3/login/exchange.
-        if return_to is not None and SSOAuthenticationHandler._validate_return_to(return_to):
-            code = secrets.token_urlsafe(32)
-            cache_key = f"login_code:{code}"
-            cache_value = {"token": jwt_token, "redirect_url": return_to}
-            if redis_usage_cache is not None:
-                await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-            else:
-                await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
-
-            separator = "&" if "?" in return_to else "?"
-            redirect_url = return_to + separator + urlencode({"login": "success", "code": code})
-            verbose_proxy_logger.info("Cross-origin SSO: redirecting to control plane with login code")
-            redirect_response = RedirectResponse(url=redirect_url, status_code=303)
-            redirect_response.delete_cookie("litellm_cp_return_to")
-            return redirect_response
+        if return_to_redirect is not None:
+            return return_to_redirect
 
         if user_id is not None and isinstance(user_id, str):
             litellm_dashboard_ui += "?login=success"

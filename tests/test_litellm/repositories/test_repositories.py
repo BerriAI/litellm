@@ -5,7 +5,7 @@ Tests for gateway repository layer.
 import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -498,6 +498,42 @@ class TestTeamRepository:
         )
         assert team.team_id == "team-123"
         assert team.team_alias == "Engineering"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_value, expected_ids",
+        [
+            (
+                [
+                    {"user_id": "a", "role": "user"},
+                    {"user_id": "b", "role": "admin"},
+                ],
+                ["a", "b"],
+            ),
+            (json.dumps([{"user_id": "a", "role": "user"}]), ["a"]),
+            ({}, []),
+            (None, []),
+        ],
+    )
+    async def test_get_members_with_roles_locked(self, repo, raw_value, expected_ids):
+        tx = MagicMock()
+        tx.query_raw = AsyncMock(return_value=[{"members_with_roles": raw_value}])
+
+        members = await repo.get_members_with_roles_locked(tx, "team-1")
+
+        assert [m.user_id for m in members] == expected_ids
+        sql = tx.query_raw.call_args.args[0]
+        assert "FOR UPDATE" in sql
+        assert tx.query_raw.call_args.args[1] == "team-1"
+
+    @pytest.mark.asyncio
+    async def test_get_members_with_roles_locked_missing_row(self, repo):
+        tx = MagicMock()
+        tx.query_raw = AsyncMock(return_value=[])
+
+        members = await repo.get_members_with_roles_locked(tx, "missing")
+
+        assert members == []
 
     @pytest.mark.asyncio
     async def test_create_team_all_fields(self, repo):
