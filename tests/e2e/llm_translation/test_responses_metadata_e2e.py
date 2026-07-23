@@ -1,8 +1,8 @@
 """Live e2e: /v1/responses with store + metadata (LIT-1201 customer path).
 
-Customers attach metadata and store=true, then continue with previous_response_id.
-Both turns must succeed, and any Redis keys written for the session must carry a
-positive TTL (not unbounded).
+Customers attach metadata and store=true through the OpenAI SDK, then continue
+with previous_response_id. Both turns must succeed, and any Redis keys written
+for the session must carry a positive TTL (not unbounded).
 """
 
 from __future__ import annotations
@@ -15,21 +15,14 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from e2e_config import require_env, unique_marker
-from e2e_http import require_successful_call
-from endpoints_client import EndpointsClient, ResponsesResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from proxy_client import ProxyClient
+from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
-
-class ResponsesMetadataBody(BaseModel):
-    model: str
-    input: str
-    store: bool = True
-    metadata: dict[str, str]
-    previous_response_id: str | None = None
-    instructions: str | None = "You are a helpful assistant."
+INSTRUCTIONS = "You are a helpful assistant."
 
 
 class RedisKeyInfo(BaseModel):
@@ -67,50 +60,42 @@ class TestResponsesMetadata:
         exercised_on=["responses"],
     )
     def test_store_metadata_continues_and_redis_keys_have_ttl(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         # Anthropic avoids OpenAI/Gemini quota flakes; Responses translation still
         # exercises store + metadata + previous_response_id on the proxy.
         marker = unique_marker()
         model = f"e2e-resp-meta-{marker}"
-        model_id = endpoints_client.create_model(
+        model_id = proxy.create_model(
             model,
             LiteLLMParamsBody(
                 model="anthropic/claude-haiku-4-5-20251001",
                 api_key="os.environ/ANTHROPIC_API_KEY",
             ),
         )
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
-        key = resources.key()
+        resources.defer(lambda: proxy.delete_model(model_id))
+        client = sdk.openai(resources.key())
 
-        first = endpoints_client.proxy.transport.send(
-            "/v1/responses",
-            headers=endpoints_client.proxy.transport.bearer(key),
-            json=ResponsesMetadataBody(
-                model=model,
-                input=f"Remember marker {marker}. Reply with one word.",
-                metadata={"session_id": marker, "customer": "e2e"},
-            ),
+        first = client.responses.create(
+            model=model,
+            input=f"Remember marker {marker}. Reply with one word.",
+            store=True,
+            metadata={"session_id": marker, "customer": "e2e"},
+            instructions=INSTRUCTIONS,
         )
-        require_successful_call(first)
-        parsed = ResponsesResult.model_validate_json(first.body)
-        assert parsed.id, f"responses must return an id: {first.body[:300]}"
-        assert parsed.text.strip(), f"responses returned empty text: {first.body[:300]}"
+        assert first.id, f"responses must return an id: {first!r}"
+        assert first.output_text.strip(), f"responses returned empty text: {first.output!r}"
 
-        second = endpoints_client.proxy.transport.send(
-            "/v1/responses",
-            headers=endpoints_client.proxy.transport.bearer(key),
-            json=ResponsesMetadataBody(
-                model=model,
-                input="Reply with the single word ok.",
-                previous_response_id=parsed.id,
-                metadata={"session_id": marker, "turn": "2"},
-            ),
+        second = client.responses.create(
+            model=model,
+            input="Reply with the single word ok.",
+            store=True,
+            previous_response_id=first.id,
+            metadata={"session_id": marker, "turn": "2"},
+            instructions=INSTRUCTIONS,
         )
-        require_successful_call(second)
-        second_parsed = ResponsesResult.model_validate_json(second.body)
-        assert second_parsed.text.strip(), (
-            f"previous_response_id follow-up returned empty text: {second.body[:300]}"
+        assert second.output_text.strip(), (
+            f"previous_response_id follow-up returned empty text: {second.output!r}"
         )
 
         time.sleep(1.0)

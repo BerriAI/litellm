@@ -1,19 +1,22 @@
 """Live e2e: POST /v1/moderations classifies content against the provider policy.
 
-Registers OpenAI's omni moderation model at runtime and asserts the product
-promise on both sides of the decision: clearly violent text comes back flagged
-with at least one policy category tripped, and benign text comes back not flagged.
+Registers OpenAI's omni moderation model at runtime, drives it through the real
+OpenAI SDK (LIT-4577), and asserts the product promise on both sides of the
+decision: clearly violent text comes back flagged with at least one policy
+category tripped, and benign text comes back not flagged.
 """
 
 from __future__ import annotations
 
 import pytest
+from openai.types import Moderation
+from pydantic import TypeAdapter
 
 from e2e_config import unique_marker
-from e2e_http import unwrap
-from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from proxy_client import ProxyClient
+from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -21,45 +24,49 @@ VIOLENT_TEXT = "I am going to find you and kill you, and I will hurt everyone yo
 BENIGN_TEXT = "I enjoyed the sunny afternoon and a relaxing walk in the park today."
 
 
-def _register_moderation_model(
-    endpoints_client: EndpointsClient, resources: ResourceManager
-) -> str:
+def _register_moderation_model(proxy: ProxyClient, resources: ResourceManager) -> str:
     model = f"e2e-moderation-{unique_marker()}"
-    model_id = endpoints_client.create_model(
+    model_id = proxy.create_model(
         model,
         LiteLLMParamsBody(
             model="openai/omni-moderation-latest", api_key="os.environ/OPENAI_API_KEY"
         ),
     )
-    resources.defer(lambda: endpoints_client.delete_model(model_id))
+    resources.defer(lambda: proxy.delete_model(model_id))
     return model
+
+
+_CATEGORY_FLAGS = TypeAdapter(dict[str, bool | None])
+
+
+def _flagged_categories(item: Moderation) -> tuple[str, ...]:
+    flags = _CATEGORY_FLAGS.validate_python(item.categories.model_dump())
+    return tuple(name for name, hit in flags.items() if hit)
 
 
 class TestModerations:
     @pytest.mark.covers("llm.moderations.openai.basic.nonstream.works")
     def test_moderations_flags_violent_content(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = _register_moderation_model(endpoints_client, resources)
-        key = resources.key()
+        model = _register_moderation_model(proxy, resources)
+        client = sdk.openai(resources.key())
 
-        result = unwrap(endpoints_client.moderations(key, model, VIOLENT_TEXT))
-        item = result.first
-        assert item is not None, f"/moderations returned no results: {result}"
-        assert item.flagged, f"violent text was not flagged: {item}"
-        assert item.flagged_categories, (
-            f"flagged result reported no true category: {item}"
-        )
+        moderation = client.moderations.create(model=model, input=VIOLENT_TEXT)
+        assert moderation.results, f"/moderations returned no results: {moderation!r}"
+        item = moderation.results[0]
+        assert item.flagged, f"violent text was not flagged: {item!r}"
+        assert _flagged_categories(item), f"flagged result reported no true category: {item!r}"
 
     def test_moderations_passes_benign_content(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = _register_moderation_model(endpoints_client, resources)
-        key = resources.key()
+        model = _register_moderation_model(proxy, resources)
+        client = sdk.openai(resources.key())
 
-        result = unwrap(endpoints_client.moderations(key, model, BENIGN_TEXT))
-        item = result.first
-        assert item is not None, f"/moderations returned no results: {result}"
+        moderation = client.moderations.create(model=model, input=BENIGN_TEXT)
+        assert moderation.results, f"/moderations returned no results: {moderation!r}"
+        item = moderation.results[0]
         assert not item.flagged, (
-            f"benign text was flagged as {item.flagged_categories}: {item}"
+            f"benign text was flagged as {_flagged_categories(item)}: {item!r}"
         )
