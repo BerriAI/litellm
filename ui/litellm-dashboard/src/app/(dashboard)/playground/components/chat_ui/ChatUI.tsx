@@ -484,6 +484,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   }, [chatHistory]);
 
+  useEffect(() => () => abortControllerRef.current?.abort(), []);
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault(); // Prevent default to avoid newline

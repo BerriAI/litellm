@@ -2,10 +2,15 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
+import * as chatCompletionModule from "@/components/llm_calls/chat_completion";
 
 // Mock the fetchAvailableModels function
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
+}));
+
+vi.mock("@/components/llm_calls/chat_completion", () => ({
+  makeOpenAIChatCompletionRequest: vi.fn(),
 }));
 
 // Mock other networking functions that cause errors
@@ -373,6 +378,60 @@ describe("ChatUI", () => {
       "Optional: Enter custom proxy URL (e.g., http://localhost:5000)",
     );
     expect(customProxyInput).toHaveValue(testProxyUrl);
+  });
+
+  it("aborts the in-flight streaming request when the component unmounts", async () => {
+    vi.mocked(chatCompletionModule.makeOpenAIChatCompletionRequest).mockImplementation(() => new Promise(() => {}));
+
+    const { unmount } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const selectModelLabel = screen.getByText("Select Model");
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
+    expect(modelSelect).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.mouseDown(modelSelect!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Model 1").length).toBeGreaterThan(0);
+    });
+
+    const model1Options = screen.getAllByText("Model 1");
+    await act(async () => {
+      fireEvent.click(model1Options[model1Options.length - 1]);
+    });
+
+    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello" } });
+      fireEvent.keyDown(messageInput, { key: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(chatCompletionModule.makeOpenAIChatCompletionRequest).toHaveBeenCalled();
+    });
+
+    const signal = vi.mocked(chatCompletionModule.makeOpenAIChatCompletionRequest).mock.calls[0][5];
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal!.aborted).toBe(false);
+
+    unmount();
+
+    expect(signal!.aborted).toBe(true);
   });
 
   it("should enable search functionality for MCP server selector", async () => {
