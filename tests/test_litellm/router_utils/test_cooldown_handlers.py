@@ -5,6 +5,7 @@ from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _resolve_allowed_fails_from_policy,
     _should_cooldown_based_on_deployment_policy,
+    should_cooldown_based_on_allowed_fails_policy,
 )
 
 
@@ -172,3 +173,33 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
         call_kwargs = mock_sc.call_args[1]
         assert call_kwargs["cooldown_time_override"] is None
+
+
+class TestShouldCooldownBasedOnAllowedFailsPolicy:
+    def _make_router(self, cooldown_time: float = 60.0) -> MagicMock:
+        router = MagicMock()
+        router.cooldown_time = cooldown_time
+        router.allowed_fails = 0
+        router.allowed_fails_policy = None
+        router.get_allowed_fails_from_policy.return_value = None
+        router.failed_calls.get_cache.return_value = None
+        return router
+
+    def test_cooldown_time_override_zero_is_not_falsy(self):
+        """cooldown_time_override=0 must be honored; it must not fall through to the router-level value."""
+        router = self._make_router(cooldown_time=60.0)
+        exc = litellm.RateLimitError("429", "openai", "gpt-4")
+
+        should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="dep-1",
+            original_exception=exc,
+            allowed_fails_override=5,
+            cooldown_time_override=0.0,
+        )
+
+        set_cache_call = router.failed_calls.set_cache.call_args
+        assert set_cache_call is not None
+        assert set_cache_call[1]["ttl"] == 0.0, (
+            "cooldown_time_override=0 should be used as TTL, not the router-level 60.0"
+        )
