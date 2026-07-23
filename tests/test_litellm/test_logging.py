@@ -17,6 +17,7 @@ import sys
 import litellm
 from litellm._logging import (
     ALL_LOGGERS,
+    CorrelationContextFilter,
     JsonFormatter,
     _initialize_loggers_with_handler,
     _turn_on_json,
@@ -404,6 +405,7 @@ class _JsonCapture(logging.Handler):
         super().__init__()
         self.formatter = JsonFormatter()
         self.records: list[dict] = []
+        self.addFilter(CorrelationContextFilter())
 
     def emit(self, record):
         self.records.append(json.loads(self.formatter.format(record)))
