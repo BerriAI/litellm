@@ -393,24 +393,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if compaction_event is not None:
                     return compaction_event
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                is_opening_first_block = self.sent_content_block_start is False
+                if is_opening_first_block:
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                elif should_start_new_block:
                     self._increment_content_block_index()
 
                 # applied_edits only needs to flow to the final message_delta
@@ -447,7 +446,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     # ``not self.queued_usage_chunk``.
                     continue
 
-                if should_start_new_block and not self.sent_content_block_finish:
+                if should_start_new_block and not is_opening_first_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
                     # -> (optionally) the trigger chunk's delta.
                     #
@@ -615,25 +614,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if compaction_event is not None:
                     return compaction_event
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.sent_content_block_finish = False
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
-
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
-                # Check if we need to start a new content block
                 should_start_new_block = self._should_start_new_content_block(chunk)
-                if should_start_new_block:
+                is_opening_first_block = self.sent_content_block_start is False
+                if is_opening_first_block:
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                elif should_start_new_block:
                     self._increment_content_block_index()
 
                 # applied_edits only needs to flow to the final message_delta
@@ -664,7 +661,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 # Check if this processed chunk has a stop_reason - hold it for next chunk
 
                 if not self.queued_usage_chunk:
-                    if should_start_new_block and not self.sent_content_block_finish:
+                    if should_start_new_block and not is_opening_first_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
                         # -> (optionally) the trigger chunk's delta.
                         #
