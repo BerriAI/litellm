@@ -302,6 +302,41 @@ async def test_aquery_forwards_retrieval_filter_to_vector_store_search(filter_ke
 
 
 @pytest.mark.asyncio
+async def test_aquery_top_level_filters_kwarg_does_not_collide():
+    """
+    An SDK caller may pass a top-level `filters` kwarg (it used to flow to the
+    search via **kwargs). Now that the pipeline passes `filters` explicitly, the
+    top-level kwarg must be consumed rather than forwarded twice, otherwise
+    asearch raises TypeError for a duplicate keyword before any search runs.
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    top_level_filter = {"equals": {"key": "tenant", "value": "a"}}
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page",
+            search_query="q",
+            data=[],
+        )
+    )
+
+    with patch("litellm.vector_stores.asearch", new=fake_search):
+        response = await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+            filters=top_level_filter,
+            mock_response="hi",
+        )
+
+    assert isinstance(response, ModelResponse)
+    fake_search.assert_awaited_once()
+    assert fake_search.await_args.kwargs["filters"] == top_level_filter
+    assert "filters" not in fake_search.await_args.kwargs.get("kwargs", {})
+
+
+@pytest.mark.asyncio
 async def test_aquery_without_filter_forwards_none():
     """
     When no filter is provided, the search call must receive filters=None rather
