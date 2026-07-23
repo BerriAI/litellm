@@ -12,7 +12,10 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
@@ -37,6 +40,91 @@ class CredentialHelperUtils:
             credential_values=encrypted_credential_values,
             credential_info=credential.credential_info or {},
         )
+
+
+def _is_masked_credential_value(
+    *,
+    key: str,
+    submitted_value: object,
+    stored_value: object,
+    unmasked_length: int = 4,
+    number_of_asterisks: int = 4,
+) -> bool:
+    if not isinstance(submitted_value, str) or not isinstance(stored_value, str):
+        return False
+
+    masked_value = _get_masked_values(
+        {key: stored_value},
+        unmasked_length=unmasked_length,
+        number_of_asterisks=number_of_asterisks,
+    )[key]
+    return submitted_value == masked_value
+
+
+def _looks_like_masked_credential_value(
+    *,
+    key: str,
+    submitted_value: object,
+    unmasked_length: int = 4,
+    number_of_asterisks: int = 4,
+) -> bool:
+    if not isinstance(submitted_value, str) or "*" not in submitted_value:
+        return False
+
+    if set(submitted_value) == {"*"}:
+        return True
+
+    return _is_masked_credential_value(
+        key=key,
+        submitted_value=submitted_value,
+        stored_value=submitted_value,
+        unmasked_length=unmasked_length,
+        number_of_asterisks=number_of_asterisks,
+    )
+
+
+def _preserve_masked_credential_values(
+    db_credential: CredentialItem,
+    updated_patch: CredentialItem,
+) -> CredentialItem:
+    if not updated_patch.credential_values:
+        return updated_patch
+
+    existing_credential_values = db_credential.credential_values or {}
+    filtered_credential_values = {}
+
+    for key, value in updated_patch.credential_values.items():
+        existing_value = existing_credential_values.get(key)
+        decrypted_existing_value = existing_value
+        if isinstance(existing_value, str):
+            decrypted_existing_value = decrypt_value_helper(
+                value=existing_value,
+                key=key,
+                exception_type="debug",
+                return_original_value=False,
+            )
+            if decrypted_existing_value is None:
+                if _looks_like_masked_credential_value(
+                    key=key,
+                    submitted_value=value,
+                ):
+                    continue
+                decrypted_existing_value = existing_value
+
+        if _is_masked_credential_value(
+            key=key,
+            submitted_value=value,
+            stored_value=decrypted_existing_value,
+        ):
+            continue
+
+        filtered_credential_values[key] = value
+
+    return CredentialItem(
+        credential_name=updated_patch.credential_name,
+        credential_values=filtered_credential_values,
+        credential_info=updated_patch.credential_info,
+    )
 
 
 @router.post(
@@ -311,6 +399,7 @@ async def update_credential(
         db_credential = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
+        credential = _preserve_masked_credential_values(db_credential, credential)
         merged_credential = update_db_credential(db_credential, credential)
         credential_object_jsonified = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
