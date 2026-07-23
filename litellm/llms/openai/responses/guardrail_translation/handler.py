@@ -34,9 +34,6 @@ from openai.types.responses.response_function_tool_call import ResponseFunctionT
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.completion_extras.litellm_responses_transformation.transformation import (
-    OpenAiResponsesToChatCompletionStreamIterator,
-)
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -48,6 +45,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import (
+    CustomToolCallOutputItem,
     GenericResponseOutputItem,
     OutputFunctionToolCall,
     OutputText,
@@ -252,21 +250,45 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         if not original_tools:
             return remapped
+        remaining_custom_tools = [
+            tool for tool in original_tools if isinstance(tool, dict) and tool.get("type") == "custom"
+        ]
         result: List[Dict[str, Any]] = []
-        j = 0
-        for tool in original_tools:
-            if isinstance(tool, dict) and tool.get("type") in (
-                "web_search",
-                "web_search_preview",
-            ):
-                result.append(tool)
-            else:
-                if j < len(remapped):
-                    result.append(remapped[j])
-                    j += 1
-        # Keep guardrail-appended tools that matched no original slot above.
-        result.extend(remapped[j:])
+        for remapped_tool in remapped:
+            restored_tool = remapped_tool
+            for custom_index, original_tool in enumerate(remaining_custom_tools):
+                candidate = self._restore_unchanged_custom_tool(
+                    original_tool=original_tool,
+                    remapped_tool=remapped_tool,
+                )
+                if candidate is original_tool:
+                    restored_tool = candidate
+                    remaining_custom_tools.pop(custom_index)
+                    break
+            result.append(restored_tool)
+
+        for original_index, original_tool in enumerate(original_tools):
+            if original_tool.get("type") in ("web_search", "web_search_preview"):
+                result.insert(min(original_index, len(result)), original_tool)
         return result
+
+    def _restore_unchanged_custom_tool(
+        self,
+        original_tool: dict[str, Any],
+        remapped_tool: dict[str, Any],
+    ) -> dict[str, Any]:
+        if original_tool.get("type") != "custom":
+            return remapped_tool
+
+        transformed, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            [original_tool]
+        )
+        expected = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            transformed
+        )
+        if expected == [remapped_tool]:
+            return original_tool
+        return remapped_tool
 
     def _apply_guardrailed_tools_to_data(
         self,
@@ -550,15 +572,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         # Case 2: response.output_item.done — extract tool calls only.        #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
-            model_response_stream = (
-                OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
-            )
-            tool_calls = model_response_stream.choices[0].delta.tool_calls
+            tool_calls: list[ChatCompletionToolCallChunk] = []
+            output_item = final_chunk.get("item")
+            if output_item is not None:
+                self._extract_output_text_and_images(
+                    output_item=output_item,
+                    output_idx=final_chunk.get("output_index", 0),
+                    texts_to_check=[],
+                    images_to_check=[],
+                    task_mappings=[],
+                    tool_calls_to_check=tool_calls,
+                )
             if tool_calls:
-                inputs = GenericGuardrailAPIInputs()
-                inputs["tool_calls"] = cast(List[ChatCompletionToolCallChunk], tool_calls)
-                if hasattr(model_response_stream, "model") and model_response_stream.model:
-                    inputs["model"] = model_response_stream.model
+                inputs = GenericGuardrailAPIInputs(tool_calls=cast(list[ChatCompletionToolCallChunk], tool_calls))
+                response_model = final_chunk.get("model")
+                if response_model:
+                    inputs["model"] = response_model
                 await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
                     request_data=request_data if request_data is not None else {},
@@ -656,8 +685,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         Override this method to customize text/image/tool extraction logic.
         """
 
-        # Check if this is a tool call (OutputFunctionToolCall)
-        if isinstance(output_item, OutputFunctionToolCall):
+        if isinstance(output_item, (OutputFunctionToolCall, CustomToolCallOutputItem)):
             if tool_calls_to_check is not None:
                 tool_call_dict = (
                     LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
@@ -670,7 +698,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         elif (
             isinstance(output_item, BaseModel)
             and hasattr(output_item, "type")
-            and getattr(output_item, "type") == "function_call"
+            and getattr(output_item, "type") in ("function_call", "custom_tool_call")
         ):
             if tool_calls_to_check is not None:
                 tool_call_dict = (
@@ -681,12 +709,17 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
                 tool_calls_to_check.append(cast(ChatCompletionToolCallChunk, tool_call_dict))
             return
-        elif isinstance(output_item, dict) and output_item.get("type") == "function_call":
-            # Handle dict representation of tool call
+        elif isinstance(output_item, dict) and output_item.get("type") in (
+            "function_call",
+            "custom_tool_call",
+        ):
             if tool_calls_to_check is not None:
-                # Convert dict to ResponseFunctionToolCall for processing
                 try:
-                    tool_call_obj = ResponseFunctionToolCall(**output_item)
+                    tool_call_obj = (
+                        CustomToolCallOutputItem(**output_item)
+                        if output_item.get("type") == "custom_tool_call"
+                        else ResponseFunctionToolCall(**output_item)
+                    )
                     tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                         tool_call_item=tool_call_obj,
                         index=output_idx,
