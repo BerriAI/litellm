@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/berriai-litellm-badge.png)](https://mseep.ai/app/berriai-litellm)
+
 <h1 align="center">
         🚅 LiteLLM
     </h1>
