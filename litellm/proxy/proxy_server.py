@@ -9325,17 +9325,89 @@ async def embeddings(
         )
 
 
+_MODERATIONS_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "title": "ModerationsRequest",
+                "required": ["input"],
+                "additionalProperties": True,
+                "properties": {
+                    "input": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ],
+                        "title": "Input",
+                        "description": "Text (or list of texts) to classify for policy violations.",
+                    },
+                    "model": {
+                        "type": "string",
+                        "title": "Model",
+                        "description": "Moderation model ID. Optional; provider default is used when omitted.",
+                    },
+                },
+            }
+        }
+    },
+}
+
+_AUDIO_SPEECH_REQUEST_BODY = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "title": "AudioSpeechRequest",
+                "required": ["model", "input", "voice"],
+                "additionalProperties": True,
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "title": "Model",
+                        "description": "TTS model ID (e.g. 'tts-1', 'tts-1-hd'). Forwarded to the upstream provider.",
+                    },
+                    "input": {
+                        "type": "string",
+                        "title": "Input",
+                        "description": "The text to synthesise into speech.",
+                    },
+                    "voice": {
+                        "type": "string",
+                        "title": "Voice",
+                        "description": "Voice identifier (e.g. 'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer').",
+                    },
+                    "response_format": {
+                        "type": "string",
+                        "title": "Response Format",
+                        "description": "Audio output format (e.g. 'mp3', 'opus', 'aac', 'flac'). Optional.",
+                    },
+                    "speed": {
+                        "type": "number",
+                        "title": "Speed",
+                        "description": "Speech speed in the range 0.25-4.0. Optional; defaults to 1.0.",
+                    },
+                },
+            }
+        }
+    },
+}
+
 @router.post(
     "/v1/moderations",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
     tags=["moderations"],
+    openapi_extra={"requestBody": _MODERATIONS_REQUEST_BODY},
 )
 @router.post(
     "/moderations",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,
     tags=["moderations"],
+    openapi_extra={"requestBody": _MODERATIONS_REQUEST_BODY},
 )
 async def moderations(
     request: Request,
@@ -9458,11 +9530,13 @@ async def _audio_speech_chunk_generator(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
+    openapi_extra={"requestBody": _AUDIO_SPEECH_REQUEST_BODY},
 )
 @router.post(
     "/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
     tags=["audio"],
+    openapi_extra={"requestBody": _AUDIO_SPEECH_REQUEST_BODY},
 )
 async def audio_speech(
     request: Request,
