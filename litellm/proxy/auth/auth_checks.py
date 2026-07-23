@@ -4008,7 +4008,7 @@ async def _team_multi_budget_check(
 
 
 async def _user_multi_budget_check(
-    user_object: Optional[LiteLLM_UserTable],
+    user_object: LiteLLM_UserTable | None,
 ):
     """
     Raises BudgetExceededError if any budget window in user_object.budget_limits is exceeded.

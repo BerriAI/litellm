@@ -38,7 +38,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
-    budget_limits: Optional[List[BudgetLimitEntry]] = None
+    budget_limits: list[BudgetLimitEntry] | None = None
     allowed_cache_controls: List[str] = []
     policies: List[str] = []
     model_spend: Optional[Dict] = {}

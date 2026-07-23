@@ -294,7 +294,6 @@ class BudgetClient:
 
     # ---- internal user --------------------------------------------------
 
-<<<<<<< HEAD:tests/e2e/quota_management/budgets/budget_client.py
     def create_user(
         self,
         *,
