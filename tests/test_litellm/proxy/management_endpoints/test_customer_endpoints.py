@@ -354,6 +354,41 @@ def test_update_customer_response_preserves_budget_id(mock_prisma_client, mock_u
     assert response.json()["budget_id"] == "budget-123"
 
 
+def test_update_customer_can_set_blocked_false(mock_prisma_client, mock_user_api_key_auth):
+    existing = LiteLLM_EndUserTable(user_id="cust-1", blocked=True)
+    updated = LiteLLM_EndUserTable(user_id="cust-1", blocked=False)
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=existing)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "cust-1", "blocked": False},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    update_data = mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]
+    assert update_data["blocked"] is False
+    assert response.json()["blocked"] is False
+
+
+def test_update_customer_does_not_send_default_blocked_false(mock_prisma_client, mock_user_api_key_auth):
+    existing = LiteLLM_EndUserTable(user_id="cust-1", alias="old", blocked=True)
+    updated = LiteLLM_EndUserTable(user_id="cust-1", alias="new", blocked=True)
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=existing)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "cust-1", "alias": "new"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    update_data = mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]
+    assert "blocked" not in update_data
+
+
 def test_update_customer_response_keeps_nested_budget_server_fields(mock_prisma_client, mock_user_api_key_auth):
     """
     Faithfulness regression: /customer/update embeds the full budget row. The
