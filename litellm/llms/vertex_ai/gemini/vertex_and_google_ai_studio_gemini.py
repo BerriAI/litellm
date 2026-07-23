@@ -108,6 +108,17 @@ from .transformation import (
     sync_transform_request_body,
 )
 
+
+def _invalidate_stale_context_cache(logging_obj, status_code: int, response_text: str) -> None:
+    """Lazy wrapper: ``context_caching`` can't be imported at module load (circular import via
+    its module-level Cache()), so defer the import to call time like ``transformation`` does."""
+    from ..context_caching.vertex_ai_context_caching import (
+        maybe_invalidate_stale_context_cache,
+    )
+
+    maybe_invalidate_stale_context_cache(logging_obj, status_code, response_text)
+
+
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
@@ -2609,6 +2620,7 @@ async def make_call(
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string = str(await e.response.aread())
+        _invalidate_stale_context_cache(logging_obj, e.response.status_code, exception_string)
         raise VertexAIError(
             status_code=e.response.status_code,
             message=VertexGeminiConfig().translate_exception_str(exception_string),
@@ -2657,9 +2669,11 @@ def make_sync_call(
     response = client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
 
     if response.status_code != 200 and response.status_code != 201:
+        error_text = str(response.read())
+        _invalidate_stale_context_cache(logging_obj, response.status_code, error_text)
         raise VertexAIError(
             status_code=response.status_code,
-            message=str(response.read()),
+            message=error_text,
             headers=response.headers,
         )
 
@@ -2876,6 +2890,7 @@ class VertexLLM(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
+            _invalidate_stale_context_cache(logging_obj, error_code, err.response.text)
             raise VertexAIError(
                 status_code=error_code,
                 message=err.response.text,
@@ -3081,6 +3096,7 @@ class VertexLLM(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
+            _invalidate_stale_context_cache(logging_obj, error_code, err.response.text)
             raise VertexAIError(
                 status_code=error_code,
                 message=err.response.text,
