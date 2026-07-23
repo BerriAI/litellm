@@ -34,3 +34,23 @@ def test_filter_out_litellm_params():
     assert "litellm_trace_id" not in filtered
     assert "proxy_server_request" not in filtered
     assert "secret_fields" not in filtered
+
+
+def test_filter_out_router_timeout_params_not_forwarded_to_provider():
+    """ttft_timeout / stream_idle_timeout are router-internal params; they must be filtered
+    out so they are never forwarded to the upstream provider API (where they would 400),
+    while genuine provider params are kept. Regression for the params leaking via
+    per-deployment litellm_params."""
+    kwargs = {
+        "ttft_timeout": 8.0,
+        "stream_idle_timeout": 30.0,
+        "stream_timeout": 60.0,
+        "temperature": 0.5,
+    }
+
+    filtered = filter_out_litellm_params(kwargs=kwargs)
+
+    assert "ttft_timeout" not in filtered
+    assert "stream_idle_timeout" not in filtered
+    assert "stream_timeout" not in filtered
+    assert filtered["temperature"] == 0.5

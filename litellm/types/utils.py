@@ -3251,6 +3251,8 @@ all_litellm_params = (
         "no-log",
         "base_model",
         "stream_timeout",
+        "ttft_timeout",
+        "stream_idle_timeout",
         "supports_system_message",
         "region_name",
         "allowed_model_region",
