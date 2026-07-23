@@ -1,17 +1,15 @@
 "use client";
 
-import SpendLogsTable from "@/components/view_logs";
+import RequestLogsPanel from "@/components/view_logs/RequestLogsPanel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-export default function Logs() {
-  const { accessToken, userRole, userId, token, premiumUser } = useAuthorized();
-  return (
-    <SpendLogsTable
-      userID={userId}
-      userRole={userRole}
-      token={token}
-      accessToken={accessToken}
-      premiumUser={premiumUser}
-    />
-  );
+export default function RequestLogsPage() {
+  const { accessToken, token, userRole, userId } = useAuthorized();
+  if (!accessToken || !token) {
+    return null;
+  }
+  if (!userRole || !userId) {
+    return null;
+  }
+  return <RequestLogsPanel accessToken={accessToken} token={token} userRole={userRole} userID={userId} isActive />;
 }
