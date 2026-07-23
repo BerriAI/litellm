@@ -11071,6 +11071,8 @@ def _add_team_models_to_all_models(
     Add team models to all models
     """
     team_models: Dict[str, Set[str]] = {}
+    proxy_model_list = llm_router.get_model_names()
+    model_access_groups = llm_router.get_model_access_groups()
 
     for team_object in team_db_objects_typed:
         if (
@@ -11094,7 +11096,12 @@ def _add_team_models_to_all_models(
                     if can_add_model:
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
-            for model_name in team_object.models:
+            resolved_model_names = get_team_models(
+                team_models=team_object.models,
+                proxy_model_list=proxy_model_list,
+                model_access_groups=model_access_groups,
+            )
+            for model_name in resolved_model_names:
                 _models = llm_router.get_model_list(model_name=model_name, team_id=team_object.team_id)
                 if _models is not None:
                     for model in _models:
