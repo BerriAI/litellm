@@ -1057,6 +1057,10 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    budget_alert_thresholds: list[float] | None = Field(
+        default=None,
+        description="Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.",
+    )
 
     @field_validator("max_budget", mode="before")
     @classmethod
@@ -1791,6 +1795,10 @@ class NewTeamRequest(TeamBase):
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
+    budget_alert_thresholds: list[float] | None = Field(
+        default=None,
+        description="Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.",
+    )
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -1854,6 +1862,10 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: Optional[List[str]] = None
     budget_limits: Optional[List[BudgetLimitEntry]] = None  # multiple concurrent budget windows
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
+    budget_alert_thresholds: list[float] | None = Field(
+        default=None,
+        description="Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.",
+    )
 
 
 class PatchTeamRequest(UpdateTeamRequest):
@@ -3066,6 +3078,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
         default=None,
         description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
     )
+    budget_percentage_used: float | None = Field(
+        default=None,
+        description="Fraction of max_budget consumed at alert time (e.g. 0.85 means 85% consumed). Used to fire separate alerts per threshold and included in the webhook payload.",
+    )
 
 
 class WebhookEvent(CallInfo):
@@ -4039,6 +4055,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
     "allowed_vector_store_indexes",
     "enforced_batch_output_expires_after",
     "enforced_file_expires_after",
+    "budget_alert_thresholds",
     "throttle_on_budget_exceeded",
 ]
 

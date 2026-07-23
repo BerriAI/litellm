@@ -6593,6 +6593,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_alert_thresholds: Optional[List[float]] - Per-key budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
          *
          *     Examples:
          *
@@ -6986,6 +6987,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_alert_thresholds: Optional[List[float]] - Per-key budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
          *
          *     Example:
          *     ```bash
@@ -13638,6 +13640,7 @@ export interface paths {
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the team. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_alert_thresholds: Optional[List[float]] - Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
          *     - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
          *
          *     Returns:
@@ -13819,6 +13822,7 @@ export interface paths {
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the team. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_alert_thresholds: Optional[List[float]] - Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
          *     - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
          *
          *     ```
@@ -14732,6 +14736,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - budget_alert_thresholds: Optional[List[float]] - Per-user budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
          *     Returns:
          *     - key: (str) The generated api key for the user
          *     - expires: (datetime) Datetime object for when key expires.
@@ -14812,6 +14817,7 @@ export interface paths {
          *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
          *         - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *         - budget_alert_thresholds: Optional[List[float]] - Per-user budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
          */
         post: operations["user_update_user_update_post"];
         delete?: never;
@@ -23938,6 +23944,11 @@ export interface components {
             auto_rotate: boolean | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */
@@ -24088,6 +24099,11 @@ export interface components {
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */
@@ -28184,6 +28200,11 @@ export interface components {
              * @default false
              */
             blocked: boolean;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
@@ -28306,6 +28327,11 @@ export interface components {
             auto_create_key: boolean;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */
@@ -28448,6 +28474,11 @@ export interface components {
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */
@@ -28912,6 +28943,11 @@ export interface components {
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
@@ -30209,6 +30245,11 @@ export interface components {
             auto_rotate: boolean | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */
@@ -32263,6 +32304,11 @@ export interface components {
             auto_rotate?: boolean | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */
@@ -32631,6 +32677,11 @@ export interface components {
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
@@ -32738,6 +32789,11 @@ export interface components {
             allowed_cache_controls: unknown[] | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */
@@ -32844,6 +32900,11 @@ export interface components {
             allowed_cache_controls: unknown[] | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-entity budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Fallbacks */

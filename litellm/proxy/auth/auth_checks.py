@@ -616,8 +616,6 @@ async def common_checks(
 
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
-        # Key metadata.tags are injected into request_body here so the tag budget
-        # check can read them; this mutation must run before the gathered checks.
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -649,6 +647,15 @@ async def common_checks(
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
+            slack_alerting = getattr(proxy_logging_obj, "slack_alerting_instance", None)
+            if slack_alerting is not None:
+                await _user_max_budget_alert_check(
+                    user_object=user_object,
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    spend=user_spend,
+                    thresholds=slack_alerting.alerting_args.user_budget_alert_thresholds,
+                )
             if math.isfinite(user_budget) and user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=user_spend,
@@ -658,11 +665,6 @@ async def common_checks(
                     entity_id=user_object.user_id,
                 )
 
-        # Each scope reads a distinct counter key with no cross-scope ordering
-        # dependency, so the per-scope Redis-first reads run concurrently instead
-        # of one sequential await per scope. return_exceptions lets every scope
-        # settle, then the first error in scope-priority order propagates exactly
-        # as the sequential path raised.
         budget_check_coros = tuple(
             coro
             for coro in (
@@ -3714,31 +3716,72 @@ def _merge_budget_alert_email_configs(
 async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
-    user_obj: Optional[LiteLLM_UserTable] = None,
+    user_obj: LiteLLM_UserTable | None = None,
+    thresholds: list[float] | None = None,
 ):
     """
-    Triggers a budget alert if the token has reached EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
-    (default 80%) of its max budget.
-    This is a warning alert before the token actually exceeds the max budget.
+    Fires a non-blocking budget alert for each configured threshold the key has crossed
+    but not yet exceeded (i.e. spend is between threshold*max_budget and max_budget).
 
+    When max_budget_alert_emails is configured on the key or globally, only the email
+    path fires and the thresholds list is ignored for that path (backward compat).
     """
+    if valid_token.max_budget is None or valid_token.spend is None or valid_token.spend <= 0:
+        return
 
-    if valid_token.max_budget is not None and valid_token.spend is not None and valid_token.spend > 0:
-        owner_email = user_obj.user_email if user_obj else None
-        alert_email_config: Optional[Dict[str, List[str]]] = _merge_budget_alert_email_configs(
-            global_cfg=litellm.default_key_max_budget_alert_emails,
-            per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
+    owner_email = user_obj.user_email if user_obj else None
+    alert_email_config: dict[str, list[str]] | None = _merge_budget_alert_email_configs(
+        global_cfg=litellm.default_key_max_budget_alert_emails,
+        per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
+    )
+
+    if isinstance(alert_email_config, dict) and alert_email_config:
+        min_pct = min(
+            (int(k) for k in alert_email_config if k.isdigit()),
+            default=None,
         )
+        if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
+            return
 
-        if isinstance(alert_email_config, dict) and alert_email_config:
-            # New path: only create task if spend has crossed the lowest threshold
-            min_pct = min(
-                (int(k) for k in alert_email_config if k.isdigit()),
-                default=None,
+        call_info = CallInfo(
+            token=valid_token.token,
+            spend=valid_token.spend,
+            max_budget=valid_token.max_budget,
+            soft_budget=valid_token.soft_budget,
+            user_id=valid_token.user_id,
+            team_id=valid_token.team_id,
+            team_alias=valid_token.team_alias,
+            organization_id=valid_token.org_id,
+            user_email=owner_email,
+            key_alias=valid_token.key_alias,
+            event_group=Litellm_EntityType.KEY,
+            max_budget_alert_emails=alert_email_config,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="max_budget_alert",
+                user_info=call_info,
             )
-            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
-                return
+        )
+        return
 
+    raw_key_thresholds = (
+        ((valid_token.metadata or {}).get("budget_alert_thresholds") if valid_token.metadata else None)
+        or thresholds
+        or [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
+    )
+    effective_thresholds = _sanitize_alert_thresholds(
+        raw_key_thresholds if isinstance(raw_key_thresholds, list) else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
+    )
+    for threshold in effective_thresholds:
+        if valid_token.spend >= valid_token.max_budget * threshold and valid_token.spend < valid_token.max_budget:
+            verbose_proxy_logger.debug(
+                "Key budget threshold crossed: token=%s spend=%s max_budget=%s threshold=%s",
+                valid_token.token,
+                valid_token.spend,
+                valid_token.max_budget,
+                threshold,
+            )
             call_info = CallInfo(
                 token=valid_token.token,
                 spend=valid_token.spend,
@@ -3751,7 +3794,7 @@ async def _virtual_key_max_budget_alert_check(
                 user_email=owner_email,
                 key_alias=valid_token.key_alias,
                 event_group=Litellm_EntityType.KEY,
-                max_budget_alert_emails=alert_email_config,
+                budget_percentage_used=threshold,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
@@ -3759,38 +3802,127 @@ async def _virtual_key_max_budget_alert_check(
                     user_info=call_info,
                 )
             )
-        else:
-            # Old path: existing single 80% threshold — completely unchanged
-            alert_threshold = valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
 
-            if valid_token.spend >= alert_threshold and valid_token.spend < valid_token.max_budget:
-                verbose_proxy_logger.debug(
-                    "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
-                    valid_token.token,
-                    valid_token.spend,
-                    valid_token.max_budget,
-                    alert_threshold,
-                )
-                call_info = CallInfo(
-                    token=valid_token.token,
-                    spend=valid_token.spend,
-                    max_budget=valid_token.max_budget,
-                    soft_budget=valid_token.soft_budget,
-                    user_id=valid_token.user_id,
-                    team_id=valid_token.team_id,
-                    team_alias=valid_token.team_alias,
-                    organization_id=valid_token.org_id,
-                    user_email=owner_email,
-                    key_alias=valid_token.key_alias,
-                    event_group=Litellm_EntityType.KEY,
-                )
 
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="max_budget_alert",
-                        user_info=call_info,
-                    )
+def _sanitize_alert_thresholds(thresholds: list[float]) -> list[float]:
+    return list(
+        dict.fromkeys(t for t in thresholds[:10] if isinstance(t, float) and math.isfinite(t) and 0.0 < t < 1.0)
+    )
+
+
+async def _team_max_budget_alert_check(
+    team_object: LiteLLM_TeamTable | None,
+    valid_token: UserAPIKeyAuth | None,
+    proxy_logging_obj: ProxyLogging,
+    spend: float,
+    thresholds: list[float] | None = None,
+) -> None:
+    """
+    Fires a non-blocking budget alert for each configured threshold the team has crossed
+    but not yet exceeded. Mirrors _virtual_key_max_budget_alert_check for teams.
+
+    Runs off the spend already read by _team_max_budget_check so the alert path adds no
+    extra spend read on the hot request path.
+    """
+    if (
+        team_object is None
+        or team_object.team_id is None
+        or team_object.max_budget is None
+        or not math.isfinite(team_object.max_budget)
+    ):
+        return
+
+    raw_thresholds = (
+        (team_object.metadata.get("budget_alert_thresholds") if isinstance(team_object.metadata, dict) else None)
+        or thresholds
+        or [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
+    )
+    effective_thresholds = _sanitize_alert_thresholds(
+        raw_thresholds if isinstance(raw_thresholds, list) else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
+    )
+    for threshold in effective_thresholds:
+        if spend >= team_object.max_budget * threshold and spend < team_object.max_budget:
+            verbose_proxy_logger.debug(
+                "Team budget threshold crossed: team=%s spend=%s max_budget=%s threshold=%s",
+                team_object.team_id,
+                spend,
+                team_object.max_budget,
+                threshold,
+            )
+            call_info = CallInfo(
+                token=valid_token.token if valid_token else None,
+                spend=spend,
+                max_budget=team_object.max_budget,
+                user_id=valid_token.user_id if valid_token else None,
+                team_id=team_object.team_id,
+                team_alias=team_object.team_alias,
+                organization_id=valid_token.org_id if valid_token else None,
+                event_group=Litellm_EntityType.TEAM,
+                budget_percentage_used=threshold,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="team_budget",
+                    user_info=call_info,
                 )
+            )
+
+
+async def _user_max_budget_alert_check(
+    user_object: LiteLLM_UserTable | None,
+    valid_token: UserAPIKeyAuth | None,
+    proxy_logging_obj: ProxyLogging,
+    spend: float,
+    thresholds: list[float] | None = None,
+) -> None:
+    """
+    Fires a non-blocking budget alert for each configured threshold the user has crossed
+    but not yet exceeded. Mirrors _virtual_key_max_budget_alert_check for users.
+
+    Runs off the spend already read by the personal-budget check so the alert path adds no
+    extra spend read on the hot request path.
+    """
+    if (
+        user_object is None
+        or user_object.user_id is None
+        or user_object.max_budget is None
+        or not math.isfinite(user_object.max_budget)
+    ):
+        return
+
+    raw_thresholds = (
+        (user_object.metadata.get("budget_alert_thresholds") if isinstance(user_object.metadata, dict) else None)
+        or thresholds
+        or [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
+    )
+    effective_thresholds = _sanitize_alert_thresholds(
+        raw_thresholds if isinstance(raw_thresholds, list) else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
+    )
+    for threshold in effective_thresholds:
+        if spend >= user_object.max_budget * threshold and spend < user_object.max_budget:
+            verbose_proxy_logger.debug(
+                "User budget threshold crossed: user=%s spend=%s max_budget=%s threshold=%s",
+                user_object.user_id,
+                spend,
+                user_object.max_budget,
+                threshold,
+            )
+            call_info = CallInfo(
+                token=valid_token.token if valid_token else None,
+                spend=spend,
+                max_budget=user_object.max_budget,
+                user_id=user_object.user_id,
+                team_id=valid_token.team_id if valid_token else None,
+                organization_id=valid_token.org_id if valid_token else None,
+                event_group=Litellm_EntityType.USER,
+                budget_percentage_used=threshold,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="user_budget",
+                    user_info=call_info,
+                )
+            )
 
 
 async def _check_team_member_budget(
@@ -3936,6 +4068,16 @@ async def _team_max_budget_check(
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
         )
+
+        slack_alerting = getattr(proxy_logging_obj, "slack_alerting_instance", None)
+        if slack_alerting is not None:
+            await _team_max_budget_alert_check(
+                team_object=team_object,
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+                spend=spend,
+                thresholds=slack_alerting.alerting_args.team_budget_alert_thresholds,
+            )
 
         if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
             if valid_token:
