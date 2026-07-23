@@ -2811,3 +2811,71 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
         id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
     )
     assert convert(openai)["id"] == "call_tokyo"
+
+
+class TestDropBlankAssistantMessagesAfterToolCalls:
+    """Regression tests for issue #31553: blank assistant messages after tool_calls
+    break providers like DeepSeek that require tool messages immediately after."""
+
+    def test_blank_assistant_after_tool_calls_is_dropped(self):
+        """A blank assistant message right after an assistant with tool_calls should be removed"""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "shell", "arguments": "{}"}}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+            {"role": "tool", "content": "output", "tool_call_id": "call_1"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._drop_blank_assistant_messages_after_tool_calls(messages)
+        assert len(result) == 2
+        assert result[0]["role"] == "assistant"
+        assert result[0].get("tool_calls") is not None
+        assert result[1]["role"] == "tool"
+
+    def test_blank_string_content_after_tool_calls_is_dropped(self):
+        """Empty string content should also be dropped"""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            },
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "content": "ok", "tool_call_id": "call_1"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._drop_blank_assistant_messages_after_tool_calls(messages)
+        assert len(result) == 2
+
+    def test_nonempty_assistant_after_tool_calls_is_kept(self):
+        """An assistant message with actual content should NOT be dropped"""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            },
+            {"role": "assistant", "content": "Here is my analysis"},
+            {"role": "tool", "content": "ok", "tool_call_id": "call_1"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._drop_blank_assistant_messages_after_tool_calls(messages)
+        assert len(result) == 3
+
+    def test_blank_assistant_not_after_tool_calls_is_kept(self):
+        """A blank assistant message NOT preceded by tool_calls should be kept"""
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": ""},
+        ]
+        result = LiteLLMCompletionResponsesConfig._drop_blank_assistant_messages_after_tool_calls(messages)
+        assert len(result) == 2
+
+    def test_no_messages_returns_empty(self):
+        result = LiteLLMCompletionResponsesConfig._drop_blank_assistant_messages_after_tool_calls([])
+        assert result == []
+
+    def test_is_blank_content(self):
+        assert LiteLLMCompletionResponsesConfig._is_blank_content(None) is True
+        assert LiteLLMCompletionResponsesConfig._is_blank_content("") is True
+        assert LiteLLMCompletionResponsesConfig._is_blank_content("  ") is True
+        assert LiteLLMCompletionResponsesConfig._is_blank_content([{"type": "text", "text": ""}]) is True
+        assert LiteLLMCompletionResponsesConfig._is_blank_content("hello") is False
+        assert LiteLLMCompletionResponsesConfig._is_blank_content([{"type": "text", "text": "hi"}]) is False

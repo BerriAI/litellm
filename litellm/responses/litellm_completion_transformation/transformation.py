@@ -484,7 +484,67 @@ class LiteLLMCompletionResponsesConfig:
                     continue
 
                 messages.extend(chat_completion_messages)
+
+        # Drop blank assistant messages that follow an assistant message with
+        # tool_calls.  Providers like DeepSeek require that tool_calls be
+        # immediately followed by tool messages; an empty assistant message in
+        # between violates that contract and triggers HTTP 400.
+        messages = LiteLLMCompletionResponsesConfig._drop_blank_assistant_messages_after_tool_calls(messages)
         return messages
+
+    @staticmethod
+    def _is_blank_content(content: Any) -> bool:
+        """Return True when *content* carries no meaningful information."""
+        if content is None:
+            return True
+        if isinstance(content, str):
+            return content.strip() == ""
+        if isinstance(content, list):
+            # e.g. [{"type": "text", "text": ""}]
+            return all(
+                isinstance(item, dict) and item.get("type") == "text" and not (item.get("text") or "").strip()
+                for item in content
+            )
+        return False
+
+    @staticmethod
+    def _has_tool_calls(msg: Any) -> bool:
+        """Return True when the message contains tool_calls."""
+        tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+        return isinstance(tool_calls, Sequence) and not isinstance(tool_calls, (str, bytes)) and len(tool_calls) > 0
+
+    @staticmethod
+    def _drop_blank_assistant_messages_after_tool_calls(
+        messages: List[Any],
+    ) -> List[Any]:
+        """
+        Remove blank assistant messages that immediately follow an assistant
+        message with tool_calls.
+
+        Providers like DeepSeek require that an assistant message with
+        tool_calls is immediately followed by tool messages.  The Responses
+        API transformation can insert an empty assistant message (e.g.
+        content=[{"type":"text","text":""}]) right after a tool-calling
+        assistant message; this helper strips those out.
+        """
+        if len(messages) < 2:
+            return messages
+        result: list = []  # mutable-ok: single-pass filter that depends on previous element
+        for msg in messages:
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            if (
+                role == "assistant"
+                and result
+                and not LiteLLMCompletionResponsesConfig._has_tool_calls(msg)
+            ):
+                prev = result[-1]
+                prev_role = prev.get("role") if isinstance(prev, dict) else getattr(prev, "role", None)
+                if prev_role == "assistant" and LiteLLMCompletionResponsesConfig._has_tool_calls(prev):
+                    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+                    if LiteLLMCompletionResponsesConfig._is_blank_content(content):
+                        continue
+            result.append(msg)
+        return result
 
     @staticmethod
     def _deduplicate_tool_call_output_messages(
