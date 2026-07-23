@@ -9,10 +9,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
-    build_token_endpoint_client_auth,
-    normalize_token_endpoint_auth_method,
-)
+from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -1248,11 +1245,12 @@ def _decrypted_credential_field(creds: Dict[str, object], field: str) -> object:
 
 def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
     """The upstream-OAuth-token-determining fields of an MCP server: the resource/audience (url, or
-    spec_path for OpenAPI servers), the OAuth mode/grant (auth_type, oauth2_flow), the
-    authorization-server endpoints, and the OAuth client + scopes. Mirrors the dashboard's
-    getOAuthAuthorizationIdentity. When any of these change on a server update, previously stored
-    per-user tokens were minted for the old identity and are stale. Excludes transport and
-    delegate_auth_to_upstream, which do not affect what token is minted (RFC 8707/8693).
+    spec_path for OpenAPI servers, plus the RFC 8707 upstream_resource sent on the authorize and
+    token legs), the OAuth mode/grant (auth_type, oauth2_flow), the authorization-server endpoints,
+    and the OAuth client + scopes. Mirrors the dashboard's getOAuthAuthorizationIdentity. When any
+    of these change on a server update, previously stored per-user tokens were minted for the old
+    identity and are stale. Excludes transport and delegate_auth_to_upstream, which do not affect
+    what token is minted (RFC 8693).
 
     client_id/client_secret are compared decrypted: stored values are NaCl-encrypted with a fresh
     nonce on every write, so comparing ciphertext would flag every routine save as an identity
@@ -1278,6 +1276,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
         _decrypted_credential_field(creds_dict, "client_id"),
         _decrypted_credential_field(creds_dict, "client_secret"),
         creds_dict.get("scopes"),
+        creds_dict.get("upstream_resource"),
     )
 
 
@@ -1367,20 +1366,21 @@ async def refresh_user_oauth_token(
         return None
 
     try:
-        client_auth = build_token_endpoint_client_auth(
-            auth_method=normalize_token_endpoint_auth_method(getattr(server, "token_endpoint_auth_method", None)),
+        token_request = build_upstream_oauth2_token_request(
+            server,
+            auth_method=getattr(server, "token_endpoint_auth_method", None),
             client_id=client_id,
             client_secret=client_secret,
         )
         token_data: Dict[str, str] = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            **client_auth.body,
+            **token_request.body,
         }
         async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
         response = await async_client.post(
             token_url,
-            headers={"Accept": "application/json", **client_auth.headers},
+            headers={"Accept": "application/json", **token_request.headers},
             data=token_data,
         )
         response.raise_for_status()

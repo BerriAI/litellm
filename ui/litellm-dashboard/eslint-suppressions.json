@@ -1060,9 +1060,6 @@
     "max-lines": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 2
     },

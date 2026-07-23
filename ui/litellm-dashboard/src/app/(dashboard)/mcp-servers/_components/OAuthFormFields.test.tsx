@@ -29,6 +29,63 @@ describe("OAuthFormFields", () => {
 
   // ── visibility by flow type ─────────────────────────────────────────────────
 
+  // The RFC 8707 resource indicator applies to both OAuth arms: the interactive authorize/token legs
+  // and the M2M client_credentials fetch. It must render in each, or the arm missing it can only be
+  // configured through the API.
+  describe("resource indicator field", () => {
+    it("renders in interactive mode", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      expect(screen.getByText("Resource Indicator (optional)")).toBeInTheDocument();
+    });
+
+    it("renders in M2M mode", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={true} />
+        </WithForm>,
+      );
+      expect(screen.getByText("Resource Indicator (optional)")).toBeInTheDocument();
+    });
+
+    it("keeps one placeholder when editing, since the stored value is returned and shown", () => {
+      // Non-secret admin config is no longer redacted out of responses, so the field mounts with its
+      // real value and an emptied field clears it. There is no keep-existing state left to signal.
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} isEditing={true} />
+        </WithForm>,
+      );
+      expect(screen.getByPlaceholderText("auto, or https://mcp.example.com/mcp")).toBeInTheDocument();
+    });
+
+    it("submits its value under credentials.upstream_resource", async () => {
+      const onFinish = vi.fn();
+      render(
+        <WithForm onFinish={onFinish}>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      const input = screen.getByPlaceholderText("auto, or https://mcp.example.com/mcp");
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "api://finance-api/.default" } });
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByText("Submit"));
+      });
+      await waitFor(() => {
+        expect(onFinish).toHaveBeenCalledWith(
+          expect.objectContaining({
+            credentials: expect.objectContaining({ upstream_resource: "api://finance-api/.default" }),
+          }),
+        );
+      });
+    });
+  });
+
   describe("interactive mode (isM2M=false)", () => {
     it("renders Token Validation Rules field", () => {
       render(

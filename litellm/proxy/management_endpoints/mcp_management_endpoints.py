@@ -181,7 +181,11 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp import MCPAuth, MCPCredentials
+    from litellm.types.mcp import (
+        MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
+        MCPAuth,
+        MCPCredentials,
+    )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     @dataclass
@@ -476,7 +480,8 @@ if MCP_AVAILABLE:
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
-        """Return a copy of the MCP server object with credentials removed."""
+        """Return a copy with secret credentials removed, keeping only non-secret admin config so the
+        admin form can show and clear it. Non-admin and virtual-key views strip the whole blob."""
 
         try:
             redacted_server = mcp_server.model_copy(deep=True)
@@ -484,9 +489,24 @@ if MCP_AVAILABLE:
             redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
 
         if hasattr(redacted_server, "credentials"):
-            setattr(redacted_server, "credentials", None)
+            setattr(redacted_server, "credentials", _preserved_admin_config_credentials(redacted_server.credentials))
 
         return redacted_server
+
+    def _preserved_admin_config_credentials(
+        credentials: "MCPCredentials | str | None",
+    ) -> "dict[str, str] | None":
+        """Keep only the non-secret admin-config keys, which are stored unencrypted so they lift out
+        as plaintext from either blob shape; every secret and minted-token key is dropped."""
+        if not credentials:
+            return None
+        as_dict: dict[str, Any] = json.loads(credentials) if isinstance(credentials, str) else dict(credentials)
+        preserved = {
+            key: value
+            for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
+            if isinstance((value := as_dict.get(key)), str) and value
+        }
+        return preserved or None
 
     def _redact_mcp_credentials_list(
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
@@ -529,6 +549,7 @@ if MCP_AVAILABLE:
         ``[]``/``{}`` for required list/dict fields).
         """
         sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
         # similar tokens in the OpenAPI spec URL.
@@ -572,6 +593,7 @@ if MCP_AVAILABLE:
         """
 
         sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
 
         # Remove potentially sensitive config + identity fields.
         sanitized.url = None
@@ -615,36 +637,47 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
 
+    # (server attribute, credentials key) a session server inherits from the server it derives from.
+    # Declared as a table rather than a chain of ifs, which is how upstream_resource was missed.
+    _INHERITED_CREDENTIAL_FIELDS: tuple[tuple[str, str], ...] = (
+        ("authentication_token", "auth_value"),
+        ("client_id", "client_id"),
+        ("client_secret", "client_secret"),
+        ("scopes", "scopes"),
+        ("aws_access_key_id", "aws_access_key_id"),
+        ("aws_secret_access_key", "aws_secret_access_key"),
+        ("aws_session_token", "aws_session_token"),
+        ("aws_region_name", "aws_region_name"),
+        ("aws_service_name", "aws_service_name"),
+        ("upstream_resource", "upstream_resource"),
+    )
+
+    def _has_non_admin_config_credentials(credentials: "MCPCredentials | None") -> bool:
+        """Did the caller supply an actual credential? Admin config rides in the same blob but is not
+        one, so a form that round-trips it must not read as "credentials supplied"."""
+        if not credentials:
+            return False
+        as_dict: dict[str, Any] = dict(credentials)
+        return any(value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS)
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
-        if not payload.server_id or payload.credentials:
+        if not payload.server_id or _has_non_admin_config_credentials(payload.credentials):
             return payload
 
         existing_server = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
         if existing_server is None:
             return payload
 
-        inherited_credentials: MCPCredentials = {}
-        if existing_server.authentication_token:
-            inherited_credentials["auth_value"] = existing_server.authentication_token
-        if existing_server.client_id:
-            inherited_credentials["client_id"] = existing_server.client_id
-        if existing_server.client_secret:
-            inherited_credentials["client_secret"] = existing_server.client_secret
-        if existing_server.scopes:
-            inherited_credentials["scopes"] = existing_server.scopes
-        # AWS SigV4 fields
-        if existing_server.aws_access_key_id:
-            inherited_credentials["aws_access_key_id"] = existing_server.aws_access_key_id
-        if existing_server.aws_secret_access_key:
-            inherited_credentials["aws_secret_access_key"] = existing_server.aws_secret_access_key
-        if existing_server.aws_session_token:
-            inherited_credentials["aws_session_token"] = existing_server.aws_session_token
-        if existing_server.aws_region_name:
-            inherited_credentials["aws_region_name"] = existing_server.aws_region_name
-        if existing_server.aws_service_name:
-            inherited_credentials["aws_service_name"] = existing_server.aws_service_name
+        inherited_credentials: dict[str, Any] = {
+            credential_key: value
+            for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
+            if (value := getattr(existing_server, server_attr, None))
+        }
+        # The gate above guarantees anything still supplied is admin config, which the admin just
+        # typed, so it wins over the stored value.
+        inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
 
         if not inherited_credentials:
             return payload
