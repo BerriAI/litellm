@@ -3086,9 +3086,7 @@ class MCPServerManager:
             )
         ):
             spec = None
-        auth_value = (
-            await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token) if spec is None else None
-        )
+        auth_value = await resolve_mcp_auth(server, mcp_auth_header) if spec is None else None
 
         # Create sampling and elicitation callbacks for this client
         sampling_cb = _create_sampling_callback(user_api_key_auth=user_api_key_auth) if server.allow_sampling else None
