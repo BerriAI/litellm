@@ -1,4 +1,5 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
@@ -68,13 +69,18 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
   return unfurlWildcardModelsInList(tempModelsToPick, userModels);
 };
 
-const canCreateOrManageTeams = (
+export const canCreateOrManageTeams = (
   userRole: string | null,
   userID: string | null,
   organizations: Organization[] | null,
+  allowUserTeamCreation: boolean,
 ): boolean => {
   // Admin role always has permission
   if (userRole === "Admin") {
+    return true;
+  }
+
+  if (allowUserTeamCreation && userRole === "Internal User") {
     return true;
   }
 
@@ -124,6 +130,8 @@ const getOrganizationAlias = (
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
   const organizations = organizationsData ?? null;
+  const { data: uiSettings } = useUISettings();
+  const allowUserTeamCreation = Boolean(uiSettings?.values?.allow_user_team_creation);
   const queryClient = useQueryClient();
   const refreshTeams = () => queryClient.invalidateQueries({ queryKey: teamsTableKeys.all });
   const [currentOrg] = useState<Organization | null>(null);
@@ -570,7 +578,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           <Tabs
             items={tabItems}
             tabBarExtraContent={{
-              left: canCreateOrManageTeams(userRole, userID, organizations) ? (
+              left: canCreateOrManageTeams(userRole, userID, organizations, allowUserTeamCreation) ? (
                 <div className="flex items-center gap-4 pr-4">
                   <UIButton onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
                     <Plus className="size-4" />
@@ -584,7 +592,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         </>
       )}
 
-      {canCreateOrManageTeams(userRole, userID, organizations) && (
+      {canCreateOrManageTeams(userRole, userID, organizations, allowUserTeamCreation) && (
         <Modal
           title="Create Team"
           open={isTeamModalVisible}
@@ -612,6 +620,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 const isOrgAdmin = userRole !== "Admin";
                 const isSingleOrg = adminOrgs.length === 1;
                 const hasNoOrgs = adminOrgs.length === 0;
+
+                if (userRole !== "Admin" && hasNoOrgs) {
+                  return null;
+                }
 
                 return (
                   <>
