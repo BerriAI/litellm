@@ -25,7 +25,6 @@ from pydantic import BaseModel, RootModel
 from e2e_config import unique_marker
 from proxy_client import ProxyClient
 from e2e_http import Success, unwrap
-from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import (
     ChatBody,
@@ -71,7 +70,7 @@ def _approx_equal(actual: float, expected: float) -> bool:
 
 
 def _provision(
-    endpoints_client: EndpointsClient,
+    proxy: ProxyClient,
     resources: ResourceManager,
     prefix: str,
     *,
@@ -84,7 +83,7 @@ def _provision(
     marker keeps the name unique so concurrent runs on the shared proxy never
     collide."""
     model_name = f"{prefix}-{unique_marker()}"
-    model_id = endpoints_client.create_model(
+    model_id = proxy.create_model(
         model_name,
         LiteLLMParamsBody(
             model=BACKEND_MODEL,
@@ -93,15 +92,15 @@ def _provision(
             output_cost_per_token=output_cost_per_token,
         ),
     )
-    resources.defer(lambda: endpoints_client.delete_model(model_id))
+    resources.defer(lambda: proxy.delete_model(model_id))
     return model_name
 
 
 def _provision_custom_priced(
-    endpoints_client: EndpointsClient, resources: ResourceManager
+    proxy: ProxyClient, resources: ResourceManager
 ) -> str:
     return _provision(
-        endpoints_client,
+        proxy,
         resources,
         "custom-priced-flash",
         input_cost_per_token=CUSTOM_INPUT_RATE,
@@ -151,14 +150,14 @@ def _poll_breakdown_row(proxy: ProxyClient, key: str, response_id: str | None) -
 class TestCustomPricing:
     def test_custom_pricing_is_billed_at_configured_rate(
         self,
-        endpoints_client: EndpointsClient,
+        proxy: ProxyClient,
         resources: ResourceManager,
         scoped_key: str,
     ) -> None:
-        model = _provision_custom_priced(endpoints_client, resources)
+        model = _provision_custom_priced(proxy, resources)
 
         chat = unwrap(
-            endpoints_client.proxy.chat(
+            proxy.chat(
                 scoped_key,
                 ChatBody(
                     model=model,
@@ -172,7 +171,7 @@ class TestCustomPricing:
             )
         )
 
-        row = _poll_breakdown_row(endpoints_client.proxy, scoped_key, chat.id)
+        row = _poll_breakdown_row(proxy, scoped_key, chat.id)
         assert row.metadata and row.metadata.cost_breakdown  # guaranteed by the poll
         breakdown = row.metadata.cost_breakdown
 
@@ -195,10 +194,10 @@ class TestCustomPricing:
         )
 
     def test_model_info_reports_custom_pricing(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
-        model = _provision_custom_priced(endpoints_client, resources)
-        entry = _model_info_entry(endpoints_client.proxy.model_info(), model)
+        model = _provision_custom_priced(proxy, resources)
+        entry = _model_info_entry(proxy.model_info(), model)
 
         assert entry.litellm_params.input_cost_per_token == CUSTOM_INPUT_RATE, (
             f"/model/info litellm_params input rate "
@@ -210,20 +209,20 @@ class TestCustomPricing:
         )
 
     def test_custom_pricing_is_isolated_from_sibling_deployment(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
         # Register the override first so its rate is in the backend cost map before
         # the sibling resolves; a leak (LIT-3897) would then poison the sibling.
-        custom = _provision_custom_priced(endpoints_client, resources)
+        custom = _provision_custom_priced(proxy, resources)
         sibling = _provision(
-            endpoints_client,
+            proxy,
             resources,
             "base-flash",
             input_cost_per_token=None,
             output_cost_per_token=None,
         )
 
-        entries = {entry.model_name: entry for entry in endpoints_client.proxy.model_info()}
+        entries = {entry.model_name: entry for entry in proxy.model_info()}
         custom_entry = entries.get(custom)
         sibling_entry = entries.get(sibling)
         assert custom_entry is not None, f"{custom} absent from /model/info"

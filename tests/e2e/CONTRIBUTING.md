@@ -122,6 +122,8 @@ That snippet only conveys intent. What you actually write uses the real harness:
 
 Every HTTP call goes through the shared transport, never through `requests.*` in a test. `e2e_http.py` is the only module permitted to call `requests.*`, and that is enforced in CI by `tests/code_coverage_tests/check_e2e_no_raw_requests.py`. A test that imports requests will fail the check
 
+One deliberate exception: LLM-endpoint calls in `llm_translation/` go through the real provider SDKs (OpenAI, Anthropic) via the suite's `sdk` fixture (`llm_translation/sdk_clients.py`), because that is what customers actually run against the proxy (LIT-4577). Management routes and endpoints no official SDK covers stay on the shared transport, and raw HTTP client imports remain banned either way
+
 The shape is layered so tests stay declarative
 
 `transport.py` exposes a `Transport` Protocol with `post`, `get`, `delete`, `send`, `stream`, `probe`, plus `bearer(key)` and the `master` header. `HttpTransport` fulfils it, and `SplitTransport` routes each call by path to the data plane or the control plane so a split control-plane/data-plane deployment works without any change in the test

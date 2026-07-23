@@ -15,7 +15,7 @@ service_tier lives in test_provider_features_e2e.py.
 
 The provider-native cache_control request shape is not expressible with the
 shared ``ChatBody`` (whose content is a plain string), so the cacheable body is
-built from the typed content blocks shared in ``endpoints_client.py``.
+built from the typed content blocks shared in ``models.py``.
 """
 
 from __future__ import annotations
@@ -27,9 +27,8 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, unwrap
-from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
-from models import ChatResponse, LiteLLMParamsBody, Usage
+from models import CacheControl, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
 from passthrough_client import PassthroughClient
 import os
 
