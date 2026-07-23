@@ -9,7 +9,10 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    filter_internal_params,
+    map_finish_reason,
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
@@ -129,12 +132,16 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=self._get_aws_region_name(optional_params=optional_params, model=model),
+            aws_region_name=self._get_aws_region_name(
+                optional_params=optional_params, model=model
+            ),
         )
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            proxy_endpoint_url = (
+                f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
+            )
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
@@ -193,7 +200,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             custom_prompt_dict=custom_prompt_dict,
         )
         inference_params = copy.deepcopy(optional_params)
-        inference_params = {k: v for k, v in inference_params.items() if k not in self.aws_authentication_params}
+        inference_params = {
+            k: v
+            for k, v in inference_params.items()
+            if k not in self.aws_authentication_params
+        }
+        inference_params = filter_internal_params(inference_params)
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
@@ -209,15 +221,19 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 config = litellm.AmazonCohereConfig.get_config()
                 self._apply_config_to_params(config, inference_params)
                 if stream is True:
-                    inference_params["stream"] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            transformed_request = litellm.AmazonAnthropicClaudeConfig().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
+            transformed_request = (
+                litellm.AmazonAnthropicClaudeConfig().transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
             )
 
             return transformed_request
@@ -296,7 +312,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         try:
             completion_response = raw_response.json()
         except Exception:
-            raise BedrockError(message=raw_response.text, status_code=raw_response.status_code)
+            raise BedrockError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
         verbose_logger.debug(
             "bedrock invoke response % s",
             json.dumps(completion_response, indent=4, default=str),
@@ -353,16 +371,22 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     json_mode=json_mode,
                 )
             elif provider == "ai21":
-                outputText = completion_response.get("completions")[0].get("data").get("text")
+                outputText = (
+                    completion_response.get("completions")[0].get("data").get("text")
+                )
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
-                outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
+                outputText = litellm.AmazonMistralConfig.get_outputText(
+                    completion_response, model_response
+                )
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
             raise BedrockError(
-                message="Error processing={}, Received error={}".format(raw_response.text, str(e)),
+                message="Error processing={}, Received error={}".format(
+                    raw_response.text, str(e)
+                ),
                 status_code=422,
             )
 
@@ -385,15 +409,23 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 raise Exception()
         except Exception as e:
             raise BedrockError(
-                message="Error parsing received text={}.\nError-{}".format(outputText, str(e)),
+                message="Error parsing received text={}.\nError-{}".format(
+                    outputText, str(e)
+                ),
                 status_code=raw_response.status_code,
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        bedrock_input_tokens = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
-        bedrock_output_tokens = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
+        bedrock_input_tokens = raw_response.headers.get(
+            "x-amzn-bedrock-input-token-count", None
+        )
+        bedrock_output_tokens = raw_response.headers.get(
+            "x-amzn-bedrock-output-token-count", None
+        )
 
-        prompt_tokens = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
+        prompt_tokens = int(
+            bedrock_input_tokens or litellm.token_counter(messages=messages)
+        )
 
         completion_tokens = int(
             bedrock_output_tokens
@@ -580,7 +612,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
-    def convert_messages_to_prompt(self, model, messages, provider, custom_prompt_dict) -> Tuple[str, Optional[list]]:
+    def convert_messages_to_prompt(
+        self, model, messages, provider, custom_prompt_dict
+    ) -> Tuple[str, Optional[list]]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: Optional[list] = None
@@ -590,18 +624,26 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
+                initial_prompt_value=model_prompt_details.get(
+                    "initial_prompt_value", ""
+                ),
                 final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
                 messages=messages,
             )
             return prompt, None
         ## ELSE
         if provider == "anthropic" or provider == "amazon":
-            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="bedrock"
+            )
         elif provider == "mistral":
-            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="bedrock"
+            )
         elif provider == "meta" or provider == "llama":
-            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
+            prompt = prompt_factory(
+                model=model, messages=messages, custom_llm_provider="bedrock"
+            )
         elif provider == "cohere":
             prompt, chat_history = cohere_message_pt(messages=messages)
         elif provider == "deepseek_r1":
