@@ -715,3 +715,25 @@ class TestCompleteGDC:
 
         _, kwargs = mock_completion.call_args
         assert kwargs["api_base"] == "https://gdc-specific.com"
+
+    @patch("google.auth.load_credentials_from_dict")
+    @patch("builtins.open", new_callable=MagicMock)
+    @patch("os.path.exists", return_value=True)
+    def test_load_creds_from_key_local_file_safety(self, mock_exists, mock_open, mock_load_creds):
+        config = GDCGeminiConfig()
+        fake_path = "/tmp/fake_service_account.json"
+        
+        # 1. By default, local file access must be blocked (prevents LFI via api_key)
+        mock_open.reset_mock()
+        creds, is_sa = config._load_creds_from_key(fake_path, TEST_MODEL)
+        mock_open.assert_not_called()
+        
+        # 2. When enabled via GDC_ALLOW_LOCAL_FILE_ACCESS env var, file access should be allowed
+        with patch.dict(os.environ, {"GDC_ALLOW_LOCAL_FILE_ACCESS": "true"}):
+            mock_open.reset_mock()
+            mock_open.return_value.__enter__.return_value.read.return_value = '{"type": "service_account"}'
+            mock_load_creds.return_value = (MagicMock(), None)
+            creds, is_sa = config._load_creds_from_key(fake_path, TEST_MODEL)
+            mock_open.assert_called_once_with(fake_path, "r")
+            assert creds is not None
+            assert is_sa is True
