@@ -337,6 +337,7 @@ class TestFallbackDeploymentCooldown:
         kwargs = {
             "litellm_metadata": {
                 "model_info": {"id": "fallback-deployment"},
+                "deployment_model_name": "gpt-4",
             }
         }
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
@@ -381,6 +382,7 @@ class TestFallbackDeploymentCooldown:
         kwargs = {
             "litellm_metadata": {
                 "model_info": {"id": "fallback-deployment"},
+                "deployment_model_name": "gpt-4",
             }
         }
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")

@@ -20,6 +20,25 @@ else:
     LitellmRouter = Any
 
 
+def _router_authored_metadata(kwargs: dict) -> dict[str, Any]:
+    """Return whichever of kwargs["metadata"]/["litellm_metadata"] the router itself
+    just wrote deployment info into, rather than trusting whichever key happens to be
+    present.
+
+    Router._update_kwargs_with_deployment() always writes "model_info" and
+    "deployment_model_name" into the same bucket together (whichever one it picks based
+    on the call type), so a bucket carrying "deployment_model_name" is the one the
+    router touched for this call. A metadata/litellm_metadata bucket lacking it (e.g.
+    caller-supplied and preserved via allow_client_pricing_override on the *other* key)
+    is not trusted.
+    """
+    for key in ("metadata", "litellm_metadata"):
+        bucket = kwargs.get(key)
+        if isinstance(bucket, dict) and "deployment_model_name" in bucket:
+            return bucket
+    return {}
+
+
 def _trigger_cooldown_for_failed_deployment(
     litellm_router: LitellmRouter,
     kwargs: dict,
@@ -34,8 +53,7 @@ def _trigger_cooldown_for_failed_deployment(
     fallback deployment is evaluated for cooldown regardless.
     """
     try:
-        metadata_key = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-        metadata = kwargs.get(metadata_key) or {}
+        metadata = _router_authored_metadata(kwargs)
         model_info = metadata.get("model_info") or {}
         deployment_id: str | None = model_info.get("id") if isinstance(model_info, dict) else None
 
