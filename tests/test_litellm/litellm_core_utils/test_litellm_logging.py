@@ -3243,6 +3243,141 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
     assert payload["litellm_call_id"] == call_id
 
 
+def test_mcp_tool_is_error_marks_standard_logging_payload_as_failure(logging_obj):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import CallTypes
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "litellm_call_id": "mcp-call-id",
+            "model": "MCP: deepwiki/search",
+            "messages": [],
+            "call_type": CallTypes.call_mcp_tool.value,
+            "mcp_tool_call_metadata": {
+                "name": "search",
+                "arguments": {"NOT_a_real_arg": "x"},
+                "mcp_server_name": "deepwiki",
+                "namespaced_tool_name": "deepwiki/search",
+            },
+        },
+        init_response_obj={
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Input validation error: 'query' is required",
+                }
+            ],
+            "isError": True,
+        },
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["status"] == "failure"
+    assert payload["status_fields"]["llm_api_status"] == "failure"
+    assert payload["error_str"] == "MCP tool returned isError=true"
+    assert payload["error_information"] is not None
+    assert payload["error_information"]["error_class"] == "MCPToolError"
+    assert (
+        payload["error_information"]["error_message"]
+        == "MCP tool returned isError=true"
+    )
+    assert payload["metadata"]["mcp_tool_call_metadata"] is not None
+    assert (
+        payload["metadata"]["mcp_tool_call_metadata"]["namespaced_tool_name"]
+        == "deepwiki/search"
+    )
+
+
+def test_mcp_tool_json_rpc_is_error_envelope_marks_payload_as_failure(logging_obj):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import CallTypes
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "litellm_call_id": "mcp-json-rpc-call-id",
+            "model": "MCP: github/create_issue",
+            "messages": [],
+            "call_type": CallTypes.call_mcp_tool.value,
+        },
+        init_response_obj={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Permission denied for repository sk-live-secret",
+                    }
+                ],
+                "isError": True,
+            },
+        },
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["status"] == "failure"
+    assert payload["error_information"] is not None
+    assert payload["error_information"]["error_class"] == "MCPToolError"
+    assert (
+        payload["error_information"]["error_message"]
+        == "MCP tool returned isError=true"
+    )
+    assert payload["error_str"] == "MCP tool returned isError=true"
+    assert "sk-live-secret" not in payload["error_str"]
+    assert "sk-live-secret" not in payload["error_information"]["error_message"]
+
+
+def test_mcp_tool_success_keeps_standard_logging_payload_success(logging_obj):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import CallTypes
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "litellm_call_id": "mcp-success-call-id",
+            "model": "MCP: deepwiki/search",
+            "messages": [],
+            "call_type": CallTypes.call_mcp_tool.value,
+        },
+        init_response_obj={
+            "content": [{"type": "text", "text": "Search result"}],
+            "isError": False,
+        },
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["status"] == "success"
+    assert payload["error_str"] is None
+    assert payload["error_information"] is not None
+    assert payload["error_information"]["error_message"] == ""
+
+
 def _make_dict_logging_obj():
     """Build a Logging instance configured for a non-streaming dict result."""
     obj = LitellmLogging(

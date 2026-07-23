@@ -5199,6 +5199,49 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
+MCP_TOOL_ERROR_LOGGING_MESSAGE = "MCP tool returned isError=true"
+
+
+def _has_mcp_tool_error(response_obj: dict) -> bool:
+    """Return True when an MCP tool result reports isError."""
+    result_obj = response_obj.get("result", response_obj)
+    if not isinstance(result_obj, dict) or result_obj.get("isError") is not True:
+        return False
+    return True
+
+
+def _get_mcp_tool_call_logging_status(
+    call_type: Optional[str],
+    response_obj: dict,
+    status: StandardLoggingPayloadStatus,
+    error_str: Optional[str],
+) -> Tuple[
+    Optional[str],
+    StandardLoggingPayloadStatus,
+    Optional[str],
+    Optional[StandardLoggingPayloadErrorInformation],
+]:
+    if call_type != CallTypes.call_mcp_tool.value:
+        return call_type, status, error_str, None
+
+    if _has_mcp_tool_error(response_obj) is False:
+        return call_type, status, error_str, None
+
+    error_information = StandardLoggingPayloadErrorInformation(
+        error_code="",
+        error_class="MCPToolError",
+        llm_provider="mcp",
+        traceback="",
+        error_message=MCP_TOOL_ERROR_LOGGING_MESSAGE,
+    )
+    return (
+        call_type,
+        "failure",
+        error_str or MCP_TOOL_ERROR_LOGGING_MESSAGE,
+        error_information,
+    )
+
+
 def get_standard_logging_object_payload(
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
@@ -5223,7 +5266,14 @@ def get_standard_logging_object_payload(
         metadata: dict = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
 
         completion_start_time = kwargs.get("completion_start_time", end_time)
-        call_type = kwargs.get("call_type")
+        call_type, status, error_str, mcp_tool_error_information = (
+            _get_mcp_tool_call_logging_status(
+                call_type=kwargs.get("call_type"),
+                response_obj=response_obj,
+                status=status,
+                error_str=error_str,
+            )
+        )
         cache_hit = kwargs.get("cache_hit", False)
         # Extract usage as a plain dict, avoiding Pydantic round-trip
         raw_usage_dict = StandardLoggingPayloadSetup.get_usage_as_dict(
@@ -5319,6 +5369,8 @@ def get_standard_logging_object_payload(
             original_exception=original_exception,
             error_str=error_str,
         )
+        if mcp_tool_error_information is not None:
+            error_information = mcp_tool_error_information
 
         ## get final response object ##
         final_response_obj = StandardLoggingPayloadSetup.get_final_response_obj(
