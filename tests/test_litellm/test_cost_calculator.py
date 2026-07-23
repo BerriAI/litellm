@@ -3479,3 +3479,62 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_fireworks_ai_prompt_caching_cost_calculation(monkeypatch):
+    """
+    Test that Fireworks AI models correctly apply cache_read_input_token_cost
+    in completion_cost calculations.
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage, PromptTokensDetailsWrapper, ModelResponse
+
+    # Use monkeypatch for environment variables
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    # Load local cost map and patch litellm.model_cost
+    local_map = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", local_map)
+
+    # Mock usage with prompt caching
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=200,
+        total_tokens=1200,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=800,
+            audio_tokens=0,
+        ),
+    )
+
+    # Register mock Fireworks AI model
+    model = "fireworks_ai/mock-cached-model"
+    litellm.model_cost[model] = {
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000008,
+        "cache_read_input_token_cost": 0.0000005,
+        "litellm_provider": "fireworks_ai",
+        "max_tokens": 8192,
+    }
+
+    response = ModelResponse(
+        id="test-id",
+        model="mock-cached-model",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="fireworks_ai",
+    )
+
+    # Regular input tokens: 1000 - 800 = 200 tokens
+    # Cost: 200 * 0.000002 = 0.0004
+    # Cached input tokens: 800 tokens
+    # Cost: 800 * 0.0000005 = 0.0004
+    # Output: 200 * 0.000008 = 0.0016
+    # Expected: 0.0004 + 0.0004 + 0.0016 = 0.0024
+    expected = 0.0024
+    assert cost == pytest.approx(expected)

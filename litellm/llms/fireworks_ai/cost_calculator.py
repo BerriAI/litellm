@@ -11,7 +11,6 @@ from litellm.constants import (
     FIREWORKS_AI_176_B_MOE,
 )
 from litellm.types.utils import Usage
-from litellm.utils import get_model_info
 
 
 # Extract the number of billion parameters from the model name
@@ -65,33 +64,18 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## check if model mapped, else use default pricing
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
     try:
-        model_info = get_model_info(model=model, custom_llm_provider="fireworks_ai")
+        return generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider="fireworks_ai",
+        )
     except Exception:
-        base_model = get_base_model_for_pricing(model_name=model)
-
-        ## GET MODEL INFO
-        model_info = get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
-
-    ## CALCULATE INPUT COST
-    prompt_tokens_details = usage.prompt_tokens_details
-    cached_tokens: int = (
-        prompt_tokens_details.cached_tokens
-        if prompt_tokens_details is not None and prompt_tokens_details.cached_tokens is not None
-        else 0
-    )
-    input_cost_per_token: float = model_info["input_cost_per_token"] or 0.0
-    cache_read_input_token_cost = model_info.get("cache_read_input_token_cost")
-    cache_read_cost_per_token: float = (
-        cache_read_input_token_cost if cache_read_input_token_cost is not None else input_cost_per_token
-    )
-    non_cached_prompt_tokens: int = max(usage.prompt_tokens - cached_tokens, 0)
-
-    prompt_cost: float = non_cached_prompt_tokens * input_cost_per_token + cached_tokens * cache_read_cost_per_token
-
-    ## CALCULATE OUTPUT COST
-    output_cost_per_token: float = model_info["output_cost_per_token"] or 0.0
-    completion_cost: float = usage.completion_tokens * output_cost_per_token
-
-    return prompt_cost, completion_cost
+        resolved_model = get_base_model_for_pricing(model_name=model)
+        return generic_cost_per_token(
+            model=resolved_model,
+            usage=usage,
+            custom_llm_provider="fireworks_ai",
+        )

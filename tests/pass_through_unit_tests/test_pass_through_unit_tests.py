@@ -2,33 +2,21 @@ import json
 import os
 import sys
 from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 from typing import Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-import fastapi
-from fastapi import FastAPI
 from fastapi.routing import APIRoute
 import httpx
 import pytest
-import litellm
-from typing import AsyncGenerator
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
-from litellm.proxy.pass_through_endpoints.success_handler import (
-    PassThroughEndpointLogging,
-)
-from litellm.proxy.pass_through_endpoints.streaming_handler import (
-    PassThroughStreamingHandler,
-)
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     pass_through_request,
 )
-from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _update_metadata_with_tags_in_header,
@@ -652,3 +640,54 @@ def test_custom_pricing_used_in_cost_calculation():
 
     print(f"Cache-aware cost: {cache_cost}")
     print("✅ Custom pricing parameters are correctly used in cost calculation")
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_url_model_derivation(mock_request, mock_user_api_key_dict):
+    """
+    Test that when a request body does not contain a 'model' key, the model is derived
+    from the URL and surfaced as observability metadata.
+    """
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response._content = b'{"mock": "response"}'
+    async def mock_aread(): return mock_response._content
+    mock_response.aread = mock_aread
+
+    mock_logging_update = MagicMock()
+
+    with (
+        patch("httpx.AsyncClient.request", return_value=mock_response),
+        patch("httpx.AsyncClient.send", return_value=mock_response),
+        patch("litellm.litellm_core_utils.litellm_logging.Logging.update_environment_variables", new=mock_logging_update)
+    ):
+        request = mock_request(
+            headers={}, method="POST", request_body={"prompt": "hello"}
+        )
+        
+        target_url = "https://fal.run/fal-ai/flux/schnell"
+        
+        response = await pass_through_request(
+            request=request,
+            target=target_url,
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict,
+            custom_body={"prompt": "hello"}  # No model provided
+        )
+        
+        assert response.status_code == 200
+        
+        # Check that update_environment_variables was called with the derived model
+        mock_logging_update.assert_called_once()
+        _, kwargs = mock_logging_update.call_args
+
+        assert kwargs["model"] == "fal-ai/flux/schnell"
+
+        litellm_params = kwargs["litellm_params"]
+        # The URL-derived model is surfaced as metadata only, never as a tag: tags
+        # feed budget enforcement, and a URL-derived tag can't be checked against its
+        # own budget on the same request that first introduces it.
+        assert "tags" not in litellm_params["metadata"]
+        assert litellm_params["metadata"]["fal_model"] == "fal-ai/flux/schnell"
+

@@ -881,7 +881,36 @@ async def pass_through_request(
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        # If the body doesn't carry a model, fall back to deriving it from the URL path.
+        import urllib.parse
+
+        parsed_url = urllib.parse.urlparse(str(url))
+        url_host = parsed_url.hostname or ""
+        url_path = (parsed_url.path or "").lstrip("/")
+
+        url_provider = "unknown"
+        if url_host:
+            parts = url_host.split(".")
+            url_provider = parts[-2] if len(parts) >= 2 else url_host
+
+        url_identifier = url_path or url_host
+
+        # Surface the URL-derived model as observability metadata (Langfuse / Spend
+        # Logs) only. This intentionally does NOT go into `metadata.tags`: that list
+        # feeds tag spend/budget enforcement, and `user_api_key_auth`/`common_checks`
+        # already ran as FastAPI dependencies before this endpoint body executes, so a
+        # tag added here can never be checked against its own budget on this request.
+        # A caller could keep hitting a passthrough URL past that tag's budget forever.
+        if url_identifier:
+            if _parsed_body is None:
+                _parsed_body = {}
+            litellm_metadata = _parsed_body.setdefault("litellm_metadata", {})
+            if isinstance(litellm_metadata, dict):
+                litellm_metadata[f"{url_provider}_model"] = url_identifier
+
+        passthrough_model = (
+            _parsed_body.get("model") if isinstance(_parsed_body, dict) else None
+        ) or url_identifier or "unknown"
         start_time = datetime.now()
         logging_obj = Logging(
             model=passthrough_model,
