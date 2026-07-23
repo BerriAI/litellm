@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
@@ -3166,3 +3167,66 @@ async def test_bedrock_converse_message_level_cache_point_preserves_ttl_async():
     )
 
     assert _collect_cache_points(result) == [{"type": "default", "ttl": "1h"}]
+
+
+def test_map_system_message_pt_content_block_lists():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/32904
+
+    When system and/or user content is a list of content blocks (Anthropic-style),
+    merging must not string-concatenate a list. Merge as a block list instead.
+    """
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "Be brief."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+    ]
+
+    new_messages = map_system_message_pt(messages=messages)
+
+    assert len(new_messages) == 1
+    assert new_messages[0]["role"] == "user"
+    assert new_messages[0]["content"] == [
+        {"type": "text", "text": "Be brief."},
+        {"type": "text", "text": "Hi"},
+    ]
+
+
+def test_map_system_message_pt_mixed_string_and_content_blocks():
+    """
+    Mixed forms: a plain string on one side and a content-block list on the other
+    should merge into a block list rather than raising.
+    """
+    system_list_user_str = map_system_message_pt(
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "Be brief."}]},
+            {"role": "user", "content": "Hi"},
+        ]
+    )
+    assert system_list_user_str[0]["content"] == [
+        {"type": "text", "text": "Be brief."},
+        {"type": "text", "text": "Hi"},
+    ]
+
+    system_str_user_list = map_system_message_pt(
+        messages=[
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+        ]
+    )
+    assert system_str_user_list[0]["content"] == [
+        {"type": "text", "text": "Be brief."},
+        {"type": "text", "text": "Hi"},
+    ]
+
+
+def test_map_system_message_pt_string_content_unchanged():
+    """
+    Plain string content on both sides keeps the original space-joined behavior.
+    """
+    new_messages = map_system_message_pt(
+        messages=[
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Hi"},
+        ]
+    )
+    assert new_messages[0]["content"] == "Be brief. Hi"

@@ -87,6 +87,18 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
 )  # similar to autogen. Only used if `litellm.modify_params=True`.
 
 
+def _merge_message_content(system_content: Union[str, list], next_content: Union[str, list]) -> Union[str, list]:
+    if isinstance(system_content, str) and isinstance(next_content, str):
+        return system_content + " " + next_content
+
+    def as_blocks(content: Union[str, list]) -> list:
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        return list(content)
+
+    return as_blocks(system_content) + as_blocks(next_content)
+
+
 def map_system_message_pt(messages: list) -> list:
     """
     Convert 'system' message to 'user' message if provider doesn't support 'system' role.
@@ -106,7 +118,7 @@ def map_system_message_pt(messages: list) -> list:
                 next_role = next_m["role"]
                 if next_role == "user" or next_role == "assistant":  # Next message is a user or assistant message
                     # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
+                    next_m["content"] = _merge_message_content(m["content"], next_m["content"])
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": m["content"]}
