@@ -285,77 +285,49 @@ def test_extra_body_tags_not_forwarded_to_vertex_ai():
     assert result["custom_param"] == "allowed"
 
 
-def test_extra_body_google_maps_rewrites_json_response_format():
+def test_google_maps_rewrite_applies_only_to_gemini_provider():
+    """Regression: responseFormat rewrite must be gated to gemini provider only.
+
+    Vertex AI must keep responseMimeType + responseJsonSchema (old format) because
+    responseFormat is not a documented Vertex AI generationConfig field and causes
+    ~65-75% flaky 400 errors under concurrent load on Vertex AI.
+    Gemini API requires responseFormat because it rejects googleMaps + responseMimeType.
+    """
     messages = [{"role": "user", "content": "test"}]
-    optional_params = {
-        "response_mime_type": "application/json",
-        "response_schema": {
-            "type": "object",
-            "properties": {"answer": {"type": "string"}},
-        },
-        "extra_body": {
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+
+    vertex_result = _transform_request_body(
+        messages=messages,
+        model="gemini-3.1-flash-lite-preview",
+        optional_params={
             "tools": [{"googleMaps": {}}],
+            "response_mime_type": "application/json",
+            "response_schema": schema,
         },
-    }
-
-    result = _transform_request_body(
-        messages=messages,
-        model="gemini-2.5-pro",
-        optional_params=optional_params,
         custom_llm_provider="vertex_ai",
         litellm_params={},
         cached_content=None,
     )
+    vertex_gc = vertex_result["generationConfig"]
+    assert "responseFormat" not in vertex_gc
+    assert vertex_gc.get("response_mime_type") == "application/json"
 
-    generation_config = result["generationConfig"]
-    assert "response_mime_type" not in generation_config
-    assert generation_config["responseFormat"] == {
-        "text": {
-            "mimeType": "APPLICATION_JSON",
-            "schema": {
-                "type": "object",
-                "properties": {"answer": {"type": "string"}},
-            },
-        }
-    }
-
-
-def test_extra_body_generation_config_cannot_restore_google_maps_json_mime_type():
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {
-        "tools": [{"googleMaps": {}}],
-        "response_mime_type": "application/json",
-        "extra_body": {
-            "generationConfig": {
-                "response_mime_type": "application/json",
-                "response_json_schema": {
-                    "type": "object",
-                    "properties": {"answer": {"type": "string"}},
-                },
-            },
-        },
-    }
-
-    result = _transform_request_body(
+    gemini_result = _transform_request_body(
         messages=messages,
-        model="gemini-2.5-pro",
-        optional_params=optional_params,
-        custom_llm_provider="vertex_ai",
+        model="gemini-3.1-flash-lite-preview",
+        optional_params={
+            "tools": [{"googleMaps": {}}],
+            "response_mime_type": "application/json",
+            "response_schema": schema,
+        },
+        custom_llm_provider="gemini",
         litellm_params={},
         cached_content=None,
     )
-
-    generation_config = result["generationConfig"]
-    assert "response_mime_type" not in generation_config
-    assert "response_json_schema" not in generation_config
-    assert generation_config["responseFormat"] == {
-        "text": {
-            "mimeType": "APPLICATION_JSON",
-            "schema": {
-                "type": "object",
-                "properties": {"answer": {"type": "string"}},
-            },
-        }
+    gemini_gc = gemini_result["generationConfig"]
+    assert "response_mime_type" not in gemini_gc
+    assert gemini_gc["responseFormat"] == {
+        "text": {"mimeType": "APPLICATION_JSON", "schema": schema}
     }
 
 
