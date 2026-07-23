@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from urllib.parse import unquote
 from typing import Any, Coroutine, Optional, Tuple, Union
@@ -22,6 +23,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.utils import StandardCallbackDynamicParams
 
 from .transformation import VertexAIFilesConfig
 
@@ -91,7 +93,16 @@ class VertexAIFilesHandler(GCSBucketBase):
         if not file_id:
             raise ValueError("file_id is required in file_content_request")
 
-        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(kwargs={})
+        resolved_litellm_params = litellm_params or {}
+        gcs_dynamic_params = StandardCallbackDynamicParams(
+            gcs_bucket_name=resolved_litellm_params.get("gcs_bucket_name")
+            or resolved_litellm_params.get("bucket_name"),
+            gcs_path_service_account=resolved_litellm_params.get("gcs_path_service_account")
+            or (json.dumps(vertex_credentials) if isinstance(vertex_credentials, dict) else vertex_credentials),
+        )
+        gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+            kwargs={"standard_callback_dynamic_params": gcs_dynamic_params}
+        )
         bucket_name, object_path = self._extract_bucket_and_object_from_file_id(
             file_id=file_id,
             configured_bucket_name=gcs_logging_config["bucket_name"],
