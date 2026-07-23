@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Any, Optional, cast
 
@@ -71,6 +72,15 @@ def _to_epoch(value: Any) -> Optional[int]:
     if isinstance(value, datetime):
         return int(value.timestamp())
     return None
+
+
+def _sanitize_response_for_logging(value: Any) -> Any:
+    def _default(obj: Any) -> Any:
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return str(obj)
+
+    return json.loads(json.dumps(value, default=_default))
 
 
 class BedrockBatchesHandler:
@@ -253,7 +263,7 @@ class BedrockBatchesHandler:
             logging_obj.post_call(
                 input=batch_id,
                 api_key="",
-                original_response=response,
+                original_response=_sanitize_response_for_logging(response),
                 additional_args={"complete_input_dict": {"jobIdentifier": batch_id}},
             )
 
