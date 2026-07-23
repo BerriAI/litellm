@@ -8,6 +8,7 @@ import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
 import AutorouterTab from "./AutorouterTab";
 import PromptCachingTab from "./PromptCachingTab";
+import { useDailyActivityRange } from "./useDailyActivityRange";
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -16,11 +17,13 @@ interface CostOptimizationViewProps {
 }
 
 const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
+  const activity = useDailyActivityRange(accessToken, userId, userRole);
+
   const items = [
     {
       key: "usage",
       label: "Usage",
-      children: <UsageTab accessToken={accessToken} userId={userId} userRole={userRole} />,
+      children: <UsageTab accessToken={accessToken} activity={activity} />,
     },
     {
       key: "compression",
@@ -35,7 +38,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
     {
       key: "caching",
       label: "Prompt Caching",
-      children: <PromptCachingTab accessToken={accessToken} />,
+      children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
     },
   ];
 
