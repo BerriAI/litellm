@@ -5,6 +5,7 @@ import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } fr
 import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
 import { internalUserRoles } from "../../utils/roles";
 import type { KeyResponse } from "../key_team_helpers/key_list";
 import { keyInfoV1Call } from "../networking";
@@ -202,7 +203,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   }
 
   return (
-    <>
+    <AutoRouterModelGroupsProvider>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Request Logs</h1>
       </div>
@@ -259,6 +260,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         onSelectLog={setSelectedLog}
         startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
       />
-    </>
+    </AutoRouterModelGroupsProvider>
   );
 }
