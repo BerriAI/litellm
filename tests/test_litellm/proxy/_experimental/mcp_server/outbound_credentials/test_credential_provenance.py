@@ -79,19 +79,27 @@ def _external_opaque_tokens() -> dict[str, str]:
     }
 
 
-@pytest.mark.parametrize("name,token", list(_gateway_credentials().items()))
+# Evaluated once, and the case NAME is the test id. A minted session token embeds the current time
+# and a random jti, so deriving the id from the token value instead would make it differ on every
+# collection; under xdist the workers then disagree about which tests exist and the run errors out.
+_GATEWAY_CREDENTIALS = _gateway_credentials()
+_EXTERNAL_JWT_TOKENS = _external_jwt_tokens()
+_EXTERNAL_OPAQUE_TOKENS = _external_opaque_tokens()
+
+
+@pytest.mark.parametrize("name,token", list(_GATEWAY_CREDENTIALS.items()), ids=list(_GATEWAY_CREDENTIALS))
 def test_every_gateway_credential_is_recognized(name, token):
     assert is_gateway_issued_credential(token) is True
     assert classify_inbound_provenance(token) == "gateway_credential"
 
 
-@pytest.mark.parametrize("name,token", list(_external_jwt_tokens().items()))
+@pytest.mark.parametrize("name,token", list(_EXTERNAL_JWT_TOKENS.items()), ids=list(_EXTERNAL_JWT_TOKENS))
 def test_external_jwt_is_an_id_token_candidate(name, token):
     assert is_gateway_issued_credential(token) is False
     assert classify_inbound_provenance(token) == "external_jwt"
 
 
-@pytest.mark.parametrize("name,token", list(_external_opaque_tokens().items()))
+@pytest.mark.parametrize("name,token", list(_EXTERNAL_OPAQUE_TOKENS.items()), ids=list(_EXTERNAL_OPAQUE_TOKENS))
 def test_external_opaque_token_is_not_an_id_token(name, token):
     """A non-gateway non-JWT bearer is not an id_token; id_jag must not forward it (the finding)."""
     assert is_gateway_issued_credential(token) is False
