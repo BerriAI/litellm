@@ -12538,6 +12538,34 @@
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
+    "dashscope/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 2.8e-08,
+        "input_cost_per_token": 1.38e-07,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-07,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "dashscope/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 1.38e-07,
+        "input_cost_per_token": 1.65e-06,
+        "litellm_provider": "dashscope",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 3.301e-06,
+        "source": "https://www.alibabacloud.com/help/en/model-studio/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "dashscope/qwen-coder": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "dashscope",
