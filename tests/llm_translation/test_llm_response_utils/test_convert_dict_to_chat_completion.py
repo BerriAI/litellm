@@ -2005,6 +2005,60 @@ class TestConvertToStreamingResponseAsync:
         assert chunks[-1].choices[0].finish_reason == "stop"
         assert chunks[-1].usage.prompt_tokens == 3
 
+    def test_preserves_reasoning_fields(self):
+        import asyncio
+
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response_async,
+        )
+
+        thinking_blocks = [
+            {
+                "type": "thinking",
+                "thinking": "cached reasoning",
+                "signature": "sig-cache",
+            }
+        ]
+        response_object = {
+            "id": "msg_async_reasoning_cache",
+            "model": "claude-3",
+            "created": 1700000000,
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "Final answer",
+                        "role": "assistant",
+                        "reasoning_content": "cached reasoning",
+                        "thinking_blocks": thinking_blocks,
+                    },
+                }
+            ],
+        }
+
+        async def run():
+            return [
+                chunk
+                async for chunk in convert_to_streaming_response_async(
+                    response_object=response_object
+                )
+            ]
+
+        chunks = asyncio.run(run())
+
+        assert (
+            "".join(c.choices[0].delta.content or "" for c in chunks) == "Final answer"
+        )
+        assert chunks[0].choices[0].delta.reasoning_content == "cached reasoning"
+        assert chunks[0].choices[0].delta.thinking_blocks == thinking_blocks
+        assert not any(
+            hasattr(c.choices[0].delta, "reasoning_content") for c in chunks[1:]
+        )
+        assert not any(
+            hasattr(c.choices[0].delta, "thinking_blocks") for c in chunks[1:]
+        )
+
 
 class TestHandleInvalidParallelToolCalls:
     def test_none_input(self):
