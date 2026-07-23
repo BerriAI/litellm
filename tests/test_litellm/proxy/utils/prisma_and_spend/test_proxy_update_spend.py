@@ -384,17 +384,18 @@ def test_disable_spend_updates_error_when_general_settings_unavailable(
 def test_disable_entity_spend_updates_reflects_general_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The static method delegates to ``general_settings['disable_entity_spend_updates']``."""
+    """``true`` disables all entity counter types."""
     import litellm.proxy.proxy_server as proxy_server_mod
 
     monkeypatch.setattr(
         proxy_server_mod, "general_settings", {"disable_entity_spend_updates": True}
     )
     assert ProxyUpdateSpend.disable_entity_spend_updates() is True
-    assert isinstance(ProxyUpdateSpend.disable_entity_spend_updates(), bool)
-    assert isinstance(
-        ProxyUpdateSpend.__dict__["disable_entity_spend_updates"], staticmethod
-    )
+    assert ProxyUpdateSpend.is_entity_spend_update_disabled("user") is True
+    assert ProxyUpdateSpend.is_entity_spend_update_disabled("key") is True
+    # Daily tables unaffected by entity flag alone
+    assert ProxyUpdateSpend.is_daily_spend_update_disabled("tag") is False
+    assert ProxyUpdateSpend.should_run_batch_database_updates() is True
 
 
 def test_disable_entity_spend_updates_default_false_without_flag(
@@ -404,3 +405,58 @@ def test_disable_entity_spend_updates_default_false_without_flag(
 
     monkeypatch.setattr(proxy_server_mod, "general_settings", {})
     assert ProxyUpdateSpend.disable_entity_spend_updates() is False
+    assert ProxyUpdateSpend.disable_daily_spend_updates() is False
+    assert ProxyUpdateSpend.should_run_batch_database_updates() is True
+
+
+def test_disable_entity_spend_updates_list_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server_mod
+
+    monkeypatch.setattr(
+        proxy_server_mod,
+        "general_settings",
+        {"disable_entity_spend_updates": ["user", "KEY", "unknown"]},
+    )
+    assert ProxyUpdateSpend.disable_entity_spend_updates() is False  # not all
+    assert ProxyUpdateSpend.is_entity_spend_update_disabled("user") is True
+    assert ProxyUpdateSpend.is_entity_spend_update_disabled("key") is True
+    assert ProxyUpdateSpend.is_entity_spend_update_disabled("team") is False
+    assert ProxyUpdateSpend.disabled_entity_spend_update_types() == frozenset(
+        {"user", "key"}
+    )
+
+
+def test_disable_daily_spend_updates_list_keeps_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server_mod
+
+    monkeypatch.setattr(
+        proxy_server_mod,
+        "general_settings",
+        {
+            "disable_entity_spend_updates": True,
+            "disable_daily_spend_updates": ["user", "team"],
+        },
+    )
+    assert ProxyUpdateSpend.is_daily_spend_update_disabled("user") is True
+    assert ProxyUpdateSpend.is_daily_spend_update_disabled("tag") is False
+    assert ProxyUpdateSpend.should_run_batch_database_updates() is True
+
+
+def test_both_flags_true_skips_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server_mod
+
+    monkeypatch.setattr(
+        proxy_server_mod,
+        "general_settings",
+        {
+            "disable_entity_spend_updates": True,
+            "disable_daily_spend_updates": True,
+        },
+    )
+    assert ProxyUpdateSpend.should_run_batch_database_updates() is False

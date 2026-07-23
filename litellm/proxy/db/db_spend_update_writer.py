@@ -187,12 +187,10 @@ class DBSpendUpdateWriter:
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
-            # Entity counter UPDATEs (key/user/team/org/agent/tag + daily
-            # dimension tables) are the high-contention path. Operators that
-            # only need raw SpendLogs for billing/audit can skip them via
-            # general_settings.disable_entity_spend_updates.
-            # See: https://github.com/BerriAI/litellm/issues/31866
-            if not ProxyUpdateSpend.disable_entity_spend_updates():
+            # Entity counters and daily tables are independently configurable via
+            # disable_entity_spend_updates / disable_daily_spend_updates
+            # (bool or list of types). See BerriAI/litellm#31866.
+            if ProxyUpdateSpend.should_run_batch_database_updates():
                 # Single task replaces 11 create_task() calls
                 asyncio.create_task(
                     self._batch_database_updates(
@@ -209,9 +207,8 @@ class DBSpendUpdateWriter:
                 )
             else:
                 verbose_proxy_logger.debug(
-                    "disable_entity_spend_updates=True. Skipping entity spend "
-                    "counter updates (key/user/team/org/agent/tag + daily "
-                    "spend tables). Raw spend logs are still written."
+                    "Skipping _batch_database_updates: all entity spend counters "
+                    "and daily spend tables are disabled. Raw spend logs still written."
                 )
 
             self._enqueue_tool_registry_upsert(
@@ -343,157 +340,174 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
     ):
         """
-        Runs all 11 spend-update helpers sequentially inside a single asyncio task.
+        Runs spend-update helpers sequentially inside a single asyncio task.
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
+        Individual helpers are skipped when disabled via
+        ``disable_entity_spend_updates`` / ``disable_daily_spend_updates``.
 
         The deepcopy runs here, off the awaited request path, so the daily spend
         helpers get a payload isolated from the spend-log queue entry and the caller.
         """
+        from litellm.proxy.utils import ProxyUpdateSpend
+
         payload_copy = copy.deepcopy(payload)
         request_tags = payload_copy.get("request_tags")
-        try:
-            await self._update_user_db(
-                response_cost=response_cost,
-                user_id=user_id,
-                prisma_client=prisma_client,
-                litellm_proxy_budget_name=litellm_proxy_budget_name,
-                end_user_id=end_user_id,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_user_db failed: %s",
-                traceback.format_exc(),
-            )
 
-        try:
-            await self._update_key_db(
-                response_cost=response_cost,
-                hashed_token=hashed_token,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_key_db failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_entity_spend_update_disabled("user"):
+            try:
+                await self._update_user_db(
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    prisma_client=prisma_client,
+                    litellm_proxy_budget_name=litellm_proxy_budget_name,
+                    end_user_id=end_user_id,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_user_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self._update_team_db(
-                response_cost=response_cost,
-                team_id=team_id,
-                user_id=user_id,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_team_db failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_entity_spend_update_disabled("key"):
+            try:
+                await self._update_key_db(
+                    response_cost=response_cost,
+                    hashed_token=hashed_token,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_key_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self._update_org_db(
-                response_cost=response_cost,
-                org_id=org_id,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_org_db failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_entity_spend_update_disabled("team"):
+            try:
+                await self._update_team_db(
+                    response_cost=response_cost,
+                    team_id=team_id,
+                    user_id=user_id,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_team_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self._update_tag_db(
-                response_cost=response_cost,
-                request_tags=request_tags,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_tag_db failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_entity_spend_update_disabled("org"):
+            try:
+                await self._update_org_db(
+                    response_cost=response_cost,
+                    org_id=org_id,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_org_db failed: %s",
+                    traceback.format_exc(),
+                )
+
+        if not ProxyUpdateSpend.is_entity_spend_update_disabled("tag"):
+            try:
+                await self._update_tag_db(
+                    response_cost=response_cost,
+                    request_tags=request_tags,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_tag_db failed: %s",
+                    traceback.format_exc(),
+                )
 
         _agent_id_for_spend = payload_copy.get("agent_id")
-        try:
-            await self._update_agent_db(
-                response_cost=response_cost,
-                agent_id=_agent_id_for_spend,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_agent_db failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_entity_spend_update_disabled("agent"):
+            try:
+                await self._update_agent_db(
+                    response_cost=response_cost,
+                    agent_id=_agent_id_for_spend,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: _update_agent_db failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self.add_spend_log_transaction_to_daily_user_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_daily_spend_update_disabled("user"):
+            try:
+                await self.add_spend_log_transaction_to_daily_user_transaction(
+                    payload=payload_copy,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self.add_spend_log_transaction_to_daily_end_user_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_end_user_transaction failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_daily_spend_update_disabled("end_user"):
+            try:
+                await self.add_spend_log_transaction_to_daily_end_user_transaction(
+                    payload=payload_copy,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: add_spend_log_transaction_to_daily_end_user_transaction failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self.add_spend_log_transaction_to_daily_agent_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_agent_transaction failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_daily_spend_update_disabled("agent"):
+            try:
+                await self.add_spend_log_transaction_to_daily_agent_transaction(
+                    payload=payload_copy,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: add_spend_log_transaction_to_daily_agent_transaction failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self.add_spend_log_transaction_to_daily_team_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_daily_spend_update_disabled("team"):
+            try:
+                await self.add_spend_log_transaction_to_daily_team_transaction(
+                    payload=payload_copy,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self.add_spend_log_transaction_to_daily_org_transaction(
-                payload=payload_copy,
-                org_id=org_id,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_org_transaction failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_daily_spend_update_disabled("org"):
+            try:
+                await self.add_spend_log_transaction_to_daily_org_transaction(
+                    payload=payload_copy,
+                    org_id=org_id,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: add_spend_log_transaction_to_daily_org_transaction failed: %s",
+                    traceback.format_exc(),
+                )
 
-        try:
-            await self.add_spend_log_transaction_to_daily_tag_transaction(
-                payload=payload_copy,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
-                traceback.format_exc(),
-            )
+        if not ProxyUpdateSpend.is_daily_spend_update_disabled("tag"):
+            try:
+                await self.add_spend_log_transaction_to_daily_tag_transaction(
+                    payload=payload_copy,
+                    prisma_client=prisma_client,
+                )
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
+                    traceback.format_exc(),
+                )
 
     async def _update_key_db(
         self,

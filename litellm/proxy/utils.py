@@ -5301,30 +5301,127 @@ class ProxyUpdateSpend:
             return True
         return False
 
+    # Rolling spend counters on key/user/team/org/agent/tag tables.
+    ENTITY_SPEND_UPDATE_TYPES = frozenset(
+        {"user", "key", "team", "org", "tag", "agent"}
+    )
+    # Daily dimension aggregation tables (DailyUserSpend, DailyTagSpend, …).
+    DAILY_SPEND_UPDATE_TYPES = frozenset(
+        {"user", "end_user", "team", "org", "agent", "tag"}
+    )
+
+    @staticmethod
+    def _disabled_spend_update_types(
+        setting_key: str,
+        valid_types: frozenset,
+    ) -> frozenset:
+        """
+        Parse a spend-update disable setting from ``general_settings``.
+
+        Accepted values:
+          - ``true`` / ``True`` → disable **all** ``valid_types``
+          - ``false`` / absent / ``None`` → disable none
+          - list/tuple/set of type names → disable only those (unknown names ignored)
+
+        This lets operators keep warehouse-facing tables (e.g. DailyTagSpend)
+        while dropping hot-row counters (e.g. UserTable), or the reverse.
+        """
+        from litellm.proxy.proxy_server import general_settings
+        from litellm.secret_managers.main import str_to_bool
+
+        raw = general_settings.get(setting_key, False)
+        if isinstance(raw, str):
+            parsed = str_to_bool(raw)
+            if parsed is not None:
+                raw = parsed
+        if raw is True:
+            return frozenset(valid_types)
+        if raw is False or raw is None:
+            return frozenset()
+        if isinstance(raw, (list, tuple, set, frozenset)):
+            return frozenset(
+                str(item).strip().lower()
+                for item in raw
+                if str(item).strip().lower() in valid_types
+            )
+        return frozenset()
+
+    @staticmethod
+    def disabled_entity_spend_update_types() -> frozenset:
+        """Entity counter types disabled by ``disable_entity_spend_updates``."""
+        return ProxyUpdateSpend._disabled_spend_update_types(
+            "disable_entity_spend_updates",
+            ProxyUpdateSpend.ENTITY_SPEND_UPDATE_TYPES,
+        )
+
+    @staticmethod
+    def disabled_daily_spend_update_types() -> frozenset:
+        """Daily spend table types disabled by ``disable_daily_spend_updates``."""
+        return ProxyUpdateSpend._disabled_spend_update_types(
+            "disable_daily_spend_updates",
+            ProxyUpdateSpend.DAILY_SPEND_UPDATE_TYPES,
+        )
+
+    @staticmethod
+    def is_entity_spend_update_disabled(entity_type: str) -> bool:
+        return entity_type in ProxyUpdateSpend.disabled_entity_spend_update_types()
+
+    @staticmethod
+    def is_daily_spend_update_disabled(daily_type: str) -> bool:
+        return daily_type in ProxyUpdateSpend.disabled_daily_spend_update_types()
+
     @staticmethod
     def disable_entity_spend_updates() -> bool:
         """
-        Returns True if entity-level spend counter UPDATEs should be skipped.
+        Returns True if **all** entity-level spend counter UPDATEs are disabled.
 
-        When True, raw spend log rows are still written to LiteLLM_SpendLogs via
-        `_insert_spend_log_to_db`, but the batch UPDATEs to the key, user,
-        end_user, team, team_member, org, agent, and tag spend counters — and
-        the daily dimension spend tables driven by `_batch_database_updates` —
-        are suppressed.
+        Prefer ``is_entity_spend_update_disabled(entity_type)`` for fine-grained
+        checks. ``disable_entity_spend_updates`` may be ``true`` or a list of
+        entity types: ``user`` | ``key`` | ``team`` | ``org`` | ``tag`` | ``agent``.
 
-        WARNING: Enabling this flag disables per-entity budget enforcement.
-        Per-key, per-user, and per-team budget limits will not be enforced while
-        this flag is active.
+        Raw SpendLogs and daily tables are controlled separately
+        (``disable_spend_logs``, ``disable_daily_spend_updates``).
 
-        Set in config.yaml:
-          general_settings:
-            disable_entity_spend_updates: true
+        WARNING: Disabling entity counters disables per-entity budget enforcement
+        for those entities.
+
+        Examples::
+
+            general_settings:
+              # drop all hot-row counters; keep DailyTagSpend for warehouse ETL
+              disable_entity_spend_updates: true
+              disable_daily_spend_updates: false
+
+              # or only drop the contended user counter
+              disable_entity_spend_updates: [user]
         """
-        from litellm.proxy.proxy_server import general_settings
+        disabled = ProxyUpdateSpend.disabled_entity_spend_update_types()
+        return disabled == ProxyUpdateSpend.ENTITY_SPEND_UPDATE_TYPES
 
-        if general_settings.get("disable_entity_spend_updates") is True:
-            return True
-        return False
+    @staticmethod
+    def disable_daily_spend_updates() -> bool:
+        """
+        Returns True if **all** daily spend dimension UPDATEs are disabled.
+
+        Prefer ``is_daily_spend_update_disabled(daily_type)`` for fine-grained
+        checks. ``disable_daily_spend_updates`` may be ``true`` or a list of
+        types: ``user`` | ``end_user`` | ``team`` | ``org`` | ``agent`` | ``tag``.
+
+        Keep ``tag`` enabled (or leave this flag false) when a warehouse CDC
+        pipeline reads ``LiteLLM_DailyTagSpend``.
+        """
+        disabled = ProxyUpdateSpend.disabled_daily_spend_update_types()
+        return disabled == ProxyUpdateSpend.DAILY_SPEND_UPDATE_TYPES
+
+    @staticmethod
+    def should_run_batch_database_updates() -> bool:
+        """True unless every entity counter and every daily update is disabled."""
+        return (
+            ProxyUpdateSpend.disabled_entity_spend_update_types()
+            != ProxyUpdateSpend.ENTITY_SPEND_UPDATE_TYPES
+            or ProxyUpdateSpend.disabled_daily_spend_update_types()
+            != ProxyUpdateSpend.DAILY_SPEND_UPDATE_TYPES
+        )
 
 
 async def update_spend(
