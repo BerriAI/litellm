@@ -1,662 +1,353 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { renderWithProviders } from "../../../../../tests/test-utils";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import AllModelsTab from "./AllModelsTab";
 
-// Mock modelDeleteCall
+import AllModelsTab from "./AllModelsTab";
+import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
+
 const mockModelDeleteCall = vi.fn().mockResolvedValue({});
+const mockModelPatchUpdateCall = vi.fn().mockResolvedValue({});
 vi.mock("@/components/networking", () => ({
-  modelDeleteCall: (...args: any[]) => mockModelDeleteCall(...args),
+  modelDeleteCall: (...args: unknown[]) => mockModelDeleteCall(...args),
+  modelPatchUpdateCall: (...args: unknown[]) => mockModelPatchUpdateCall(...args),
 }));
 
-// Mock NotificationsManager
 vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
+  default: { success: vi.fn(), fromBackend: vi.fn() },
+}));
+
+vi.mock("@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal", () => ({
+  default: function ModelSettingsModalMock({ isVisible }: { isVisible: boolean }) {
+    return isVisible ? <div data-testid="model-settings-modal" /> : null;
   },
 }));
 
-// Mock react-query
 const mockInvalidateQueries = vi.fn();
 vi.mock("@tanstack/react-query", async (importOriginal) => {
-  const actual = (await importOriginal()) as any;
-  return {
-    ...actual,
-    useQueryClient: () => ({
-      invalidateQueries: mockInvalidateQueries,
-    }),
-  };
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return { ...actual, useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries }) };
 });
 
-// Mock the useModelsInfo hook
-const mockUseModelsInfo = vi.fn(() => ({
-  data: { data: [], total_count: 0, current_page: 1, total_pages: 1, size: 50 },
-  isLoading: false,
-  error: null,
-})) as any;
+interface ModelsInfoArgs {
+  page?: number;
+  size?: number;
+  search?: string;
+  teamId?: string;
+  sortBy?: string;
+  sortOrder?: string;
+}
+
+const modelsInfoCalls: ModelsInfoArgs[] = [];
+const mockRefetch = vi.fn();
+let modelsInfoResult: Record<string, unknown> = {};
+
+type UseModelsInfoArgs = [
+  page?: number,
+  size?: number,
+  search?: string,
+  modelId?: string,
+  teamId?: string,
+  sortBy?: string,
+  sortOrder?: string,
+];
 
 vi.mock("../../hooks/models/useModels", () => ({
-  useModelsInfo: (page?: number, size?: number, search?: string) => mockUseModelsInfo(page, size, search),
-}));
-
-// Mock the useModelCostMap hook
-const mockUseModelCostMap = vi.fn(() => ({
-  data: {
-    "gpt-4": { litellm_provider: "openai" },
-    "gpt-3.5-turbo": { litellm_provider: "openai" },
-    "gpt-4-accessible": { litellm_provider: "openai" },
-    "gpt-3.5-turbo-blocked": { litellm_provider: "openai" },
-    "gpt-4-sales": { litellm_provider: "openai" },
-    "gpt-4-engineering": { litellm_provider: "openai" },
-    "gpt-4-personal": { litellm_provider: "openai" },
-    "gpt-4-team-only": { litellm_provider: "openai" },
-    "gpt-4-config": { litellm_provider: "openai" },
-    "gpt-4-db": { litellm_provider: "openai" },
+  useModelsInfo: (...args: UseModelsInfoArgs) => {
+    const [page, size, search, , teamId, sortBy, sortOrder] = args;
+    const call: ModelsInfoArgs = { page, size, search, teamId, sortBy, sortOrder };
+    modelsInfoCalls.push(call);
+    return { ...modelsInfoResult, refetch: mockRefetch };
   },
-  isLoading: false,
-  error: null,
-})) as any;
+}));
 
 vi.mock("../../hooks/models/useModelCostMap", () => ({
-  useModelCostMap: () => mockUseModelCostMap(),
+  useModelCostMap: () => ({ data: { "gpt-4": { litellm_provider: "openai" } }, isLoading: false, error: null }),
 }));
 
-// Mock the useTeams hook (react-query implementation)
-const mockUseTeams = vi.fn(() => ({
-  data: [],
-  isLoading: false,
-  error: null,
-  refetch: vi.fn(),
-})) as any;
-
+const mockTeams = [{ team_id: "team-1", team_alias: "Engineering" }];
 vi.mock("../../hooks/teams/useTeams", () => ({
-  useTeams: () => mockUseTeams(),
+  useTeams: () => ({ data: mockTeams, isLoading: false, error: null, refetch: vi.fn() }),
 }));
 
-// Helper function to create model cost map mock return value
-const createModelCostMapMock = (data: Record<string, any>) => ({
-  data,
-  isLoading: false,
-  error: null,
+const BASE_MODEL_INFO = {
+  id: "model-1",
+  db_model: true,
+  created_by: "user-123",
+  created_at: "2024-01-01T00:00:00Z",
+  updated_at: "2024-01-02T00:00:00Z",
+  team_id: "team-1",
+  access_groups: [],
+};
+
+const makeRow = (overrides: Record<string, unknown> = {}) => ({
+  model_name: "gpt-4",
+  litellm_params: { model: "openai/gpt-4", custom_llm_provider: "openai" },
+  model_info: { ...BASE_MODEL_INFO, ...((overrides.model_info as Record<string, unknown>) ?? {}) },
 });
 
-// Helper function to create paginated model data mock
-const createPaginatedModelData = (
-  models: any[],
-  totalCount: number = models.length,
-  currentPage: number = 1,
-  totalPages: number = 1,
-  size: number = 50,
-) => ({
-  data: models,
-  total_count: totalCount,
-  current_page: currentPage,
-  total_pages: totalPages,
-  size: size,
-});
+const setModelsInfo = (rows: Record<string, unknown>[], totalCount = rows.length, isLoading = false) => {
+  modelsInfoResult = {
+    data: { data: rows, total_count: totalCount, current_page: 1, total_pages: 1, size: 50 },
+    isLoading,
+    isFetching: false,
+    error: null,
+  };
+};
+
+const lastModelsInfoCall = (): ModelsInfoArgs => modelsInfoCalls[modelsInfoCalls.length - 1];
+
+const MOCK_AUTHORIZED = {
+  isLoading: false,
+  isAuthorized: true,
+  token: "mock-token",
+  accessToken: "mock-access-token",
+  userId: "user-123",
+  userEmail: "test@example.com",
+  userRole: "Admin",
+  premiumUser: true,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
+const mockSetSelectedModelGroup = vi.fn();
+const mockSetSelectedModelId = vi.fn();
+const mockSetSelectedTeamId = vi.fn();
+
+const defaultProps = {
+  selectedModelGroup: "all",
+  setSelectedModelGroup: mockSetSelectedModelGroup,
+  availableModelGroups: ["gpt-4", "gpt-3.5-turbo"],
+  availableModelAccessGroups: ["sales-team"],
+  setSelectedModelId: mockSetSelectedModelId,
+  setSelectedTeamId: mockSetSelectedTeamId,
+};
 
 describe("AllModelsTab", () => {
-  const mockSetSelectedModelGroup = vi.fn();
-  const mockSetSelectedModelId = vi.fn();
-  const mockSetSelectedTeamId = vi.fn();
-
-  const defaultProps = {
-    selectedModelGroup: "all",
-    setSelectedModelGroup: mockSetSelectedModelGroup,
-    availableModelGroups: ["gpt-4", "gpt-3.5-turbo"],
-    availableModelAccessGroups: ["sales-team", "engineering-team"],
-    setSelectedModelId: mockSetSelectedModelId,
-    setSelectedTeamId: mockSetSelectedTeamId,
-  };
-
-  const mockUseAuthorized = {
-    token: "mock-token",
-    accessToken: "mock-access-token",
-    userId: "user-123",
-    userEmail: "test@example.com",
-    userRole: "Admin",
-    premiumUser: true,
-    disabledPersonalKeyCreation: false,
-    showSSOBanner: false,
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(useAuthorizedModule, "default").mockReturnValue(mockUseAuthorized);
+    modelsInfoCalls.length = 0;
+    setModelsInfo([makeRow()]);
+    vi.spyOn(useAuthorizedModule, "default").mockReturnValue(MOCK_AUTHORIZED);
   });
 
-  it("should render with empty data", () => {
-    mockUseModelsInfo.mockReturnValueOnce({
-      data: createPaginatedModelData([], 0, 1, 1, 50),
-      isLoading: false,
-      error: null,
-    });
+  it("renders the fetched models and the server row count", async () => {
+    setModelsInfo([makeRow()], 137);
+    render(<AllModelsTab {...defaultProps} />);
 
-    mockUseTeams.mockReturnValueOnce({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-
-    mockUseModelCostMap.mockReturnValueOnce(createModelCostMapMock({}));
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
-    expect(screen.getByText("Current Team:")).toBeInTheDocument();
+    expect(await screen.findByText("gpt-4")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 137");
   });
 
-  it("should filter models by direct team access when current team is selected", async () => {
-    const mockTeams = [
-      {
-        team_id: "team-456",
-        team_alias: "Engineering Team",
-        models: ["gpt-4"],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-123",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [],
-      },
+  it("shows the empty state when the proxy returns no models", () => {
+    setModelsInfo([], 0);
+    render(<AllModelsTab {...defaultProps} />);
+
+    expect(screen.getByText("No models found")).toBeInTheDocument();
+  });
+
+  it("shows the loading skeleton while the first page is in flight", () => {
+    setModelsInfo([], 0, true);
+    render(<AllModelsTab {...defaultProps} />);
+
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+    expect(screen.queryByText("No models found")).not.toBeInTheDocument();
+  });
+
+  describe("server sort contract", () => {
+    const sortHeader = (columnId: string): HTMLElement => screen.getByTestId(`sort-header-${columnId}`);
+
+    const expectIndicator = async (columnId: string, state: "asc" | "desc" | "none") => {
+      await waitFor(() => {
+        expect(sortHeader(columnId).querySelector(`[data-sort-indicator="${state}"]`)).not.toBeNull();
+      });
+    };
+
+    const cases: [string, string, string, "asc" | "desc"][] = [
+      ["Model Information", "model_name", "model_name", "asc"],
+      ["Created By", "model_info_created_by", "created_at", "asc"],
+      ["Updated At", "model_info_updated_at", "updated_at", "asc"],
+      ["Costs", "input_cost", "costs", "desc"],
     ];
 
-    mockUseTeams.mockReturnValueOnce({
-      data: mockTeams,
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
+    it.each(cases)("sorts %s using the server field %s", async (_label, columnId, serverField, firstDirection) => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
+
+      await user.click(sortHeader(columnId));
+      await expectIndicator(columnId, firstDirection);
+
+      expect(lastModelsInfoCall().sortBy).toBe(serverField);
+      expect(lastModelsInfoCall().sortOrder).toBe(firstDirection);
     });
 
-    mockUseModelCostMap.mockReturnValueOnce(
-      createModelCostMapMock({
-        "gpt-4-accessible": { litellm_provider: "openai" },
-        "gpt-3.5-turbo-blocked": { litellm_provider: "openai" },
-      }),
-    );
+    it("maps the hidden Status column to the server field status", () => {
+      expect(toServerSortField(STATUS_COLUMN_ID)).toBe("status");
+    });
 
-    const modelData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-accessible",
-          model_info: {
-            id: "model-1",
-            access_via_team_ids: ["team-456"],
-            access_groups: [],
-          },
-        },
-        {
-          model_name: "gpt-3.5-turbo-blocked",
-          model_info: {
-            id: "model-2",
-            access_via_team_ids: ["team-789"],
-            access_groups: [],
-          },
-        },
-      ],
-      2,
-      1,
-      1,
-      50,
-    );
+    it("cycles a sorted column back to unsorted", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
 
-    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+      await user.click(sortHeader("model_info_updated_at"));
+      await expectIndicator("model_info_updated_at", "asc");
+      expect(lastModelsInfoCall().sortOrder).toBe("asc");
 
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
+      await user.click(sortHeader("model_info_updated_at"));
+      await expectIndicator("model_info_updated_at", "desc");
+      expect(lastModelsInfoCall().sortOrder).toBe("desc");
 
-    // Component shows API total_count (2), not filtered count
-    // Since default is "personal" team and models don't have direct_access, they're filtered out
-    await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
+      await user.click(sortHeader("model_info_updated_at"));
+      await expectIndicator("model_info_updated_at", "none");
+      expect(lastModelsInfoCall().sortBy).toBeUndefined();
     });
   });
 
-  it("should filter models by access group matching when team models match model access groups", async () => {
-    const mockTeams = [
-      {
-        team_id: "team-sales",
-        team_alias: "Sales Team",
-        models: ["sales-model-group"],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-123",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [],
-      },
-    ];
+  it("queries the selected team and resets to the first page", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    mockUseTeams.mockReturnValue({
-      data: mockTeams,
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+    expect(lastModelsInfoCall().teamId).toBeUndefined();
 
-    mockUseModelCostMap.mockReturnValueOnce(
-      createModelCostMapMock({
-        "gpt-4-sales": { litellm_provider: "openai" },
-        "gpt-4-engineering": { litellm_provider: "openai" },
-      }),
-    );
+    await user.click(screen.getByTestId("models-team-select"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
 
-    const modelData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-sales",
-          model_info: {
-            id: "model-sales-1",
-            access_via_team_ids: [],
-            access_groups: ["sales-model-group"],
-          },
-        },
-        {
-          model_name: "gpt-4-engineering",
-          model_info: {
-            id: "model-eng-1",
-            access_via_team_ids: [],
-            access_groups: ["engineering-model-group"],
-          },
-        },
-      ],
-      2,
-      1,
-      1,
-      50,
-    );
-
-    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
-
-    // Component shows API total_count (2), not filtered count
-    // Since default is "personal" team and models don't have direct_access, they're filtered out
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
+      expect(lastModelsInfoCall().teamId).toBe("team-1");
+    });
+    expect(lastModelsInfoCall().page).toBe(1);
+  });
+
+  it("debounces the model name search into the server query", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.type(screen.getByTestId("datatable-search"), "claude");
+
+    await waitFor(() => {
+      expect(lastModelsInfoCall().search).toBe("claude");
     });
   });
 
-  it("should filter models by direct_access for personal team", async () => {
-    mockUseTeams.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+  it("applies a public model name filter through the drawer", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    mockUseModelCostMap.mockReturnValueOnce(
-      createModelCostMapMock({
-        "gpt-4-personal": { litellm_provider: "openai" },
-        "gpt-4-team-only": { litellm_provider: "openai" },
-      }),
-    );
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
+    await user.click(await screen.findByRole("option", { name: "gpt-3.5-turbo" }));
+    await user.click(screen.getByTestId("filter-drawer-apply"));
 
-    const modelData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-personal",
-          model_info: {
-            id: "model-personal-1",
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-          },
-        },
-        {
-          model_name: "gpt-4-team-only",
-          model_info: {
-            id: "model-team-1",
-            direct_access: false,
-            access_via_team_ids: ["team-123"],
-            access_groups: [],
-          },
-        },
-      ],
-      2,
-      1,
-      1,
-      50,
-    );
-
-    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
-
-    // Component shows API total_count (2), but only 1 model has direct_access
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
+      expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("gpt-3.5-turbo");
     });
   });
 
-  it("should show config model status for models defined in configs", async () => {
-    mockUseTeams.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+  it("filters the fetched page down to the selected model group", () => {
+    setModelsInfo([makeRow(), { ...makeRow(), model_name: "claude-opus" }], 2);
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
-    mockUseModelCostMap.mockReturnValueOnce(
-      createModelCostMapMock({
-        "gpt-4-config": { litellm_provider: "openai" },
-        "gpt-4-db": { litellm_provider: "openai" },
-      }),
-    );
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("claude-opus")).toBeInTheDocument();
+    expect(within(table).queryByText("gpt-4")).not.toBeInTheDocument();
+  });
 
-    const modelData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-config",
-          litellm_model_name: "gpt-4-config",
-          provider: "openai",
-          model_info: {
-            id: "model-config-1",
-            db_model: false,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-        {
-          model_name: "gpt-4-db",
-          litellm_model_name: "gpt-4-db",
-          provider: "openai",
-          model_info: {
-            id: "model-db-1",
-            db_model: true,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-      ],
-      2,
-      1,
-      1,
-      50,
-    );
+  it("resets search, filters, team and sorting from the drawer reset button", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} selectedModelGroup="gpt-4" />);
 
-    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
+    await user.click(screen.getByTestId("models-team-select"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
+    await waitFor(() => expect(lastModelsInfoCall().teamId).toBe("team-1"));
 
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(await screen.findByTestId("filter-drawer-reset"));
 
+    expect(mockSetSelectedModelGroup).toHaveBeenCalledWith("all");
     await waitFor(() => {
-      expect(screen.getByText("Config Model")).toBeInTheDocument();
-      expect(screen.getByText("DB Model")).toBeInTheDocument();
+      expect(lastModelsInfoCall().teamId).toBeUndefined();
     });
   });
 
-  it("should show 'Defined in config' for models defined in configs", async () => {
-    mockUseTeams.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+  it("opens the delete modal from the row and deletes the model", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    mockUseModelCostMap.mockReturnValueOnce(
-      createModelCostMapMock({
-        "gpt-4-config": { litellm_provider: "openai" },
-      }),
-    );
+    await user.click(await screen.findByTestId("model-delete-model-1"));
+    expect(await screen.findByText("Delete Model")).toBeInTheDocument();
 
-    const modelData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-config",
-          litellm_model_name: "gpt-4-config",
-          provider: "openai",
-          model_info: {
-            id: "model-config-1",
-            db_model: false,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-      ],
-      1,
-      1,
-      1,
-      50,
-    );
-
-    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null });
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
 
     await waitFor(() => {
-      expect(screen.getByText("Defined in config")).toBeInTheDocument();
+      expect(mockModelDeleteCall).toHaveBeenCalledWith("mock-access-token", "model-1");
     });
   });
 
-  it("should handle pagination: Previous button is disabled on first page and Next button works", async () => {
-    mockUseTeams.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+  it("pauses a model through the row toggle", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    mockUseModelCostMap.mockReturnValue(
-      createModelCostMapMock({
-        "gpt-4-page1": { litellm_provider: "openai" },
-        "gpt-4-page2": { litellm_provider: "openai" },
-      }),
-    );
-
-    // Mock first page response (page 1 of 2)
-    const page1Data = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-page1",
-          model_info: {
-            id: "model-page1-1",
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-          },
-        },
-      ],
-      2, // total_count
-      1, // current_page
-      2, // total_pages
-      50, // size
-    );
-
-    // Set up mock to return page1Data for page 1
-    mockUseModelsInfo.mockImplementation((page: number = 1, size?: number, search?: string) => {
-      return { data: page1Data, isLoading: false, error: null };
-    });
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
+    await user.click(await screen.findByTestId("model-pause-toggle-model-1"));
 
     await waitFor(() => {
-      // Component calculates: ((1-1)*50)+1 = 1, Math.min(1*50, 2) = 2
-      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
+      expect(mockModelPatchUpdateCall).toHaveBeenCalledWith("mock-access-token", { blocked: true }, "model-1");
     });
-
-    // Check that Previous button is disabled on first page
-    const previousButton = screen.getByRole("button", { name: /previous/i });
-    expect(previousButton).toBeDisabled();
-
-    // Check that Next button is enabled (since we're on page 1 of 2)
-    const nextButton = screen.getByRole("button", { name: /next/i });
-    expect(nextButton).not.toBeDisabled();
   });
 
-  it("should handle pagination: Next button is disabled on last page", async () => {
-    mockUseTeams.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+  it("opens the model settings modal from the toolbar", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    mockUseModelCostMap.mockReturnValue(
-      createModelCostMapMock({
-        "gpt-4-page2": { litellm_provider: "openai" },
-      }),
-    );
-
-    // Mock single page response (page 1 of 1 - last page)
-    const singlePageData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-page2",
-          model_info: {
-            id: "model-page2-1",
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-          },
-        },
-      ],
-      1, // total_count
-      1, // current_page
-      1, // total_pages (only 1 page, so this is the last page)
-      50, // size
-    );
-
-    mockUseModelsInfo.mockImplementation((page?: number, size?: number, search?: string) => {
-      return { data: singlePageData, isLoading: false, error: null };
-    });
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
-    });
-
-    // When there's only 1 page (last page), Next should be disabled
-    const nextButton = screen.getByRole("button", { name: /next/i });
-    expect(nextButton).toBeDisabled();
-
-    // Previous should also be disabled on the first (and only) page
-    const previousButton = screen.getByRole("button", { name: /previous/i });
-    expect(previousButton).toBeDisabled();
+    expect(screen.queryByTestId("model-settings-modal")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("models-settings-trigger"));
+    expect(screen.getByTestId("model-settings-modal")).toBeInTheDocument();
   });
 
-  it("should pass setDeleteModalModelId to columns for delete functionality", async () => {
-    // This test verifies that the delete modal setter is passed to columns
-    // The actual modal rendering is handled by DeleteResourceModal component
-    mockUseTeams.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+  it("opens the model detail view from the model ID cell", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
 
-    mockUseModelCostMap.mockReturnValue(
-      createModelCostMapMock({
-        "gpt-4-delete-test": { litellm_provider: "openai" },
-      }),
-    );
+    await user.click(await screen.findByTestId("model-id-model-1"));
 
-    const modelData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-delete-test",
-          litellm_model_name: "gpt-4-delete-test",
-          provider: "openai",
-          model_info: {
-            id: "model-to-delete",
-            db_model: true,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-      ],
-      1,
-      1,
-      1,
-      50,
-    );
-
-    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(screen.getByText("gpt-4-delete-test")).toBeInTheDocument();
-    });
-
-    // Verify the DB Model badge is shown (indicating it can be deleted)
-    expect(screen.getByText("DB Model")).toBeInTheDocument();
+    expect(mockSetSelectedModelId).toHaveBeenCalledWith("model-1");
   });
 
-  it("should render clickable model ID that calls setSelectedModelId", async () => {
-    mockUseTeams.mockReturnValue({
-      data: [],
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
+  it("opens the team detail view from the team ID cell", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("model-team-id-model-1"));
+
+    expect(mockSetSelectedTeamId).toHaveBeenCalledWith("team-1");
+  });
+
+  describe("virtual key hint", () => {
+    it("explains personal key creation while viewing current team models", () => {
+      render(<AllModelsTab {...defaultProps} />);
+
+      expect(screen.getByText(/create a Virtual Key without selecting a team/i)).toBeInTheDocument();
     });
 
-    mockUseModelCostMap.mockReturnValue(
-      createModelCostMapMock({
-        "gpt-4-clickable": { litellm_provider: "openai" },
-      }),
-    );
+    it("names the selected team in the hint", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
 
-    const modelData = createPaginatedModelData(
-      [
-        {
-          model_name: "gpt-4-clickable",
-          litellm_model_name: "gpt-4-clickable",
-          provider: "openai",
-          model_info: {
-            id: "clickable-model-id",
-            db_model: true,
-            direct_access: true,
-            access_via_team_ids: [],
-            access_groups: [],
-            created_by: "user-123",
-            created_at: "2024-01-01",
-            updated_at: "2024-01-01",
-          },
-        },
-      ],
-      1,
-      1,
-      1,
-      50,
-    );
+      await user.click(screen.getByTestId("models-team-select"));
+      await user.click(await screen.findByRole("option", { name: "Engineering" }));
 
-    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
-
-    renderWithProviders(<AllModelsTab {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(screen.getByText("gpt-4-clickable")).toBeInTheDocument();
+      expect(await screen.findByText(/select Team as "Engineering"/i)).toBeInTheDocument();
     });
 
-    // Click on the Model ID cell which should call setSelectedModelId
-    const modelIdCell = screen.getByText("clickable-model-id");
-    expect(modelIdCell).toBeInTheDocument();
+    it("hides the hint when viewing all available models", async () => {
+      const user = userEvent.setup();
+      render(<AllModelsTab {...defaultProps} />);
 
-    fireEvent.click(modelIdCell);
+      await user.click(screen.getByTestId("models-view-select"));
+      await user.click(await screen.findByRole("option", { name: "All Available Models" }));
 
-    await waitFor(() => {
-      expect(mockSetSelectedModelId).toHaveBeenCalledWith("clickable-model-id");
+      await waitFor(() => {
+        expect(screen.queryByText(/create a Virtual Key/i)).not.toBeInTheDocument();
+      });
     });
   });
 });

@@ -1143,33 +1143,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
-    "no-restricted-imports": {
-      "count": 3
-    },
-    "react-hooks/preserve-manual-memoization": {
-      "count": 4
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.test.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.test.tsx": {
     "react/display-name": {
       "count": 1
@@ -3509,17 +3482,6 @@
       "count": 1
     }
   },
-  "src/components/model_dashboard/all_models_table.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/model_filters.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3581,28 +3543,6 @@
   "src/components/molecules/message_manager.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/molecules/models/columns.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/components/molecules/models/columns.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "max-params": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 2
     },
     "no-restricted-imports": {
       "count": 2
@@ -4201,6 +4141,11 @@
     }
   },
   "src/components/ui/dropdown-menu.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/ui/hover-card.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }
