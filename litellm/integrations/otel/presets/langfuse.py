@@ -3,6 +3,9 @@
 from litellm.integrations.langfuse.langfuse_otel import (
     LangfuseOtelLogger as _V1Langfuse,
 )
+from litellm.integrations.langfuse.langfuse_otel import (
+    build_langfuse_otel_headers,
+)
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
@@ -40,9 +43,8 @@ def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str,
     public_key = params.get("langfuse_public_key")
     secret_key = params.get("langfuse_secret_key")
     if public_key and secret_key:
-        return {
-            "Authorization": _V1Langfuse._get_langfuse_authorization_header(
-                public_key=public_key, secret_key=secret_key
-            )
-        }
+        return build_langfuse_otel_headers(
+            public_key=public_key,
+            secret_key=secret_key,
+        )
     return {}
