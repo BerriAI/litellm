@@ -70,8 +70,27 @@ async def get_global_activity(
             )
 
         sql_query = """
+            WITH spend_logs_with_prompt_cache AS (
+                SELECT
+                    sl.*,
+                    COALESCE(
+                        NULLIF(sl."metadata" #>> '{usage_object,cache_read_input_tokens}', '')::numeric,
+                        NULLIF(sl."metadata" #>> '{usage_object,prompt_tokens_details,cached_tokens}', '')::numeric,
+                        0
+                    ) AS prompt_cache_read_input_tokens,
+                    COALESCE(
+                        NULLIF(sl."metadata" #>> '{usage_object,cache_creation_input_tokens}', '')::numeric,
+                        NULLIF(sl."metadata" #>> '{usage_object,prompt_tokens_details,cache_write_tokens}', '')::numeric,
+                        NULLIF(sl."metadata" #>> '{usage_object,prompt_tokens_details,cache_creation_tokens}', '')::numeric,
+                        0
+                    ) AS prompt_cache_creation_input_tokens
+                FROM "LiteLLM_SpendLogs" sl
+                WHERE
+                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+            )
             SELECT
-                CASE 
+                CASE
                     WHEN vt."key_alias" IS NOT NULL THEN vt."key_alias"
                     ELSE 'Unnamed Key'
                 END AS api_key,
@@ -79,14 +98,15 @@ async def get_global_activity(
                 sl."model",
                 COUNT(*) AS total_rows,
                 SUM(CASE WHEN sl."cache_hit" = 'True' THEN 1 ELSE 0 END) AS cache_hit_true_rows,
+                SUM(CASE WHEN sl.prompt_cache_read_input_tokens > 0 THEN 1 ELSE 0 END) AS cache_read_input_token_rows,
+                SUM(CASE WHEN sl."cache_hit" = 'True' OR sl.prompt_cache_read_input_tokens > 0 THEN 1 ELSE 0 END) AS cache_activity_rows,
                 SUM(CASE WHEN sl."cache_hit" = 'True' THEN sl."completion_tokens" ELSE 0 END) AS cached_completion_tokens,
-                SUM(CASE WHEN sl."cache_hit" != 'True' THEN sl."completion_tokens" ELSE 0 END) AS generated_completion_tokens
-            FROM "LiteLLM_SpendLogs" sl
+                SUM(CASE WHEN sl."cache_hit" != 'True' THEN sl."completion_tokens" ELSE 0 END) AS generated_completion_tokens,
+                SUM(sl.prompt_cache_read_input_tokens)::bigint AS cache_read_input_tokens,
+                SUM(sl.prompt_cache_creation_input_tokens)::bigint AS cache_creation_input_tokens
+            FROM spend_logs_with_prompt_cache sl
             LEFT JOIN "LiteLLM_VerificationToken" vt ON sl."api_key" = vt."token"
-            WHERE
-                sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-                AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-            GROUP BY 
+            GROUP BY
                 vt."key_alias",
                 sl."call_type",
                 sl."model"

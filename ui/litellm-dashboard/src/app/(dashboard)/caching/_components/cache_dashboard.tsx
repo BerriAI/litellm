@@ -26,6 +26,7 @@ import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/n
 import { CacheHealthTab } from "./cache_health";
 import CacheSettings from "./cache_settings";
 import CoordinationRedisSettings from "./coordination_redis_settings";
+import { buildCacheDashboardMetrics, type CacheChartData, type CacheDataItem } from "./cacheDashboardMetrics";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -49,26 +50,6 @@ interface CachePageProps {
   userID: string | null;
   premiumUser: boolean;
 }
-
-interface cacheDataItem {
-  api_key: string;
-  model: string;
-  cache_hit_true_rows: number;
-  cached_completion_tokens: number;
-  total_rows: number;
-  generated_completion_tokens: number;
-  call_type: string;
-
-  // Add other properties as needed
-}
-
-type uiData = {
-  name: string;
-  "LLM API requests": number;
-  "Cache hit": number;
-  "Cached Completion Tokens": number;
-  "Generated Completion Tokens": number;
-};
 
 interface CacheHealthResponse {
   status?: string;
@@ -98,10 +79,10 @@ const deepParse = (input: any) => {
 };
 
 const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
-  const [filteredData, setFilteredData] = useState<uiData[]>([]);
+  const [filteredData, setFilteredData] = useState<CacheChartData[]>([]);
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
-  const [data, setData] = useState<cacheDataItem[]>([]);
+  const [data, setData] = useState<CacheDataItem[]>([]);
   const [cachedResponses, setCachedResponses] = useState("0");
   const [cachedTokens, setCachedTokens] = useState("0");
   const [cacheHitRatio, setCacheHitRatio] = useState("0");
@@ -151,77 +132,21 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   };
 
   useEffect(() => {
-    let newData: cacheDataItem[] = data;
+    let newData: CacheDataItem[] = data;
     if (selectedApiKeys.length > 0) {
-      newData = newData.filter((item) => selectedApiKeys.includes(item.api_key));
+      newData = newData.filter((item) => selectedApiKeys.includes(item.api_key ?? ""));
     }
 
     if (selectedModels.length > 0) {
-      newData = newData.filter((item) => selectedModels.includes(item.model));
+      newData = newData.filter((item) => selectedModels.includes(item.model ?? ""));
     }
 
-    /* 
-    Data looks like this 
-    [{"api_key":"sk-test-mock-key-001","call_type":"acompletion","model":"llama3-8b-8192","total_rows":13,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-002","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-123","call_type":"acompletion","model":"gpt-3.5-turbo","total_rows":19,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-123","call_type":"aimage_generation","model":"","total_rows":3,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-003","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-004","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-005","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    */
+    const metrics = buildCacheDashboardMetrics(newData);
 
-    // What data we need for bar chat
-    // ui_data = [
-    //     {
-    //         name: "Call Type",
-    //         Cache hit: 20,
-    //         LLM API requests: 10,
-    //     }
-    // ]
-
-    let llm_api_requests = 0;
-    let cache_hits = 0;
-    let cached_tokens = 0;
-    const processedData = newData.reduce((acc: uiData[], item) => {
-      if (!item.call_type) {
-        item.call_type = "Unknown";
-      }
-
-      llm_api_requests += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
-      cache_hits += item.cache_hit_true_rows || 0;
-      cached_tokens += item.cached_completion_tokens || 0;
-
-      const existingItem = acc.find((i) => i.name === item.call_type);
-      if (existingItem) {
-        existingItem["LLM API requests"] += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
-        existingItem["Cache hit"] += item.cache_hit_true_rows || 0;
-        existingItem["Cached Completion Tokens"] += item.cached_completion_tokens || 0;
-        existingItem["Generated Completion Tokens"] += item.generated_completion_tokens || 0;
-      } else {
-        acc.push({
-          name: item.call_type,
-          "LLM API requests": (item.total_rows || 0) - (item.cache_hit_true_rows || 0),
-          "Cache hit": item.cache_hit_true_rows || 0,
-          "Cached Completion Tokens": item.cached_completion_tokens || 0,
-          "Generated Completion Tokens": item.generated_completion_tokens || 0,
-        });
-      }
-      return acc;
-    }, []);
-
-    // set header cache statistics
-    setCachedResponses(valueFormatterNumbers(cache_hits));
-    setCachedTokens(valueFormatterNumbers(cached_tokens));
-    let allRequests = cache_hits + llm_api_requests;
-    if (allRequests > 0) {
-      let cache_hit_ratio = ((cache_hits / allRequests) * 100).toFixed(2);
-      setCacheHitRatio(cache_hit_ratio);
-    } else {
-      setCacheHitRatio("0");
-    }
-
-    setFilteredData(processedData);
+    setCachedResponses(valueFormatterNumbers(metrics.cacheHits));
+    setCachedTokens(valueFormatterNumbers(metrics.cachedTokens));
+    setCacheHitRatio(metrics.cacheHitRatio);
+    setFilteredData(metrics.chartData);
   }, [selectedApiKeys, selectedModels, dateValue, data]);
 
   const handleRefreshClick = () => {
@@ -391,9 +316,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
             <ChartCard className="mt-6">
               <CardHeader>
-                <CardTitle className="text-base font-semibold">
-                  Cached Completion Tokens vs Generated Completion Tokens
-                </CardTitle>
+                <CardTitle className="text-base font-semibold">Cached Tokens vs Generated Completion Tokens</CardTitle>
               </CardHeader>
               <CardContent>
                 <BarChart
@@ -401,8 +324,12 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   stack={true}
                   index="name"
                   valueFormatter={valueFormatterNumbers}
-                  categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
-                  colors={["sky", "teal"]}
+                  categories={[
+                    "Generated Completion Tokens",
+                    "Cached Completion Tokens",
+                    "Provider Prompt Cache Tokens",
+                  ]}
+                  colors={["sky", "teal", "indigo"]}
                   yAxisWidth={48}
                 />
               </CardContent>
