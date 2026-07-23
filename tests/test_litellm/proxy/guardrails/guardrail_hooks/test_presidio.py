@@ -842,6 +842,129 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     assert any(c.apply_to_output for c in created)
 
 
+def test_presidio_filter_scope_with_output_parse_pii(monkeypatch):
+    """
+    When output_parse_pii=True, the round-trip masker/unmasker pair must not be
+    accompanied by an apply_to_output=True callback — that companion callback
+    re-masks the already-unmasked streaming response.
+    """
+
+    created = []
+
+    class DummyGuardrail:
+        def __init__(
+            self,
+            apply_to_output: bool = False,
+            event_hook=None,
+            output_parse_pii=None,
+            **kwargs,
+        ):
+            self.apply_to_output = apply_to_output
+            self.event_hook = event_hook
+            self.output_parse_pii = output_parse_pii
+            created.append(self)
+
+        def update_in_memory_litellm_params(self, litellm_params):
+            pass
+
+    class DummyManager:
+        def __init__(self):
+            self.added = []
+
+        def add_litellm_callback(self, cb):
+            self.added.append(cb)
+
+    mgr = DummyManager()
+    monkeypatch.setattr(litellm, "logging_callback_manager", mgr, raising=False)
+
+    import litellm.proxy.guardrails.guardrail_hooks.presidio as presidio_mod
+
+    monkeypatch.setattr(
+        presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
+    )
+
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+
+    guardrail_dict = {"guardrail_name": "presidio-output-parse"}
+
+    # Case 1: output_parse_pii=True, no explicit filter_scope.
+    # Expected: exactly 2 callbacks (input masker + post_call unmasker),
+    # no apply_to_output=True callback.
+    created.clear()
+    params = LitellmParams(guardrail="presidio", mode="pre_call", output_parse_pii=True)
+    cb = initialize_presidio(params, guardrail_dict)
+    assert len(created) == 2, (
+        f"expected 2 callbacks for output_parse_pii=True default scope, "
+        f"got {len(created)}"
+    )
+    assert all(not c.apply_to_output for c in created)
+    assert any(
+        c.output_parse_pii is True and c.event_hook == "post_call" for c in created
+    )
+    assert cb.apply_to_output is False
+
+    # Case 2: output_parse_pii=True + explicit filter_scope="input".
+    # Same as case 1, no warning needed.
+    created.clear()
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        output_parse_pii=True,
+        presidio_filter_scope="input",
+    )
+    initialize_presidio(params, guardrail_dict)
+    assert len(created) == 2
+    assert all(not c.apply_to_output for c in created)
+
+    # Case 3: output_parse_pii=True + explicit filter_scope="both".
+    # Contradictory config — must NOT register the apply_to_output callback;
+    # warning must be emitted.
+    created.clear()
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        output_parse_pii=True,
+        presidio_filter_scope="both",
+    )
+    with patch(
+        "litellm.proxy.guardrails.guardrail_initializers.verbose_proxy_logger.warning"
+    ) as mock_warn:
+        initialize_presidio(params, guardrail_dict)
+    assert len(created) == 2
+    assert all(not c.apply_to_output for c in created)
+    assert mock_warn.called
+
+    # Case 4: output_parse_pii=True + explicit filter_scope="output".
+    # Also contradictory — must NOT register apply_to_output callback;
+    # warning must be emitted; input masker still registered so pii_tokens
+    # are populated for the unmasker.
+    created.clear()
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        output_parse_pii=True,
+        presidio_filter_scope="output",
+    )
+    with patch(
+        "litellm.proxy.guardrails.guardrail_initializers.verbose_proxy_logger.warning"
+    ) as mock_warn:
+        initialize_presidio(params, guardrail_dict)
+    assert len(created) == 2
+    assert all(not c.apply_to_output for c in created)
+    assert mock_warn.called
+
+    # Case 5 (backwards compat): output_parse_pii=False, no filter_scope.
+    # Pre-existing default — 2 callbacks (input masker + apply_to_output masker).
+    created.clear()
+    params = LitellmParams(
+        guardrail="presidio", mode="pre_call", output_parse_pii=False
+    )
+    initialize_presidio(params, guardrail_dict)
+    assert len(created) == 2
+    assert any(not c.apply_to_output for c in created)
+    assert any(c.apply_to_output for c in created)
+
+
 @pytest.mark.asyncio
 async def test_empty_content_handling(
     presidio_guardrail, mock_user_api_key, mock_cache
