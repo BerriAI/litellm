@@ -2452,6 +2452,7 @@ async def _reserve_budget_after_common_checks(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
         skip_user_budget_on_team_key=general_settings.get("skip_user_budget_on_team_key") is True,
+        fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
     )
 
 

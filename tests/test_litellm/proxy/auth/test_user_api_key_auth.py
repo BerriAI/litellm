@@ -180,6 +180,45 @@ async def test_budget_reservation_runs_when_not_disabled():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings,expected_flag",
+    [
+        ({"fail_closed_budget_enforcement": True}, True),
+        ({}, False),
+    ],
+)
+async def test_fail_closed_budget_enforcement_reaches_reservation(
+    general_settings, expected_flag
+):
+    """#33923: the strict flag must be threaded into reserve_budget_for_request so a
+    failed reservation write can reject instead of failing open."""
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new=AsyncMock(return_value=None),
+    ) as mock_reserve:
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+            general_settings=general_settings,
+        )
+
+    assert (
+        mock_reserve.await_args.kwargs["fail_closed_budget_enforcement"]
+        is expected_flag
+    )
+
+
+@pytest.mark.asyncio
 async def test_should_not_reuse_cached_key_object_for_request_state():
     key_cache = DualCache()
     cached_key = UserAPIKeyAuth(
