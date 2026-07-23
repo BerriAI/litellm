@@ -67,14 +67,15 @@ describe("dashboard landing keyless redirect", () => {
     mockMigratedHref.mockClear();
   });
 
-  it("sends a keyless non-admin to the connect page after login", () => {
+  it.each(["Internal User", "Internal Viewer"])("sends a keyless %s to the connect page after login", (role) => {
+    state.userRole = role;
     render(<CreateKeyPage />);
     expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/connect");
     expect(screen.queryByTestId("api-keys-dashboard")).not.toBeInTheDocument();
   });
 
-  it("leaves an admin with no keys on the dashboard", () => {
-    state.userRole = "Admin";
+  it.each(["Admin", "Admin Viewer", "Org Admin"])("leaves a keyless %s on the dashboard", (role) => {
+    state.userRole = role;
     render(<CreateKeyPage />);
     expect(mockReplace).not.toHaveBeenCalled();
     expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();

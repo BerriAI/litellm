@@ -4,7 +4,7 @@ import ApiKeysDashboard from "@/app/(dashboard)/api-keys/ApiKeysDashboard";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { proxyBaseUrl } from "@/components/networking";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { isAdminRole } from "@/utils/roles";
+import { internalUserRoles } from "@/utils/roles";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   buildLoginUrlWithReturn,
@@ -93,7 +93,7 @@ function CreateKeyPageContent() {
 
   const isPostLoginLanding = searchParams.get("login") === "success";
   const isSignedIn = !authLoading && Boolean(token);
-  const shouldCheckForKeys = isPostLoginLanding && isSignedIn && !isAdminRole(userRole);
+  const shouldCheckForKeys = isPostLoginLanding && isSignedIn && internalUserRoles.includes(userRole);
   const { data: keysData, isLoading: keysLoading } = useKeys(1, 1, { userID }, shouldCheckForKeys);
   const isKeylessLanding = shouldCheckForKeys && !keysLoading && keysData?.keys?.length === 0;
   const isResolvingKeylessLanding = (shouldCheckForKeys && keysLoading) || isKeylessLanding;
