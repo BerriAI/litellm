@@ -14,6 +14,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
+from litellm.models.team import BudgetLimitEntry
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -37,6 +38,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    budget_limits: Optional[List[BudgetLimitEntry]] = None
     allowed_cache_controls: List[str] = []
     policies: List[str] = []
     model_spend: Optional[Dict] = {}
