@@ -624,7 +624,13 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                   </div>
                 </div>
 
-                <Button type="primary" size="large" className="w-full md:w-auto" icon={<DownloadOutlined />}>
+                <Button
+                  type="primary"
+                  size="large"
+                  className="w-full md:w-auto"
+                  icon={<DownloadOutlined />}
+                  onClick={downloadTemplate}
+                >
                   Download CSV Template
                 </Button>
               </div>
