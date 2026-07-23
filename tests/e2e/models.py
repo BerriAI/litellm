@@ -115,6 +115,18 @@ class KeyInfoResponse(BaseModel):
 # ---------- customers ----------
 
 
+class CustomerNewBody(BaseModel):
+    user_id: str
+
+
+class CustomerResponse(BaseModel):
+    user_id: str | None = None
+
+
+class CustomerInfoParams(BaseModel):
+    end_user_id: str
+
+
 class CustomerDeleteBody(BaseModel):
     user_ids: list[str]
 
@@ -126,9 +138,26 @@ class ChatMetadata(BaseModel):
     tags: list[str] | None = None
 
 
+class ImageUrl(BaseModel):
+    url: str
+
+
+class TextContentPart(BaseModel):
+    type: str = "text"
+    text: str
+
+
+class ImageContentPart(BaseModel):
+    type: str = "image_url"
+    image_url: ImageUrl
+
+
+ContentPart = TextContentPart | ImageContentPart
+
+
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str | list[ContentPart]
 
 
 class CacheControl(BaseModel):
@@ -180,6 +209,7 @@ class ChatBody(BaseModel):
     tools: list[ChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    response_format: dict[str, object] | None = None
 
 
 class RouterSettingsOverride(BaseModel):
@@ -203,9 +233,19 @@ class ReliabilityChatBody(ChatBody):
     router_settings_override: RouterSettingsOverride | None = None
 
 
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    function: ToolCallFunction = ToolCallFunction()
+
+
 class OutMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 class ChatChoice(BaseModel):
@@ -216,6 +256,10 @@ class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
 
 
+class CompletionTokensDetails(BaseModel):
+    reasoning_tokens: int | None = None
+
+
 class Usage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -223,6 +267,7 @@ class Usage(BaseModel):
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
 
 class ChatResponse(BaseModel):
@@ -286,6 +331,7 @@ class CountTokensBody(BaseModel):
 
 class AnthropicContentBlock(BaseModel):
     type: str | None = None
+    text: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -817,3 +863,23 @@ class TagListResponse(RootModel[list[TagListEntry]]):
     """GET /tag/list answers with a bare array of tag configs (the stored tags plus
     any dynamically-seen spend tags), not an object wrapping them. Read the rows off
     .root."""
+
+
+# ---------- health / lifecycle ----------
+
+
+class ReadinessResponse(BaseModel):
+    """GET /health/readiness (public probe). The low-detail payload a load
+    balancer sees: `status` plus the resolved DB state (`connected`,
+    `disconnected`, or `Not connected`)."""
+
+    status: str
+    db: str | None = None
+
+
+class ReadinessDetailsResponse(ReadinessResponse):
+    """GET /health/readiness/details (authenticated). Extends the public payload
+    with the diagnostics only an authenticated caller may read."""
+
+    litellm_version: str | None = None
+    success_callbacks: list[str] = []

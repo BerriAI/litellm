@@ -8031,3 +8031,606 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_authorize_wall_names_the_fix_for_urlless_servers():
+    """LIT-4629: the authorize wall previously said only "authorization url is not set" with no
+    hint that spec-only servers never discover; the detail must now name both remedies (manual
+    Authorization URL + Token URL, or an Issuer for RFC 8414 discovery)."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-wall",
+        name="sheets_wall",
+        server_name="sheets_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="client",
+            redirect_uri="http://localhost/callback",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Authorization URL and Token URL" in detail_text
+    assert "Issuer" in detail_text
+
+
+@pytest.mark.asyncio
+async def test_token_wall_names_the_fix_for_urlless_servers():
+    """The /token wall is the second stop on the same misconfiguration (LIT-4629): after an admin
+    fills only the Authorization URL, the code exchange dies here; the detail must name the
+    remedies like the authorize wall does."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-token-wall",
+        name="sheets_token_wall",
+        server_name="sheets_token_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="client",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Token URL manually" in detail_text
+    assert "Issuer" in detail_text
+
+
+@pytest.mark.asyncio
+async def test_register_wall_names_the_fix_for_urlless_servers():
+    """The /register wall serves the same missing-authorization-url 400 as authorize; its detail
+    must carry the same actionable remedies."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-register-wall",
+        name="sheets_register_wall",
+        server_name="sheets_register_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_client_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_name="client",
+            grant_types=None,
+            response_types=None,
+            token_endpoint_auth_method=None,
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Authorization URL and Token URL" in detail_text
+    assert "Issuer" in detail_text
+
+
+def test_passthrough_authorization_code_round_trips_and_rejects_hostile_input():
+    """The passthrough gateway code seals and recovers the ephemeral DCR client and upstream code,
+    and is total over hostile input: a raw upstream code opens to None, and a tampered or
+    non-gateway value opens to None rather than raising, so every existing caller-supplied-client
+    flow is untouched."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        open_passthrough_authorization_code,
+        seal_passthrough_authorization_code,
+    )
+
+    with patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY):
+        sealed = seal_passthrough_authorization_code(
+            upstream_code="up-code",
+            client_id="minted-77",
+            client_secret="mint-secret",
+            mcp_server_id="srv-1",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+        opened = open_passthrough_authorization_code(sealed)
+        assert opened is not None
+        assert opened.upstream_code == "up-code"
+        assert opened.client_id == "minted-77"
+        assert opened.client_secret == "mint-secret"
+        assert opened.mcp_server_id == "srv-1"
+        assert opened.token_endpoint_auth_method == "client_secret_basic"
+        assert open_passthrough_authorization_code("raw-upstream-code") is None
+        assert open_passthrough_authorization_code(sealed[:-4] + "aaaa") is None
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _BRIDGE_AUTH_CODE_PREFIX,
+            _PASSTHROUGH_AUTH_CODE_PREFIX,
+            open_bridge_authorization_code,
+            seal_bridge_authorization_code,
+        )
+
+        bridge_sealed = seal_bridge_authorization_code(
+            upstream_code="up-code", litellm_user_id="sso-user-9", mcp_server_id="srv-1"
+        )
+        reprefixed_as_passthrough = _PASSTHROUGH_AUTH_CODE_PREFIX + bridge_sealed[len(_BRIDGE_AUTH_CODE_PREFIX) :]
+        reprefixed_as_bridge = _BRIDGE_AUTH_CODE_PREFIX + sealed[len(_PASSTHROUGH_AUTH_CODE_PREFIX) :]
+        assert open_passthrough_authorization_code(reprefixed_as_passthrough) is None
+        assert open_bridge_authorization_code(reprefixed_as_bridge) is None
+
+
+@pytest.mark.asyncio
+async def test_authorize_with_ephemeral_dcr_client_seals_client_into_state():
+    """When mcp_authorize fell through to a gateway-side DCR mint, authorize_with_server seals the
+    minted client and the target server into the encrypted OAuth state, so the callback can bind
+    them into the forwarded authorization code while the gateway stores nothing."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        EphemeralDcrClient,
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None)
+    captured: dict = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return "mocked_encrypted_state"
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encode_state_with_base_url",
+        side_effect=_capture,
+    ):
+        response = await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            client_id="minted-77",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="s",
+            code_challenge="chal",
+            code_challenge_method="S256",
+            ephemeral_dcr_client=EphemeralDcrClient(
+                client_id="minted-77", client_secret="mint-secret", token_endpoint_auth_method="client_secret_basic"
+            ),
+        )
+
+    assert captured["dcr_client_id"] == "minted-77"
+    assert captured["dcr_client_secret"] == "mint-secret"
+    assert captured["dcr_token_endpoint_auth_method"] == "client_secret_basic"
+    assert captured["mcp_server_id"] == server.server_id
+    assert "client_id=minted-77" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_callback_wraps_code_into_passthrough_code_for_ephemeral_dcr_state():
+    """When the OAuth state carries an ephemeral DCR client, the callback forwards a sealed
+    passthrough code (binding the client and the upstream code to the server) instead of the raw
+    upstream code, so the client's later token call can authenticate the exchange with a client the
+    gateway never stored."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+        open_passthrough_authorization_code,
+    )
+
+    state_data = {
+        "original_state": "client-state",
+        "client_redirect_uri": "http://127.0.0.1:60108/cb",
+        "base_url": "http://127.0.0.1:60108/cb",
+        "mcp_server_id": "srv-1",
+        "dcr_client_id": "minted-77",
+        "dcr_client_secret": "mint-secret",
+        "dcr_token_endpoint_auth_method": "client_secret_basic",
+    }
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_encoded_oauth_state",
+            return_value="enc",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash",
+            return_value=state_data,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._get_validated_client_redirect_uri",
+            return_value="http://127.0.0.1:60108/cb",
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await callback(request=_bridge_mock_request(), code="REAL-UPSTREAM-CODE", state="relay")
+
+        forwarded_code = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+        opened = open_passthrough_authorization_code(forwarded_code)
+
+    assert opened is not None
+    assert opened.upstream_code == "REAL-UPSTREAM-CODE"
+    assert opened.client_id == "minted-77"
+    assert opened.client_secret == "mint-secret"
+    assert opened.mcp_server_id == "srv-1"
+    assert opened.token_endpoint_auth_method == "client_secret_basic"
+
+
+@pytest.mark.asyncio
+async def test_authorize_bridge_server_with_ephemeral_client_takes_short_circuit_arm():
+    """A gateway-minted client is registered against {base}/callback, so a bridge server's
+    authorize with an ephemeral client must run the short-circuit (gateway /callback) arm with a
+    relay state cookie, never the verbatim relay: relaying would send the browser's redirect_uri
+    to an IdP that has the gateway callback registered, stranding the flow."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        EphemeralDcrClient,
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough)
+    with patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY):
+        response = await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            client_id="minted-77",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="client-state",
+            code_challenge="chal",
+            code_challenge_method="S256",
+            ephemeral_dcr_client=EphemeralDcrClient(client_id="minted-77", client_secret=None),
+        )
+
+    location = response.headers["location"]
+    params = parse_qs(urlparse(location).query)
+    assert params["redirect_uri"] == ["https://litellm.example.com/callback"]
+    assert params["client_id"] == ["minted-77"]
+    assert params["state"] != ["client-state"]
+    assert any(cookie.startswith("mcp_oauth_state_") for cookie in response.headers.get("set-cookie", "").split(";"))
+
+
+@pytest.mark.asyncio
+async def test_callback_forwards_raw_code_when_dcr_state_lacks_server_binding():
+    """A state carrying a dcr client but no server id cannot produce a server-bound sealed code, so
+    the callback falls back to forwarding the raw upstream code instead of sealing an unbindable
+    one."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import callback
+
+    state_data = {
+        "original_state": "client-state",
+        "client_redirect_uri": "http://127.0.0.1:60108/cb",
+        "base_url": "http://127.0.0.1:60108/cb",
+        "dcr_client_id": "minted-77",
+    }
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_encoded_oauth_state",
+            return_value="enc",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash",
+            return_value=state_data,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._get_validated_client_redirect_uri",
+            return_value="http://127.0.0.1:60108/cb",
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await callback(request=_bridge_mock_request(), code="REAL-UPSTREAM-CODE", state="relay")
+
+    forwarded_code = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+    assert forwarded_code == "REAL-UPSTREAM-CODE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_type_value",
+    [
+        "none",
+        "api_key",
+        "bearer_token",
+        "basic",
+        "authorization",
+        "oauth2",
+        "aws_sigv4",
+        "token",
+        "oauth2_token_exchange",
+        "oauth2_id_jag",
+        "true_passthrough",
+        "oauth_delegate",
+    ],
+)
+@pytest.mark.parametrize("dcr_bridge", [True, False])
+async def test_resolve_ephemeral_dcr_client_mint_set_is_exact(auth_type_value, dcr_bridge):
+    """The full authorize-time mint decision matrix, one cell per (auth_type, dcr_bridge). The gateway
+    mints iff true_passthrough (any bridge) or oauth_delegate-and-not-dcr_bridge; every other mode
+    returns None so no non-OAuth mode ever registers an upstream client, and the interactive
+    oauth_delegate dcr_bridge sign-in is left to its own browser-front-door flow. The UI
+    gatewayMintsClientFor helper mirrors this exact set; ui/.../mcp_tools/types.test.tsx pins the
+    frontend side against the same table, so a divergence fails on one side or the other."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        EphemeralDcrClient,
+        resolve_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth(auth_type_value),
+        dcr_bridge=dcr_bridge,
+        server_id=f"matrix_{auth_type_value}_{dcr_bridge}",
+        server_name=f"matrix_{auth_type_value}_{dcr_bridge}",
+    )
+    expected_mint = server.is_true_passthrough or (server.is_oauth_delegate and not server.is_dcr_bridge)
+    mint_mock = AsyncMock(return_value=EphemeralDcrClient(client_id="minted", client_secret=None))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.mint_ephemeral_dcr_client",
+        mint_mock,
+    ):
+        result = await resolve_ephemeral_dcr_client(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            code_challenge="chal",
+            code_challenge_method="S256",
+            redirect_uri="http://127.0.0.1:9/callback",
+        )
+
+    if expected_mint:
+        mint_mock.assert_awaited_once()
+        assert result is not None
+    else:
+        mint_mock.assert_not_awaited()
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_returns_none_without_registration_endpoint():
+    """A server whose upstream exposes no RFC 7591 registration endpoint cannot mint, so the
+    fall-through reports None and the caller keeps its existing missing_client_id failure."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, registration_url=None)
+    assert await mint_ephemeral_dcr_client(_bridge_mock_request(), server) is None
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_posts_rfc7591_and_returns_client():
+    """The mint POSTs a public-client RFC 7591 registration bound to the gateway /callback and hands
+    back the upstream's client without persisting it anywhere."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id="mint_posts_srv", server_name="mint_posts_srv"
+    )
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {"client_id": "minted-77", "client_secret": "mint-secret", "token_endpoint_auth_method": "client_secret_basic"}
+    )
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        minted = await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+
+    assert minted is not None
+    assert minted.client_id == "minted-77"
+    assert minted.client_secret == "mint-secret"
+    assert minted.token_endpoint_auth_method == "client_secret_basic"
+    register_data = mock_async_client.post.call_args.kwargs["json"]
+    assert register_data["redirect_uris"] == ["https://litellm.example.com/callback"]
+    assert register_data["token_endpoint_auth_method"] == "none"
+    assert register_data["grant_types"] == ["authorization_code", "refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_reuses_minted_client_within_flow_ttl():
+    """Reloading the authorize page must not spam the upstream registration endpoint with orphan
+    clients: within the OAuth state's lifetime a second mint for the same server and gateway origin
+    reuses the cached client and performs no second upstream POST."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id="mint_reuse_srv", server_name="mint_reuse_srv"
+    )
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({"client_id": "minted-77"})
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        first = await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+        second = await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+
+    assert first is not None
+    assert second == first
+    mock_async_client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_single_flights_concurrent_mints():
+    """Two in-flight authorize requests for the same server must not both register an upstream
+    client: the per-key lock makes the second waiter reuse the first mint, so exactly one upstream
+    POST happens."""
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough,
+        dcr_bridge=None,
+        server_id="mint_concurrent_srv",
+        server_name="mint_concurrent_srv",
+    )
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({"client_id": "minted-77"})
+    mock_response.raise_for_status = MagicMock()
+
+    async def _slow_post(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return mock_response
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(side_effect=_slow_post)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        first, second = await asyncio.gather(
+            mint_ephemeral_dcr_client(_bridge_mock_request(), server),
+            mint_ephemeral_dcr_client(_bridge_mock_request(), server),
+        )
+
+    assert first is not None
+    assert second == first
+    mock_async_client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload, server_id",
+    [
+        ({"unexpected": "shape"}, "mint_bad_shape_srv"),
+        ({"client_id": ""}, "mint_empty_id_srv"),
+    ],
+)
+async def test_mint_ephemeral_dcr_client_unusable_registration_response_is_502(payload, server_id):
+    """An upstream registration response without a usable client_id, whether the field is missing or
+    an empty string, surfaces as a loud 502 instead of letting the authorize proceed with an empty
+    client and fail opaquely at the IdP."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id)
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(payload)
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sealed_auth_method, expects_basic_header",
+    [
+        ("client_secret_basic", True),
+        (None, False),
+    ],
+)
+async def test_token_exchange_authenticates_with_the_sealed_clients_own_auth_method(
+    sealed_auth_method, expects_basic_header
+):
+    """The id, secret, and token-endpoint auth method must come from the same source: a client
+    recovered from a sealed passthrough code authenticates the upstream exchange the way its own
+    registration was granted, not the way the server row is configured. A sealed
+    ``client_secret_basic`` grant sends the Basic header and keeps the secret out of the body; a
+    sealed public client (no method) keeps the body-credential path."""
+    import base64
+
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id="sealed_method_srv")
+    upstream_request = httpx.Request("POST", server.token_url)
+    upstream_response = httpx.Response(
+        200, json={"access_token": "up-token", "token_type": "Bearer"}, request=upstream_request
+    )
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=upstream_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="up-code",
+            redirect_uri="https://litellm.example.com/callback",
+            client_id="minted-77",
+            client_secret="mint-secret",
+            code_verifier="verifier",
+            client_token_endpoint_auth_method=sealed_auth_method,
+        )
+
+    sent_headers = mock_async_client.post.call_args.kwargs["headers"]
+    sent_body = mock_async_client.post.call_args.kwargs["data"]
+    if expects_basic_header:
+        expected = base64.b64encode(b"minted-77:mint-secret").decode()
+        assert sent_headers["Authorization"] == f"Basic {expected}"
+        assert "client_secret" not in sent_body
+    else:
+        assert "Authorization" not in sent_headers
+        assert sent_body["client_id"] == "minted-77"
+        assert sent_body["client_secret"] == "mint-secret"

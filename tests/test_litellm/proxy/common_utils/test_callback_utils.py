@@ -84,6 +84,52 @@ def test_process_callback_with_no_required_env_vars(mock_get_env_vars):
     assert result["variables"] == {}
 
 
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"],
+)
+def test_process_callback_falls_back_to_process_env(mock_get_env_vars, monkeypatch):
+    """A callback env var set only in the process env must be surfaced.
+
+    The logging integrations read their config from the process environment, so a
+    callback configured purely via env vars (IaC) is live even with no stored
+    entry. Reporting it as unset makes a working callback read as unconfigured.
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "env-public-key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "env-secret-key")
+    # stored config only carries the public key; the secret is env-only
+    environment_variables = {"LANGFUSE_PUBLIC_KEY": "db-public-key"}
+
+    result = process_callback(
+        _callback="langfuse",
+        callback_type="success",
+        environment_variables=environment_variables,
+    )
+
+    # stored value wins; the env-only var is resolved rather than reported None
+    assert result["variables"] == {
+        "LANGFUSE_PUBLIC_KEY": "db-public-key",
+        "LANGFUSE_SECRET_KEY": "env-secret-key",
+    }
+
+
+@patch(
+    "litellm.proxy.common_utils.callback_utils.CustomLogger.get_callback_env_vars",
+    return_value=["LANGFUSE_SECRET_KEY"],
+)
+def test_process_callback_reports_none_when_absent_everywhere(mock_get_env_vars, monkeypatch):
+    """A var set in neither the stored config nor the process env stays None."""
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+
+    result = process_callback(
+        _callback="langfuse",
+        callback_type="success",
+        environment_variables={},
+    )
+
+    assert result["variables"] == {"LANGFUSE_SECRET_KEY": None}
+
+
 def test_normalize_callback_names_none_returns_empty_list():
     assert normalize_callback_names(None) == []
     assert normalize_callback_names([]) == []

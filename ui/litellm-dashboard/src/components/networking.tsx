@@ -372,7 +372,7 @@ export function getGlobalLitellmHeaderName(): string {
   return globalLitellmHeaderName;
 }
 
-const apiClient = createApiClient({
+export const apiClient = createApiClient({
   getBaseUrl: getProxyBaseUrl,
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
@@ -6737,6 +6737,7 @@ interface RegisterMcpOAuthClientPayload {
   grant_types?: string[];
   response_types?: string[];
   token_endpoint_auth_method?: string;
+  redirect_uris?: string[];
 }
 
 export const registerMcpOAuthClient = async (

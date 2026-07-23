@@ -7,7 +7,7 @@ accepted in place on Claude 4.8+/5 (200) but rejected on Claude 4.7 and older
 ("role 'system' is not supported on this model", 400), and a *leading* system
 entry is rejected on every model ("messages.0: use the top-level 'system'
 parameter"). This mirrors Bedrock Invoke (PRs #32578/#32831/#32882); the same
-model-gated hoist now runs for these two providers (Kraken Tech RCA gap #3).
+model-gated hoist now runs for these two providers (customer RCA gap #3).
 
 Flagged models (``supports_mid_conversation_system`` in the cost map: Claude
 4.8+ and the 5 family) must keep the reminder in ``messages`` so the top-level
@@ -88,9 +88,9 @@ def _system_reminder_turn() -> RichMessage:
 
 
 def _post_messages(client: EndpointsClient, key: str, body: RichMessagesRequest) -> Result[MessagesResult]:
-    return client.gateway.transport.post(
+    return client.proxy.transport.post(
         "/v1/messages",
-        headers=client.gateway.transport.bearer(key),
+        headers=client.proxy.transport.bearer(key),
         json=body,
         response_type=MessagesResult,
     )

@@ -1856,6 +1856,17 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
 
 
+class PatchTeamRequest(UpdateTeamRequest):
+    """
+    Body of PATCH /team/{team_id}.
+
+    Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+    from the path. A team_id in the body is still accepted when it matches the path.
+    """
+
+    team_id: str | None = None
+
+
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
     """
     internal type used to reset the budget on a team
@@ -2296,6 +2307,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_response_size_mb: Optional[int] = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
+    )
+    proxy_config_reload_interval_seconds: int = Field(
+        30,
+        gt=0,
+        description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
     )
     cancel_on_disconnect: Optional[bool] = Field(
         None,
@@ -2760,6 +2776,30 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
                 values["metadata"][field] = values.get(field)
                 values.pop(field)
         return values
+
+
+class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
+    """
+    Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+
+    Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+    left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+    the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_alias: str | None = None
+    models: list[str] | None = None
+    metadata: dict | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    max_parallel_requests: int | None = None
+    model_max_budget: dict | None = None
+    budget_duration: str | None = None
+    object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
 from litellm.models.organization import (  # noqa: E402
@@ -4047,6 +4087,7 @@ class JWTAuthBuilderResult(TypedDict):
     token: str
     team_id: Optional[str]
     user_id: Optional[str]
+    user_email: str | None
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
