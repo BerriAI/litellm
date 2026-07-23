@@ -4,7 +4,7 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -209,6 +209,8 @@ def _build_responses_followup_items(
 
 
 class HeadroomGuardrail(CustomGuardrail):
+    records_own_guardrail_information: ClassVar[bool] = True
+
     @classmethod
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [
@@ -482,6 +484,15 @@ class HeadroomGuardrail(CustomGuardrail):
         end_time = time.time()
 
         if not compression_succeeded:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"error": "headroom compression unavailable; request forwarded uncompressed"},
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+            )
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
         self.add_standard_logging_guardrail_information_to_request_data(

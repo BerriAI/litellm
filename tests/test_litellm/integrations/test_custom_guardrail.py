@@ -2,9 +2,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.utils import GuardrailTracingDetail
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
 
 
 class TestCustomGuardrailDeploymentHook:
@@ -1914,3 +1917,55 @@ class TestOnlyScanNewMessages:
         cache.async_set_cache = AsyncMock(side_effect=RuntimeError("redis down"))
 
         await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
+
+
+def _guardrail_entries(request_data: dict) -> list:
+    container = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    entries = container.get("standard_logging_guardrail_information")
+    return entries if isinstance(entries, list) else []
+
+
+class _NoopGuardrail(CustomGuardrail):
+    """apply_guardrail that returns the inputs untouched and records nothing."""
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return inputs
+
+
+class _NoopSelfLoggingGuardrail(_NoopGuardrail):
+    records_own_guardrail_information = True
+
+
+class TestRecordsOwnGuardrailInformation:
+    """The @log_guardrail_information decorator must not synthesize an "allow"/"success"
+    entry for a no-op apply_guardrail when the guardrail sets
+    records_own_guardrail_information (LIT-4650)."""
+
+    @pytest.mark.asyncio
+    async def test_default_noop_apply_guardrail_is_auto_logged(self):
+        guardrail = _NoopGuardrail(guardrail_name="g1")
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        entries = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_self_logging_noop_apply_guardrail_is_not_logged(self):
+        guardrail = _NoopSelfLoggingGuardrail(guardrail_name="g2")
+        request_data: dict = {"model": "gpt-4o"}
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"]),
+            request_data=request_data,
+            input_type="request",
+        )
+
+        assert _guardrail_entries(request_data) == []

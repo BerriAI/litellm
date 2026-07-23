@@ -114,6 +114,16 @@ def guardrail() -> HeadroomGuardrail:
     return _make_guardrail()
 
 
+def _recorded_guardrail_entries(request_data: dict) -> list:
+    for container_key in ("metadata", "litellm_metadata"):
+        container = request_data.get(container_key)
+        if isinstance(container, dict):
+            entries = container.get("standard_logging_guardrail_information")
+            if isinstance(entries, list):
+                return entries
+    return []
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_compresses_and_returns_structured_messages(
     guardrail: HeadroomGuardrail,
@@ -123,6 +133,7 @@ async def test_apply_guardrail_compresses_and_returns_structured_messages(
         structured_messages=ORIGINAL_MESSAGES,
     )
     mock_response = _make_compress_response(COMPRESSED_MESSAGES)
+    request_data = {"model": "gpt-4o"}
 
     with patch.object(
         guardrail.async_handler,
@@ -132,11 +143,17 @@ async def test_apply_guardrail_compresses_and_returns_structured_messages(
     ):
         result = await guardrail.apply_guardrail(
             inputs=inputs,
-            request_data={"model": "gpt-4o"},
+            request_data=request_data,
             input_type="request",
         )
 
     assert result.get("structured_messages") == COMPRESSED_MESSAGES
+
+    entries = _recorded_guardrail_entries(request_data)
+    assert len(entries) == 1
+    assert entries[0]["guardrail_name"] == "headroom"
+    assert entries[0]["guardrail_status"] == "success"
+    assert entries[0]["guardrail_provider"] == "headroom"
 
 
 @pytest.mark.asyncio
@@ -719,6 +736,7 @@ async def test_apply_guardrail_bypass_header_skips_compression(
         mock_post.assert_not_called()
 
     assert result.get("structured_messages") == ORIGINAL_MESSAGES
+    assert _recorded_guardrail_entries(request_data) == []
 
 
 @pytest.mark.asyncio
@@ -729,16 +747,18 @@ async def test_apply_guardrail_response_type_passthrough(
         texts=["some response text"],
         structured_messages=ORIGINAL_MESSAGES,
     )
+    request_data: dict = {"model": "gpt-4o"}
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data,
             input_type="response",
         )
         mock_post.assert_not_called()
 
     assert result is inputs
+    assert _recorded_guardrail_entries(request_data) == []
 
 
 @pytest.mark.asyncio
@@ -746,16 +766,46 @@ async def test_apply_guardrail_empty_structured_messages_passthrough(
     guardrail: HeadroomGuardrail,
 ):
     inputs = GenericGuardrailAPIInputs(texts=["hello"])
+    request_data: dict = {"model": "gpt-4o"}
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data,
             input_type="request",
         )
         mock_post.assert_not_called()
 
     assert result is inputs
+    assert _recorded_guardrail_entries(request_data) == []
+
+
+@pytest.mark.asyncio
+async def test_passthrough_handler_does_not_log_headroom_as_run(
+    guardrail: HeadroomGuardrail,
+):
+    """Regression for LIT-4650.
+
+    A passthrough request drives headroom through PassThroughEndpointHandler, which
+    only supplies `texts` (no `structured_messages`). Headroom cannot compress that
+    shape and no-ops, so it must not appear in the spend log's
+    standard_logging_guardrail_information as a successful run.
+    """
+    from litellm.llms.pass_through.guardrail_translation.handler import (
+        PassThroughEndpointHandler,
+    )
+
+    data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+        await PassThroughEndpointHandler().process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+        mock_post.assert_not_called()
+
+    assert _recorded_guardrail_entries(data) == []
 
 
 @pytest.mark.asyncio
@@ -884,6 +934,7 @@ async def test_apply_guardrail_transport_error_fail_open_forwards_uncompressed()
         texts=["hello"],
         structured_messages=ORIGINAL_MESSAGES,
     )
+    request_data = {"model": "gpt-4o"}
 
     with patch.object(
         guardrail.async_handler,
@@ -893,11 +944,16 @@ async def test_apply_guardrail_transport_error_fail_open_forwards_uncompressed()
     ):
         result = await guardrail.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data,
             input_type="request",
         )
 
     assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+    entries = _recorded_guardrail_entries(request_data)
+    assert len(entries) == 1
+    assert entries[0]["guardrail_name"] == "headroom"
+    assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
 
 
 @pytest.mark.asyncio
