@@ -475,7 +475,11 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             tool_calls = chunk["message"].get("tool_calls")
             if tool_calls is not None:
                 for tool_call in tool_calls:
-                    function_args = tool_call.get("function").get("arguments")
+                    function = tool_call.get("function") or {}
+                    function_index = function.get("index")
+                    if function_index is not None:
+                        tool_call["index"] = function_index
+                    function_args = function.get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)
                         if is_function_call_complete:
