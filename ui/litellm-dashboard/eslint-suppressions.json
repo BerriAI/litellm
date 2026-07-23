@@ -4393,14 +4393,6 @@
       "count": 1
     }
   },
-  "src/components/view_logs/index.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/log_filter_logic.tsx": {
     "local/filename-pascal-case": {
       "count": 1
