@@ -28917,6 +28917,11 @@ export interface components {
             allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
             /** Blocked */
             blocked?: boolean | null;
+            /**
+             * Budget Alert Thresholds
+             * @description Per-team budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args.
+             */
+            budget_alert_thresholds?: number[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
