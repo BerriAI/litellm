@@ -1,6 +1,9 @@
 from typing import TYPE_CHECKING, Union
 
-from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.guardrails import (
+    AZURE_TEXT_MODERATION_PARAM_KEYS,
+    SupportedGuardrailIntegrations,
+)
 
 from .prompt_shield import AzureContentSafetyPromptShieldGuardrail
 from .text_moderation import AzureContentSafetyTextModerationGuardrail
@@ -38,10 +41,16 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             },
         )
     elif azure_guardrail == "text_moderations":
+        litellm_params_dict = litellm_params.model_dump(exclude_none=True)
+        optional_params = litellm_params_dict.pop("optional_params", None)
+        if optional_params is not None:
+            litellm_params_dict.update(
+                {key: optional_params[key] for key in AZURE_TEXT_MODERATION_PARAM_KEYS if key in optional_params}
+            )
         azure_content_safety_guardrail = AzureContentSafetyTextModerationGuardrail(
             guardrail_name=guardrail_name,
             **{
-                **litellm_params.model_dump(exclude_none=True),
+                **litellm_params_dict,
                 "api_key": litellm_params.api_key,
                 "api_base": litellm_params.api_base,
                 "default_on": litellm_params.default_on,

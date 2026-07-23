@@ -148,10 +148,17 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
     def check_severity_threshold(self, response: "AzureTextModerationGuardrailResponse") -> Literal[True]:
         """
+        - Reject blocklist matches
         - Check if threshold set by category
         - Check if general severity threshold set
         - If both none, use default_severity_threshold
         """
+
+        if response["blocklistsMatch"]:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Azure Content Safety Guardrail: Blocklist match detected"},
+            )
 
         if self.severity_threshold_by_category:
             for category in response["categoriesAnalysis"]:

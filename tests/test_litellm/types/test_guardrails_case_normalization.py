@@ -92,6 +92,27 @@ class TestLitellmParamsCaseNormalization:
             assert params.on_disallowed_action in ["block", "rewrite"]
             assert params.on_disallowed_action.islower()
 
+    def test_azure_text_moderation_provider_params_validate(self):
+        """Azure text moderation accepts Azure-specific top-level config fields."""
+        params = LitellmParams(
+            guardrail="azure/text_moderations",
+            mode=["pre_call", "post_call"],
+            api_key="test-key",
+            api_base="https://example.com",
+            severity_threshold=2,
+            categories=["Hate", "Sexual", "SelfHarm", "Violence"],
+        )
+
+        assert params.categories is None
+        assert params.severity_threshold is None
+        assert params.optional_params.categories == [
+            "Hate",
+            "Sexual",
+            "SelfHarm",
+            "Violence",
+        ]
+        assert params.optional_params.severity_threshold == 2
+
 
 class TestSensitiveDataRoutingValidation:
     """on_sensitive_data='route' requires a target model to be set"""
