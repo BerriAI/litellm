@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Button, Collapse, Drawer, Empty, Spin, Tooltip, Typography } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { ArrowLeft, ChevronDown, RefreshCw } from "lucide-react";
 import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
 import { getGlobalLitellmHeaderName, proxyBaseUrl } from "@/components/networking";
 import {
@@ -9,10 +8,14 @@ import {
   DataTableFilterField,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-const { Text } = Typography;
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { cn } from "@/lib/cva.config";
 
 interface WorkflowRunsProps {
   accessToken: string | null;
@@ -59,11 +62,11 @@ interface WorkflowRunMessage {
 // ── design tokens ─────────────────────────────────────────────────────────────
 
 const STATUS_DOT: Record<RunStatus, string> = {
-  pending: "#a1a1aa",
-  running: "#3b82f6",
-  paused: "#f59e0b",
-  completed: "#22c55e",
-  failed: "#ef4444",
+  pending: "bg-gray-400",
+  running: "bg-blue-500",
+  paused: "bg-amber-500",
+  completed: "bg-green-500",
+  failed: "bg-red-500",
 };
 
 const RUN_STATUS_OPTIONS: RunStatus[] = ["pending", "running", "paused", "completed", "failed"];
@@ -75,15 +78,15 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   failed: "Failed",
 };
 
-const EVENT_COLOR: Record<string, { bar: string; border: string; text: string }> = {
-  "step.started": { bar: "#f0fdf4", border: "#86efac", text: "#16a34a" },
-  "step.failed": { bar: "#fef2f2", border: "#fca5a5", text: "#dc2626" },
-  "hook.waiting": { bar: "#fffbeb", border: "#fcd34d", text: "#d97706" },
-  "hook.received": { bar: "#eff6ff", border: "#93c5fd", text: "#2563eb" },
+const EVENT_COLOR: Record<string, { bar: string; text: string }> = {
+  "step.started": { bar: "border-green-300 bg-green-50", text: "text-green-600" },
+  "step.failed": { bar: "border-red-300 bg-red-50", text: "text-red-600" },
+  "hook.waiting": { bar: "border-amber-300 bg-amber-50", text: "text-amber-600" },
+  "hook.received": { bar: "border-blue-300 bg-blue-50", text: "text-blue-600" },
 };
 
 function eventStyle(type: string) {
-  return EVENT_COLOR[type] ?? { bar: "#f4f4f5", border: "#d4d4d8", text: "#52525b" };
+  return EVENT_COLOR[type] ?? { bar: "border-border bg-muted", text: "text-muted-foreground" };
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -118,17 +121,8 @@ function shortId(id: string): string {
 
 // ── status dot ────────────────────────────────────────────────────────────────
 
-const StatusDot: React.FC<{ status: RunStatus; size?: number }> = ({ status, size = 8 }) => (
-  <span
-    style={{
-      display: "inline-block",
-      width: size,
-      height: size,
-      borderRadius: "50%",
-      background: STATUS_DOT[status] ?? "#a1a1aa",
-      flexShrink: 0,
-    }}
-  />
+const StatusDot: React.FC<{ status: RunStatus; className?: string }> = ({ status, className }) => (
+  <span className={cn("inline-block flex-none rounded-full", STATUS_DOT[status] ?? "bg-gray-400", className)} />
 );
 
 // ── truncated text value ──────────────────────────────────────────────────────
@@ -138,25 +132,14 @@ const TRUNCATE_AT = 120;
 const TruncatedValue: React.FC<{ value: string }> = ({ value }) => {
   const [expanded, setExpanded] = useState(false);
   if (value.length <= TRUNCATE_AT) {
-    return <span style={{ color: "#27272a", wordBreak: "break-all" }}>{value}</span>;
+    return <span className="break-all text-foreground">{value}</span>;
   }
   return (
-    <span style={{ color: "#27272a", wordBreak: "break-all" }}>
+    <span className="break-all text-foreground">
       {expanded ? value : value.slice(0, TRUNCATE_AT) + "…"}
-      <button
-        onClick={() => setExpanded((e) => !e)}
-        style={{
-          background: "none",
-          border: "none",
-          padding: "0 4px",
-          cursor: "pointer",
-          color: "#2563eb",
-          fontSize: 11,
-          flexShrink: 0,
-        }}
-      >
+      <Button variant="link" size="xs" className="h-auto px-1 py-0 text-[11px]" onClick={() => setExpanded((e) => !e)}>
         {expanded ? "less" : "more"}
-      </button>
+      </Button>
     </span>
   );
 };
@@ -179,67 +162,24 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
   );
 
   return (
-    <div
-      style={{
-        borderRadius: 8,
-        border: "1px solid #e4e4e7",
-        marginBottom: 16,
-        overflow: "hidden",
-      }}
-    >
+    <div className="mb-4 overflow-hidden rounded-lg border">
       {/* title bar */}
-      <div
-        style={{
-          padding: "14px 20px",
-          borderBottom: "1px solid #f4f4f5",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        <StatusDot status={run.status} size={10} />
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#18181b", flex: 1 }}>{runTitle(run)}</span>
-        <span
-          style={{
-            fontFamily: "monospace",
-            fontSize: 11,
-            color: "#a1a1aa",
-            background: "#f4f4f5",
-            padding: "2px 8px",
-            borderRadius: 4,
-          }}
-        >
+      <div className="flex items-center gap-2.5 border-b px-5 py-3.5">
+        <StatusDot status={run.status} className="size-2.5" />
+        <span className="flex-1 text-sm font-semibold text-foreground">{runTitle(run)}</span>
+        <span className="rounded bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
           {shortId(run.run_id)}
         </span>
-        <span
-          style={{
-            fontSize: 11,
-            color: "#a1a1aa",
-            background: "#f4f4f5",
-            padding: "2px 8px",
-            borderRadius: 4,
-          }}
-        >
-          {run.workflow_type}
-        </span>
+        <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{run.workflow_type}</span>
       </div>
 
       {/* key fields grid */}
-      <div
-        style={{
-          padding: "12px 20px",
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-          gap: "8px 24px",
-          fontFamily: "monospace",
-          fontSize: 12,
-        }}
-      >
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-x-6 gap-y-2 px-5 py-3 font-mono text-xs">
         <FieldPair label="status">
-          <span style={{ textTransform: "capitalize", color: "#27272a" }}>{run.status}</span>
+          <span className="capitalize text-foreground">{run.status}</span>
         </FieldPair>
         <FieldPair label="created">
-          <span style={{ color: "#27272a" }}>{timeAgo(run.created_at)}</span>
+          <span className="text-foreground">{timeAgo(run.created_at)}</span>
         </FieldPair>
 
         {meta.pr_url && (
@@ -248,7 +188,7 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
               href={String(meta.pr_url)}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: "#2563eb", textDecoration: "none", wordBreak: "break-all" }}
+              className="break-all text-primary underline-offset-4 hover:underline"
             >
               {String(meta.pr_url)}
             </a>
@@ -280,9 +220,9 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
 };
 
 const FieldPair: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-    <span style={{ fontSize: 10, color: "#a1a1aa", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</span>
-    <span style={{ fontSize: 12 }}>{children}</span>
+  <div className="flex flex-col gap-px">
+    <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">{label}</span>
+    <span className="text-xs">{children}</span>
   </div>
 );
 
@@ -293,11 +233,7 @@ const GanttTimeline: React.FC<{
   events: WorkflowRunEvent[];
 }> = ({ run, events }) => {
   if (events.length === 0) {
-    return (
-      <div style={{ padding: "16px 0", color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>
-        No events recorded
-      </div>
-    );
+    return <div className="py-4 font-mono text-xs text-muted-foreground">No events recorded</div>;
   }
 
   const runStart = new Date(run.created_at).getTime();
@@ -307,186 +243,138 @@ const GanttTimeline: React.FC<{
   const totalDur = fmtDuration(lastTime - runStart);
 
   return (
-    <div style={{ fontFamily: "monospace", fontSize: 12 }}>
-      {/* ruler */}
-      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: "0 12px", marginBottom: 2 }}>
-        <div />
-        <div style={{ position: "relative", height: 16 }}>
-          {[0, 100].map((pct) => (
-            <span
-              key={pct}
-              style={{
-                position: "absolute",
-                left: `${pct}%`,
-                transform: pct === 100 ? "translateX(-100%)" : undefined,
-                fontSize: 10,
-                color: "#a1a1aa",
-              }}
-            >
-              {pct === 0 ? "0" : totalDur}
-            </span>
-          ))}
+    <TooltipProvider delay={300}>
+      <div className="font-mono text-xs">
+        {/* ruler */}
+        <div className="mb-0.5 grid grid-cols-[160px_minmax(0,1fr)] gap-x-3">
+          <div />
+          <div className="relative h-4">
+            <span className="absolute left-0 text-[10px] text-muted-foreground">0</span>
+            <span className="absolute left-full -translate-x-full text-[10px] text-muted-foreground">{totalDur}</span>
+          </div>
         </div>
-      </div>
 
-      {/* outer run bar */}
-      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: "0 12px", marginBottom: 4 }}>
-        <div
-          style={{
-            color: "#3f3f46",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            paddingTop: 2,
-          }}
-        >
-          {runTitle(run)}
+        {/* outer run bar */}
+        <div className="mb-1 grid grid-cols-[160px_minmax(0,1fr)] gap-x-3">
+          <div className="truncate pt-0.5 text-foreground">{runTitle(run)}</div>
+          <div className="flex h-6 items-center rounded border bg-muted pl-2">
+            <span className="text-[11px] text-muted-foreground">{totalDur}</span>
+          </div>
         </div>
-        <div
-          style={{
-            height: 24,
-            background: "#f4f4f5",
-            border: "1px solid #d4d4d8",
-            borderRadius: 4,
-            display: "flex",
-            alignItems: "center",
-            paddingLeft: 8,
-          }}
-        >
-          <span style={{ color: "#71717a", fontSize: 11 }}>{totalDur}</span>
-        </div>
-      </div>
 
-      {/* event rows */}
-      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: "0 12px", rowGap: 3 }}>
-        {events.map((ev) => {
-          const evTime = new Date(ev.created_at).getTime();
-          const leftPct = ((evTime - runStart) / totalSpan) * 100;
+        {/* event rows */}
+        <div className="grid grid-cols-[160px_minmax(0,1fr)] gap-x-3 gap-y-[3px]">
+          {events.map((ev) => {
+            const evTime = new Date(ev.created_at).getTime();
+            const leftPct = ((evTime - runStart) / totalSpan) * 100;
 
-          const nextIdx = events.findIndex((e) => e.sequence_number > ev.sequence_number);
-          const nextTime =
-            nextIdx >= 0 ? new Date(events[nextIdx].created_at).getTime() : lastTime + Math.max(totalSpan * 0.12, 500);
-          const widthPct = Math.max(8, ((nextTime - evTime) / totalSpan) * 100);
-          const style = eventStyle(ev.event_type);
-          const dur = fmtDuration(nextTime - evTime);
+            const nextIdx = events.findIndex((e) => e.sequence_number > ev.sequence_number);
+            const nextTime =
+              nextIdx >= 0
+                ? new Date(events[nextIdx].created_at).getTime()
+                : lastTime + Math.max(totalSpan * 0.12, 500);
+            const widthPct = Math.max(8, ((nextTime - evTime) / totalSpan) * 100);
+            const style = eventStyle(ev.event_type);
+            const dur = fmtDuration(nextTime - evTime);
 
-          return (
-            <React.Fragment key={ev.event_id}>
-              <div
-                style={{
-                  color: style.text,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  paddingTop: 2,
-                  paddingLeft: 12,
-                }}
-              >
-                {ev.step_name || ev.event_type}
-              </div>
-              <div style={{ position: "relative", height: 24 }}>
-                <Tooltip
-                  title={
-                    <div style={{ fontFamily: "monospace", fontSize: 11, lineHeight: 1.6 }}>
-                      <div>
-                        <span style={{ color: "#a1a1aa" }}>type: </span>
-                        <span style={{ color: style.text }}>{ev.event_type}</span>
-                      </div>
-                      <div>
-                        <span style={{ color: "#a1a1aa" }}>step: </span>
-                        {ev.step_name}
-                      </div>
-                      <div>
-                        <span style={{ color: "#a1a1aa" }}>seq: </span>
-                        {ev.sequence_number}
-                      </div>
-                      <div>
-                        <span style={{ color: "#a1a1aa" }}>time: </span>
-                        {timeAgo(ev.created_at)}
-                      </div>
-                      {ev.data && Object.keys(ev.data).length > 0 && (
+            return (
+              <React.Fragment key={ev.event_id}>
+                <div className={cn("truncate pt-0.5 pl-3", style.text)}>{ev.step_name || ev.event_type}</div>
+                <div className="relative h-6">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <div
+                          className={cn(
+                            "absolute h-full cursor-default gap-1.5 overflow-hidden rounded border pl-2",
+                            "flex items-center",
+                            style.bar,
+                          )}
+                          style={{
+                            left: `${Math.min(leftPct, 92)}%`,
+                            width: `${Math.min(widthPct, 100 - Math.min(leftPct, 92))}%`,
+                          }}
+                        />
+                      }
+                    >
+                      <span className={cn("whitespace-nowrap text-[11px]", style.text)}>{ev.event_type}</span>
+                      {dur && <span className="whitespace-nowrap text-[11px] text-muted-foreground">{dur}</span>}
+                    </TooltipTrigger>
+                    <TooltipContent className="font-mono text-[11px] leading-relaxed">
+                      <div className="flex flex-col">
                         <div>
-                          <span style={{ color: "#a1a1aa" }}>data: </span>
-                          {JSON.stringify(ev.data)}
+                          <span className="opacity-70">type: </span>
+                          <span>{ev.event_type}</span>
                         </div>
-                      )}
-                    </div>
-                  }
-                >
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: `${Math.min(leftPct, 92)}%`,
-                      width: `${Math.min(widthPct, 100 - Math.min(leftPct, 92))}%`,
-                      height: "100%",
-                      background: style.bar,
-                      border: `1px solid ${style.border}`,
-                      borderRadius: 4,
-                      display: "flex",
-                      alignItems: "center",
-                      paddingLeft: 8,
-                      cursor: "default",
-                      overflow: "hidden",
-                      gap: 6,
-                    }}
-                  >
-                    <span style={{ color: style.text, whiteSpace: "nowrap", fontSize: 11 }}>{ev.event_type}</span>
-                    {dur && <span style={{ color: "#a1a1aa", whiteSpace: "nowrap", fontSize: 11 }}>{dur}</span>}
-                  </div>
-                </Tooltip>
-              </div>
-            </React.Fragment>
-          );
-        })}
+                        <div>
+                          <span className="opacity-70">step: </span>
+                          {ev.step_name}
+                        </div>
+                        <div>
+                          <span className="opacity-70">seq: </span>
+                          {ev.sequence_number}
+                        </div>
+                        <div>
+                          <span className="opacity-70">time: </span>
+                          {timeAgo(ev.created_at)}
+                        </div>
+                        {ev.data && Object.keys(ev.data).length > 0 && (
+                          <div>
+                            <span className="opacity-70">data: </span>
+                            {JSON.stringify(ev.data)}
+                          </div>
+                        )}
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </React.Fragment>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 };
 
 // ── message row ───────────────────────────────────────────────────────────────
 
-const MessageRow: React.FC<{ msg: WorkflowRunMessage }> = ({ msg }) => {
-  const roleColor: Record<string, string> = {
-    user: "#2563eb",
-    assistant: "#16a34a",
-    system: "#7c3aed",
-    tool_result: "#d97706",
-  };
-  const color = roleColor[msg.role] ?? "#52525b";
-
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "80px 1fr",
-        gap: "0 16px",
-        padding: "10px 0",
-        borderBottom: "1px solid #f4f4f5",
-        fontFamily: "monospace",
-        fontSize: 12,
-        alignItems: "start",
-      }}
-    >
-      <span style={{ color, paddingTop: 1 }}>[{msg.role}]</span>
-      <div>
-        <span
-          style={{
-            color: "#27272a",
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            display: "block",
-          }}
-        >
-          {msg.content}
-        </span>
-        <span style={{ color: "#a1a1aa", fontSize: 11, marginTop: 2, display: "block" }}>
-          {timeAgo(msg.created_at)}
-        </span>
-      </div>
-    </div>
-  );
+const ROLE_COLOR: Record<string, string> = {
+  user: "text-blue-600",
+  assistant: "text-green-600",
+  system: "text-violet-600",
+  tool_result: "text-amber-600",
 };
+
+const MessageRow: React.FC<{ msg: WorkflowRunMessage }> = ({ msg }) => (
+  <div className="grid grid-cols-[80px_minmax(0,1fr)] items-start gap-x-4 border-b py-2.5 font-mono text-xs">
+    <span className={cn("pt-px", ROLE_COLOR[msg.role] ?? "text-muted-foreground")}>[{msg.role}]</span>
+    <div>
+      <span className="block whitespace-pre-wrap break-words leading-relaxed text-foreground">{msg.content}</span>
+      <span className="mt-0.5 block text-[11px] text-muted-foreground">{timeAgo(msg.created_at)}</span>
+    </div>
+  </div>
+);
+
+// ── collapsible section ───────────────────────────────────────────────────────
+
+const DetailSection: React.FC<{
+  title: string;
+  meta: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}> = ({ title, meta, defaultOpen = false, children }) => (
+  <Collapsible defaultOpen={defaultOpen}>
+    <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-medium text-foreground hover:bg-muted/50">
+      <ChevronDown className="size-3.5 -rotate-90 text-muted-foreground transition-transform group-data-[panel-open]:rotate-0" />
+      <span>
+        {title}
+        <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{meta}</span>
+      </span>
+    </CollapsibleTrigger>
+    <CollapsibleContent className="px-4 pb-3">{children}</CollapsibleContent>
+  </Collapsible>
+);
 
 // ── main component ────────────────────────────────────────────────────────────
 
@@ -572,11 +460,11 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         cell: ({ row }) => {
           const run = row.original;
           return (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <StatusDot status={run.status} size={7} />
+            <div className="flex items-center gap-2">
+              <StatusDot status={run.status} className="size-[7px]" />
               <div>
-                <div style={{ fontSize: 13, color: "#18181b", fontWeight: 500, lineHeight: 1.4 }}>{runTitle(run)}</div>
-                <div style={{ fontFamily: "monospace", fontSize: 11, color: "#a1a1aa" }}>{shortId(run.run_id)}</div>
+                <div className="text-[13px] font-medium leading-snug text-foreground">{runTitle(run)}</div>
+                <div className="font-mono text-[11px] text-muted-foreground">{shortId(run.run_id)}</div>
               </div>
             </div>
           );
@@ -588,7 +476,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         meta: { title: "Type" },
         filterFn: "includesString",
         cell: ({ row }) => (
-          <span style={{ fontFamily: "monospace", fontSize: 12, color: "#71717a" }}>{row.original.workflow_type}</span>
+          <span className="font-mono text-xs text-muted-foreground">{row.original.workflow_type}</span>
         ),
       },
       {
@@ -600,11 +488,9 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         cell: ({ row }) => {
           const run = row.original;
           return (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <StatusDot status={run.status} size={7} />
-              <span style={{ fontSize: 12, color: "#52525b", textTransform: "capitalize" }}>
-                {run.metadata?.state ?? run.status}
-              </span>
+            <div className="flex items-center gap-1.5">
+              <StatusDot status={run.status} className="size-[7px]" />
+              <span className="text-xs capitalize text-muted-foreground">{run.metadata?.state ?? run.status}</span>
             </div>
           );
         },
@@ -613,26 +499,18 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         accessorKey: "created_at",
         header: "Created",
         meta: { title: "Created" },
-        cell: ({ row }) => <span style={{ fontSize: 12, color: "#a1a1aa" }}>{timeAgo(row.original.created_at)}</span>,
+        cell: ({ row }) => <span className="text-xs text-muted-foreground">{timeAgo(row.original.created_at)}</span>,
       },
     ],
     [],
   );
 
   return (
-    <div
-      style={{
-        width: "100%",
-        padding: "24px 32px",
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        minHeight: "calc(100vh - 64px)",
-        background: "#fff",
-      }}
-    >
+    <div className="w-full px-8 py-6">
       {/* page header */}
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, color: "#18181b" }}>Workflow Runs</div>
-        <div style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>
+      <div className="mb-5">
+        <div className="text-lg font-semibold text-foreground">Workflow Runs</div>
+        <div className="mt-0.5 text-[13px] text-muted-foreground">
           Durable state tracking for agents and automated workflows
         </div>
       </div>
@@ -643,12 +521,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         getRowId={(run) => run.run_id}
         isLoading={loadingRuns}
         loadingMessage="Loading workflow runs…"
-        noDataMessage={
-          <Empty
-            description={<span style={{ color: "#a1a1aa", fontSize: 13 }}>No workflow runs yet</span>}
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-          />
-        }
+        noDataMessage={<div className="py-6 text-center text-[13px] text-muted-foreground">No workflow runs yet</div>}
         paginationMode="client"
         pageSizeOptions={[50, 100]}
         filterMode="client"
@@ -712,115 +585,70 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       />
 
       {/* detail drawer */}
-      <Drawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={680}
-        title={null}
-        closable={false}
-        bodyStyle={{ padding: 0 }}
-        styles={{ body: { padding: 0 } }}
-      >
-        {!selectedRun ? null : loadingDetail ? (
-          <div style={{ display: "flex", justifyContent: "center", padding: 80 }}>
-            <Spin />
-          </div>
-        ) : (
-          <div
-            style={{
-              padding: "24px 28px",
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-            }}
-          >
-            {/* drawer close + refresh */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 16,
-              }}
-            >
-              <button
-                onClick={() => setDrawerOpen(false)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  padding: "4px 0",
-                  fontSize: 12,
-                  color: "#a1a1aa",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
-                }}
-              >
-                ← close
-              </button>
-              <Button
-                size="small"
-                icon={<ReloadOutlined />}
-                onClick={() => fetchRunDetail(selectedRun)}
-                loading={loadingDetail}
-                style={{ color: "#71717a", borderColor: "#e4e4e7" }}
-              >
-                Refresh
-              </Button>
+      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+        <SheetContent
+          showCloseButton={false}
+          className="overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[680px]"
+        >
+          <SheetTitle className="sr-only">Workflow run details</SheetTitle>
+          <SheetDescription className="sr-only">
+            Metadata, timeline and messages for the selected workflow run
+          </SheetDescription>
+          {!selectedRun ? null : loadingDetail ? (
+            <div className="flex justify-center py-20">
+              <UiLoadingSpinner className="size-8 text-muted-foreground" />
             </div>
+          ) : (
+            <div className="px-7 py-6">
+              {/* drawer close + refresh */}
+              <div className="mb-4 flex items-center justify-between">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="px-0 text-xs font-normal text-muted-foreground hover:bg-transparent"
+                  onClick={() => setDrawerOpen(false)}
+                >
+                  <ArrowLeft />
+                  close
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => fetchRunDetail(selectedRun)}>
+                  <RefreshCw />
+                  Refresh
+                </Button>
+              </div>
 
-            {/* metadata card — top */}
-            <MetadataCard run={selectedRun} />
+              {/* metadata card — top */}
+              <MetadataCard run={selectedRun} />
 
-            {/* collapsible sections */}
-            <Collapse
-              defaultActiveKey={["timeline"]}
-              ghost={false}
-              style={{ border: "1px solid #e4e4e7", borderRadius: 8, overflow: "hidden" }}
-              items={[
-                {
-                  key: "timeline",
-                  label: (
-                    <span style={{ fontSize: 12, fontWeight: 500, color: "#3f3f46" }}>
-                      Timeline
-                      <span style={{ marginLeft: 6, fontSize: 11, color: "#a1a1aa", fontWeight: 400 }}>
-                        {events.length} {events.length === 1 ? "event" : "events"}
-                      </span>
-                    </span>
-                  ),
-                  children: (
-                    <div style={{ padding: "4px 4px 12px" }}>
-                      <GanttTimeline run={selectedRun} events={events} />
+              {/* collapsible sections */}
+              <div className="divide-y overflow-hidden rounded-lg border">
+                <DetailSection
+                  title="Timeline"
+                  meta={
+                    <>
+                      {events.length} {events.length === 1 ? "event" : "events"}
+                    </>
+                  }
+                  defaultOpen
+                >
+                  <GanttTimeline run={selectedRun} events={events} />
+                </DetailSection>
+                <DetailSection title="Messages" meta={messages.length}>
+                  {messages.length === 0 ? (
+                    <div className="py-3 font-mono text-xs text-muted-foreground">No messages</div>
+                  ) : (
+                    <div>
+                      {messages.map((msg) => (
+                        <MessageRow key={msg.message_id} msg={msg} />
+                      ))}
                     </div>
-                  ),
-                },
-                {
-                  key: "messages",
-                  label: (
-                    <span style={{ fontSize: 12, fontWeight: 500, color: "#3f3f46" }}>
-                      Messages
-                      <span style={{ marginLeft: 6, fontSize: 11, color: "#a1a1aa", fontWeight: 400 }}>
-                        {messages.length}
-                      </span>
-                    </span>
-                  ),
-                  children:
-                    messages.length === 0 ? (
-                      <div style={{ padding: "12px 4px", color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>
-                        No messages
-                      </div>
-                    ) : (
-                      <div style={{ paddingBottom: 4 }}>
-                        {messages.map((msg) => (
-                          <MessageRow key={msg.message_id} msg={msg} />
-                        ))}
-                      </div>
-                    ),
-                },
-              ]}
-            />
-          </div>
-        )}
-      </Drawer>
+                  )}
+                </DetailSection>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 };
