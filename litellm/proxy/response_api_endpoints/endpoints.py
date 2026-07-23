@@ -24,57 +24,47 @@ router = APIRouter()
 
 _user_api_key_auth_dep = Depends(user_api_key_auth)
 
-_FLAT_CUSTOM_TOOL_KEYS = ("name", "description", "format")
-_FLAT_FUNCTION_TOOL_KEYS = ("name", "description", "parameters", "strict")
+_TOOL_PAYLOAD_KEYS = {
+    "custom": ("name", "description", "format"),
+    "function": ("name", "description", "parameters", "strict"),
+}
 
 
-def _nest_flat_chat_tool(tool: object) -> object:
+def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         convert_custom_tool_format_to_chat_shape,
-    )
-
-    if not isinstance(tool, dict):
-        return tool
-    if tool.get("type") == "custom":
-        if isinstance(tool.get("custom"), dict):
-            envelope = tool
-            payload = tool["custom"]
-        elif "name" in tool:
-            envelope = {"type": "custom"}
-            payload = {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}
-        else:
-            return tool
-        if isinstance(payload.get("format"), dict):
-            payload = {**payload, "format": convert_custom_tool_format_to_chat_shape(payload["format"])}
-        return {**envelope, "custom": payload}
-    if tool.get("type") == "function" and "function" not in tool and "name" in tool:
-        return {"type": "function", "function": {k: tool[k] for k in _FLAT_FUNCTION_TOOL_KEYS if k in tool}}
-    return tool
-
-
-def _flatten_chat_tool_for_responses(tool: object) -> object:
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
         convert_custom_tool_format_to_responses_shape,
     )
 
-    if not isinstance(tool, dict):
-        return tool
-    if tool.get("type") == "custom":
-        if isinstance(tool.get("custom"), dict):
-            payload = {k: tool["custom"][k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool["custom"]}
-        elif "name" in tool:
-            payload = {k: tool[k] for k in _FLAT_CUSTOM_TOOL_KEYS if k in tool}
-        else:
-            return tool
-        if isinstance(payload.get("format"), dict):
-            payload = {**payload, "format": convert_custom_tool_format_to_responses_shape(payload["format"])}
-        return {"type": "custom", **payload}
-    if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-        return {
-            "type": "function",
-            **{k: tool["function"][k] for k in _FLAT_FUNCTION_TOOL_KEYS if k in tool["function"]},
-        }
-    return tool
+    if not isinstance(obj, dict):
+        return obj
+    tool_type = obj.get("type")
+    payload_keys = _TOOL_PAYLOAD_KEYS.get(tool_type)
+    if payload_keys is None:
+        return obj
+    nested = obj.get(tool_type)
+    source = nested if isinstance(nested, dict) else obj
+    if source is obj and "name" not in obj:
+        return obj
+    payload = {key: source[key] for key in payload_keys if key in source}
+    if isinstance(payload.get("format"), dict):
+        convert = convert_custom_tool_format_to_chat_shape if to_chat else convert_custom_tool_format_to_responses_shape
+        payload = {**payload, "format": convert(payload["format"])}
+    return {"type": tool_type, tool_type: payload} if to_chat else {"type": tool_type, **payload}
+
+
+def _normalize_tool_dialect(data: dict, *, to_chat: bool) -> dict:
+    converted: dict = {}
+    tools = data.get("tools")
+    if isinstance(tools, list):
+        normalized_tools = [_convert_tool_envelope(tool, to_chat=to_chat) for tool in tools]
+        if normalized_tools != tools:
+            converted["tools"] = normalized_tools
+    tool_choice = data.get("tool_choice")
+    normalized_choice = _convert_tool_envelope(tool_choice, to_chat=to_chat)
+    if normalized_choice != tool_choice:
+        converted["tool_choice"] = normalized_choice
+    return {**data, **converted} if converted else data
 
 
 def _is_chat_completions_body(data: dict) -> bool:
@@ -82,18 +72,6 @@ def _is_chat_completions_body(data: dict) -> bool:
     if isinstance(messages, list) and len(messages) > 0:
         return True
     return "messages" in data and "input" not in data
-
-
-def _flatten_chat_tool_choice_for_responses(tool_choice: object) -> object:
-    if not isinstance(tool_choice, dict):
-        return tool_choice
-    choice_type = tool_choice.get("type")
-    if choice_type not in ("custom", "function"):
-        return tool_choice
-    nested = tool_choice.get(choice_type)
-    if isinstance(nested, dict) and isinstance(nested.get("name"), str):
-        return {"type": choice_type, "name": nested["name"]}
-    return tool_choice
 
 
 @router.post(
@@ -450,14 +428,9 @@ async def cursor_chat_completions(
         # already fixed); delegate so behavior matches /chat/completions exactly.
         # Keyed on messages CONTENT, not key presence: Cursor can send a null or
         # empty messages stub alongside a real agent-mode input array
-        tools = data.get("tools")
-        normalized: dict = {}
-        if isinstance(tools, list):
-            nested_tools = [_nest_flat_chat_tool(tool) for tool in tools]
-            if nested_tools != tools:
-                normalized["tools"] = nested_tools
-        if normalized:
-            _safe_set_request_parsed_body(request=request, parsed_body={**data, **normalized})
+        normalized = _normalize_tool_dialect(data, to_chat=True)
+        if normalized is not data:
+            _safe_set_request_parsed_body(request=request, parsed_body=normalized)
         return await chat_completion(
             request=request,
             fastapi_response=fastapi_response,
@@ -472,13 +445,7 @@ async def cursor_chat_completions(
     # cache's key snapshot so later readers get an empty body
     data = {key: value for key, value in data.items() if key != "stream_options"}
 
-    tools = data.get("tools")
-    if isinstance(tools, list):
-        data = {**data, "tools": [_flatten_chat_tool_for_responses(tool) for tool in tools]}
-    tool_choice = data.get("tool_choice")
-    flattened_tool_choice = _flatten_chat_tool_choice_for_responses(tool_choice)
-    if flattened_tool_choice != tool_choice:
-        data = {**data, "tool_choice": flattened_tool_choice}
+    data = _normalize_tool_dialect(data, to_chat=False)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
