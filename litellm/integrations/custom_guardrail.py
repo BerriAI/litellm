@@ -717,6 +717,13 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the guardrail should be run on the event_type
         """
+        apply_guardrail_to_model_groups: frozenset[str] = getattr(self, "apply_guardrail_to_model_groups", frozenset())
+        if apply_guardrail_to_model_groups:
+            model = str(data.get("model") or "").strip().lower()
+            model_group = str(self._resolve_metadata_model_group(data) or "").strip().lower()
+            if model not in apply_guardrail_to_model_groups and model_group not in apply_guardrail_to_model_groups:
+                return False
+
         requested_guardrails = self.get_guardrail_from_metadata(data)
         disable_global_guardrail = self.get_disable_global_guardrail(data)
         opted_out_global_guardrails = self.get_opted_out_global_guardrails_from_metadata(data)
@@ -776,6 +783,16 @@ class CustomGuardrail(CustomLogger):
             if result is not None:
                 return result
         return True
+
+    @staticmethod
+    def _resolve_metadata_model_group(data: dict[str, object]) -> str | None:
+        for dict_key in ("litellm_metadata", "metadata"):
+            container = data.get(dict_key) or {}
+            if isinstance(container, dict) and container:
+                value = container.get("model_group")
+                if value is not None:
+                    return str(value).strip()
+        return None
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """
@@ -1140,6 +1157,8 @@ class CustomGuardrail(CustomLogger):
         Update the guardrails litellm params in memory
         """
         for key, value in vars(litellm_params).items():
+            if key == "apply_guardrail_to_model_groups" and isinstance(value, list):
+                value = frozenset(str(v).strip().lower() for v in value if str(v).strip())
             setattr(self, key, value)
 
     def get_guardrails_messages_for_call_type(
