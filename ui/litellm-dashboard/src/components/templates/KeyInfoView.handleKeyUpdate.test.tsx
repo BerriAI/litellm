@@ -267,6 +267,13 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/keys/useSetKeyBlockedState", () => ({
+  useSetKeyBlockedState: vi.fn().mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 // useQueryClient also needs a provider; the delete-path invalidation is covered in key_info_view.test.tsx
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
@@ -443,6 +450,44 @@ describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
     expect(sentPayload.prompts).toEqual(["fast"]);
     expect(sentPayload.metadata?.guardrails).toEqual(["gr-1"]);
     expect(sentPayload.key).toBe("tok_123");
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate budget_duration", () => {
+  it("should send a canonical budget_duration through unchanged", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "30d",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
+  });
+
+  it("should heal a legacy word-form budget_duration to canonical", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "monthly",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
   });
 });
 

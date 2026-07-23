@@ -5,6 +5,7 @@ import click
 import yaml
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from .... import Client
 from .config import (
@@ -21,6 +22,7 @@ from .config import (
     build_generated_model_list,
     chat_models,
     embedding_models,
+    master_key_from_config,
     parse_discovered_models,
     validate_config,
 )
@@ -84,18 +86,37 @@ def _prompt_for_keyword_tier_rules() -> tuple[KeywordTierRule, ...]:
     return tuple(_rule_for(tier) for tier in TIER_NAMES)
 
 
+_RAW_CONFIG_ADAPTER = TypeAdapter(dict[str, JsonValue])
+
+
+def _load_persisted_master_key(config_path: Path) -> str | None:
+    """The master key from an existing generated config, so a rewrite carries it forward.
+
+    Lenient on a missing or corrupt file: configure is the regeneration path, so it must
+    succeed from any prior state; a key that cannot be read is simply not carried and `up`
+    mints a fresh one.
+    """
+    if not config_path.exists():
+        return None
+    try:
+        raw = _RAW_CONFIG_ADAPTER.validate_python(yaml.safe_load(config_path.read_text()))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValidationError):
+        return None
+    return master_key_from_config(raw)
+
+
 def run_configure_wizard(ctx: click.Context) -> Path:
     """Discover the caller's accessible models, walk them through tier assignment, write config."""
     base_url = ctx.obj["base_url"]
     api_key = ctx.obj["api_key"]
     client = Client(base_url=base_url, api_key=api_key)
 
-    raw_groups = client.model_groups.info()
-    if not isinstance(raw_groups, list):
+    raw_models = client.models.list()
+    if not isinstance(raw_models, list):
         raise click.ClickException(
-            f"Unexpected response from /model_group/info: expected a list, got {type(raw_groups).__name__}"
+            f"Unexpected response from /v1/models: expected a list, got {type(raw_models).__name__}"
         )
-    discovered = parse_discovered_models(raw_groups)
+    discovered = parse_discovered_models(raw_models)
     chat_pool = chat_models(discovered)
     embedding_pool = embedding_models(discovered)
 
@@ -137,9 +158,15 @@ def run_configure_wizard(ctx: click.Context) -> Path:
         raise click.ClickException(str(e))
 
     model_list = build_generated_model_list(config)
+    persisted_master_key = _load_persisted_master_key(CONFIG_PATH)
+    generated: dict[str, JsonValue] = (
+        {"model_list": model_list, "general_settings": {"master_key": persisted_master_key}}
+        if persisted_master_key is not None
+        else {"model_list": model_list}
+    )
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with secure_create(CONFIG_PATH) as f:
-        yaml.safe_dump({"model_list": model_list}, f, sort_keys=False)
+        yaml.safe_dump(generated, f, sort_keys=False)
 
     click.echo(f"\nWrote {CONFIG_PATH}")
     for tier, models in tiers.items():

@@ -1,5 +1,6 @@
 import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ToolSpendResponse } from "@/components/networking";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
@@ -11,14 +12,12 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: (args: unknown) => mockUseQuery(args),
 }));
 
-vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", () => ({
-  usePaginatedDailyActivity: (args: unknown) => mockUsePaginatedDailyActivity(args),
-}));
+const mockGetToolSpend = vi.fn();
 
 vi.mock("@/components/networking", () => ({
-  userDailyActivityCall: vi.fn(),
   getCostOptimizationUsageLogs: vi.fn(),
   uiSpendLogsCall: (args: unknown) => mockUiSpendLogsCall(args),
+  getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
 }));
 
 vi.mock("@/components/view_logs/LogDetailsDrawer", () => ({
@@ -38,9 +37,15 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: ({ data, label }: { data: unknown; label: string }) => (
     <div data-testid="donut-chart" data-label={label} data-slices={JSON.stringify(data)} />
   ),
+  BarChart: ({ data, categories }: { data: unknown; categories: string[] }) => (
+    <div data-testid="bar-chart" data-categories={categories.join(",")} data-series={JSON.stringify(data)} />
+  ),
+  DEFAULT_COLOR_CYCLE: ["emerald", "blue", "violet", "amber"],
 }));
 
 import UsageTab from "./UsageTab";
+
+const emptyToolSpend: ToolSpendResponse = { by_tool: [], daily: [], total_spend: 0, start_date: null, end_date: null };
 
 const baseMetrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
   spend: 0,
@@ -88,7 +93,7 @@ const detailLog = {
 };
 
 const renderWith = (results: DailyData[]) => {
-  mockUsePaginatedDailyActivity.mockReturnValue({ data: { results }, loading: false, isFetchingMore: false });
+  mockGetToolSpend.mockResolvedValue(emptyToolSpend);
   mockUseQuery.mockImplementation((args: { queryKey: string[] }) =>
     args.queryKey[0] === "cost-optimization-usage-logs"
       ? {
@@ -125,7 +130,34 @@ const renderWith = (results: DailyData[]) => {
           error: null,
         },
   );
-  return render(<UsageTab accessToken="test-token" userId="u1" userRole="proxy_admin" />);
+  return render(
+    <UsageTab
+      accessToken="test-token"
+      activity={{
+        dateValue: { from: new Date("2026-07-01"), to: new Date("2026-07-14") },
+        onDateChange: vi.fn(),
+        results,
+        loading: false,
+        isFetchingMore: false,
+      }}
+    />,
+  );
+};
+
+const renderWithToolSpend = (results: DailyData[], toolSpend: ToolSpendResponse) => {
+  mockGetToolSpend.mockResolvedValue(toolSpend);
+  return render(
+    <UsageTab
+      accessToken="test-token"
+      activity={{
+        dateValue: { from: new Date("2026-07-01"), to: new Date("2026-07-14") },
+        onDateChange: vi.fn(),
+        results,
+        loading: false,
+        isFetchingMore: false,
+      }}
+    />,
+  );
 };
 
 describe("UsageTab", () => {
@@ -173,7 +205,6 @@ describe("UsageTab", () => {
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
   });
-
   it("renders recent optimized requests with savings and optimization type", () => {
     const { getByText } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
 
@@ -202,5 +233,22 @@ describe("UsageTab", () => {
       }),
     );
     expect(getByTestId("log-details-drawer")).toHaveTextContent("req-123456789");
+  });
+  it("renders spend-by-tool bars from the tool spend endpoint", async () => {
+    const toolSpend = {
+      by_tool: [
+        { tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 },
+        { tool_name: "read_file", spend: 1.0, call_count: 2, total_tokens: 50 },
+      ],
+      daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
+      total_spend: 5.0,
+      start_date: "2026-07-12",
+      end_date: "2026-07-12",
+    };
+    const { findAllByTestId } = renderWithToolSpend([day("2026-07-12", {})], toolSpend);
+
+    const bars = await findAllByTestId("bar-chart");
+    const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
+    expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
   });
 });

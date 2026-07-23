@@ -49,9 +49,7 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
         }
 
     monkeypatch.setattr("litellm.proxy.auth.login_utils.authenticate_user", _fake_auth)
-    monkeypatch.setattr(
-        "litellm.proxy.auth.login_utils.create_ui_token_object", _fake_token_object
-    )
+    monkeypatch.setattr("litellm.proxy.auth.login_utils.create_ui_token_object", _fake_token_object)
     monkeypatch.setattr(ps, "master_key", "sk-test-master")
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "premium_user", False)
@@ -69,9 +67,7 @@ def test_fallback_login_returns_html_form(client, monkeypatch):
     body_lower = response.text.lower()
     shape = {
         "status": response.status_code,
-        "content_type_html": response.headers.get("content-type", "").startswith(
-            "text/html"
-        ),
+        "content_type_html": response.headers.get("content-type", "").startswith("text/html"),
         "has_form": "<form" in body_lower or "username" in body_lower,
     }
     assert shape == {
@@ -88,9 +84,7 @@ def test_fallback_login_returns_html_form_with_ui_username_set(client, monkeypat
     body_lower = response.text.lower()
     shape = {
         "status": response.status_code,
-        "content_type_html": response.headers.get("content-type", "").startswith(
-            "text/html"
-        ),
+        "content_type_html": response.headers.get("content-type", "").startswith("text/html"),
         "has_form_or_username": "<form" in body_lower or "username" in body_lower,
     }
     assert shape == {
@@ -126,11 +120,7 @@ def test_fallback_login_invalid_method_405(client):
     """POST against the GET-only /fallback/login is rejected (error path)."""
     response = client.post("/fallback/login")
     assert response.status_code == 405
-    body = (
-        response.json()
-        if response.headers.get("content-type", "").startswith("application/json")
-        else {}
-    )
+    body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
     assert isinstance(body, dict)
 
 
@@ -193,15 +183,15 @@ def test_v2_login_success_returns_token_and_redirect(client, monkeypatch):
         json={"username": "admin", "password": "password"},
     )
     assert response.status_code == 200
-    assert normalize(
-        response.json(), volatile=frozenset({"token", "redirect_url"})
-    ) == {"redirect_url": "<VOLATILE>", "token": "<VOLATILE>"}
+    assert normalize(response.json(), volatile=frozenset({"token", "redirect_url"})) == {
+        "redirect_url": "<VOLATILE>",
+        "token": "<VOLATILE>",
+    }
     body = response.json()
     set_cookie = response.headers.get("set-cookie", "")
     shape = {
         "redirect_url_has_ui": "/ui/" in body.get("redirect_url", ""),
-        "redirect_url_has_login_success": "login=success"
-        in body.get("redirect_url", ""),
+        "redirect_url_has_login_success": "login=success" in body.get("redirect_url", ""),
         "token_in_body": bool(body.get("token")),
         "token_cookie_set": "token=" in set_cookie,
     }
@@ -264,9 +254,7 @@ def test_v3_login_success_returns_code(client, monkeypatch):
     from litellm.proxy import proxy_server as ps
 
     _install_login_mocks(monkeypatch)
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
     # Force the local (non-redis) cache path
     monkeypatch.setattr(ps, "redis_usage_cache", None)
     fake_cache = MagicMock()
@@ -301,9 +289,7 @@ def test_v3_login_authenticate_failure_500(client, monkeypatch):
     from litellm.proxy import proxy_server as ps
 
     _install_login_mocks(monkeypatch, raise_on_auth=True)
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
 
     response = client.post(
         "/v3/login",
@@ -337,9 +323,7 @@ def test_v3_login_exchange_missing_code_400(client, monkeypatch):
     """Error path: missing 'code' in body -> 400 with 'Missing' message."""
     from litellm.proxy import proxy_server as ps
 
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
 
     response = client.post("/v3/login/exchange", json={})
     assert response.status_code == 400
@@ -352,9 +336,7 @@ def test_v3_login_exchange_invalid_code_401(client, monkeypatch):
     """Error path: code that isn't in cache -> 401 'Invalid or expired'."""
     from litellm.proxy import proxy_server as ps
 
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
     monkeypatch.setattr(ps, "redis_usage_cache", None)
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=None)
@@ -372,9 +354,7 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
     """Pin: valid code -> JSON {token, redirect_url} + token cookie + cache deleted (single-use)."""
     from litellm.proxy import proxy_server as ps
 
-    monkeypatch.setattr(
-        ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"}
-    )
+    monkeypatch.setattr(ps, "general_settings", {"control_plane_url": "https://cp.example.invalid"})
     monkeypatch.setattr(ps, "redis_usage_cache", None)
 
     cached_payload = {
@@ -388,9 +368,10 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
 
     response = client.post("/v3/login/exchange", json={"code": "valid-code"})
     assert response.status_code == 200
-    assert normalize(
-        response.json(), volatile=frozenset({"token", "redirect_url"})
-    ) == {"token": "<VOLATILE>", "redirect_url": "<VOLATILE>"}
+    assert normalize(response.json(), volatile=frozenset({"token", "redirect_url"})) == {
+        "token": "<VOLATILE>",
+        "redirect_url": "<VOLATILE>",
+    }
     body = response.json()
     set_cookie = response.headers.get("set-cookie", "")
     shape = {
@@ -405,3 +386,77 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
         "token_cookie_set": True,
         "cache_deleted_once": True,
     }
+
+
+def test_login_form_honors_same_origin_return_to_cookie(client, monkeypatch):
+    """The aggregate DCR connect flow preserves a same-origin return_to in the litellm_cp_return_to
+    cookie; /login must RESUME there after password sign-in instead of dead-ending at the dashboard."""
+    _install_login_mocks(monkeypatch)
+    return_to = "/mcp/authorize?client_id=llm_dcrc_abc&response_type=code"
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": return_to},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers.get("location", "") == return_to  # resumed the connect flow, not the dashboard
+    assert "token=" in response.headers.get("set-cookie", "")
+
+
+def test_login_form_honors_control_plane_return_to_cookie(client, monkeypatch):
+    """/login resumes through the SAME resumer the SSO callback uses, so it honors BOTH shapes
+    _persist_return_to_cookie is willing to store. Honoring only the relative one silently dropped
+    a control-plane return_to and landed the user on the dashboard."""
+    import litellm.proxy.proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "control_plane_url", "https://cp.example.com")
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": "https://cp.example.com/console"},
+        follow_redirects=False,
+    )
+    location = response.headers.get("location", "")
+    assert response.status_code == 303
+    assert location.startswith("https://cp.example.com/console")
+    # Cross-origin arm hands the JWT off via a one-time code rather than a cookie.
+    assert "code=" in location and "login=success" in location
+    assert "token=" not in response.headers.get("set-cookie", "")
+
+
+def test_login_form_survives_stale_control_plane_return_to(client, monkeypatch):
+    """A stale one-shot cookie must NEVER fail a completed sign-in. The resumer rejects a return_to
+    that no longer matches control_plane_url (a config change between the cookie's write and this
+    read); the user has already authenticated, so land on the dashboard instead of erroring."""
+    import litellm.proxy.proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "control_plane_url", "https://new-cp.example.com")
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": "https://old-cp.example.com/console"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, "login must not break on a stale return_to cookie"
+    location = response.headers.get("location", "")
+    assert "old-cp.example.com" not in location
+    assert "/ui/" in location
+
+
+def test_login_form_ignores_open_redirect_return_to(client, monkeypatch):
+    """A non-same-origin return_to (open-redirect attempt) is rejected — /login falls back to the
+    dashboard rather than honoring an absolute/foreign URL."""
+    _install_login_mocks(monkeypatch)
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "password"},
+        cookies={"litellm_cp_return_to": "https://evil.example.com/steal"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    location = response.headers.get("location", "")
+    assert "evil.example.com" not in location
+    assert "/ui/" in location  # dashboard fallback

@@ -111,6 +111,36 @@ describe("LoggingSettings", () => {
     expect(updatedConfig[0].callback_vars.langsmith_sampling_rate).toBe("0.3"); // Preserves initial value
   });
 
+  it("shows the bundled logo in the integration card header", () => {
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    expect(screen.getByAltText("LangSmith logo")).toHaveAttribute("src", "/_next/static/media/langsmith.png");
+  });
+
+  it("shows a letter avatar in the card header for a callback without a bundled logo", () => {
+    const initialValue = [
+      {
+        callback_name: "custom_callback_api",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    expect(screen.getByText("Custom Callback API Configuration")).toBeInTheDocument();
+    expect(screen.queryByAltText("Custom Callback API logo")).toBeNull();
+    expect(screen.getByText("C")).toBeInTheDocument();
+  });
+
   it("correctly handles numerical input with decimal values", () => {
     const mockOnChange = vi.fn();
 

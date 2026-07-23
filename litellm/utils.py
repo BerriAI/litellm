@@ -1864,7 +1864,9 @@ def client(original_function):
                     except Exception:
                         pass
 
-            setattr(e, "num_retries", num_retries)  ## IMPORTANT: returns the deployment's num_retries to the router
+            deployment_num_retries = kwargs.get("num_retries")
+            if deployment_num_retries is not None:
+                setattr(e, "num_retries", deployment_num_retries)
 
             timeout = _get_wrapper_timeout(kwargs=kwargs, exception=e)
             setattr(e, "timeout", timeout)

@@ -1,9 +1,10 @@
 """Tests for the resolver dispatch: live arms produce auth, stubbed arms fail closed.
 
-`none`, `api_key` (shared-key source), `passthrough`, `authorization_code`, and `token_exchange` are
-implemented; every other arm, plus the `api_key` BYOK source, returns a typed `not_implemented` error
-until its mode lands. Parametrizing the stubs over one config each also guards reachability: a dropped
-`case` would hit `assert_never` and raise instead of returning the stub.
+`none`, `api_key` (shared-key source), `passthrough`, `authorization_code`, `token_exchange`, and
+`client_credentials` are implemented; every other arm, plus the `api_key` BYOK source, returns a
+typed `not_implemented` error until its mode lands. Parametrizing the stubs over one config each
+also guards reachability: a dropped `case` would hit `assert_never` and raise instead of
+returning the stub.
 """
 
 import httpx
@@ -324,9 +325,106 @@ async def test_passthrough_without_inbound_token_is_a_no_op():
     assert isinstance(result.ok, NoOpAuth)
 
 
+class _FakeM2MSource:
+    """A ClientCredentialsTokenSource returning a canned result and recording refetches."""
+
+    def __init__(self, result) -> None:
+        self._result = result
+        self.gets: list[str] = []
+        self.refetches: list[tuple[str, str]] = []
+
+    async def get(self, server_id: str, config):
+        self.gets.append(server_id)
+        return self._result
+
+    async def refetch(self, server_id: str, config, failed_access_token: str):
+        self.refetches.append((server_id, failed_access_token))
+        return "fresh-m2m"
+
+
+_M2M = ClientCredentialsConfig(
+    client_id="cid",
+    client_secret=SecretStr("csec"),
+    token_url="https://idp.example.com/token",
+)
+
+
+async def _emitted_async(auth: httpx.Auth, respond=None) -> tuple[httpx.Headers, list[httpx.Request]]:
+    """Drive the async auth flow one request at a time, replying via ``respond`` when given."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return respond(request) if respond else httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
+        await client.get("https://upstream.example.com/mcp")
+    return seen[-1].headers, seen
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_emits_the_minted_bearer():
+    source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
+    result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(
+        _SUBJECT, _spec(_M2M)
+    )
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["Authorization"] == "Bearer m2m-at"
+    assert source.gets == ["s"]
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_ignores_the_subject():
+    # The contract's no-user-context clause: every caller shares the one client identity.
+    source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
+    provider = UpstreamCredentialProvider(client_credentials_source=source)
+    alice = await provider.resolve_credentials(Subject(tenant_id="t1", subject_id="alice"), _spec(_M2M))
+    bob = await provider.resolve_credentials(Subject(tenant_id="t2", subject_id="bob"), _spec(_M2M))
+    assert isinstance(alice, Ok) and isinstance(bob, Ok)
+    alice_headers, _ = await _emitted_async(alice.ok)
+    bob_headers, _ = await _emitted_async(bob.ok)
+    assert alice_headers["Authorization"] == bob_headers["Authorization"] == "Bearer m2m-at"
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_auth_retries_a_401_through_the_source():
+    source = _FakeM2MSource(Ok(OAuthToken(access_token="stale-at")))
+    result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(
+        _SUBJECT, _spec(_M2M)
+    )
+    assert isinstance(result, Ok)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        is_stale = request.headers["Authorization"] == "Bearer stale-at"
+        return httpx.Response(401) if is_stale else httpx.Response(200)
+
+    headers, seen = await _emitted_async(result.ok, respond)
+    assert headers["Authorization"] == "Bearer fresh-m2m"
+    assert len(seen) == 2
+    assert source.refetches == [("s", "stale-at")]
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_propagates_the_source_error():
+    source = _FakeM2MSource(Error(CredError.of_upstream_unavailable("idp down")))
+    result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(
+        _SUBJECT, _spec(_M2M)
+    )
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_with_no_source_wired_fails_closed_on_missing_config():
+    # The default source validates the grant fields before any network is touched.
+    result = await UpstreamCredentialProvider().resolve_credentials(_SUBJECT, _spec(ClientCredentialsConfig()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
 _STUBBED = [
     ("api_key_byok", ApiKeyConfig(key_source=Byok())),
-    ("client_credentials", ClientCredentialsConfig()),
     ("aws_sigv4", AwsSigV4Config(region="us-east-1")),
 ]
 

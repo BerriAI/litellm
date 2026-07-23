@@ -5,10 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::caching::in_memory_cache::InMemoryCache;
 use crate::error::{CoreError, CoreResult};
-use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::ProvideCredentials;
 use aws_sigv4::http_request::{
-    sign, SignableBody, SignableRequest, SigningParams, SigningSettings,
+    SignableBody, SignableRequest, SigningParams, SigningSettings, sign,
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
@@ -52,7 +52,7 @@ pub struct AwsAuthConfig {
 }
 
 impl AwsAuthConfig {
-    fn with_environment(self, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
+    fn with_environment(self, env_lookup: &(dyn Fn(&str) -> Option<String> + Sync)) -> Self {
         Self {
             access_key_id: self.access_key_id.or_else(|| env_lookup(AWS_ACCESS_KEY_ID)),
             secret_access_key: self
@@ -144,7 +144,7 @@ fn same_role_arns(target: &str, caller: &str) -> bool {
 
 pub fn classify_auth(
     config: AwsAuthConfig,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> AwsAuthFlow {
     let config = config.with_environment(env_lookup);
     if let (Some(token), Some(role), Some(session_name)) = (
@@ -194,7 +194,7 @@ pub fn classify_auth(
 
 pub async fn resolve_credentials(
     config: AwsAuthConfig,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> CoreResult<Credentials> {
     let resolved = config.clone().with_environment(env_lookup);
     let flow = classify_auth(config, env_lookup);
@@ -368,11 +368,11 @@ async fn is_already_running_as_role(role: &str, config: &AwsAuthConfig) -> CoreR
     if let (Ok(current_role), Ok(token_file)) = (
         std::env::var(AWS_ROLE_ARN),
         std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE),
-    ) {
-        if !token_file.is_empty() {
-            return Ok(same_role_arns(role, &current_role));
-        }
+    ) && !token_file.is_empty()
+    {
+        return Ok(same_role_arns(role, &current_role));
     }
+
     let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
     if let Some(region) = config.region_name.clone() {
         loader = loader.region(aws_types::region::Region::new(region));
@@ -639,7 +639,9 @@ mod tests {
         );
         assert_eq!(
             signed.get("Authorization").map(String::as_str),
-            Some("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464")
+            Some(
+                "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
+            )
         );
     }
 

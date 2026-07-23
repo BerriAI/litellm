@@ -11,14 +11,16 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from ..up import CLAUDE_SETTINGS_PATH, UpError, load_json_or_empty, restore_claude_settings, write_backup
 from ..up import BackupRecord as ClaudeBackupRecord
+from .config import master_key_from_config
 from .process import (
     AUTOROUTE_DIR,
     CONFIG_PATH,
+    DEFAULT_AUTOROUTE_PORT,
     LOG_PATH,
     PidRecord,
     ProcessLaunchError,
-    allocate_free_port,
     clear_pid_record,
+    is_port_available,
     is_running,
     launch_proxy,
     missing_proxy_runtime_modules,
@@ -37,15 +39,15 @@ AUTOROUTE_BACKUP_PATH = AUTOROUTE_DIR / "claude_settings_backup.json"
 _GENERATED_CONFIG_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
-def _mint_and_embed_master_key() -> str:
-    """Generate a fresh key for this session and write it into the generated config.yaml.
+def _ensure_master_key() -> str:
+    """Reuse the master key already persisted in the generated config.yaml, minting one only when absent.
 
-    Must go under general_settings, not litellm_settings -- the proxy server only ever
-    reads general_settings.master_key (proxy_server.py:4530) to authenticate requests. A
-    key placed under litellm_settings is silently ignored, leaving the ephemeral proxy with
-    no real auth: any request reaches it regardless of the token Claude Code sends.
+    The generated config is the single home of the key: the proxy server authenticates against
+    general_settings.master_key only (a key under litellm_settings is silently ignored, which
+    would leave the ephemeral proxy with no real auth), and the file is written 0600 via
+    secure_create. Reusing that persisted value keeps the key stable across `up` runs, so a
+    client configured against one session keeps working in the next.
     """
-    master_key = secrets.token_urlsafe(32)
     with open(CONFIG_PATH, "r") as f:
         try:
             generated = _GENERATED_CONFIG_ADAPTER.validate_python(yaml.safe_load(f))
@@ -53,6 +55,10 @@ def _mint_and_embed_master_key() -> str:
             raise click.ClickException(
                 f"{CONFIG_PATH} is empty or corrupt. Run `lite autoroute configure` again to regenerate it."
             )
+    persisted = master_key_from_config(generated)
+    if persisted is not None:
+        return persisted
+    master_key = secrets.token_urlsafe(32)
     general_settings = generated.get("general_settings")
     updated_settings: dict[str, JsonValue] = {
         **(general_settings if isinstance(general_settings, dict) else {}),
@@ -77,7 +83,14 @@ def configure(ctx: click.Context) -> None:
 
 
 @autoroute_group.command("up")
-def up() -> None:
+@click.option(
+    "--port",
+    type=click.IntRange(1, 65535),
+    default=DEFAULT_AUTOROUTE_PORT,
+    show_default=True,
+    help="Loopback port for the ephemeral proxy; stable across runs so configured clients keep working.",
+)
+def up(port: int) -> None:
     """Launch the ephemeral auto-router proxy and route Claude Code through it"""
     if not CONFIG_PATH.exists():
         raise click.ClickException("No config found. Run `lite autoroute configure` first.")
@@ -108,8 +121,19 @@ def up() -> None:
             "running (or crashed without cleanup). Run `lite autoroute down` first."
         )
 
-    master_key = _mint_and_embed_master_key()
-    port = allocate_free_port()
+    if port == 4000:
+        raise click.ClickException(
+            "Port 4000 is the litellm proxy's own default and its launcher silently rebinds it to a random "
+            "port when busy; pick a different --port."
+        )
+
+    if not is_port_available(port):
+        raise click.ClickException(
+            f"Port {port} on 127.0.0.1 is already in use. If a previous `lite autoroute up` is still "
+            "running or crashed, run `lite autoroute down`; otherwise pick a different port with --port."
+        )
+
+    master_key = _ensure_master_key()
     base_url = f"http://127.0.0.1:{port}"
     process = launch_proxy(CONFIG_PATH, port, LOG_PATH)
     write_pid_record(PidRecord(pid=process.pid, port=port, config_path=str(CONFIG_PATH), log_path=str(LOG_PATH)))

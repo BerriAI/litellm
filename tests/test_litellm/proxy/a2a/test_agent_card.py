@@ -1,10 +1,14 @@
 """Unit tests for the pure merge logic in litellm/proxy/a2a/agent_card.py."""
 
+import pytest
+
 from litellm.proxy.a2a.agent_card import (
     LITELLM_A2A_PROTOCOL_VERSION,
     LITELLM_SECURITY_REQUIREMENTS,
     LITELLM_SECURITY_SCHEMES,
     merge_agent_card,
+    normalize_protocol_version,
+    resolve_served_protocol_version,
 )
 
 PROXY_URL = "https://proxy.example/a2a/agent-xyz"
@@ -205,3 +209,54 @@ def test_strips_additional_interfaces_to_prevent_backend_url_leak():
     ]
     merged = merge_agent_card(upstream, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
     assert "additionalInterfaces" not in merged
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("0.3", "0.3"),
+        ("0.3.0", "0.3"),
+        ("1.0", "1.0"),
+        ("1.0.0", "1.0"),
+        ("1.0.1", "1.0"),
+        ("0.3.0-rc1", "0.3"),
+        ("1.0.0-rc.1+build.5", "1.0"),
+        ("0.2.6", None),
+        ("2.0", None),
+        ("0.30", None),
+        ("0.3.garbage", None),
+        ("0.3.", None),
+        ("1.0.not-semver", None),
+        ("0.3.0.0", None),
+        ("0.3-rc1", None),
+        ("garbage", None),
+        ("", None),
+        (None, None),
+        (1.0, None),
+    ],
+)
+def test_normalize_protocol_version(raw, expected):
+    assert normalize_protocol_version(raw) == expected
+
+
+def test_resolve_served_protocol_version_canonicalizes_semver_pins():
+    assert resolve_served_protocol_version({"protocolVersion": "0.3.0"}) == "0.3"
+    assert resolve_served_protocol_version({"protocolVersion": "1.0.0"}) == "1.0"
+    assert resolve_served_protocol_version({"protocolVersion": "0.3"}) == "0.3"
+    assert resolve_served_protocol_version({"protocolVersion": "1.0"}) == "1.0"
+
+
+def test_resolve_served_protocol_version_falls_back_for_unsupported():
+    assert (
+        resolve_served_protocol_version({"protocolVersion": "0.2.6"})
+        == LITELLM_A2A_PROTOCOL_VERSION
+    )
+    assert resolve_served_protocol_version(None) == LITELLM_A2A_PROTOCOL_VERSION
+
+
+def test_serves_semver_pinned_protocol_version_as_major_minor():
+    card = _full_upstream_card()
+    card["protocolVersion"] = "0.3.0"
+    merged = merge_agent_card(card, proxy_url=PROXY_URL, proxy_base_url=PROXY_BASE)
+    assert merged["protocolVersion"] == "0.3"
+    assert merged["supportedInterfaces"][0]["protocolVersion"] == "0.3"

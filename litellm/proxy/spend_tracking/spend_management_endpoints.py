@@ -1647,7 +1647,7 @@ async def ui_view_spend_logs(
         description="Time till which to view key spend",
     ),
     page: int = fastapi.Query(default=1, description="Page number for pagination", ge=1),
-    page_size: int = fastapi.Query(default=50, description="Number of items per page", ge=1, le=100),
+    page_size: int = fastapi.Query(default=50, description="Number of items per page", ge=1, le=1000),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"

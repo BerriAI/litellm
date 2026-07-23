@@ -18,6 +18,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/team/",
     "/v2/team/",
     "/organization/",
+    "/v2/organization/",
     "/customer/",
     "/end_user/",
     "/sso/",

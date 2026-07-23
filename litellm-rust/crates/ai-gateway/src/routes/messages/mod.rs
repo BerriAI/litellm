@@ -2,13 +2,13 @@
 
 mod service;
 
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{Json, State};
-use axum::http::header::{HeaderMap, HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::StatusCode;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use axum::Router;
 use litellm_core::CoreError;
 use serde_json::{Map, Value};
 
@@ -125,9 +125,9 @@ mod tests {
     use std::sync::Arc;
 
     use axum::body::Body;
-    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
     use axum::http::Request;
     use axum::http::StatusCode;
+    use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
     use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -439,8 +439,8 @@ mod tests {
             .await
             .expect("response body reads");
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&response_body).expect("error is json")
-                ["error"]["message"],
+            serde_json::from_slice::<serde_json::Value>(&response_body).expect("error is json")["error"]
+                ["message"],
             "messages provider request failed"
         );
         server.await.expect("upstream task completes");
