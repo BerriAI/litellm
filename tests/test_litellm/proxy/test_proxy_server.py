@@ -113,6 +113,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     assert response.json() == {
         "redirect_url": "http://testserver/ui/?login=success",
         "token": "signed-token",
+        "reset_password_required": False,
     }
     assert response.cookies.get("token") == "signed-token"
 
