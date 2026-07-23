@@ -581,7 +581,8 @@ def _count_image_tokens(
     Count tokens for an image_url content block.
 
     Args:
-        image_url: The image URL data - can be a string URL or dict with 'url' and 'detail'
+        image_url: The image URL data - can be a string URL or dict with 'url' and 'detail'.
+            None is treated as an unknown image and returns the default token count.
         use_default_image_token_count: Whether to use default image token counts
 
     Returns:
@@ -590,6 +591,8 @@ def _count_image_tokens(
     Raises:
         ValueError: If image_url is invalid type or detail value is invalid
     """
+    if image_url is None:
+        return DEFAULT_IMAGE_TOKEN_COUNT
     if isinstance(image_url, dict):
         detail = image_url.get("detail", "auto")
         if detail not in ["low", "high", "auto"]:
