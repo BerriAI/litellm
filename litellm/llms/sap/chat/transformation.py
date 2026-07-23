@@ -3,17 +3,13 @@ Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orches
 """
 
 from typing import (
-    List,
-    Optional,
     Union,
-    Dict,
-    Tuple,
     Any,
     TYPE_CHECKING,
     Iterator,
     AsyncIterator,
-    FrozenSet,
 )
+import re
 from functools import cached_property
 import litellm
 import httpx
@@ -48,24 +44,41 @@ from .handler import (
     SAPStreamIterator,
 )
 
-# Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
-_SAP_MODEL_PARAMS_EXCLUDED_KEYS: FrozenSet[str] = frozenset(
+# Keys routed outside SAP orchestration `model.params`.
+# Each of these is either popped and forwarded to a sibling field on `model`,
+# placed directly in the prompt template, or handled at a higher level.
+_SAP_MODEL_PARAMS_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
         "tools",
-        "tool_choice",
         "stream_options",
         "fallback_sap_modules",
         "placeholder_values",
         "model_version",
+        "timeout",
+        "max_retries",
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# SAP capability registry
+# ---------------------------------------------------------------------------
+# Models that accept reasoning_effort / thinking parameters on SAP GenAI Hub.
+# Pattern covers: Anthropic Claude 3.7 / 4.x, OpenAI o-series and GPT-5,
+# and Cohere Command-R-series with "reasoning" in the config name.
+_REASONING_MODELS: re.Pattern[str] = re.compile(
+    r"^(?:anthropic--claude-(?:4(?:\.[5-9])?|3-7)|o\d|gpt-5(?:[.\-]|$)|cohere--\S*reasoning\S*)"
+)
+
+# Models that support Anthropic-style cache_control on message content parts.
+_CACHE_CONTROL_MODELS: re.Pattern[str] = re.compile(r"^anthropic--")
 
 
 def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
-def _messages_to_sap_template(messages: List[Dict[str, str]]) -> list:  # type: ignore[type-arg]
+def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:  # type: ignore[type-arg]
     template = []
     for message in messages:
         if message["role"] == "user":
@@ -79,7 +92,7 @@ def _messages_to_sap_template(messages: List[Dict[str, str]]) -> list:  # type: 
     return template
 
 
-def _tools_response_format_and_stream(optional_params: dict, model_params: dict) -> Tuple[dict, dict, dict]:
+def _tools_response_format_and_stream(optional_params: dict, model_params: dict) -> tuple[dict, dict, dict]:
     tools_ = optional_params.pop("tools", [])
     tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
     tools: dict = {"tools": tools_} if tools_ else {}
@@ -106,36 +119,36 @@ def _tools_response_format_and_stream(optional_params: dict, model_params: dict)
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None  #
+    frequency_penalty: int | None = None
+    function_call: Union[str, dict] | None = None
+    functions: list | None = None
+    logit_bias: dict | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: Union[str, list] | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    response_format: dict | None = None
+    tools: list | None = None
+    tool_choice: Union[str, dict] | None = None  #
     model_version: str = "latest"
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
+        frequency_penalty: int | None = None,
+        function_call: Union[str, dict] | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: Union[str, list] | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        response_format: dict | None = None,
+        tools: list | None = None,
+        tool_choice: Union[str, dict] | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -145,14 +158,14 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self._base_url = None
         self._resource_group = None
 
-    def run_env_setup(self, service_key: Optional[str] = None) -> None:
+    def run_env_setup(self, service_key: str | None = None) -> None:
         try:
             self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key)  # type: ignore
         except ValueError as err:
             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
 
     @property
-    def headers(self) -> Dict[str, str]:
+    def headers(self) -> dict[str, str]:
         if self.token_creator is None:
             self.run_env_setup()
         access_token = self.token_creator()  # pyright: ignore[reportOptionalCall]  # run_env_setup set it or raised
@@ -181,7 +194,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         client = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
         deployments = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
-        valid: List[Tuple[str, str]] = []
+        valid: list[tuple[str, str]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
                 cfg = client.get(
@@ -215,13 +228,20 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "temperature",
             "top_p",
             "tools",
-            "tool_choice",
+            # tool_choice is NOT supported by SAP orchestration v2 — the API returns
+            # 400 "Additional properties are not allowed" when it is present.
+            # Omitted here so callers receive UnsupportedParamsError immediately
+            # rather than a silent no-op.  tools still work; the model applies
+            # its own default (auto) selection.
             "function_call",
             "functions",
             "extra_headers",
             "parallel_tool_calls",
             "response_format",
             "timeout",
+            "max_retries",
+            "model_version",
+            "user",
         ]
         # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
@@ -231,19 +251,19 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             or model == "gpt-4"
         ):
             params.remove("response_format")
-        if model.startswith("gemini") or model.startswith("amazon"):
-            params.remove("tool_choice")
+        if self._sap_supports_reasoning(model):
+            params.extend(["reasoning_effort", "thinking"])
         return params
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key:
             self.run_env_setup(api_key)
@@ -251,12 +271,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ):
         api_base_ = f"{self.deployment_url}/v2/completion"
         return api_base_
@@ -264,7 +284,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def _build_prompt_module(
         self,
         model_name: str,
-        template_messages: List[Dict[str, str]],
+        template_messages: list[dict[str, str]],
         params: dict,
     ) -> dict:
         # Filter strict for GPT models only - SAP AI Core doesn't accept it as a model param
@@ -273,11 +293,24 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         if model_name.startswith("gpt") and "strict" in params:
             params.pop("strict")
 
+        # Drop reasoning params for models that don't support them; they arrive
+        # here only when passed via fallback_sap_modules or extra_params directly.
+        if not self._sap_supports_reasoning(model_name):
+            params.pop("reasoning_effort", None)
+            params.pop("thinking", None)
+
         model_version = params.pop("model_version", "latest")
+        timeout = params.pop("timeout", None)
+        max_retries = params.pop("max_retries", None)
 
         tools_ = params.pop("tools", [])
         tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
         tools = {"tools": tools_} if tools_ else {}
+
+        # SAP orchestration v2 schema does not include tool_choice in Template;
+        # the API returns 400 if it is present.  Drop it silently here so that
+        # callers who pass tool_choice alongside tools do not receive an error.
+        params.pop("tool_choice", None)
 
         response_format = params.pop("response_format", {})
         resp_type = response_format.get("type", None)
@@ -299,6 +332,16 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             if params.get(module, None) is not None:
                 optional_modules[module] = params.pop(module)
 
+        model_details: dict = {
+            "name": model_name,
+            "params": params,
+            "version": model_version,
+        }
+        if timeout is not None:
+            model_details["timeout"] = timeout
+        if max_retries is not None:
+            model_details["max_retries"] = max_retries
+
         return {
             "prompt_templating": {
                 "prompt": {
@@ -307,11 +350,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                     **tools,
                     **response_format,
                 },
-                "model": {
-                    "name": model_name,
-                    "params": params,
-                    "version": model_version,
-                },
+                "model": model_details,
             },
             **optional_modules,
         }
@@ -319,7 +358,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[Dict[str, str]],  # type: ignore
+        messages: list[dict[str, str]],  # type: ignore
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -340,8 +379,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 stream_config["chunk_size"] = stream_options["chunk_size"]
             if "delimiters" in stream_options:
                 stream_config["delimiters"] = stream_options["delimiters"]
-
-        optional_params.pop("tool_choice", None)
 
         modules = [
             self._build_prompt_module(
@@ -368,13 +405,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 )
             )
 
-        config_payload: Dict[str, Any] = {
+        config_payload: dict[str, Any] = {
             "modules": modules if len(modules) > 1 else modules[0],
         }
         if stream_config:
             config_payload["stream"] = stream_config
 
-        request_body: Dict[str, Any] = {"config": config_payload}
+        request_body: dict[str, Any] = {"config": config_payload}
         if placeholder_values is not None:
             request_body["placeholder_values"] = placeholder_values
 
@@ -389,12 +426,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         logging_obj.post_call(
             input=messages,
@@ -402,7 +439,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        raw = raw_response.json()
+        self._normalize_gemini_reasoning(raw["final_result"])
+        response = ModelResponse.model_validate(raw["final_result"])
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
@@ -415,6 +454,34 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         return response
 
+    @staticmethod
+    def _sap_supports_reasoning(model: str) -> bool:
+        """Return True if *model* accepts reasoning_effort / thinking on SAP GenAI Hub."""
+        return bool(_REASONING_MODELS.match(model))
+
+    @staticmethod
+    def _sap_supports_cache_control(model: str) -> bool:
+        """Return True if *model* supports Anthropic-style cache_control content parts."""
+        return bool(_CACHE_CONTROL_MODELS.match(model))
+
+    @staticmethod
+    def _normalize_gemini_reasoning(final_result: dict) -> None:
+        """Coerce Gemini's list-shaped reasoning_content to a plain string in-place.
+
+        Gemini models on SAP GenAI Hub return reasoning_content as a list of
+        ``{"thought": str, "signature": str}`` objects.  ModelResponse expects a
+        plain ``str``, so model_validate crashes without this normalisation step.
+
+        The dict is mutated in-place so the original raw bytes are never reparsed.
+        """
+        for choice in final_result.get("choices") or []:
+            msg = (choice.get("message") or {}) if isinstance(choice, dict) else {}
+            rc = msg.get("reasoning_content")
+            if isinstance(rc, list):
+                msg["reasoning_content"] = (
+                    "\n\n".join(item.get("thought", "") for item in rc if isinstance(item, dict)) or None
+                )
+
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
         """Strip markdown code block wrapper from JSON content if present.
 
@@ -422,8 +489,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         markdown code blocks (```json ... ```) depending on prompt phrasing.
         This method strips that wrapper to ensure consistent JSON output.
         """
-        import re
-
         for choice in response.choices or []:
             if choice.message and choice.message.content:
                 content = choice.message.content.strip()
@@ -438,7 +503,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         if sync_stream:
             return SAPStreamIterator(response=streaming_response)  # type: ignore
