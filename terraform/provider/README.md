@@ -139,11 +139,13 @@ For full details on the <code>litellm_key</code> resource, see the [key resource
 - <code>litellm_mcp_server</code>: Manage MCP (Model Context Protocol) servers. [Documentation](docs/resources/mcp_server.md)
 - <code>litellm_credential</code>: Manage credentials for secure authentication. [Documentation](docs/resources/credential.md)
 - <code>litellm_vector_store</code>: Manage vector stores for embeddings and RAG. [Documentation](docs/resources/vector_store.md)
+- <code>litellm_guardrail</code>: Manage guardrails for content filtering, PII detection, and prompt injection protection. [Documentation](docs/resources/guardrail.md)
 
 ### Available Data Sources
 
 - <code>litellm_credential</code>: Retrieve information about existing credentials. [Documentation](docs/data-sources/credential.md)
 - <code>litellm_vector_store</code>: Retrieve information about existing vector stores. [Documentation](docs/data-sources/vector_store.md)
+- <code>litellm_guardrail</code>: Retrieve information about existing guardrails. [Documentation](docs/data-sources/guardrail.md)
 
 ## Development
 

@@ -246,3 +246,23 @@ type VectorStoreDeleteRequest struct {
 type VectorStoreInfoRequest struct {
 	VectorStoreID string `json:"vector_store_id"`
 }
+
+type GuardrailSpec struct {
+	GuardrailID   string                 `json:"guardrail_id,omitempty"`
+	GuardrailName string                 `json:"guardrail_name"`
+	LiteLLMParams map[string]interface{} `json:"litellm_params"`
+	GuardrailInfo map[string]interface{} `json:"guardrail_info,omitempty"`
+}
+
+type GuardrailRequest struct {
+	Guardrail GuardrailSpec `json:"guardrail"`
+}
+
+type GuardrailResponse struct {
+	GuardrailID   string                 `json:"guardrail_id"`
+	GuardrailName string                 `json:"guardrail_name"`
+	LiteLLMParams map[string]interface{} `json:"litellm_params"`
+	GuardrailInfo map[string]interface{} `json:"guardrail_info,omitempty"`
+	CreatedAt     string                 `json:"created_at,omitempty"`
+	UpdatedAt     string                 `json:"updated_at,omitempty"`
+}

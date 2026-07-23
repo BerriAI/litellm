@@ -247,6 +247,30 @@ func isVectorStoreNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
+func handleGuardrailAPIResponse(resp *http.Response, result interface{}, client *Client) error {
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return errGuardrailNotFound
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("API request failed: Status: %s, Response: %s",
+			resp.Status, client.redactSensitiveData(string(bodyBytes)))
+	}
+
+	if result != nil {
+		if err := json.Unmarshal(bodyBytes, result); err != nil {
+			return fmt.Errorf("failed to parse response: %v", err)
+		}
+	}
+
+	return nil
+}
+
 // handleVectorStoreAPIResponse handles API responses specifically for vector store operations
 func handleVectorStoreAPIResponse(resp *http.Response, result interface{}, client *Client) error {
 	bodyBytes, err := io.ReadAll(resp.Body)
