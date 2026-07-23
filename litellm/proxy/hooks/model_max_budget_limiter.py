@@ -146,10 +146,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
         if _current_model_budget_info is None:
             verbose_proxy_logger.debug(f"Model {model} not found in end_user_model_max_budget")
-            return True
 
         # check if current model is within budget
-        if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
+        if (
+            _current_model_budget_info is not None
+            and _current_model_budget_info.max_budget
+            and _current_model_budget_info.max_budget > 0
+        ):
             _current_spend = await self._get_end_user_spend_for_model(
                 end_user_id=end_user_id,
                 model=model,
@@ -164,6 +167,25 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
+                    entity_type=Litellm_EntityType.END_USER.value,
+                    entity_id=end_user_id,
+                )
+
+        for _group_name, _group_budget_info in self._get_matching_model_group_budget_configs(
+            model=model, internal_model_max_budget=internal_model_max_budget
+        ):
+            if not _group_budget_info.max_budget or _group_budget_info.max_budget <= 0:
+                continue
+            _group_spend = await self._get_end_user_spend_for_model_group(
+                end_user_id=end_user_id,
+                model_group_name=_group_name,
+                key_budget_config=_group_budget_info,
+            )
+            if _group_spend is not None and _group_spend > _group_budget_info.max_budget:
+                raise litellm.BudgetExceededError(
+                    message=f"LiteLLM End User: {end_user_id}, exceeded budget for model group={_group_name}, model={model}",
+                    current_cost=_group_spend,
+                    max_budget=_group_budget_info.max_budget,
                     entity_type=Litellm_EntityType.END_USER.value,
                     entity_id=end_user_id,
                 )
@@ -231,6 +253,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> float | None:
         model_group_spend_cache_key = (
             f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{user_api_key_hash}:{model_group_name}:"
+            f"{key_budget_config.budget_duration}"
+        )
+        return await self.dual_cache.async_get_cache(key=model_group_spend_cache_key)
+
+    async def _get_end_user_spend_for_model_group(
+        self,
+        end_user_id: str,
+        model_group_name: str,
+        key_budget_config: BudgetConfig,
+    ) -> float | None:
+        model_group_spend_cache_key = (
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group_name}:"
             f"{key_budget_config.budget_duration}"
         )
         return await self.dual_cache.async_get_cache(key=model_group_spend_cache_key)
@@ -386,6 +420,22 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     budget_config=key_budget_config,
                     spend_key=end_user_spend_key,
                     start_time_key=end_user_start_time_key,
+                    response_cost=response_cost,
+                )
+            for _group_name, _group_budget_config in self._get_matching_model_group_budget_configs(
+                model=model, internal_model_max_budget=internal_model_max_budget
+            ):
+                if _group_budget_config.budget_duration is None:
+                    continue
+                end_user_group_spend_key = (
+                    f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{_group_name}:"
+                    f"{_group_budget_config.budget_duration}"
+                )
+                end_user_group_start_time_key = f"end_user_budget_start_time:{end_user_id}:{_group_name}"
+                await self._increment_spend_for_key(
+                    budget_config=_group_budget_config,
+                    spend_key=end_user_group_spend_key,
+                    start_time_key=end_user_group_start_time_key,
                     response_cost=response_cost,
                 )
 

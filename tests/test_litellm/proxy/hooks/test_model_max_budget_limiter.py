@@ -208,3 +208,48 @@ async def test_group_without_time_period_does_not_track_or_block():
 
     assert limiter.dual_cache.in_memory_cache.cache_dict == {}
     assert await limiter.is_key_within_model_budget(key, "anthropic-opus-4-7") is True
+
+
+END_USER_ID = "end-user-1"
+
+
+async def _log_end_user_spend(
+    limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    model: str,
+    response_cost: float,
+    end_user_model_max_budget: dict,
+) -> None:
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": response_cost,
+            "model": model,
+            "end_user": END_USER_ID,
+            "metadata": {"user_api_key_end_user_id": END_USER_ID},
+        },
+        "litellm_params": {"metadata": {"user_api_key_end_user_model_max_budget": end_user_model_max_budget}},
+    }
+    await limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
+
+
+@pytest.mark.asyncio
+async def test_end_user_group_budget_shared_across_models():
+    limiter = _make_limiter()
+
+    await _log_end_user_spend(limiter, "anthropic-opus-4-7", 11.0, OPUS_GROUP_BUDGET)
+
+    with pytest.raises(litellm.BudgetExceededError, match="model group=opus-family"):
+        await limiter.is_end_user_within_model_budget(END_USER_ID, OPUS_GROUP_BUDGET, "anthropic-opus-4-7")
+    with pytest.raises(litellm.BudgetExceededError, match="model group=opus-family"):
+        await limiter.is_end_user_within_model_budget(END_USER_ID, OPUS_GROUP_BUDGET, "anthropic-opus-4-8")
+    assert await limiter.is_end_user_within_model_budget(END_USER_ID, OPUS_GROUP_BUDGET, "anthropic-sonnet-5") is True
+
+
+@pytest.mark.asyncio
+async def test_end_user_group_budget_within_budget_passes():
+    limiter = _make_limiter()
+
+    await _log_end_user_spend(limiter, "anthropic-opus-4-7", 4.0, OPUS_GROUP_BUDGET)
+    await _log_end_user_spend(limiter, "anthropic-opus-4-8", 5.0, OPUS_GROUP_BUDGET)
+
+    assert await limiter.is_end_user_within_model_budget(END_USER_ID, OPUS_GROUP_BUDGET, "anthropic-opus-4-7") is True
+    assert await limiter.is_end_user_within_model_budget(END_USER_ID, OPUS_GROUP_BUDGET, "anthropic-opus-4-8") is True
