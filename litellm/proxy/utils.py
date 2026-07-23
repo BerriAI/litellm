@@ -6032,6 +6032,69 @@ def construct_database_url_from_env_vars() -> Optional[str]:
     return None
 
 
+async def _get_entity_access_group_models(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_id: Optional[str],
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> list[str]:
+    """
+    Resolve entity Access Groups (`access_group_ids` on the key and on its
+    team) into model names for model discovery (/v1/models,
+    /model/info).
+
+    Returns an empty list when the caller has no entity access groups.
+    """
+    from litellm.proxy.auth.auth_checks import (
+        _get_models_from_access_groups,
+        get_team_object,
+    )
+
+    group_ids: list[str] = list(user_api_key_dict.access_group_ids or [])
+
+    effective_team_id = team_id or user_api_key_dict.team_id
+    if effective_team_id and prisma_client is not None and user_api_key_cache is not None:
+        try:
+            team_object = await get_team_object(
+                team_id=effective_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            group_ids.extend(team_object.access_group_ids or [])
+        except HTTPException:
+            # Team was deleted between auth and listing; any key-level
+            # access groups still apply.
+            pass
+
+    group_ids = list(dict.fromkeys(group_ids))
+    if not group_ids:
+        return []
+
+    return await _get_models_from_access_groups(
+        access_group_ids=group_ids,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+def _strip_authorization_sentinels(models: list[str]) -> list[str]:
+    """
+    Remove authorization sentinel values (no-default-models,
+    all-team-models, all-proxy-models) from a model list.
+    """
+    from litellm.proxy._types import SpecialModelNames
+
+    sentinels = {
+        SpecialModelNames.no_default_models.value,
+        SpecialModelNames.all_team_models.value,
+        SpecialModelNames.all_proxy_models.value,
+    }
+    return [m for m in models if m not in sentinels]
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -6125,6 +6188,17 @@ async def get_available_models_for_user(
         only_model_access_groups=only_model_access_groups,
         team_id=effective_team_id,
     )
+
+    if not only_model_access_groups:
+        entity_group_models = await _get_entity_access_group_models(
+            user_api_key_dict=user_api_key_dict,
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        all_models.extend(m for m in entity_group_models if m not in all_models)
+        all_models = _strip_authorization_sentinels(all_models)
 
     return all_models
 
