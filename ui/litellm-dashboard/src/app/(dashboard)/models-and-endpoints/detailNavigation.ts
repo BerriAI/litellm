@@ -13,7 +13,8 @@ function navigateWithParams(mutate: (params: URLSearchParams) => void): void {
   const params = new URLSearchParams(window.location.search);
   mutate(params);
   const qs = params.toString();
-  window.location.assign(qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+  const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+  window.history.pushState(null, "", url);
 }
 
 export function useModelDetailRouting(): ModelDetailRouting {
