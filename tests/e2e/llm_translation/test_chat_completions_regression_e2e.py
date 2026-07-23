@@ -21,7 +21,7 @@ import os
 import pytest
 from pydantic import BaseModel
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -250,7 +250,7 @@ class TestCohereChat:
     def test_cohere_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        (cohere_key,) = require_env("COHERE_API_KEY")
+        cohere_key = os.environ["COHERE_API_KEY"]
         model = f"e2e-cohere-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -343,7 +343,7 @@ class TestHostedVllmChat:
     def test_hosted_vllm_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        (api_base,) = require_env("HOSTED_VLLM_API_BASE")
+        api_base = os.environ["HOSTED_VLLM_API_BASE"]
         api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
         backend = (
             os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"
@@ -395,7 +395,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -423,7 +422,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_logs_cost(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-cost-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -457,7 +455,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-tool-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -488,7 +485,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_structured_output_conforms_to_schema(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-schema-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -522,7 +518,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_reasoning_reports_reasoning_tokens(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-reasoning-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -561,7 +556,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-vision-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_VISION_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -579,7 +573,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_prompt_cache_hits_on_repeat(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -610,7 +603,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_streams_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-tool-stream-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -645,7 +637,6 @@ class TestBedrockConverseChatCompletions:
     """
 
     def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"{prefix}-{unique_marker()}"
         model_id = client.proxy.create_model(model, _bedrock_params())
         resources.defer(lambda: client.proxy.delete_model(model_id))

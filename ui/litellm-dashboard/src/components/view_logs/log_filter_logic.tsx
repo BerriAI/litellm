@@ -1,13 +1,11 @@
 import moment from "moment";
-import { useEffect, useMemo, useState } from "react";
-import { useDebouncer } from "@tanstack/react-pacer/debouncer";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { keepPreviousData, useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import type { ColumnFiltersState, PaginationState, SortingState } from "@tanstack/react-table";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { defaultPageSize } from "../constants";
-import type { LogEntry, LogsSortField } from "./columns";
+import { LOGS_SORT_FIELD_MAP, type LogEntry, type LogsSortField } from "./columns";
 
 export interface PaginatedResponse {
   data: LogEntry[];
@@ -18,54 +16,48 @@ export interface PaginatedResponse {
   total_is_capped?: boolean;
 }
 
-/** Spend log `model` column (LLM public model name or `search_tool_name` for /search). */
-export const FILTER_KEYS = {
-  TEAM_ID: "Team ID",
-  KEY_HASH: "Key Hash",
-  REQUEST_ID: "Request ID",
-  SESSION_ID: "Session ID",
-  MODEL: "Model",
-  /** Exact match on LiteLLM_SpendLogs.model — use for search tools and public model names. */
-  PUBLIC_MODEL_OR_SEARCH_TOOL: "Public model / search tool",
-  USER_ID: "User ID",
-  END_USER: "End User",
-  STATUS: "Status",
-  KEY_ALIAS: "Key Alias",
-  ERROR_CODE: "Error Code",
-  ERROR_MESSAGE: "Error Message",
+export const LOG_FILTER_IDS = {
+  TEAM_ID: "team_id",
+  STATUS: "status",
+  KEY_ALIAS: "key_alias",
+  END_USER: "end_user",
+  ERROR_CODE: "error_code",
+  ERROR_MESSAGE: "error_message",
+  KEY_HASH: "key_hash",
+  SESSION_ID: "session_id",
+  MODEL_ID: "model_id",
+  PUBLIC_MODEL_OR_SEARCH_TOOL: "model",
+  REQUEST_ID: "request_id",
+  USER_ID: "user_id",
 } as const;
 
-export type FilterKey = keyof typeof FILTER_KEYS;
-export type LogFilterState = Record<(typeof FILTER_KEYS)[FilterKey], string>;
+export const LOG_FILTER_LABELS: Record<string, string> = {
+  [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
+  [LOG_FILTER_IDS.STATUS]: "Status",
+  [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
+  [LOG_FILTER_IDS.END_USER]: "End User",
+  [LOG_FILTER_IDS.ERROR_CODE]: "Error Code",
+  [LOG_FILTER_IDS.ERROR_MESSAGE]: "Error Message",
+  [LOG_FILTER_IDS.KEY_HASH]: "Key Hash",
+  [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
+  [LOG_FILTER_IDS.MODEL_ID]: "Model",
+  [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
+};
 
-// Keys whose UI is a free-form text input; only these need debouncing.
-const TEXT_FILTER_KEYS: readonly (keyof LogFilterState)[] = [
-  FILTER_KEYS.KEY_HASH,
-  FILTER_KEYS.ERROR_MESSAGE,
-  FILTER_KEYS.REQUEST_ID,
-  FILTER_KEYS.SESSION_ID,
-  FILTER_KEYS.USER_ID,
-  FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
-];
-
-// Live-tail polls every 15s, but only on page 1 (newest) while live tail is on.
 export const LIVE_TAIL_INTERVAL_MS = 15000;
-export const getLiveTailRefetchInterval = (isLiveTail: boolean, currentPage: number): number | false =>
-  isLiveTail && currentPage === 1 ? LIVE_TAIL_INTERVAL_MS : false;
 
-export const defaultFilters: LogFilterState = {
-  [FILTER_KEYS.TEAM_ID]: "",
-  [FILTER_KEYS.KEY_HASH]: "",
-  [FILTER_KEYS.REQUEST_ID]: "",
-  [FILTER_KEYS.SESSION_ID]: "",
-  [FILTER_KEYS.MODEL]: "",
-  [FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "",
-  [FILTER_KEYS.USER_ID]: "",
-  [FILTER_KEYS.END_USER]: "",
-  [FILTER_KEYS.STATUS]: "",
-  [FILTER_KEYS.KEY_ALIAS]: "",
-  [FILTER_KEYS.ERROR_CODE]: "",
-  [FILTER_KEYS.ERROR_MESSAGE]: "",
+export const getLiveTailRefetchInterval = (isLiveTail: boolean, pageIndex: number): number | false =>
+  isLiveTail && pageIndex === 0 ? LIVE_TAIL_INTERVAL_MS : false;
+
+export const DEFAULT_LOGS_SORTING: SortingState = [{ id: "startTime", desc: true }];
+
+const isSortField = (id: string): id is LogsSortField => Object.hasOwn(LOGS_SORT_FIELD_MAP, id);
+
+export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: string): string | undefined => {
+  const entry = columnFilters.find((filter) => filter.id === columnId);
+  if (typeof entry?.value !== "string") return undefined;
+  const trimmed = entry.value.trim();
+  return trimmed === "" ? undefined : trimmed;
 };
 
 export function useLogFilterLogic({
@@ -73,63 +65,45 @@ export function useLogFilterLogic({
   token,
   userRole,
   userID,
-  filters,
-  setFilters,
+  columnFilters,
   filterByCurrentUser,
   activeTab,
   isLiveTail,
   startTime,
   endTime,
-  pageSize = defaultPageSize,
+  pagination,
   isCustomDate,
-  setCurrentPage,
-  sortBy = "startTime",
-  sortOrder = "desc",
-  currentPage = 1,
+  sorting,
 }: {
   accessToken: string | null;
   token: string | null;
   userRole: string | null;
   userID: string | null;
-  filters: LogFilterState;
-  setFilters: React.Dispatch<React.SetStateAction<LogFilterState>>;
+  columnFilters: ColumnFiltersState;
   filterByCurrentUser: boolean | null;
   activeTab: string;
   isLiveTail: boolean;
   startTime: string;
   endTime: string;
-  pageSize?: number;
+  pagination: PaginationState;
   isCustomDate: boolean;
-  setCurrentPage: (page: number) => void;
-  sortBy?: LogsSortField;
-  sortOrder?: "asc" | "desc";
-  currentPage?: number;
+  sorting: SortingState;
 }) {
-  const [debouncedFilters, setDebouncedFilters] = useState(filters);
-  const debouncer = useDebouncer(setDebouncedFilters, { wait: DEBOUNCE_WAIT_MS });
-  useEffect(() => {
-    debouncer.maybeExecute(filters);
-  }, [filters, debouncer]);
+  const pageSize = pagination.pageSize || defaultPageSize;
+  const activeSort = sorting[0] ?? DEFAULT_LOGS_SORTING[0];
+  const sortBy: LogsSortField = isSortField(activeSort.id) ? activeSort.id : "startTime";
+  const sortOrder: "asc" | "desc" = activeSort.desc ? "desc" : "asc";
 
-  // Live values for dropdown keys, debounced for text keys.
-  const effectiveFilters = useMemo(() => {
-    const merged = { ...filters };
-    for (const k of TEXT_FILTER_KEYS) {
-      merged[k] = debouncedFilters[k];
-    }
-    return merged;
-  }, [filters, debouncedFilters]);
-
-  const logsQuery = useQuery<PaginatedResponse>({
+  const logsQueryOptions: UseQueryOptions<PaginatedResponse> = {
     queryKey: [
       "logs",
       "table",
-      currentPage,
+      pagination.pageIndex,
       pageSize,
       startTime,
       endTime,
       isCustomDate,
-      effectiveFilters,
+      columnFilters,
       filterByCurrentUser ? userID : null,
       sortBy,
       sortOrder,
@@ -150,38 +124,39 @@ export function useLogFilterLogic({
         ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-      const response = await uiSpendLogsCall({
+      const userIdFilter = getFilterValue(columnFilters, LOG_FILTER_IDS.USER_ID);
+
+      return await uiSpendLogsCall({
         accessToken,
         start_date: formattedStartTime,
         end_date: formattedEndTime,
-        page: currentPage,
+        page: pagination.pageIndex + 1,
         page_size: pageSize,
         params: {
-          api_key: effectiveFilters[FILTER_KEYS.KEY_HASH] || undefined,
-          team_id: effectiveFilters[FILTER_KEYS.TEAM_ID] || undefined,
-          request_id: effectiveFilters[FILTER_KEYS.REQUEST_ID] || undefined,
-          session_id: effectiveFilters[FILTER_KEYS.SESSION_ID] || undefined,
-          user_id: effectiveFilters[FILTER_KEYS.USER_ID] || (filterByCurrentUser ? userID ?? undefined : undefined),
-          end_user: effectiveFilters[FILTER_KEYS.END_USER] || undefined,
-          status_filter: effectiveFilters[FILTER_KEYS.STATUS] || undefined,
-          model_id: effectiveFilters[FILTER_KEYS.MODEL] || undefined,
-          model: effectiveFilters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL] || undefined,
-          key_alias: effectiveFilters[FILTER_KEYS.KEY_ALIAS] || undefined,
-          error_code: effectiveFilters[FILTER_KEYS.ERROR_CODE] || undefined,
-          error_message: effectiveFilters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
+          api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
+          team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
+          request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
+          session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
+          user_id: userIdFilter ?? (filterByCurrentUser ? userID ?? undefined : undefined),
+          end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
+          status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
+          model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
+          model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
+          key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
+          error_code: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_CODE),
+          error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
           sort_by: sortBy,
           sort_order: sortOrder,
         },
       });
-
-      return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: getLiveTailRefetchInterval(isLiveTail, currentPage),
+    refetchInterval: getLiveTailRefetchInterval(isLiveTail, pagination.pageIndex),
     placeholderData: keepPreviousData,
-    // Only live-tail-poll while the tab is visible.
     refetchIntervalInBackground: false,
-  });
+  };
+
+  const logsQuery = useQuery(logsQueryOptions);
 
   const filteredLogs: PaginatedResponse = logsQuery.data ?? {
     data: [],
@@ -191,7 +166,7 @@ export function useLogFilterLogic({
     total_pages: 0,
   };
 
-  const { data: allTeams } = useQuery<Team[], Error>({
+  const allTeamsQueryOptions: UseQueryOptions<Team[], Error> = {
     queryKey: ["allTeamsForLogFilters", accessToken],
     queryFn: async () => {
       if (!accessToken) return [];
@@ -199,34 +174,13 @@ export function useLogFilterLogic({
       return teamsData || [];
     },
     enabled: !!accessToken,
-  });
-
-  const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
-    setFilters((prev) => {
-      const updatedFilters = { ...prev, ...newFilters };
-      for (const key of Object.keys(defaultFilters) as Array<keyof LogFilterState>) {
-        if (!(key in updatedFilters)) {
-          updatedFilters[key] = defaultFilters[key];
-        }
-      }
-      if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
-        setCurrentPage(1);
-      }
-      return updatedFilters as LogFilterState;
-    });
   };
 
-  const handleFilterReset = () => {
-    setFilters(defaultFilters);
-    setDebouncedFilters(defaultFilters);
-    setCurrentPage(1);
-  };
+  const { data: allTeams } = useQuery(allTeamsQueryOptions);
 
   return {
     logsQuery,
     filteredLogs,
     allTeams,
-    handleFilterChange,
-    handleFilterReset,
   };
 }

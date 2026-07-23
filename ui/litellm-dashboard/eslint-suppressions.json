@@ -37,16 +37,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/agents/_components/AgentsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/agents/_components/AgentsTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/agents/_components/add_agent_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -71,9 +61,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/refs": {
       "count": 3
     },
@@ -84,9 +71,6 @@
   "src/app/(dashboard)/agents/_components/agent_cost_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/agents/_components/agent_form_fields.tsx": {
@@ -122,9 +106,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1133,25 +1114,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.test.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.test.tsx": {
     "react/display-name": {
       "count": 1
@@ -2124,9 +2086,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "no-restricted-syntax": {
       "count": 3
     },
@@ -2361,25 +2320,12 @@
       "count": 1
     }
   },
-  "src/components/KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/LicenseExpiryBanner.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
   "src/components/ModelSelect/ModelSelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/ModelSelect/PaginatedModelSelect/PaginatedModelSelect.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -2962,7 +2908,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 7
+      "count": 6
     }
   },
   "src/components/chat/MCPConnectPicker.tsx": {
@@ -3476,17 +3422,6 @@
       "count": 1
     }
   },
-  "src/components/model_dashboard/all_models_table.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/model_filters.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3534,42 +3469,9 @@
       "count": 1
     }
   },
-  "src/components/molecules/filter.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/molecules/message_manager.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/molecules/models/columns.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/components/molecules/models/columns.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "max-params": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 2
     },
     "no-restricted-imports": {
       "count": 2
@@ -3679,9 +3581,6 @@
     },
     "no-restricted-imports": {
       "count": 3
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
     }
   },
   "src/components/page_utils.test.ts": {
@@ -4172,6 +4071,11 @@
       "count": 1
     }
   },
+  "src/components/ui/hover-card.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/input-group.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -4444,17 +4348,6 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogsTableToolbar.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/ToolsSection/FormattedToolView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -4483,9 +4376,6 @@
   "src/components/view_logs/columns.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/view_logs/index.tsx": {
@@ -4493,9 +4383,6 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
