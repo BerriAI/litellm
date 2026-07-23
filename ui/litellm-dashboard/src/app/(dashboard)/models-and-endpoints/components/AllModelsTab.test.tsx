@@ -97,6 +97,8 @@ const setModelsInfo = (rows: Record<string, unknown>[], totalCount = rows.length
 
 const lastModelsInfoCall = (): ModelsInfoArgs => modelsInfoCalls[modelsInfoCalls.length - 1];
 
+const SEARCH_SETTLE_MS = 400;
+
 const MOCK_AUTHORIZED = {
   isLoading: false,
   isAuthorized: true,
@@ -137,6 +139,15 @@ describe("AllModelsTab", () => {
 
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 137");
+  });
+
+  it("does not re-query after the mount-time debounced search settles unchanged", async () => {
+    render(<AllModelsTab {...defaultProps} />);
+    const callsAfterMount = modelsInfoCalls.length;
+
+    await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+
+    expect(modelsInfoCalls.length).toBe(callsAfterMount);
   });
 
   it("shows the empty state when the proxy returns no models", () => {

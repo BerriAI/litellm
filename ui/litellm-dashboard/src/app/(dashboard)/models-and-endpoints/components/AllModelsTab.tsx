@@ -64,7 +64,7 @@ const AllModelsTab = ({
   const [pausingModelId, setPausingModelId] = useState<string | null>(null);
 
   const resetToFirstPage = useCallback(() => {
-    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
+    setPagination((previous) => (previous.pageIndex === 0 ? previous : { ...previous, pageIndex: 0 }));
   }, []);
 
   const debouncedUpdateSearch = useDebouncedCallback(
