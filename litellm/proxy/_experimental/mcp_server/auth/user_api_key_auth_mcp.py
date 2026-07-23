@@ -10,6 +10,10 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    get_request_base_url,
+    well_known_root_suffix,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     BridgeEnvelopeAdmitted,
     BridgeEnvelopeInvalid,
@@ -118,6 +122,96 @@ def _has_client_supplied_mcp_auth(
     mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
 ) -> bool:
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
+
+
+def _is_aggregate_gateway_dcr_challenge_scope(
+    route: str,
+    mcp_servers: list[str] | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+    exc: Exception,
+) -> bool:
+    """True when an unauthenticated request to the aggregate ``/mcp`` endpoint
+    should receive the RFC 9728 401 challenge that advertises the gateway as
+    the authorization server.
+
+    Fires only for a genuine 401 on the aggregate scope: any named target
+    (path or ``x-mcp-servers``) belongs to the per-server challenge paths, and
+    client-supplied MCP auth headers mean the caller is not a cold-start DCR
+    client. Fails closed to the original admission error otherwise."""
+    if not _is_litellm_auth_admission_error(exc):
+        return False
+    if mcp_servers:
+        return False
+    if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
+        return False
+    return len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0
+
+
+def _aggregate_gateway_dcr_challenge(request: Request, invalid_token: bool) -> HTTPException:
+    """The RFC 9728 challenge for the aggregate endpoint: points the client at
+    the gateway's own protected-resource metadata so a DCR client discovers
+    the gateway as its authorization server and starts the sign-in flow.
+
+    ``invalid_token`` adds the RFC 6750 error code for a request that DID
+    present a bearer that failed admission (expired or revoked), telling
+    spec-compliant clients to re-authorize rather than retry; a request with
+    no credentials at all gets the bare challenge per RFC 6750 section 3.1."""
+    error_attr = 'error="invalid_token", ' if invalid_token else ""
+    resource_metadata_url = (
+        f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
+    )
+    return HTTPException(
+        status_code=401,
+        detail={
+            "error": "authentication_required",
+            "message": "Authenticate with the gateway to use the MCP endpoint.",
+        },
+        headers={"WWW-Authenticate": f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'},
+    )
+
+
+def _admission_failure_fallback(
+    request: Request,
+    request_route: str,
+    mcp_servers: list[str] | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+    exc: Exception,
+    bearer_presented: bool,
+) -> UserAPIKeyAuth:
+    """Map a failed LiteLLM admission to its anonymous fallback or challenge.
+
+    Two fallbacks exist, both gated on a genuine 401 with no client-supplied
+    MCP auth headers. The pass-through cold start (RFC 9728 / MCP
+    Authorization spec discovery return) admits anonymously so the route's
+    401 emitter can produce the per-server challenge. The aggregate
+    gateway-DCR scope converts the failure into the gateway's own
+    resource_metadata challenge, with the RFC 6750 ``invalid_token`` error
+    code when the caller DID present a bearer (an expired gateway session
+    must re-authorize, not retry a dead token). Anything else re-raises the
+    original admission error unchanged."""
+    mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route, mcp_servers)
+    if (
+        mcp_servers_from_path is not None
+        and not _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers)
+        and _is_litellm_auth_admission_error(exc)
+        and _is_mcp_passthrough_cold_start(
+            mcp_servers_from_path,
+            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        )
+    ):
+        verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
+        return UserAPIKeyAuth()
+    if _is_aggregate_gateway_dcr_challenge_scope(
+        route=request_route,
+        mcp_servers=mcp_servers,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        exc=exc,
+    ):
+        raise _aggregate_gateway_dcr_challenge(request, invalid_token=bearer_presented) from exc
+    raise exc
 
 
 class MCPRequestHandler:
@@ -271,56 +365,32 @@ class MCPRequestHandler:
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
             # LiteLLM credential, so a failed validation is a genuine 401/403 and
-            # propagates. The sole anonymous fallback is the auth_type=none
-            # pass-through cold-start (RFC 9728 discovery return), gated on a 401
-            # so a recognized-but-forbidden key still fails closed.
-            client_ip = IPAddressUtils.get_mcp_client_ip(request)
+            # propagates unless a fallback in _admission_failure_fallback applies.
             try:
                 validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
             except (HTTPException, ProxyException) as e:
-                # ProxyException.code is normalized to str (possibly "None"), so
-                # compare both int and str forms rather than coercing.
-                status = e.status_code if isinstance(e, HTTPException) else e.code
-                is_unauthenticated = status in (401, "401")
-                mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route, mcp_servers)
-                if (
-                    is_unauthenticated
-                    and mcp_servers_from_path is not None
-                    and not _has_client_supplied_mcp_auth(
-                        mcp_auth_header,
-                        mcp_server_auth_headers,
-                    )
-                    and _is_mcp_passthrough_cold_start(mcp_servers_from_path, client_ip=client_ip)
-                ):
-                    verbose_logger.debug(
-                        "MCP pass-through return: forwarding Authorization as upstream OAuth token for delegated auth"
-                    )
-                    validated_user_api_key_auth = UserAPIKeyAuth()
-                else:
-                    raise
+                validated_user_api_key_auth = _admission_failure_fallback(
+                    request=request,
+                    request_route=request_route,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    exc=e,
+                    bearer_presented=True,
+                )
         else:
             try:
                 validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
             except (HTTPException, ProxyException) as exc:
-                # Cold-start MCP OAuth discovery: RFC 9728 / MCP Authorization spec
-                # require unauthenticated requests to protected resources to receive
-                # 401 + WWW-Authenticate. Defer to _raise_preemptive_401_for_unauthenticated_servers
-                # for pass-through servers instead of surfacing a generic admission error.
-                mcp_servers_from_path = _parse_mcp_server_names_from_path(request_route, mcp_servers)
-                client_ip = IPAddressUtils.get_mcp_client_ip(request)
-                if (
-                    mcp_servers_from_path is not None
-                    and not _has_client_supplied_mcp_auth(
-                        mcp_auth_header,
-                        mcp_server_auth_headers,
-                    )
-                    and _is_litellm_auth_admission_error(exc)
-                    and _is_mcp_passthrough_cold_start(mcp_servers_from_path, client_ip=client_ip)
-                ):
-                    verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
-                    validated_user_api_key_auth = UserAPIKeyAuth()
-                else:
-                    raise
+                validated_user_api_key_auth = _admission_failure_fallback(
+                    request=request,
+                    request_route=request_route,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    exc=exc,
+                    bearer_presented=False,
+                )
 
         return (
             validated_user_api_key_auth,
@@ -1220,9 +1290,27 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            key_tools = (
+            key_direct_tools = (
                 global_mcp_server_manager.expand_tool_permissions(key_obj_perm.mcp_tool_permissions).get(server_id)
                 if key_obj_perm
+                else None
+            )
+
+            # Tools granted through the key's toolsets restrict this server exactly
+            # as direct tool permissions do; union with any direct grants so the
+            # tool-level check sees the key's full effective tool scope
+            key_toolset_ids = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
+            key_toolset_tools = (
+                (await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=key_toolset_ids)).get(
+                    server_id
+                )
+                if key_toolset_ids
+                else None
+            )
+
+            key_tools = (
+                list(set(key_direct_tools or []) | set(key_toolset_tools or []))
+                if key_direct_tools is not None or key_toolset_tools is not None
                 else None
             )
             team_tools = (
@@ -1430,8 +1518,18 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(key_object_permission.mcp_tool_permissions).keys()
             )
 
+            # servers referenced by the key's toolset grants are part of the key's
+            # scope on every path (list, call, REST), subject to the same team/org
+            # ceilings as any other key-level grant
+            toolset_ids = key_object_permission.mcp_toolsets or []
+            toolset_servers = (
+                list((await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=toolset_ids)).keys())
+                if toolset_ids
+                else []
+            )
+
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers for key: {str(e)}")

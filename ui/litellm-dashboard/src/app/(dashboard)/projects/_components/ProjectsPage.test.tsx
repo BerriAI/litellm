@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import { ProjectsPage } from "./ProjectsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
@@ -141,7 +141,63 @@ describe("ProjectsPage", () => {
   it("should show the total project count in the pagination", () => {
     mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
     renderWithProviders(<ProjectsPage />);
-    expect(screen.getByText("2 projects")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-2 of 2");
+  });
+
+  it("should show skeleton rows while projects are loading", () => {
+    mockUseProjects.mockReturnValue({ data: undefined, isLoading: true });
+    renderWithProviders(<ProjectsPage />);
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+  });
+
+  it("should show the empty state when there are no projects", () => {
+    mockUseProjects.mockReturnValue({ data: [], isLoading: false });
+    renderWithProviders(<ProjectsPage />);
+    expect(screen.getByText("No projects yet")).toBeInTheDocument();
+  });
+
+  it("should show the filtered empty state when a search matches nothing", async () => {
+    const user = userEvent.setup();
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />);
+    await user.type(screen.getByPlaceholderText(/search projects/i), "zzz-no-match");
+    await waitFor(() => {
+      expect(screen.getByText("No matching projects")).toBeInTheDocument();
+    });
+  });
+
+  it("should sort by name when the Name header is clicked", async () => {
+    const user = userEvent.setup();
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />);
+
+    await user.click(screen.getByRole("button", { name: /^name$/i }));
+    let rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("Alpha Project")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^name$/i }));
+    rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("Beta Project")).toBeInTheDocument();
+  });
+
+  it("should reset to the first page when the search text changes", async () => {
+    const user = userEvent.setup();
+    const manyProjects = Array.from({ length: 12 }, (_, i) => ({
+      ...mockProjects[0],
+      project_id: `proj-${i + 1}`,
+      project_alias: `Project ${String(i + 1).padStart(2, "0")}`,
+    }));
+    mockUseProjects.mockReturnValue({ data: manyProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />);
+
+    await user.click(screen.getByTestId("pagination-next"));
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+
+    await user.type(screen.getByPlaceholderText(/search projects/i), "Project 01");
+    await waitFor(() => {
+      expect(screen.getByText("Project 01")).toBeInTheDocument();
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
+    });
   });
 
   it("should resolve team alias from the teams list in the Team column", () => {

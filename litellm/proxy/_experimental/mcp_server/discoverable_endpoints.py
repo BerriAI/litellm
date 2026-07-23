@@ -3,6 +3,7 @@ import html as _html
 import json
 import secrets
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -13,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -20,7 +22,9 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
     build_token_endpoint_client_auth,
+    normalize_token_endpoint_auth_method,
 )
+from litellm.types.mcp_server.mcp_server_manager import MCPTokenEndpointAuthMethod
 from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     _bridge_mint_error_response,
     _BridgeMintReady,
@@ -43,6 +47,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
     validate_trusted_redirect_uri,
+    well_known_root_suffix,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -50,7 +55,6 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -111,6 +115,9 @@ def encode_state_with_base_url(
     client_redirect_uri: Optional[str] = None,
     litellm_user_id: str | None = None,
     mcp_server_id: str | None = None,
+    dcr_client_id: str | None = None,
+    dcr_client_secret: str | None = None,
+    dcr_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
 ) -> str:
     """
     Encode the base_url, original state, and PKCE parameters using encryption.
@@ -124,8 +131,18 @@ def encode_state_with_base_url(
         litellm_user_id: The SSO-authenticated litellm user captured at the bridge authorize
             (interactive dcr_bridge oauth_delegate only); the callback seals it into the gateway
             authorization code so the token mint can bind the envelope to this user
-        mcp_server_id: The bridge server the interactive flow targets, sealed alongside
-            litellm_user_id so the gateway code cannot be replayed against another server
+        mcp_server_id: The server the flow targets, sealed alongside litellm_user_id (bridge) or
+            dcr_client_id (ephemeral mint) so the gateway code cannot be replayed against another
+            server
+        dcr_client_id: The ephemeral DCR client the gateway minted at authorize for a
+            client-forwarded-token server with no caller-supplied client; the callback seals it
+            into the forwarded authorization code so the token exchange can authenticate with it
+            while the gateway stores nothing
+        dcr_client_secret: The minted client's secret, when the upstream issued one
+        dcr_token_endpoint_auth_method: The token-endpoint auth method the upstream's registration
+            response granted the minted client, sealed alongside the credentials so the exchange
+            authenticates the way the upstream expects instead of falling back to the server row's
+            configured method
 
     Returns:
         An encrypted string that encodes all values
@@ -138,6 +155,9 @@ def encode_state_with_base_url(
         "client_redirect_uri": client_redirect_uri,
         "litellm_user_id": litellm_user_id,
         "mcp_server_id": mcp_server_id,
+        "dcr_client_id": dcr_client_id,
+        "dcr_client_secret": dcr_client_secret,
+        "dcr_token_endpoint_auth_method": dcr_token_endpoint_auth_method,
     }
     state_json = json.dumps(state_data, sort_keys=True)
     encrypted_state = encrypt_value_helper(state_json)
@@ -215,6 +235,93 @@ def open_bridge_authorization_code(code: str) -> _BridgeAuthorizationCode | None
         return _BridgeAuthorizationCode.model_validate_json(decrypted)
     except ValidationError:
         return None
+
+
+_PASSTHROUGH_AUTH_CODE_PREFIX = "llm_ptcode_"
+
+
+class PassthroughAuthorizationCode(BaseModel):
+    """The ephemeral DCR client and upstream code the gateway seals into the authorization code it
+    forwards for a client-forwarded-token server (``true_passthrough`` / ``oauth_delegate``) whose
+    authorize fell through to gateway-side registration. These modes forbid the gateway from storing
+    an OAuth client identity, so the minted client survives only inside this sealed value: the
+    client echoes it back at the token endpoint, where the gateway recovers the client to
+    authenticate the upstream exchange. ``mcp_server_id`` binds the code to the server it was minted
+    for so it cannot be spent at another server's token endpoint."""
+
+    model_config = ConfigDict(frozen=True)
+    upstream_code: str = Field(min_length=1)
+    client_id: str = Field(min_length=1)
+    client_secret: str | None = None
+    token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None
+    mcp_server_id: str = Field(min_length=1)
+
+
+def seal_passthrough_authorization_code(
+    upstream_code: str,
+    client_id: str,
+    client_secret: str | None,
+    mcp_server_id: str,
+    token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
+) -> str:
+    """Seal the upstream authorization code together with the ephemeral DCR client that authorized
+    it. Encrypted with the same authenticated symmetric helper as the OAuth state and bridge codes,
+    so the client can neither read the (possibly confidential) client credentials nor forge a
+    code."""
+    payload = json.dumps(
+        {
+            "upstream_code": upstream_code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "token_endpoint_auth_method": token_endpoint_auth_method,
+            "mcp_server_id": mcp_server_id,
+        },
+        sort_keys=True,
+    )
+    return _PASSTHROUGH_AUTH_CODE_PREFIX + encrypt_value_helper(payload)
+
+
+def open_passthrough_authorization_code(code: str) -> PassthroughAuthorizationCode | None:
+    """Recover the sealed ephemeral client and upstream code, or ``None`` when ``code`` is not a
+    gateway passthrough code or does not decrypt / validate, so a raw upstream code falls through to
+    the existing caller-supplied-client behavior."""
+    if not code.startswith(_PASSTHROUGH_AUTH_CODE_PREFIX):
+        return None
+    decrypted = decrypt_value_helper(
+        code[len(_PASSTHROUGH_AUTH_CODE_PREFIX) :], "passthrough_authorization_code", return_original_value=False
+    )
+    if not isinstance(decrypted, str):
+        return None
+    try:
+        return PassthroughAuthorizationCode.model_validate_json(decrypted)
+    except ValidationError:
+        return None
+
+
+def redeem_passthrough_authorization_code(
+    code: str | None, mcp_server: MCPServer, code_verifier: str | None
+) -> PassthroughAuthorizationCode | None:
+    """The single redemption gate for sealed passthrough codes: a raw or foreign code returns
+    ``None`` so the caller keeps its existing behavior, while a genuine sealed code must be spent
+    at the server it was minted for and must carry the PKCE verifier of the S256 flow that minted
+    it (the mint refuses downgraded flows, so a verifier-less redemption is an interception
+    attempt, not a legitimate client)."""
+    if not code:
+        return None
+    sealed = open_passthrough_authorization_code(code)
+    if sealed is None:
+        return None
+    if sealed.mcp_server_id != mcp_server.server_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Authorization code was issued for a different MCP server",
+        )
+    if not code_verifier:
+        raise HTTPException(
+            status_code=400,
+            detail="code_verifier is required to redeem this authorization code",
+        )
+    return sealed
 
 
 def _redirect_to_litellm_login(request: Request) -> RedirectResponse:
@@ -594,10 +701,18 @@ async def authorize_with_server(
     code_challenge_method: Optional[str] = None,
     response_type: Optional[str] = None,
     scope: Optional[str] = None,
+    ephemeral_dcr_client: "EphemeralDcrClient | None" = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
-        raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
+                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
+                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            ),
+        )
 
     if mcp_server.is_dcr_bridge:
         # Enforce S256 PKCE on both bridge arms. The relay arm forwards the validated,
@@ -605,7 +720,10 @@ async def authorize_with_server(
         # calling this for its enforcement side effect, then falls through to the gateway
         # /callback flow below, which reads the original code_challenge names.
         bridge_challenge, bridge_method = _require_s256_pkce(code_challenge, code_challenge_method)
-        if _dcr_bridge_relays_client_registration(mcp_server):
+        # A gateway-minted ephemeral client is registered against {base}/callback, so its
+        # flow must run the short-circuit arm; the relay arm is only for clients that
+        # registered themselves through the front door and hold their own redirect binding.
+        if _dcr_bridge_relays_client_registration(mcp_server) and ephemeral_dcr_client is None:
             return _redirect_to_upstream_authorize(
                 mcp_server=mcp_server,
                 client_id=client_id,
@@ -649,7 +767,12 @@ async def authorize_with_server(
         code_challenge_method=code_challenge_method,
         client_redirect_uri=redirect_uri,
         litellm_user_id=litellm_user_id,
-        mcp_server_id=mcp_server.server_id if litellm_user_id else None,
+        mcp_server_id=mcp_server.server_id if (litellm_user_id or ephemeral_dcr_client) else None,
+        dcr_client_id=ephemeral_dcr_client.client_id if ephemeral_dcr_client else None,
+        dcr_client_secret=ephemeral_dcr_client.client_secret if ephemeral_dcr_client else None,
+        dcr_token_endpoint_auth_method=ephemeral_dcr_client.token_endpoint_auth_method
+        if ephemeral_dcr_client
+        else None,
     )
     relay_state = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
 
@@ -696,23 +819,40 @@ async def exchange_token_with_server(
     code_verifier: Optional[str],
     refresh_token: Optional[str] = None,
     scope: Optional[str] = None,
+    client_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
     if mcp_server.token_url is None:
-        raise HTTPException(status_code=400, detail="MCP server token url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server token url is not configured. Servers with no url (OpenAPI spec or "
+                "stdio) run no resource discovery, so set Token URL manually, or set Issuer to "
+                "discover it from the identity provider (RFC 8414)."
+            ),
+        )
 
-    # The id and secret must come from the same source. When the server-side client_id wins,
-    # falling back to the caller's secret pairs the persisted client with a foreign secret; the
-    # register short-circuit hands clients a placeholder secret ("dummy"), so a re-auth against a
-    # persisted public PKCE client (no stored secret) would send that placeholder and the IdP 401s.
+    # The id, secret, and token-endpoint auth method must come from the same source. When the
+    # server-side client_id wins, falling back to the caller's secret pairs the persisted client
+    # with a foreign secret; the register short-circuit hands clients a placeholder secret
+    # ("dummy"), so a re-auth against a persisted public PKCE client (no stored secret) would send
+    # that placeholder and the IdP 401s. Symmetrically, a caller-side client (an ephemeral mint
+    # recovered from a sealed code) must authenticate the way its own registration was granted,
+    # not the way the server row is configured; callers that carry no method keep the row's method
+    # as before.
     resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
     resolved_client_secret = mcp_server.client_secret if mcp_server.client_id else client_secret
+    resolved_auth_method = (
+        mcp_server.token_endpoint_auth_method
+        if mcp_server.client_id
+        else (client_token_endpoint_auth_method or mcp_server.token_endpoint_auth_method)
+    )
     try:
         client_auth = build_token_endpoint_client_auth(
-            auth_method=mcp_server.token_endpoint_auth_method,
+            auth_method=resolved_auth_method,
             client_id=resolved_client_id,
             client_secret=resolved_client_secret,
         )
@@ -971,43 +1111,93 @@ def _apply_persisted_dcr_credentials(mcp_server: MCPServer, credentials: _Persis
     return True
 
 
-async def _get_persisted_mcp_server_with_dcr_client_id(
-    mcp_server: MCPServer,
-) -> Optional[tuple["LiteLLM_MCPServerTable", _PersistedDcrCredentials]]:
-    from litellm.proxy._experimental.mcp_server.db import get_mcp_server  # noqa: PLC0415
-    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+async def _load_store_dcr_credentials(mcp_server: MCPServer) -> _PersistedDcrCredentials | None:
+    """DCR client persisted in the server-scoped OAuth-client store for a config-declared server
+    (which has no LiteLLM_MCPServerTable row). Returns None when the store has no usable client_id
+    or the DB is unreachable."""
+    from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
+        get_mcp_server_oauth_client_credentials,
+    )
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # avoids circular import
 
     try:
         prisma_client = get_prisma_client_or_throw("Database not connected. Cannot read MCP OAuth client registration.")
-        persisted_mcp_server = await get_mcp_server(
-            prisma_client=prisma_client,
-            server_id=mcp_server.server_id,
+        blob = await get_mcp_server_oauth_client_credentials(
+            prisma_client=prisma_client, server_id=mcp_server.server_id
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # best-effort read; DB may be unreachable
         verbose_logger.debug(
-            "register_client_with_server: failed to read persisted DCR client registration for server_id=%s: %s",
+            "register_client_with_server: failed to read stored DCR client for server_id=%s: %s",
             mcp_server.server_id,
             exc,
         )
         return None
 
-    if persisted_mcp_server is None:
-        return None
-
-    credentials = _get_persisted_dcr_credentials(persisted_mcp_server.credentials)
+    credentials = _get_persisted_dcr_credentials(blob)
     if credentials is None or not credentials.client_id:
         return None
+    return credentials
 
-    return persisted_mcp_server, credentials
+
+async def hydrate_config_server_dcr_client(mcp_server: MCPServer) -> bool:
+    """Overlay a config-declared server's persisted DCR client onto its in-memory object so token
+    refresh can authenticate. Config.yaml servers have no LiteLLM_MCPServerTable row, so their
+    minted client lives in the server-scoped store; without this overlay the in-memory server
+    carries no client_id after a restart. An explicit client_id set in config.yaml wins and is never
+    overwritten by a persisted store client."""
+    if mcp_server.client_id:
+        return False
+    credentials = await _load_store_dcr_credentials(mcp_server)
+    if credentials is None:
+        return False
+    return _apply_persisted_dcr_credentials(mcp_server, credentials)
+
+
+async def _resolve_persisted_dcr_client(
+    mcp_server: MCPServer,
+) -> tuple[Optional["LiteLLM_MCPServerTable"], _PersistedDcrCredentials | None]:
+    """Resolve a server's persisted DCR client using the same two-level rule the write path uses, so
+    read and write always agree. First, whether the server HAS a LiteLLM_MCPServerTable row: a row is
+    always resolved to that row and the store is never consulted for a server that has a row, so a
+    caller-chosen server_id colliding with a config-declared server cannot inherit that config
+    server's client, and a row that exists but carries no usable client_id yields (row, None) rather
+    than a store fallback. Second, among rowless servers: a config-declared server keeps its client in
+    the server-scoped store, while a rowless non-config server is a throwaway temp/session server with
+    no persisted client. Returns (row_or_None, credentials_or_None); the row is only needed by the
+    reuse path to refresh the registry for a DB-declared server."""
+    from litellm.proxy._experimental.mcp_server.db import get_mcp_server  # noqa: PLC0415  # avoids circular import
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # avoids circular import
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # avoids circular import
+
+    try:
+        prisma_client = get_prisma_client_or_throw("Database not connected. Cannot read MCP OAuth client registration.")
+        row = await get_mcp_server(prisma_client=prisma_client, server_id=mcp_server.server_id)
+    except Exception as exc:  # noqa: BLE001  # best-effort read; DB may be unreachable
+        verbose_logger.debug(
+            "register_client_with_server: failed to read persisted DCR client for server_id=%s: %s",
+            mcp_server.server_id,
+            exc,
+        )
+        return None, None
+
+    if row is not None:
+        credentials = _get_persisted_dcr_credentials(row.credentials)
+        if credentials is not None and credentials.client_id:
+            return row, credentials
+        return row, None
+    if global_mcp_server_manager.is_config_declared_server(mcp_server.server_id):
+        return None, await _load_store_dcr_credentials(mcp_server)
+    return None, None
 
 
 async def _reuse_persisted_dcr_client_if_available(
     mcp_server: MCPServer, current_redirect_uri: Optional[str] = None
 ) -> bool:
-    persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
-    if persisted is None:
+    persisted_mcp_server, credentials = await _resolve_persisted_dcr_client(mcp_server)
+    if credentials is None:
         return False
-    persisted_mcp_server, credentials = persisted
     if current_redirect_uri is not None and _redirect_uri_not_registered(credentials, current_redirect_uri):
         verbose_logger.debug(
             "register_client_with_server: not reusing persisted DCR client for server_id=%s; its registered "
@@ -1021,18 +1211,19 @@ async def _reuse_persisted_dcr_client_if_available(
     if not _apply_persisted_dcr_credentials(mcp_server, credentials):
         return False
 
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
-        global_mcp_server_manager,
-    )
-
-    try:
-        await global_mcp_server_manager.update_server(persisted_mcp_server)
-    except Exception as exc:  # noqa: BLE001
-        verbose_logger.warning(
-            "register_client_with_server: failed to refresh persisted DCR client registration for server_id=%s: %s",
-            mcp_server.server_id,
-            exc,
+    if persisted_mcp_server is not None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # avoids circular import
+            global_mcp_server_manager,
         )
+
+        try:
+            await global_mcp_server_manager.update_server(persisted_mcp_server)
+        except Exception as exc:  # noqa: BLE001  # best-effort registry refresh
+            verbose_logger.warning(
+                "register_client_with_server: failed to refresh persisted DCR client registration for server_id=%s: %s",
+                mcp_server.server_id,
+                exc,
+            )
     return bool(mcp_server.client_id)
 
 
@@ -1044,10 +1235,9 @@ async def _persisted_dcr_redirect_uri_is_stale(mcp_server: MCPServer, current_re
     otherwise short-circuits registration before any redirect check can run. Servers
     without a persisted DCR recording (admin-configured client_id, or registered before
     redirect_uris were recorded) are never reported stale."""
-    persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
-    if persisted is None:
+    _, credentials = await _resolve_persisted_dcr_client(mcp_server)
+    if credentials is None:
         return False
-    _, credentials = persisted
     if not _redirect_uri_not_registered(credentials, current_redirect_uri):
         return False
     verbose_logger.warning(
@@ -1067,7 +1257,10 @@ DcrRegistrationPersistenceResult = Literal["persisted", "reused", "skipped", "fa
 async def _persist_dcr_client_registration(
     mcp_server: MCPServer, registration_response: object, current_redirect_uri: str
 ) -> DcrRegistrationPersistenceResult:
-    """Persist the dynamically registered OAuth client (RFC 7591) onto the MCP server row.
+    """Persist the dynamically registered OAuth client (RFC 7591) to its single home: the server's
+    ``LiteLLM_MCPServerTable`` row when it has one, otherwise the server-scoped store when the server
+    is config-declared. A rowless server that is not config-declared is a throwaway temp/session
+    server, so its client is overlaid in memory only and not persisted.
 
     The interactive authorization_code flow mints a ``client_id`` via Dynamic Client
     Registration that discovery cannot re-derive; without persisting it the autonomous
@@ -1106,16 +1299,20 @@ async def _persist_dcr_client_registration(
     if await _reuse_persisted_dcr_client_if_available(mcp_server, current_redirect_uri=current_redirect_uri):
         return "reused"
 
+    token_endpoint_auth_method = (
+        "client_secret_basic" if registration.token_endpoint_auth_method == "client_secret_basic" else None
+    )
     credentials: MCPCredentials = {
         "client_id": registration.client_id,
         "client_secret": registration.client_secret,
-        "token_endpoint_auth_method": (
-            "client_secret_basic" if registration.token_endpoint_auth_method == "client_secret_basic" else None
-        ),
+        "token_endpoint_auth_method": token_endpoint_auth_method,
         "redirect_uris": [current_redirect_uri],
     }
 
-    from litellm.proxy._experimental.mcp_server.db import update_mcp_server  # noqa: PLC0415
+    from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
+        update_mcp_server,
+        upsert_mcp_server_oauth_client_credentials,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
         global_mcp_server_manager,
     )
@@ -1136,7 +1333,18 @@ async def _persist_dcr_client_registration(
             ),
             touched_by="mcp_oauth_dcr",
         )
-        await global_mcp_server_manager.update_server(updated_row)
+        if updated_row is not None:
+            await global_mcp_server_manager.update_server(updated_row)
+            return "persisted"
+        if global_mcp_server_manager.is_config_declared_server(mcp_server.server_id):
+            await upsert_mcp_server_oauth_client_credentials(
+                prisma_client=prisma_client,
+                server_id=mcp_server.server_id,
+                credentials=credentials,
+            )
+        mcp_server.client_id = registration.client_id
+        mcp_server.client_secret = registration.client_secret
+        mcp_server.token_endpoint_auth_method = token_endpoint_auth_method
         return "persisted"
     except Exception as exc:  # noqa: BLE001
         verbose_logger.warning(
@@ -1145,6 +1353,154 @@ async def _persist_dcr_client_registration(
             exc,
         )
         return "failed"
+
+
+def client_supplied_redirect_uris(value: object) -> list[str] | None:
+    """RFC 7591 redirect_uris must be a non-empty array of URI strings. Any other shape (not a list,
+    an empty list, or a list holding a non-string or empty-string element) yields None so every
+    register arm falls back to the gateway callback instead of echoing a malformed value back to the
+    client as its redirect_uris. The redirect actually used is trust-validated later at /authorize by
+    validate_trusted_redirect_uri; this guard only keeps the client-facing echo well-typed."""
+    if not isinstance(value, list) or not value:
+        return None
+    uris = [uri for uri in value if isinstance(uri, str) and uri]
+    return uris if len(uris) == len(value) else None
+
+
+async def _post_dcr_registration(
+    registration_url: str,
+    register_data: Mapping[str, object],
+    server_id: str,
+) -> httpx.Response:
+    """POST an RFC 7591 registration to the upstream and return its response, relaying a classified
+    upstream rejection instead of a generic 500 and failing loud on an absent response."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Register)
+    try:
+        response = await async_client.post(
+            registration_url,
+            headers=headers,
+            json=register_data,
+        )
+        if response is not None:
+            response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        status_code, detail = dcr_fault_detail(classify_upstream_dcr_rejection(exc.response, log_context=server_id))
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    if response is None:
+        raise HTTPException(
+            status_code=502,
+            detail="MCP upstream registration endpoint returned no response",
+        )
+    return response
+
+
+class EphemeralDcrClient(BaseModel):
+    """A DCR client minted for a single authorize round trip and never stored by the gateway."""
+
+    model_config = ConfigDict(frozen=True)
+    client_id: str = Field(min_length=1)
+    client_secret: str | None = None
+    token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None
+
+
+_EPHEMERAL_DCR_CLIENT_CACHE = InMemoryCache(default_ttl=_OAUTH_STATE_COOKIE_TTL_SECONDS)
+_EPHEMERAL_DCR_MINT_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+async def mint_ephemeral_dcr_client(request: Request, mcp_server: MCPServer) -> EphemeralDcrClient | None:
+    """Mint a throwaway OAuth client via the upstream's RFC 7591 registration endpoint for a
+    client-forwarded-token server whose authorize arrived with no client_id. Returns ``None`` when
+    the upstream exposes no registration endpoint, so the caller keeps its existing failure path.
+    The minted client is deliberately not persisted anywhere: ``true_passthrough`` /
+    ``oauth_delegate`` require the gateway to hold no OAuth client identity, so it survives only in
+    the encrypted OAuth state and the sealed authorization code the callback forwards.
+
+    Reloading the authorize page or retrying a flow must not register a fresh upstream client every
+    time (an OAuth client identifies the application, not the user, so reuse is semantically
+    correct). A per-process TTL cache bounded to the OAuth state cookie's lifetime dedupes the mint
+    per (server, gateway origin), and a per-server lock single-flights concurrent mints (the
+    ``_OAUTH_METADATA_FETCH_LOCKS`` pattern; keyed by server_id alone so the lock registry stays
+    bounded by the server count even when the request origin varies) so parallel authorize requests
+    cannot each register an upstream client; the cache stamps nothing onto the server record and
+    correctness never depends on it because the sealed state carries the client through the flow."""
+    if mcp_server.registration_url is None:
+        return None
+    request_base_url = get_request_base_url(request)
+    cache_key = f"mcp_ephemeral_dcr_client:{mcp_server.server_id}:{request_base_url}"
+    cached = _EPHEMERAL_DCR_CLIENT_CACHE.get_cache(cache_key)
+    if isinstance(cached, EphemeralDcrClient):
+        return cached
+    lock = _EPHEMERAL_DCR_MINT_LOCKS.setdefault(mcp_server.server_id, asyncio.Lock())
+    async with lock:
+        cached_after_wait = _EPHEMERAL_DCR_CLIENT_CACHE.get_cache(cache_key)
+        if isinstance(cached_after_wait, EphemeralDcrClient):
+            return cached_after_wait
+        register_data: dict[str, object] = {
+            "client_name": mcp_server.server_name or mcp_server.server_id,
+            "redirect_uris": [f"{request_base_url}/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        }
+        response = await _post_dcr_registration(
+            registration_url=mcp_server.registration_url,
+            register_data=register_data,
+            server_id=mcp_server.server_id,
+        )
+        try:
+            registration = _DcrClientRegistration.model_validate_json(response.text)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="MCP upstream registration endpoint returned no usable client_id",
+            ) from exc
+        if not registration.client_id:
+            raise HTTPException(
+                status_code=502,
+                detail="MCP upstream registration endpoint returned no usable client_id",
+            )
+        minted = EphemeralDcrClient(
+            client_id=registration.client_id,
+            client_secret=registration.client_secret,
+            token_endpoint_auth_method=normalize_token_endpoint_auth_method(registration.token_endpoint_auth_method),
+        )
+        _EPHEMERAL_DCR_CLIENT_CACHE.set_cache(cache_key, minted)
+        return minted
+
+
+async def resolve_ephemeral_dcr_client(
+    request: Request,
+    mcp_server: MCPServer,
+    code_challenge: str | None,
+    code_challenge_method: str | None,
+    redirect_uri: str,
+) -> EphemeralDcrClient | None:
+    """The single owner of the gateway-side mint policy for a clientless authorize. Returns
+    ``None`` for servers whose mode does not permit gateway minting and for upstreams without a
+    registration endpoint, so those callers keep their existing failure paths: plain ``oauth2``
+    keeps its persisted-client contract, and the interactive ``oauth_delegate`` dcr_bridge
+    sign-in has its own sealed-identity flow. ``true_passthrough`` mints regardless of the
+    ``dcr_bridge`` flag (the UI creates passthrough servers with the flag on by default): a
+    minted flow runs the bridge short-circuit arm, while the relay front door remains for
+    external clients that registered themselves. Flows that could never succeed fail loud
+    before any upstream registration: a missing ``authorization_url``, a downgraded PKCE pair
+    (without S256 the sealed code would be bearer-redeemable by any authenticated caller who
+    intercepts the redirect), or an untrusted ``redirect_uri`` (a rejected redirect must not be
+    usable to generate orphan IdP clients)."""
+    if not (mcp_server.is_true_passthrough or (mcp_server.is_oauth_delegate and not mcp_server.is_dcr_bridge)):
+        return None
+    if mcp_server.authorization_url is None:
+        raise HTTPException(
+            status_code=400,
+            detail="MCP server authorization url is not set",
+        )
+    _require_s256_pkce(code_challenge, code_challenge_method)
+    validate_trusted_redirect_uri(request, redirect_uri)
+    return await mint_ephemeral_dcr_client(request, mcp_server)
 
 
 async def register_client_with_server(
@@ -1156,15 +1512,16 @@ async def register_client_with_server(
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
     persist_credentials: bool = False,
-    client_redirect_uris: Optional[list] = None,
+    client_redirect_uris: list[str] | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
     current_redirect_uri = f"{request_base_url}/callback"
+    client_facing_redirect_uris = client_redirect_uris or [current_redirect_uri]
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [current_redirect_uri],
+        "redirect_uris": client_facing_redirect_uris,
     }
 
     if mcp_server.client_id and not (
@@ -1181,7 +1538,14 @@ async def register_client_with_server(
         return dummy_return
 
     if mcp_server.authorization_url is None:
-        raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "MCP server authorization url is not configured. Servers with no url (OpenAPI "
+                "spec or stdio) run no resource discovery, so set Authorization URL and Token URL "
+                "manually, or set Issuer to discover them from the identity provider (RFC 8414)."
+            ),
+        )
 
     if mcp_server.registration_url is None:
         return dummy_return
@@ -1200,30 +1564,11 @@ async def register_client_with_server(
         "response_types": response_types or (["code"] if bridge_relay else []),
         "token_endpoint_auth_method": token_endpoint_auth_method or ("none" if bridge_relay else ""),
     }
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Register)
-    try:
-        response = await async_client.post(
-            mcp_server.registration_url,
-            headers=headers,
-            json=register_data,
-        )
-        if response is not None:
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        status_code, detail = dcr_fault_detail(
-            classify_upstream_dcr_rejection(exc.response, log_context=mcp_server.server_id)
-        )
-        raise HTTPException(status_code=status_code, detail=detail) from exc
-    if response is None:
-        raise HTTPException(
-            status_code=502,
-            detail="MCP upstream registration endpoint returned no response",
-        )
+    response = await _post_dcr_registration(
+        registration_url=mcp_server.registration_url,
+        register_data=register_data,
+        server_id=mcp_server.server_id,
+    )
 
     token_response = response.json()
 
@@ -1231,6 +1576,9 @@ async def register_client_with_server(
         persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
         if persistence_result == "reused":
             return dummy_return
+
+    if client_redirect_uris and not bridge_relay and isinstance(token_response, dict):
+        token_response = {**token_response, "redirect_uris": client_facing_redirect_uris}
 
     return JSONResponse(token_response)
 
@@ -1458,10 +1806,22 @@ async def callback(
         # envelope to this user. Every other flow forwards the raw code unchanged.
         litellm_user_id = state_data.get("litellm_user_id")
         mcp_server_id = state_data.get("mcp_server_id")
+        dcr_client_id = state_data.get("dcr_client_id")
+        dcr_client_secret = state_data.get("dcr_client_secret")
         forwarded_code = code
         if isinstance(litellm_user_id, str) and litellm_user_id and isinstance(mcp_server_id, str) and mcp_server_id:
             forwarded_code = seal_bridge_authorization_code(
                 upstream_code=code, litellm_user_id=litellm_user_id, mcp_server_id=mcp_server_id
+            )
+        elif isinstance(dcr_client_id, str) and dcr_client_id and isinstance(mcp_server_id, str) and mcp_server_id:
+            forwarded_code = seal_passthrough_authorization_code(
+                upstream_code=code,
+                client_id=dcr_client_id,
+                client_secret=dcr_client_secret if isinstance(dcr_client_secret, str) and dcr_client_secret else None,
+                mcp_server_id=mcp_server_id,
+                token_endpoint_auth_method=normalize_token_endpoint_auth_method(
+                    state_data.get("dcr_token_endpoint_auth_method")
+                ),
             )
 
         params = {"code": forwarded_code, "state": original_state}
@@ -1770,11 +2130,88 @@ def _jwt_auth_issuers() -> list:
     return issuers
 
 
+def _build_aggregate_protected_resource_response(request: Request) -> dict:
+    """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
+    the authorization server. No per-server names or scopes leak here; access
+    is resolved after sign-in from the authenticated user's grants.
+
+    The advertised authorization server is ``{base}/mcp`` (not the bare
+    origin) so RFC 8414 path-insertion resolves its metadata at
+    ``/.well-known/oauth-authorization-server/mcp``, a route this module
+    owns. The bare-origin well-known is registered first by the BYOK OAuth
+    feature and describes the BYOK flow, so it must not be the aggregate
+    discovery entry point (same pattern as the per-server documents, which
+    advertise ``{base}/{server_name}``)."""
+    request_base_url = get_request_base_url(request)
+    return {
+        "authorization_servers": [f"{request_base_url}/mcp"],
+        "resource": f"{request_base_url}/mcp",
+        "scopes_supported": [],
+    }
+
+
+def _build_aggregate_authorization_server_response(request: Request) -> dict:
+    """RFC 8414 metadata for the gateway as the aggregate authorization server.
+
+    The issuer is ``{base}/mcp`` and must stay equal to the value the
+    aggregate protected-resource document advertises: spec clients verify the
+    issuer in the metadata matches the one that derived the well-known URL.
+    Advertises the root /authorize, /token, and /register endpoints and
+    ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
+    clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
+    S256 is mandatory in the gateway's authorize flow."""
+    request_base_url = get_request_base_url(request)
+    return {
+        "issuer": f"{request_base_url}/mcp",
+        "authorization_endpoint": f"{request_base_url}/authorize",
+        "token_endpoint": f"{request_base_url}/token",
+        "registration_endpoint": f"{request_base_url}/register",
+        "response_types_supported": ["code"],
+        "scopes_supported": [],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+    }
+
+
+# RFC 9728 path-appended discovery for the aggregate /mcp endpoint. A client
+# pointed at {base}/mcp inserts the well-known segment before the resource
+# path, so this exact route must exist for aggregate discovery to work at all.
+# Declared before the parameterized well-known routes below: Starlette matches
+# in registration order, and /.well-known/oauth-authorization-server/{name}
+# would otherwise capture the "/mcp" suffix as a server name.
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp")
+async def oauth_protected_resource_aggregate(request: Request):
+    """
+    OAuth protected resource discovery for the aggregate /mcp endpoint.
+
+    The single-segment ``/mcp`` path does not collide with any per-server PRM pattern
+    (those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously
+    describes the aggregate resource.
+    """
+    return _build_aggregate_protected_resource_response(request)
+
+
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp")
+async def oauth_authorization_server_aggregate(request: Request):
+    """
+    OAuth authorization server discovery for the aggregate /mcp endpoint, the RFC 8414
+    path-inserted form for a client that treats {base}/mcp as its authorization base URL.
+
+    The single-segment /mcp is reserved for the aggregate so the discovery chain stays
+    consistent: the aggregate protected-resource document advertises {base}/mcp as its
+    authorization server, so the document served here must have issuer {base}/mcp. A server
+    literally named ``mcp`` therefore does not take this route; it keeps its standard
+    two-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp. Letting the
+    per-server row win here instead would serve an issuer of {base} against a resource that
+    advertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.
+    """
+    return _build_aggregate_authorization_server_response(request)
+
+
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
 # This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
-@router.get(
-    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
 async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth protected resource discovery endpoint using standard MCP URL pattern.
@@ -1794,9 +2231,7 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
-@router.get(
-    f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp"
-)
+@router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
 @router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: Optional[str] = None):
     """
@@ -1866,9 +2301,7 @@ def _build_oauth_authorization_server_response(
 
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
-@router.get(
-    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp/{{mcp_server_name}}")
 async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery endpoint using standard MCP URL pattern.
@@ -1883,9 +2316,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
 
 
 # LiteLLM legacy pattern and root endpoint
-@router.get(
-    f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}"
-)
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}")
 @router.get("/.well-known/oauth-authorization-server")
 async def oauth_authorization_server_mcp(request: Request, mcp_server_name: Optional[str] = None):
     """
@@ -1982,11 +2413,12 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
 
     request_data = await _read_request_body(request=request)
     data: dict = {**request_data}
+    client_redirect_uris = client_supplied_redirect_uris(data.get("redirect_uris"))
 
     dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": client_redirect_uris or [f"{request_base_url}/callback"],
     }
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
@@ -2000,7 +2432,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
-                client_redirect_uris=data.get("redirect_uris"),
+                client_redirect_uris=client_redirect_uris,
             )
         return dummy_return
 
@@ -2015,5 +2447,5 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
         fallback_client_id=mcp_server_name,
-        client_redirect_uris=data.get("redirect_uris"),
+        client_redirect_uris=client_redirect_uris,
     )

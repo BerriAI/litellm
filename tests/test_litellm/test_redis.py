@@ -724,3 +724,16 @@ def test_connection_pool_without_ssl_kwarg_uses_plain_connection(monkeypatch):
     call_kwargs = mock_pool.call_args.kwargs
     assert call_kwargs.get("connection_class") is not async_redis.SSLConnection
     assert "ssl" not in call_kwargs
+
+
+def test_connection_pool_env_redis_ssl_false_uses_plain_connection(monkeypatch):
+    """REDIS_SSL=false from the environment must not select SSLConnection."""
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_CLUSTER_NODES", raising=False)
+    monkeypatch.setenv("REDIS_SSL", "false")
+
+    pool = get_redis_connection_pool(host="plain-host", port=6379)
+
+    assert pool is not None
+    assert pool.connection_class is async_redis.Connection
+    assert "ssl" not in pool.connection_kwargs

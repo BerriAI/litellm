@@ -183,7 +183,7 @@ def build_from_paths(
     generated_at: str,
     output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """I/O wrapper around build_matrix used by the publisher script."""
+    """I/O wrapper around ``build_matrix``: reads the manifest and per-test results from disk, calls ``build_matrix``, and (optionally) writes the compat-matrix JSON to ``output_path``. Whatever orchestrator publishes the matrix (currently the ECR image) invokes this."""
     manifest = load_manifest(manifest_path)
     results = load_results(results_path)
     matrix = build_matrix(

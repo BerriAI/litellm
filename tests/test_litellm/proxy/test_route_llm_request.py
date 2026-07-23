@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to 
 
 from unittest.mock import MagicMock
 
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
 
 
 @pytest.mark.parametrize(
@@ -40,6 +40,200 @@ async def test_route_request_dynamic_credentials(route_type):
     assert response == "fake_response"
     # Now assert that the dynamic method was called once with the expected kwargs.
     getattr(llm_router, route_type).assert_called_once_with(**data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_without_team_id():
+    import litellm
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-team-azure-east",
+                "litellm_params": {
+                    "model": "azure/gpt-4o",
+                    "api_key": "fake",
+                    "api_base": "https://east.example.openai.azure.com",
+                    "api_version": "2024-02-15-preview",
+                    "mock_response": "east",
+                },
+                "model_info": {
+                    "id": "team-azure-east",
+                    "team_id": "team-a",
+                    "team_public_model_name": "team-azure",
+                },
+            },
+            {
+                "model_name": "internal-team-azure-west",
+                "litellm_params": {
+                    "model": "azure/gpt-4o",
+                    "api_key": "fake",
+                    "api_base": "https://west.example.openai.azure.com",
+                    "api_version": "2024-02-15-preview",
+                    "mock_response": "west",
+                },
+                "model_info": {
+                    "id": "team-azure-west",
+                    "team_id": "team-a",
+                    "team_public_model_name": "team-azure",
+                },
+            },
+        ]
+    )
+    admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    data = {
+        "model": "team-azure",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"user_api_key_auth": admin_auth},
+    }
+
+    llm_call = await route_request(
+        data=data,
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+        user_api_key_dict=admin_auth,
+    )
+    response = await llm_call
+    deployments = await router.async_get_healthy_deployments(
+        model="team-azure",
+        request_kwargs=data,
+    )
+
+    assert response.choices[0].message.content in {"east", "west"}
+    assert {deployment["model_info"]["id"] for deployment in deployments} == {
+        "team-azure-east",
+        "team-azure-west",
+    }
+
+    non_admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            data={
+                **data,
+                "metadata": {"user_api_key_auth": non_admin_auth},
+            },
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+            user_api_key_dict=non_admin_auth,
+        )
+
+    from litellm.types.router import Deployment
+
+    router.add_deployment(
+        Deployment(
+            model_name="internal-team-only",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake",
+                "api_base": "https://internal.example.openai.azure.com",
+                "api_version": "2024-02-15-preview",
+            },
+            model_info={
+                "id": "internal-team-only-id",
+                "team_id": "team-a",
+            },
+        )
+    )
+    internal_deployments = await router.async_get_healthy_deployments(
+        model="internal-team-only",
+        request_kwargs={
+            **data,
+            "model": "internal-team-only",
+        },
+    )
+
+    assert {deployment["model_info"]["id"] for deployment in internal_deployments} == {"internal-team-only-id"}
+
+    router.add_deployment(
+        Deployment(
+            model_name="internal-other-team-azure",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake",
+                "api_base": "https://other.example.openai.azure.com",
+                "api_version": "2024-02-15-preview",
+                "mock_response": "other",
+            },
+            model_info={
+                "id": "other-team-azure",
+                "team_id": "team-b",
+                "team_public_model_name": "team-azure",
+            },
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="multiple teams"):
+        ambiguous_call = await route_request(
+            data=data,
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+            user_api_key_dict=admin_auth,
+        )
+        await ambiguous_call
+
+    router.add_deployment(
+        Deployment(
+            model_name="team-azure",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake",
+                "api_base": "https://legacy.example.openai.azure.com",
+                "api_version": "2024-02-15-preview",
+            },
+            model_info={
+                "id": "legacy-team-azure",
+                "team_id": "team-a",
+                "team_public_model_name": "team-azure",
+            },
+        )
+    )
+    router.add_deployment(
+        Deployment(
+            model_name="team-azure",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake",
+                "api_base": "https://other-legacy.example.openai.azure.com",
+                "api_version": "2024-02-15-preview",
+            },
+            model_info={
+                "id": "other-legacy-team-azure",
+                "team_id": "team-b",
+                "team_public_model_name": "team-azure",
+            },
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="multiple teams"):
+        await router.async_get_healthy_deployments(
+            model="team-azure",
+            request_kwargs=data,
+        )
+
+    router.add_deployment(
+        Deployment(
+            model_name="team-azure",
+            litellm_params={
+                "model": "azure/gpt-4o",
+                "api_key": "fake",
+                "api_base": "https://global.example.openai.azure.com",
+                "api_version": "2024-02-15-preview",
+            },
+            model_info={"id": "global-team-azure"},
+        )
+    )
+
+    collision_deployments = await router.async_get_healthy_deployments(
+        model="team-azure",
+        request_kwargs=data,
+    )
+
+    assert {deployment["model_info"]["id"] for deployment in collision_deployments} == {"global-team-azure"}
 
 
 @pytest.mark.asyncio
@@ -188,8 +382,8 @@ async def test_route_request_with_router_settings_override():
             "num_retries": 5,
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
-            # These settings should be ignored (not in per_request_settings list)
             "routing_strategy": "least-busy",
+            # This setting should be ignored (not in per_request_settings list)
             "model_group_alias": {"alias": "real_model"},
         },
     }
@@ -206,8 +400,8 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["num_retries"] == 5
     assert call_kwargs["timeout"] == 30
     assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    assert call_kwargs["routing_strategy"] == "least-busy"
     # Verify unsupported settings were NOT merged
-    assert "routing_strategy" not in call_kwargs
     assert "model_group_alias" not in call_kwargs
     # Verify router_settings_override was removed from data
     assert "router_settings_override" not in call_kwargs
@@ -625,3 +819,71 @@ async def test_route_request_realtime_transcription_session_resolves_credentials
         )
 
     assert mock_handler.call_args.kwargs["api_key"] == "transcription-key"
+
+
+@pytest.mark.asyncio
+async def test_route_request_merges_enable_tag_filtering_from_override():
+    """Key/team router_settings carry enable_tag_filtering; the override
+    whitelist must forward it to the router call or the team's tag-routing
+    toggle saved in the UI is silently ignored at request time."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "enable_tag_filtering": True,
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["enable_tag_filtering"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_request_strips_client_supplied_enable_tag_filtering():
+    """enable_tag_filtering influences deployment selection and is only
+    trusted when it comes from key/team router_settings via
+    router_settings_override. A caller putting it in the request body must
+    not reach the router with it."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "enable_tag_filtering": True,
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert "enable_tag_filtering" not in call_kwargs
+    assert "enable_tag_filtering" not in data
+
+
+@pytest.mark.asyncio
+async def test_route_request_override_enable_tag_filtering_beats_body_value():
+    """A client-sent enable_tag_filtering must not shadow the key/team
+    setting: the body copy is stripped first, so the override value is the
+    one the router sees."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "enable_tag_filtering": False,
+        "router_settings_override": {
+            "enable_tag_filtering": True,
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["enable_tag_filtering"] is True

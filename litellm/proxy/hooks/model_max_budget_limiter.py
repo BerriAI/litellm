@@ -5,7 +5,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -76,6 +76,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
+                    entity_type=Litellm_EntityType.KEY.value,
+                    entity_id=user_api_key_dict.token,
                 )
 
         return True
@@ -140,6 +142,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
                     current_cost=_current_spend,
                     max_budget=_current_model_budget_info.max_budget,
+                    entity_type=Litellm_EntityType.END_USER.value,
+                    entity_id=end_user_id,
                 )
 
         return True

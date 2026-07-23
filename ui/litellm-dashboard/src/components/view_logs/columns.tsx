@@ -539,15 +539,3 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
     </div>
   );
 };
-
-export type AuditLogEntry = {
-  id: string;
-  updated_at: string;
-  changed_by: string;
-  changed_by_api_key: string;
-  action: string;
-  table_name: string;
-  object_id: string;
-  before_value: Record<string, any>;
-  updated_values: Record<string, any>;
-};

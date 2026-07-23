@@ -11,7 +11,10 @@
 //!   binary turns on. The `python-config` feature additionally pulls in [`python`]
 //!   for the load-time config reader.
 
+pub mod audio_transcription;
+mod client;
 pub mod io;
+pub mod messages;
 pub mod ocr;
 
 /// GIL-activity tracking. Pure (atomics only); shared by the `server` routes and
@@ -25,9 +28,6 @@ pub mod routes;
 #[cfg(feature = "server")]
 pub mod state;
 
-// Realtime request logging. Only the server serves realtime, so these are
-// `server`-gated; `io::realtime` exposes the generic `observe` hook while the
-// collector and callback fan-out live here.
 mod constants;
 pub mod integrations;
 #[cfg(feature = "server")]

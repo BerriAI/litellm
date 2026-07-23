@@ -573,6 +573,409 @@ async def test_register_client_remote_registration_success():
 
 
 @pytest.mark.asyncio
+async def test_register_client_non_bridge_returns_client_redirect_not_gateway_callback():
+    """Regression for the DCR self-redirect loop (#33699). A plain oauth2 DCR server relays the
+    gateway's own /callback upstream, which is correct for the relay leg, but the client-facing
+    /register response must echo the CLIENT's own redirect_uris. A Rovo-style upstream echoes back
+    whatever redirect_uris it was registered with (here the gateway callback); returning that
+    verbatim makes a spec-compliant DCR client adopt /callback as its own redirect and loop."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import register_client
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="rovo_like",
+        name="rovo_like",
+        server_name="rovo_like",
+        alias="rovo_like",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+        registration_url="https://provider.example/oauth/register",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    client_redirect = "https://open-webui.example/oauth/oidc/callback"
+    request_payload = {
+        "client_name": "Open WebUI",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "redirect_uris": [client_redirect],
+    }
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "client_id": "upstream-generated-client-id",
+        "client_secret": "upstream-generated-secret",
+        "redirect_uris": ["https://proxy.litellm.example/callback"],
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(return_value=request_payload),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            response = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["redirect_uris"] == [client_redirect]
+    assert payload["client_id"] == "upstream-generated-client-id"
+    assert mock_async_client.post.call_args.kwargs["json"]["redirect_uris"] == [
+        "https://proxy.litellm.example/callback"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_register_client_admin_client_id_echoes_client_redirect_uris():
+    """A server with an admin-configured client_id short-circuits registration to a placeholder
+    response, which must still echo the client's own redirect_uris so a DCR client does not adopt
+    the gateway /callback and self-redirect loop (#33699)."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import register_client
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="stored_server",
+        name="stored_server",
+        server_name="stored_server",
+        alias="stored_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="existing-client",
+        client_secret="existing-secret",
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    client_redirect = "https://open-webui.example/oauth/oidc/callback"
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            new=AsyncMock(return_value={"redirect_uris": [client_redirect]}),
+        ):
+            result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert result == {
+        "client_id": "stored_server",
+        "client_secret": "dummy",
+        "redirect_uris": [client_redirect],
+    }
+
+
+@pytest.mark.asyncio
+async def test_dcr_full_loop_lands_on_client_redirect_not_gateway_callback(monkeypatch):
+    """End-to-end regression for #33699. A DCR client registers, then completes /authorize and
+    /callback. With the fix the client registers and authorizes with its OWN redirect, so /callback
+    delivers the code to the client's real endpoint instead of looping back into the gateway
+    /callback (whose decrypt of the client's opaque state failed as 'Incorrect padding'). The
+    client's separate origin is trusted via MCP_TRUSTED_REDIRECT_ORIGINS."""
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _oauth_state_cookie_name,
+        authorize_with_server,
+        callback,
+        register_client,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-33699")
+    monkeypatch.setenv("MCP_TRUSTED_REDIRECT_ORIGINS", "open-webui.example")
+
+    client_redirect = "https://open-webui.example/oauth/oidc/callback"
+    client_state = "client-opaque-state-777"
+
+    global_mcp_server_manager.registry.clear()
+    server = MCPServer(
+        server_id="rovo_like",
+        name="rovo_like",
+        server_name="rovo_like",
+        alias="rovo_like",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+        registration_url="https://provider.example/oauth/register",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    reg_request = MagicMock(spec=Request)
+    reg_request.base_url = "https://proxy.example.com/"
+    reg_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "client_id": "upstream-generated-client-id",
+        "client_secret": "upstream-generated-secret",
+        "redirect_uris": ["https://proxy.example.com/callback"],
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(
+                    return_value={
+                        "client_name": "Open WebUI",
+                        "redirect_uris": [client_redirect],
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                    }
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            reg_response = await register_client(request=reg_request, mcp_server_name=server.server_name)
+
+        reg_payload = json.loads(reg_response.body.decode("utf-8"))
+        assert reg_payload["redirect_uris"] == [client_redirect]
+        registered_redirect = reg_payload["redirect_uris"][0]
+
+        authorize_request = MagicMock(spec=Request)
+        authorize_request.base_url = "https://proxy.example.com/"
+        authorize_request.headers = {}
+        authorize_response = await authorize_with_server(
+            request=authorize_request,
+            mcp_server=server,
+            client_id="upstream-generated-client-id",
+            redirect_uri=registered_redirect,
+            state=client_state,
+            code_challenge="challenge",
+            code_challenge_method="S256",
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert authorize_response.status_code == 307
+    location = authorize_response.headers["location"]
+    upstream_state = parse_qs(urlparse(location).query)["state"][0]
+    assert upstream_state != client_state
+    assert "redirect_uri=https%3A%2F%2Fproxy.example.com%2Fcallback" in location
+
+    jar = SimpleCookie()
+    jar.load(authorize_response.headers["set-cookie"])
+    cookie_name = _oauth_state_cookie_name(upstream_state)
+    morsel = jar[cookie_name]
+
+    callback_request = MagicMock(spec=Request)
+    callback_request.base_url = "https://proxy.example.com/"
+    callback_request.headers = {}
+    callback_request.cookies = {cookie_name: morsel.value}
+
+    callback_response = await callback(
+        request=callback_request,
+        code="upstream-auth-code",
+        state=upstream_state,
+    )
+
+    assert callback_response.status_code == 302
+    final = urlparse(callback_response.headers["location"])
+    assert f"{final.scheme}://{final.netloc}{final.path}" == client_redirect
+    final_query = parse_qs(final.query)
+    assert final_query["code"] == ["upstream-auth-code"]
+    assert final_query["state"] == [client_state]
+
+
+@pytest.mark.asyncio
+async def test_authorize_rejects_untrusted_cross_origin_redirect_with_allowlist_hint(monkeypatch):
+    """Once the client uses its own separate-origin redirect (#33699 fix), an untrusted origin is
+    rejected at /authorize. The rejection must point the operator to MCP_TRUSTED_REDIRECT_ORIGINS,
+    the mechanism a legitimate separate-origin DCR client needs, not only to PROXY_BASE_URL."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="rovo_like",
+        name="rovo_like",
+        server_name="rovo_like",
+        alias="rovo_like",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="upstream-client",
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await authorize(
+                request=mock_request,
+                client_id="upstream-client",
+                mcp_server_name="rovo_like",
+                redirect_uri="https://open-webui.example/oauth/oidc/callback",
+                state="s",
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert exc_info.value.status_code == 400
+    assert "MCP_TRUSTED_REDIRECT_ORIGINS" in exc_info.value.detail["hint"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformed_redirect_uris",
+    [
+        "https://evil.example/cb",
+        ["https://ok.example/cb", None],
+        ["https://ok.example/cb", 123],
+        ["https://ok.example/cb", {"nested": "object"}],
+        [""],
+        [],
+    ],
+)
+async def test_register_client_malformed_redirect_uris_falls_back_to_gateway_callback(malformed_redirect_uris):
+    """RFC 7591 redirect_uris is a non-empty array of URI strings. A client that sends any other shape
+    (a bare string, a list holding a non-string or empty-string element, or an empty list) must not
+    have that value echoed back as its redirect_uris; the register response falls back to the gateway
+    callback so downstream never iterates a string as URIs or leaks non-string element types (#33699)."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import register_client
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="stored_server",
+        name="stored_server",
+        server_name="stored_server",
+        alias="stored_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="existing-client",
+        client_secret="existing-secret",
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            new=AsyncMock(return_value={"redirect_uris": malformed_redirect_uris}),
+        ):
+            result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert result["redirect_uris"] == ["https://proxy.litellm.example/callback"]
+
+
+@pytest.mark.asyncio
+async def test_register_client_valid_multi_redirect_uris_all_echoed():
+    """A well-formed client sending several valid redirect URI strings gets all of them echoed back
+    unchanged, so the element-type guard does not narrow a legitimate multi-entry list (#33699)."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import register_client
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="stored_server",
+        name="stored_server",
+        server_name="stored_server",
+        alias="stored_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="existing-client",
+        client_secret="existing-secret",
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    client_redirects = ["https://app.example/cb", "http://127.0.0.1:6274/callback"]
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            new=AsyncMock(return_value={"redirect_uris": client_redirects}),
+        ):
+            result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert result["redirect_uris"] == client_redirects
+
+
+@pytest.mark.asyncio
 async def test_register_client_persists_dcr_client_identity():
     """A dynamic client registration (RFC 7591) must persist the issued client_id /
     client_secret / token_endpoint_auth_method and the token_url onto the server row so
@@ -7130,3 +7533,1104 @@ async def test_token_exchange_unreadable_body_still_renders_oauth_fault():
     assert response.status_code == 502
     body = json.loads(response.body)
     assert body == {"error": "server_error", "error_description": "upstream token endpoint returned HTTP 400"}
+
+
+@pytest.mark.asyncio
+async def test_persist_dcr_client_for_config_server_uses_side_store():
+    """A config.yaml-declared OAuth2 DCR server has no LiteLLM_MCPServerTable row, so
+    update_mcp_server returns None. The minted client must then persist to the server-scoped
+    OAuth-client store keyed by server_id (never a shadow server row), overlay onto the in-memory
+    server so refresh can authenticate this process, and never call update_server(None) (which
+    previously raised AttributeError on .approval_status, was swallowed, and reported a 200 that
+    persisted nothing)."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _persist_dcr_client_registration,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    config_server = MCPServer(
+        server_id="config_faros",
+        name="config_faros",
+        server_name="config_faros",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        client_secret=None,
+        authorization_url="https://provider.example/oauth/authorize",
+        token_url="https://provider.example/oauth/token",
+        registration_url="https://provider.example/oauth/register",
+    )
+
+    mock_upsert = AsyncMock()
+    mock_update_server = AsyncMock()
+
+    with (
+        patch.object(global_mcp_server_manager, "is_config_declared_server", return_value=True),
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.update_mcp_server",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server_oauth_client_credentials",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.upsert_mcp_server_oauth_client_credentials",
+            new=mock_upsert,
+        ),
+        patch.object(global_mcp_server_manager, "update_server", new=mock_update_server),
+    ):
+        result = await _persist_dcr_client_registration(
+            mcp_server=config_server,
+            registration_response={
+                "client_id": "minted-client",
+                "client_secret": "minted-secret",
+                "token_endpoint_auth_method": "client_secret_basic",
+            },
+            current_redirect_uri="https://proxy.litellm.example/callback",
+        )
+
+    assert result == "persisted"
+
+    mock_upsert.assert_called_once()
+    assert mock_upsert.call_args.kwargs["server_id"] == "config_faros"
+    stored = mock_upsert.call_args.kwargs["credentials"]
+    assert stored["client_id"] == "minted-client"
+    assert stored["client_secret"] == "minted-secret"
+    assert stored["token_endpoint_auth_method"] == "client_secret_basic"
+    assert stored["redirect_uris"] == ["https://proxy.litellm.example/callback"]
+
+    assert config_server.client_id == "minted-client"
+    assert config_server.client_secret == "minted-secret"
+    assert config_server.token_endpoint_auth_method == "client_secret_basic"
+
+    mock_update_server.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch):
+    """On restart a config server's in-memory object has no client_id; hydration overlays the
+    persisted DCR client from the server-scoped store, decrypting the encrypted-at-rest blob, so the
+    refresh_token grant can authenticate as the registered client instead of re-authenticating."""
+    import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+    from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        hydrate_config_server_dcr_client,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="config_faros",
+        name="config_faros",
+        server_name="config_faros",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+    )
+
+    monkeypatch.setattr(enc, "_get_salt_key", lambda: "salt-hydrate-key")
+    stored_blob = safe_dumps(
+        encrypt_credentials(
+            credentials={
+                "client_id": "stored-client",
+                "client_secret": "stored-secret",
+                "token_endpoint_auth_method": "client_secret_basic",
+                "redirect_uris": ["https://proxy.litellm.example/callback"],
+            },
+            encryption_key="salt-hydrate-key",
+        )
+    )
+    assert "stored-client" not in stored_blob and "stored-secret" not in stored_blob
+
+    with (
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server_oauth_client_credentials",
+            new=AsyncMock(return_value=stored_blob),
+        ),
+    ):
+        applied = await hydrate_config_server_dcr_client(server)
+
+    assert applied is True
+    assert server.client_id == "stored-client"
+    assert server.client_secret == "stored-secret"
+    assert server.token_endpoint_auth_method == "client_secret_basic"
+
+
+@pytest.mark.asyncio
+async def test_reuse_config_server_reads_store_with_real_crypto(monkeypatch):
+    """A config-declared server (rowless) keeps its DCR client in the store, so the reuse read
+    resolves it from the store and decrypts the encrypted-at-rest client, mirroring the write path so
+    a re-authorize reuses the client instead of re-minting one."""
+    import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+    from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _reuse_persisted_dcr_client_if_available,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="config_faros",
+        name="config_faros",
+        server_name="config_faros",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+    )
+
+    monkeypatch.setattr(enc, "_get_salt_key", lambda: "salt-reuse-key")
+    blob = safe_dumps(
+        encrypt_credentials(
+            credentials={"client_id": "stored-client", "client_secret": "sec", "redirect_uris": ["https://x/callback"]},
+            encryption_key="salt-reuse-key",
+        )
+    )
+    assert "stored-client" not in blob
+    store_lookup = AsyncMock(return_value=blob)
+    with (
+        patch.object(global_mcp_server_manager, "is_config_declared_server", return_value=True),
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch("litellm.proxy._experimental.mcp_server.db.get_mcp_server", new=AsyncMock(return_value=None)),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server_oauth_client_credentials",
+            new=store_lookup,
+        ),
+    ):
+        result = await _reuse_persisted_dcr_client_if_available(server, current_redirect_uri="https://x/callback")
+
+    assert result is True
+    assert server.client_id == "stored-client"
+    store_lookup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_temp_server_is_not_persisted_to_store():
+    """A rowless server that is NOT config-declared (a throwaway /server/oauth/session server) must
+    not leave a permanent store row on persist, and the read must never consult the store for it. Its
+    minted client is overlaid in memory for the session only."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _persist_dcr_client_registration,
+        _reuse_persisted_dcr_client_if_available,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    temp = MCPServer(
+        server_id="temp-uuid",
+        name="temp",
+        server_name="temp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+        authorization_url="https://p.example/authorize",
+        token_url="https://p.example/token",
+        registration_url="https://p.example/register",
+    )
+
+    upsert = AsyncMock()
+    store_read = AsyncMock(return_value=None)
+    with (
+        patch.object(global_mcp_server_manager, "is_config_declared_server", return_value=False),
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch("litellm.proxy._experimental.mcp_server.db.update_mcp_server", new=AsyncMock(return_value=None)),
+        patch("litellm.proxy._experimental.mcp_server.db.get_mcp_server", new=AsyncMock(return_value=None)),
+        patch("litellm.proxy._experimental.mcp_server.db.upsert_mcp_server_oauth_client_credentials", new=upsert),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server_oauth_client_credentials",
+            new=store_read,
+        ),
+        patch.object(global_mcp_server_manager, "update_server", new=AsyncMock()),
+    ):
+        result = await _persist_dcr_client_registration(
+            temp, {"client_id": "temp-client", "client_secret": "s"}, "https://x/callback"
+        )
+        reused = await _reuse_persisted_dcr_client_if_available(
+            MCPServer(
+                server_id="temp-uuid",
+                name="temp",
+                server_name="temp",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2,
+                client_id=None,
+            ),
+            current_redirect_uri="https://x/callback",
+        )
+
+    assert result == "persisted"
+    assert temp.client_id == "temp-client"
+    upsert.assert_not_called()
+    store_read.assert_not_called()
+    assert reused is False
+
+
+@pytest.mark.asyncio
+async def test_hydrate_does_not_overwrite_explicit_config_client_id():
+    """An explicit client_id set in config.yaml wins: hydration must not overwrite it with a stale
+    persisted store client, and must not even read the store when config already supplied a client."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        hydrate_config_server_dcr_client,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="config_static",
+        name="config_static",
+        server_name="config_static",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="explicit-from-config",
+    )
+    store_read = AsyncMock(
+        return_value={"client_id": "stale-store-client", "client_secret": "x", "redirect_uris": []}
+    )
+    with (
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server_oauth_client_credentials",
+            new=store_read,
+        ),
+    ):
+        applied = await hydrate_config_server_dcr_client(server)
+
+    assert applied is False
+    assert server.client_id == "explicit-from-config"
+    store_read.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reuse_does_not_inherit_store_client_when_a_row_exists():
+    """Security: a server that HAS a LiteLLM_MCPServerTable row reads its DCR client only from that
+    row, never from the server-scoped store. server_id is caller-settable on create, so a submitted
+    server whose id collides with a config-declared server must not be able to load that config
+    server's client from the store and send it to its own token endpoint. A row that exists but has
+    no client_id yields no reusable client and must not fall back to the store."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _reuse_persisted_dcr_client_if_available,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    submitted = MCPServer(
+        server_id="collides_with_config",
+        name="submitted",
+        server_name="submitted",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id=None,
+    )
+
+    row_without_client = MagicMock()
+    row_without_client.credentials = None
+    row_without_client.server_id = "collides_with_config"
+    store_lookup = AsyncMock(
+        return_value={"client_id": "config-secret-client", "client_secret": "leak", "redirect_uris": []}
+    )
+    with (
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server",
+            new=AsyncMock(return_value=row_without_client),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_mcp_server_oauth_client_credentials",
+            new=store_lookup,
+        ),
+    ):
+        result = await _reuse_persisted_dcr_client_if_available(submitted, current_redirect_uri="https://x/callback")
+
+    assert result is False
+    assert submitted.client_id is None
+    store_lookup.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_load_servers_from_config_hydrates_dcr_clients():
+    """load_servers_from_config must invoke DCR-client hydration so config servers pick up their
+    persisted client on startup; deleting the call site leaves a restarted server with no client_id
+    and forces re-authentication on every token expiry."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    hydrate_spy = AsyncMock()
+    with patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy):
+        await global_mcp_server_manager.load_servers_from_config({})
+
+    hydrate_spy.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reload_servers_from_database_hydrates_dcr_clients():
+    """load_servers_from_config runs before the DB connects at startup, so its hydration no-ops;
+    reload_servers_from_database runs after the DB connects and must hydrate config servers' persisted
+    DCR clients too, or a fresh pod has no client_id for a config server and forces re-authentication
+    on the first token refresh."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+
+    hydrate_spy = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma,
+        ),
+        patch.object(global_mcp_server_manager, "_hydrate_config_servers_dcr_clients", new=hydrate_spy),
+    ):
+        await global_mcp_server_manager.reload_servers_from_database()
+
+    hydrate_spy.assert_awaited_once()
+
+
+def test_aggregate_wellknown_routes_serve_gateway_metadata():
+    """Both path-appended aggregate routes serve the gateway documents. Exercises real
+    routing, so this also pins registration order: the parameterized
+    /.well-known/oauth-authorization-server/{name} route would otherwise capture the /mcp
+    suffix as a server name."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    prm = client.get("/.well-known/oauth-protected-resource/mcp")
+    asm = client.get("/.well-known/oauth-authorization-server/mcp")
+
+    assert prm.status_code == 200
+    assert prm.json()["resource"] == "http://testserver/mcp"
+    assert prm.json()["authorization_servers"] == ["http://testserver/mcp"]
+
+    assert asm.status_code == 200
+    assert asm.json()["issuer"] == "http://testserver/mcp"
+    assert asm.json()["authorization_endpoint"] == "http://testserver/authorize"
+    assert "none" in asm.json()["token_endpoint_auth_methods_supported"]
+
+
+def test_as_aggregate_route_reserves_mcp_for_the_aggregate():
+    """The single-segment /.well-known/oauth-authorization-server/mcp is reserved for the
+    aggregate even when a server is literally named ``mcp``. The aggregate protected-resource
+    document advertises {base}/mcp as its authorization server, so the document served here
+    must carry issuer {base}/mcp for the RFC 8414 issuer check to pass. Letting the per-server
+    row win (issuer {base}) breaks that chain, so the aggregate wins and the mcp-named server
+    keeps its standard two-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server_named_mcp = _create_oauth2_server(server_id="mcp_srv", name="mcp", server_name="mcp", alias="mcp")
+    global_mcp_server_manager.registry[server_named_mcp.server_id] = server_named_mcp
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    try:
+        asm = client.get("/.well-known/oauth-authorization-server/mcp")
+        assert asm.status_code == 200
+        # the aggregate document, whose issuer matches what the aggregate PRM advertises
+        assert asm.json()["issuer"] == "http://testserver/mcp"
+
+        prm = client.get("/.well-known/oauth-protected-resource/mcp")
+        assert prm.status_code == 200
+        assert prm.json()["authorization_servers"] == [asm.json()["issuer"]]
+
+        # the mcp-named server keeps its own document on the standard two-segment route
+        per_server = client.get("/.well-known/oauth-authorization-server/mcp/mcp")
+        assert per_server.status_code == 200
+        assert "/mcp/authorize" in per_server.json()["authorization_endpoint"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def test_well_known_root_suffix_reflects_server_root_path():
+    """The single path segment both the discovery routes and the 401 challenges insert for RFC
+    8414/9728 path insertion: empty for a root-mounted proxy or an explicit ``/``, the configured
+    path otherwise. Sharing this one function is what keeps the advertised resource_metadata URL
+    equal to the route that serves it."""
+    import os
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import well_known_root_suffix
+
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": ""}):
+        assert well_known_root_suffix() == ""
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": "/"}):
+        assert well_known_root_suffix() == ""
+    with patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}):
+        assert well_known_root_suffix() == "/litellm"
+
+
+@pytest.mark.asyncio
+async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
+    """The always-on aggregate front door must not change bare-origin discovery: with one
+    oauth2 server configured, the no-suffix /.well-known/oauth-{authorization-server,
+    protected-resource} still resolves THAT server, so an existing single-server deployment's
+    discovery is unchanged. The aggregate document lives only at the /mcp-suffixed routes."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        authorization_response = _build_oauth_authorization_server_response(
+            request=mock_request, mcp_server_name=None
+        )
+        resource_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name=None, use_standard_pattern=True
+        )
+        # per-server, not aggregate: the single server's name is in the endpoints
+        assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
+        assert authorization_response["issuer"] == "https://llm.example.com"
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_authorize_wall_names_the_fix_for_urlless_servers():
+    """LIT-4629: the authorize wall previously said only "authorization url is not set" with no
+    hint that spec-only servers never discover; the detail must now name both remedies (manual
+    Authorization URL + Token URL, or an Issuer for RFC 8414 discovery)."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-wall",
+        name="sheets_wall",
+        server_name="sheets_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="client",
+            redirect_uri="http://localhost/callback",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Authorization URL and Token URL" in detail_text
+    assert "Issuer" in detail_text
+
+
+@pytest.mark.asyncio
+async def test_token_wall_names_the_fix_for_urlless_servers():
+    """The /token wall is the second stop on the same misconfiguration (LIT-4629): after an admin
+    fills only the Authorization URL, the code exchange dies here; the detail must name the
+    remedies like the authorize wall does."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-token-wall",
+        name="sheets_token_wall",
+        server_name="sheets_token_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="client",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Token URL manually" in detail_text
+    assert "Issuer" in detail_text
+
+
+@pytest.mark.asyncio
+async def test_register_wall_names_the_fix_for_urlless_servers():
+    """The /register wall serves the same missing-authorization-url 400 as authorize; its detail
+    must carry the same actionable remedies."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="urlless-register-wall",
+        name="sheets_register_wall",
+        server_name="sheets_register_wall",
+        url=None,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        spec_path="https://example.com/openapi.yaml",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_client_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_name="client",
+            grant_types=None,
+            response_types=None,
+            token_endpoint_auth_method=None,
+        )
+    assert exc_info.value.status_code == 400
+    detail_text = str(exc_info.value.detail)
+    assert "set Authorization URL and Token URL" in detail_text
+    assert "Issuer" in detail_text
+
+
+def test_passthrough_authorization_code_round_trips_and_rejects_hostile_input():
+    """The passthrough gateway code seals and recovers the ephemeral DCR client and upstream code,
+    and is total over hostile input: a raw upstream code opens to None, and a tampered or
+    non-gateway value opens to None rather than raising, so every existing caller-supplied-client
+    flow is untouched."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        open_passthrough_authorization_code,
+        seal_passthrough_authorization_code,
+    )
+
+    with patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY):
+        sealed = seal_passthrough_authorization_code(
+            upstream_code="up-code",
+            client_id="minted-77",
+            client_secret="mint-secret",
+            mcp_server_id="srv-1",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+        opened = open_passthrough_authorization_code(sealed)
+        assert opened is not None
+        assert opened.upstream_code == "up-code"
+        assert opened.client_id == "minted-77"
+        assert opened.client_secret == "mint-secret"
+        assert opened.mcp_server_id == "srv-1"
+        assert opened.token_endpoint_auth_method == "client_secret_basic"
+        assert open_passthrough_authorization_code("raw-upstream-code") is None
+        assert open_passthrough_authorization_code(sealed[:-4] + "aaaa") is None
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _BRIDGE_AUTH_CODE_PREFIX,
+            _PASSTHROUGH_AUTH_CODE_PREFIX,
+            open_bridge_authorization_code,
+            seal_bridge_authorization_code,
+        )
+
+        bridge_sealed = seal_bridge_authorization_code(
+            upstream_code="up-code", litellm_user_id="sso-user-9", mcp_server_id="srv-1"
+        )
+        reprefixed_as_passthrough = _PASSTHROUGH_AUTH_CODE_PREFIX + bridge_sealed[len(_BRIDGE_AUTH_CODE_PREFIX) :]
+        reprefixed_as_bridge = _BRIDGE_AUTH_CODE_PREFIX + sealed[len(_PASSTHROUGH_AUTH_CODE_PREFIX) :]
+        assert open_passthrough_authorization_code(reprefixed_as_passthrough) is None
+        assert open_bridge_authorization_code(reprefixed_as_bridge) is None
+
+
+@pytest.mark.asyncio
+async def test_authorize_with_ephemeral_dcr_client_seals_client_into_state():
+    """When mcp_authorize fell through to a gateway-side DCR mint, authorize_with_server seals the
+    minted client and the target server into the encrypted OAuth state, so the callback can bind
+    them into the forwarded authorization code while the gateway stores nothing."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        EphemeralDcrClient,
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None)
+    captured: dict = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return "mocked_encrypted_state"
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encode_state_with_base_url",
+        side_effect=_capture,
+    ):
+        response = await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            client_id="minted-77",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="s",
+            code_challenge="chal",
+            code_challenge_method="S256",
+            ephemeral_dcr_client=EphemeralDcrClient(
+                client_id="minted-77", client_secret="mint-secret", token_endpoint_auth_method="client_secret_basic"
+            ),
+        )
+
+    assert captured["dcr_client_id"] == "minted-77"
+    assert captured["dcr_client_secret"] == "mint-secret"
+    assert captured["dcr_token_endpoint_auth_method"] == "client_secret_basic"
+    assert captured["mcp_server_id"] == server.server_id
+    assert "client_id=minted-77" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_callback_wraps_code_into_passthrough_code_for_ephemeral_dcr_state():
+    """When the OAuth state carries an ephemeral DCR client, the callback forwards a sealed
+    passthrough code (binding the client and the upstream code to the server) instead of the raw
+    upstream code, so the client's later token call can authenticate the exchange with a client the
+    gateway never stored."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+        open_passthrough_authorization_code,
+    )
+
+    state_data = {
+        "original_state": "client-state",
+        "client_redirect_uri": "http://127.0.0.1:60108/cb",
+        "base_url": "http://127.0.0.1:60108/cb",
+        "mcp_server_id": "srv-1",
+        "dcr_client_id": "minted-77",
+        "dcr_client_secret": "mint-secret",
+        "dcr_token_endpoint_auth_method": "client_secret_basic",
+    }
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_encoded_oauth_state",
+            return_value="enc",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash",
+            return_value=state_data,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._get_validated_client_redirect_uri",
+            return_value="http://127.0.0.1:60108/cb",
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await callback(request=_bridge_mock_request(), code="REAL-UPSTREAM-CODE", state="relay")
+
+        forwarded_code = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+        opened = open_passthrough_authorization_code(forwarded_code)
+
+    assert opened is not None
+    assert opened.upstream_code == "REAL-UPSTREAM-CODE"
+    assert opened.client_id == "minted-77"
+    assert opened.client_secret == "mint-secret"
+    assert opened.mcp_server_id == "srv-1"
+    assert opened.token_endpoint_auth_method == "client_secret_basic"
+
+
+@pytest.mark.asyncio
+async def test_authorize_bridge_server_with_ephemeral_client_takes_short_circuit_arm():
+    """A gateway-minted client is registered against {base}/callback, so a bridge server's
+    authorize with an ephemeral client must run the short-circuit (gateway /callback) arm with a
+    relay state cookie, never the verbatim relay: relaying would send the browser's redirect_uri
+    to an IdP that has the gateway callback registered, stranding the flow."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        EphemeralDcrClient,
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough)
+    with patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY):
+        response = await authorize_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            client_id="minted-77",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="client-state",
+            code_challenge="chal",
+            code_challenge_method="S256",
+            ephemeral_dcr_client=EphemeralDcrClient(client_id="minted-77", client_secret=None),
+        )
+
+    location = response.headers["location"]
+    params = parse_qs(urlparse(location).query)
+    assert params["redirect_uri"] == ["https://litellm.example.com/callback"]
+    assert params["client_id"] == ["minted-77"]
+    assert params["state"] != ["client-state"]
+    assert any(cookie.startswith("mcp_oauth_state_") for cookie in response.headers.get("set-cookie", "").split(";"))
+
+
+@pytest.mark.asyncio
+async def test_callback_forwards_raw_code_when_dcr_state_lacks_server_binding():
+    """A state carrying a dcr client but no server id cannot produce a server-bound sealed code, so
+    the callback falls back to forwarding the raw upstream code instead of sealing an unbindable
+    one."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import callback
+
+    state_data = {
+        "original_state": "client-state",
+        "client_redirect_uri": "http://127.0.0.1:60108/cb",
+        "base_url": "http://127.0.0.1:60108/cb",
+        "dcr_client_id": "minted-77",
+    }
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_encoded_oauth_state",
+            return_value="enc",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash",
+            return_value=state_data,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._get_validated_client_redirect_uri",
+            return_value="http://127.0.0.1:60108/cb",
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await callback(request=_bridge_mock_request(), code="REAL-UPSTREAM-CODE", state="relay")
+
+    forwarded_code = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+    assert forwarded_code == "REAL-UPSTREAM-CODE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_type_value",
+    [
+        "none",
+        "api_key",
+        "bearer_token",
+        "basic",
+        "authorization",
+        "oauth2",
+        "aws_sigv4",
+        "token",
+        "oauth2_token_exchange",
+        "oauth2_id_jag",
+        "true_passthrough",
+        "oauth_delegate",
+    ],
+)
+@pytest.mark.parametrize("dcr_bridge", [True, False])
+async def test_resolve_ephemeral_dcr_client_mint_set_is_exact(auth_type_value, dcr_bridge):
+    """The full authorize-time mint decision matrix, one cell per (auth_type, dcr_bridge). The gateway
+    mints iff true_passthrough (any bridge) or oauth_delegate-and-not-dcr_bridge; every other mode
+    returns None so no non-OAuth mode ever registers an upstream client, and the interactive
+    oauth_delegate dcr_bridge sign-in is left to its own browser-front-door flow. The UI
+    gatewayMintsClientFor helper mirrors this exact set; ui/.../mcp_tools/types.test.tsx pins the
+    frontend side against the same table, so a divergence fails on one side or the other."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        EphemeralDcrClient,
+        resolve_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth(auth_type_value),
+        dcr_bridge=dcr_bridge,
+        server_id=f"matrix_{auth_type_value}_{dcr_bridge}",
+        server_name=f"matrix_{auth_type_value}_{dcr_bridge}",
+    )
+    expected_mint = server.is_true_passthrough or (server.is_oauth_delegate and not server.is_dcr_bridge)
+    mint_mock = AsyncMock(return_value=EphemeralDcrClient(client_id="minted", client_secret=None))
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.mint_ephemeral_dcr_client",
+        mint_mock,
+    ):
+        result = await resolve_ephemeral_dcr_client(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            code_challenge="chal",
+            code_challenge_method="S256",
+            redirect_uri="http://127.0.0.1:9/callback",
+        )
+
+    if expected_mint:
+        mint_mock.assert_awaited_once()
+        assert result is not None
+    else:
+        mint_mock.assert_not_awaited()
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_returns_none_without_registration_endpoint():
+    """A server whose upstream exposes no RFC 7591 registration endpoint cannot mint, so the
+    fall-through reports None and the caller keeps its existing missing_client_id failure."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, registration_url=None)
+    assert await mint_ephemeral_dcr_client(_bridge_mock_request(), server) is None
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_posts_rfc7591_and_returns_client():
+    """The mint POSTs a public-client RFC 7591 registration bound to the gateway /callback and hands
+    back the upstream's client without persisting it anywhere."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id="mint_posts_srv", server_name="mint_posts_srv"
+    )
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {"client_id": "minted-77", "client_secret": "mint-secret", "token_endpoint_auth_method": "client_secret_basic"}
+    )
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        minted = await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+
+    assert minted is not None
+    assert minted.client_id == "minted-77"
+    assert minted.client_secret == "mint-secret"
+    assert minted.token_endpoint_auth_method == "client_secret_basic"
+    register_data = mock_async_client.post.call_args.kwargs["json"]
+    assert register_data["redirect_uris"] == ["https://litellm.example.com/callback"]
+    assert register_data["token_endpoint_auth_method"] == "none"
+    assert register_data["grant_types"] == ["authorization_code", "refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_reuses_minted_client_within_flow_ttl():
+    """Reloading the authorize page must not spam the upstream registration endpoint with orphan
+    clients: within the OAuth state's lifetime a second mint for the same server and gateway origin
+    reuses the cached client and performs no second upstream POST."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id="mint_reuse_srv", server_name="mint_reuse_srv"
+    )
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({"client_id": "minted-77"})
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        first = await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+        second = await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+
+    assert first is not None
+    assert second == first
+    mock_async_client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_mint_ephemeral_dcr_client_single_flights_concurrent_mints():
+    """Two in-flight authorize requests for the same server must not both register an upstream
+    client: the per-key lock makes the second waiter reuse the first mint, so exactly one upstream
+    POST happens."""
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(
+        auth_type=MCPAuth.true_passthrough,
+        dcr_bridge=None,
+        server_id="mint_concurrent_srv",
+        server_name="mint_concurrent_srv",
+    )
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({"client_id": "minted-77"})
+    mock_response.raise_for_status = MagicMock()
+
+    async def _slow_post(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return mock_response
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(side_effect=_slow_post)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        first, second = await asyncio.gather(
+            mint_ephemeral_dcr_client(_bridge_mock_request(), server),
+            mint_ephemeral_dcr_client(_bridge_mock_request(), server),
+        )
+
+    assert first is not None
+    assert second == first
+    mock_async_client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload, server_id",
+    [
+        ({"unexpected": "shape"}, "mint_bad_shape_srv"),
+        ({"client_id": ""}, "mint_empty_id_srv"),
+    ],
+)
+async def test_mint_ephemeral_dcr_client_unusable_registration_response_is_502(payload, server_id):
+    """An upstream registration response without a usable client_id, whether the field is missing or
+    an empty string, surfaces as a loud 502 instead of letting the authorize proceed with an empty
+    client and fail opaquely at the IdP."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id=server_id, server_name=server_id)
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(payload)
+    mock_response.raise_for_status = MagicMock()
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sealed_auth_method, expects_basic_header",
+    [
+        ("client_secret_basic", True),
+        (None, False),
+    ],
+)
+async def test_token_exchange_authenticates_with_the_sealed_clients_own_auth_method(
+    sealed_auth_method, expects_basic_header
+):
+    """The id, secret, and token-endpoint auth method must come from the same source: a client
+    recovered from a sealed passthrough code authenticates the upstream exchange the way its own
+    registration was granted, not the way the server row is configured. A sealed
+    ``client_secret_basic`` grant sends the Basic header and keeps the secret out of the body; a
+    sealed public client (no method) keeps the body-credential path."""
+    import base64
+
+    import httpx
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.true_passthrough, dcr_bridge=None, server_id="sealed_method_srv")
+    upstream_request = httpx.Request("POST", server.token_url)
+    upstream_response = httpx.Response(
+        200, json={"access_token": "up-token", "token_type": "Bearer"}, request=upstream_request
+    )
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=upstream_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="up-code",
+            redirect_uri="https://litellm.example.com/callback",
+            client_id="minted-77",
+            client_secret="mint-secret",
+            code_verifier="verifier",
+            client_token_endpoint_auth_method=sealed_auth_method,
+        )
+
+    sent_headers = mock_async_client.post.call_args.kwargs["headers"]
+    sent_body = mock_async_client.post.call_args.kwargs["data"]
+    if expects_basic_header:
+        expected = base64.b64encode(b"minted-77:mint-secret").decode()
+        assert sent_headers["Authorization"] == f"Basic {expected}"
+        assert "client_secret" not in sent_body
+    else:
+        assert "Authorization" not in sent_headers
+        assert sent_body["client_id"] == "minted-77"
+        assert sent_body["client_secret"] == "mint-secret"

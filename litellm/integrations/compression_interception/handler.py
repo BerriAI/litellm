@@ -14,6 +14,7 @@ from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
+    CompressionSavingsMetadata,
 )
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
@@ -23,6 +24,41 @@ from litellm.types.utils import CallTypes
 
 LITELLM_CONTENT_RETRIEVE_TOOL_NAME = "litellm_content_retrieve"
 _CACHE_TTL_SECONDS = 15 * 60
+
+
+def _compression_savings_from_counts(
+    original_tokens: object, compressed_tokens: object
+) -> CompressionSavingsMetadata | None:
+    if isinstance(original_tokens, bool) or not isinstance(original_tokens, int):
+        return None
+    if isinstance(compressed_tokens, bool) or not isinstance(compressed_tokens, int):
+        return None
+    if compressed_tokens < 0 or original_tokens < compressed_tokens:
+        return None
+    return CompressionSavingsMetadata(
+        tokens_before=original_tokens,
+        tokens_after=compressed_tokens,
+        tokens_saved=original_tokens - compressed_tokens,
+        source="compression_interception",
+    )
+
+
+def _record_compression_savings(kwargs: dict[str, object], savings: CompressionSavingsMetadata) -> None:
+    """
+    Attach savings to the request's litellm metadata so they land in the
+    SpendLog row's metadata JSON under ``compression_savings``.
+
+    ``/v1/messages`` requests carry proxy metadata under ``litellm_metadata``
+    (the ``metadata`` key is Anthropic's own API field). The existing dict is
+    updated in place because the proxy and the logging object hold references
+    to the same object; replacing it would orphan writes made through those
+    references.
+    """
+    existing = kwargs.get("litellm_metadata")
+    if isinstance(existing, dict):
+        existing["compression_savings"] = savings
+        return
+    kwargs["litellm_metadata"] = {"compression_savings": savings}
 
 
 class CompressionInterceptionLogger(CustomLogger):
@@ -130,6 +166,12 @@ class CompressionInterceptionLogger(CustomLogger):
                 call_id = str(uuid.uuid4())
                 kwargs["litellm_call_id"] = call_id
             self._compression_cache_by_call_id[call_id] = (cache, time.time())
+            savings = _compression_savings_from_counts(
+                original_tokens=compressed.get("original_tokens"),
+                compressed_tokens=compressed.get("compressed_tokens"),
+            )
+            if savings is not None:
+                _record_compression_savings(kwargs=kwargs, savings=savings)
             verbose_logger.debug(
                 "CompressionInterception: compressed request [call_id=%s original=%d compressed=%d cached_keys=%d]",
                 call_id,

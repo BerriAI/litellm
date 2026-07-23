@@ -12,6 +12,7 @@ import asyncio
 import base64
 import hashlib
 import inspect
+import json
 import os
 import re
 import secrets
@@ -61,6 +62,11 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    SSOIdentityAssertion,
+    assertion_from_sso_login,
+    retain_sso_identity_assertion_for_ema,
 )
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -241,22 +247,53 @@ def _check_cli_sso_start_rate_limit(
 
 
 def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dict:
+    if isinstance(login_id, str) and login_id.startswith("sk-"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Your litellm CLI is out of date and uses a login flow this proxy no longer supports. "
+                "Upgrade it with `pip install -U 'litellm[proxy]'` and run `litellm-proxy login` again."
+            ),
+        )
     if not _is_valid_cli_sso_login_id(login_id):
-        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+        raise HTTPException(status_code=400, detail="Invalid CLI login session id")
 
     cache_key = _get_cli_sso_flow_cache_key(cast(str, login_id))
-    flow = cache.get_cache(key=cache_key)
+    redis_cache = cache.redis_cache
+    if redis_cache is not None:
+        flow = redis_cache.get_cache(key=cache_key)
+    else:
+        flow = cache.get_cache(key=cache_key)
+    if isinstance(flow, str):
+        try:
+            flow = json.loads(flow)
+        except ValueError:
+            flow = None
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
-        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+        verbose_proxy_logger.warning(
+            "CLI SSO login session not found in cache for login_id=%s. If the proxy runs multiple replicas, "
+            "a shared Redis cache is required for CLI login to work.",
+            login_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CLI login session not found or expired. Run `litellm-proxy login` again. "
+                "If this happens immediately after starting a login, the proxy is likely running multiple "
+                "replicas without a shared cache; configure a Redis cache "
+                "so every replica can see the login session."
+            ),
+        )
     return flow
 
 
 def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
-    cache.set_cache(
-        key=_get_cli_sso_flow_cache_key(login_id),
-        value=flow,
-        ttl=CLI_SSO_SESSION_TTL_SECONDS,
-    )
+    cache_key = _get_cli_sso_flow_cache_key(login_id)
+    redis_cache = cache.redis_cache
+    if redis_cache is not None:
+        redis_cache.set_cache(key=cache_key, value=json.dumps(flow), ttl=CLI_SSO_SESSION_TTL_SECONDS)
+    else:
+        cache.set_cache(key=cache_key, value=flow, ttl=CLI_SSO_SESSION_TTL_SECONDS)
 
 
 def _verify_cli_sso_poll_secret(flow: dict, poll_secret: Optional[str]) -> bool:
@@ -567,11 +604,11 @@ def _render_cli_sso_verification_page(
 
 @router.post("/sso/cli/start", tags=["experimental"], include_in_schema=False)
 async def cli_sso_start(request: Request):
-    from litellm.proxy.proxy_server import general_settings, user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache, general_settings
 
     _check_cli_sso_start_rate_limit(
         request=request,
-        cache=user_api_key_cache,
+        cache=cli_sso_session_cache,
         use_x_forwarded_for=bool((general_settings or {}).get("use_x_forwarded_for", False)),
     )
 
@@ -586,7 +623,7 @@ async def cli_sso_start(request: Request):
         "user_code_verified": False,
         "session_data": None,
     }
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
     verification_uri_complete: str | None = (
         (
@@ -618,9 +655,9 @@ async def cli_sso_complete(request: Request, login_id: str):
     from litellm.proxy.common_utils.html_forms.cli_sso_success import (
         render_cli_sso_success_page,
     )
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache
 
-    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=user_api_key_cache)
+    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=cli_sso_session_cache)
     if not flow.get("sso_complete") or not flow.get("session_data"):
         raise HTTPException(status_code=400, detail="CLI login is not ready")
 
@@ -644,7 +681,7 @@ async def cli_sso_complete(request: Request, login_id: str):
         raise HTTPException(status_code=400, detail="Invalid verification code")
 
     flow["user_code_verified"] = True
-    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
     html_content = render_cli_sso_success_page()
     return HTMLResponse(content=html_content, status_code=200)
@@ -835,10 +872,10 @@ async def google_login(
     Example:
     """
     from litellm.proxy.proxy_server import (
+        cli_sso_session_cache,
         general_settings,
         premium_user,
         prisma_client,
-        user_api_key_cache,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -886,7 +923,7 @@ async def google_login(
     )
 
     if source == LITELLM_CLI_SOURCE_IDENTIFIER:
-        _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+        _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     # Store CLI login handle in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
@@ -1290,12 +1327,15 @@ async def get_generic_sso_response(
     sso_jwt_handler: Optional[JWTHandler],  # sso specific jwt handler - used for restricted sso group access control
     generic_client_id: str,
     redirect_url: str,
-) -> Tuple[Union[OpenID, dict], Optional[dict], Optional[dict]]:  # (result, received_response, access_token_payload)
+) -> tuple[
+    Union[OpenID, dict], dict | None, dict | None, SSOIdentityAssertion | None
+]:  # (result, received_response, access_token_payload, sso_assertion)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
     from fastapi_sso.sso.generic import create_provider
 
     received_response: Optional[dict] = None
+    sso_assertion: SSOIdentityAssertion | None = None
 
     # Setup environment variables
     (
@@ -1429,6 +1469,9 @@ async def get_generic_sso_response(
             # Assign directly rather than relying on nonlocal mutation so that Pyright
             # can track that received_response is non-None from this point on.
             received_response = {k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS}
+            sso_assertion = assertion_from_sso_login(
+                combined_response.get("id_token"), combined_response.get("refresh_token")
+            )
             # In the PKCE path verify_and_process is skipped, so generic_sso.access_token
             # is never set. Read the token directly from the exchange response instead so
             # process_sso_jwt_access_token can extract JWT-embedded roles/teams.
@@ -1440,6 +1483,7 @@ async def get_generic_sso_response(
                 headers=additional_generic_sso_headers_dict,
             )
             access_token_str = generic_sso.access_token
+            sso_assertion = assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
 
         access_token_payload = process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings
@@ -1459,7 +1503,7 @@ async def get_generic_sso_response(
             additional_generic_sso_headers_dict,
         )
     verbose_proxy_logger.debug("generic result: %s", result)
-    return result or {}, received_response, access_token_payload
+    return result or {}, received_response, access_token_payload, sso_assertion
 
 
 async def create_team_member_add_task(team_id, user_info):
@@ -1791,6 +1835,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
     received_response: Optional[dict] = None
     access_token_payload: Optional[dict] = None
+    sso_assertion: SSOIdentityAssertion | None = None
     # get url from request
     if master_key is None:
         raise ProxyException(
@@ -1821,6 +1866,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):
             result,
             received_response,
             access_token_payload,
+            sso_assertion,
         ) = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
@@ -1848,6 +1894,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):
             prefill_user_code=prefill_user_code,
             result=result,
             received_response=received_response,
+            sso_assertion=sso_assertion,
         )
 
     # Control-plane cross-origin: read return_to from cookie.
@@ -1863,6 +1910,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):
         access_token_payload=access_token_payload,
         jwt_handler=jwt_handler,
         return_to=cp_return_to,
+        sso_assertion=sso_assertion,
     )
 
 
@@ -1920,8 +1968,10 @@ async def _complete_cli_sso_callback_session(
     user_defined_values: Optional[SSOUserDefinedValues],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
+    cli_sso_session_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
     prefill_user_code: str | None = None,
+    sso_assertion: SSOIdentityAssertion | None = None,
 ):
     from fastapi.responses import HTMLResponse
 
@@ -1940,6 +1990,8 @@ async def _complete_cli_sso_callback_session(
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
     if not user_info.user_id:
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
+
+    await retain_sso_identity_assertion_for_ema(user_id=user_info.user_id, assertion=sso_assertion)
 
     teams: List[str] = []
     if hasattr(user_info, "teams") and user_info.teams:
@@ -1966,7 +2018,7 @@ async def _complete_cli_sso_callback_session(
     flow["sso_complete"] = True
     browser_complete_token = secrets.token_urlsafe(32)
     flow["browser_complete_token_hash"] = _hash_cli_sso_secret(browser_complete_token)
-    _set_cli_sso_flow(login_id=key, cache=user_api_key_cache, flow=flow)
+    _set_cli_sso_flow(login_id=key, cache=cli_sso_session_cache, flow=flow)
 
     verbose_proxy_logger.info(
         f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
@@ -1991,18 +2043,20 @@ async def cli_sso_callback(
     result: Optional[Union[OpenID, dict]] = None,
     received_response: Optional[dict] = None,
     prefill_user_code: str | None = None,
+    sso_assertion: SSOIdentityAssertion | None = None,
 ):
     """CLI SSO callback - stores session info for JWT generation on polling"""
     verbose_proxy_logger.info("CLI SSO callback")
 
     from litellm.proxy.proxy_server import (
+        cli_sso_session_cache,
         general_settings,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
-    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -2042,8 +2096,10 @@ async def cli_sso_callback(
             user_defined_values=user_defined_values,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            cli_sso_session_cache=cli_sso_session_cache,
             proxy_logging_obj=proxy_logging_obj,
             prefill_user_code=prefill_user_code,
+            sso_assertion=sso_assertion,
         )
     except ProxyException:
         raise
@@ -2071,15 +2127,11 @@ async def cli_poll_key(
         key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.proxy.auth.auth_checks import (
-        ExperimentalUIJWTToken,
-        get_team_object,
-        get_user_object,
-    )
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.proxy_server import cli_sso_session_cache
 
     try:
-        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
+        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=cli_sso_session_cache)
         if not _verify_cli_sso_poll_secret(flow=flow, poll_secret=x_litellm_cli_poll_secret):
             raise HTTPException(status_code=403, detail="Invalid CLI polling secret")
 
@@ -2146,47 +2198,15 @@ async def cli_poll_key(
                 models=session_data.get("models", []),
             )
 
-            try:
-                user_db_obj = await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=False,
-                )
-            except ValueError as e:
-                verbose_proxy_logger.debug(f"CLI poll: user lookup failed, proceeding without user budget: {e}")
-                user_db_obj = None
-            user_budget = user_db_obj.max_budget if user_db_obj is not None else None
-
-            team_budget: Optional[float] = None
-            team_budget_resolved = False
-            if team_id is not None:
-                try:
-                    team_obj = await get_team_object(
-                        team_id=team_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                    )
-                    team_budget = team_obj.max_budget
-                    team_budget_resolved = True
-                except Exception:
-                    pass
-
-            session_max_budget = (
-                litellm.max_ui_session_budget
-                if user_budget is None and (team_id is None or (team_budget_resolved and team_budget is None))
-                else None
-            )
-
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info,
                 team_id=team_id,
                 team_alias=team_alias,
-                max_budget=session_max_budget,
+                max_budget=None,
             )
 
             # Delete cache entry (single-use)
-            user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
+            cli_sso_session_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
             verbose_proxy_logger.info(f"CLI JWT generated for user: {user_id}, team: {team_id}")
             poll_response = {
@@ -3033,6 +3053,7 @@ class SSOAuthenticationHandler:
         access_token_payload: Optional[dict] = None,
         jwt_handler: Optional[JWTHandler] = None,
         return_to: Optional[str] = None,
+        sso_assertion: SSOIdentityAssertion | None = None,
     ) -> RedirectResponse:
         import jwt
 
@@ -3162,6 +3183,9 @@ class SSOAuthenticationHandler:
                         "error": f"User not allowed to access proxy. User role={user_role}, proxy mode={ui_access_mode}"
                     },
                 )
+
+        if isinstance(user_id, str) and user_id:
+            await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=sso_assertion)
 
         disabled_non_admin_personal_key_creation = get_disabled_non_admin_personal_key_creation()
         litellm_dashboard_ui = get_custom_url(request_base_url=str(request.base_url), route="ui/")
@@ -4256,6 +4280,7 @@ async def debug_sso_callback(request: Request):
             result,
             received_response,
             access_token_payload,
+            _sso_assertion,
         ) = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,

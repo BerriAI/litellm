@@ -39,10 +39,9 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
 
-const asset_logos_folder = "/ui/assets/logos/";
-export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
+export const mcpLogoImg = mcpLogo.src;
 
 interface CreateMCPServerProps {
   userRole: string;
@@ -210,6 +209,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         credentials: isClientForwardedTokenMode(values.auth_type)
           ? preservedDeclaredAppCredentials(values.credentials)
           : { ...((values.credentials as Record<string, unknown> | undefined) ?? {}), ...(dcrClientRef.current ?? {}) },
+        issuer: values.issuer,
         authorization_url: values.authorization_url,
         token_url: values.token_url,
         registration_url: values.registration_url,
@@ -759,7 +759,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if ("credentials" in changedValues) {
       setAppMayNotMatchUpstream(false);
     } else {
-      const upstreamChanged = ["url", "spec_path", "authorization_url", "token_url", "registration_url"].some(
+      const upstreamChanged = ["url", "spec_path", "issuer", "authorization_url", "token_url", "registration_url"].some(
         (key) => key in changedValues,
       );
       const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
@@ -790,7 +790,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </button>
           )}
           <img
-            src={resolveLogoSrc(mcpLogoImg)}
+            src={mcpLogoImg}
             alt="MCP Logo"
             className="w-8 h-8 object-contain"
             style={{

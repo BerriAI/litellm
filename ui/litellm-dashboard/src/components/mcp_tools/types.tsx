@@ -52,6 +52,19 @@ export const AUTH_TYPE = {
 export const isClientForwardedTokenMode = (authType?: string | null): boolean =>
   authType === AUTH_TYPE.TRUE_PASSTHROUGH || authType === AUTH_TYPE.OAUTH_DELEGATE;
 
+/**
+ * Whether the gateway acquires the OAuth client itself during /authorize (so the browser must NOT
+ * pre-register one). This MUST mirror the backend `resolve_ephemeral_dcr_client` mint condition
+ * exactly, cell for cell, or a mode where the two disagree either dead-ends (browser skips a
+ * register the gateway never performs) or double-registers. The gateway mints for every
+ * `true_passthrough` server, and for `oauth_delegate` only when it is NOT a dcr_bridge server: the
+ * interactive oauth_delegate dcr_bridge sign-in captures the SSO user through the browser's own
+ * front-door registration, which the mint must not preempt.
+ */
+export const gatewayMintsClientFor = (server: { auth_type?: string | null; dcr_bridge?: boolean | null }): boolean =>
+  server.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH ||
+  (server.auth_type === AUTH_TYPE.OAUTH_DELEGATE && !server.dcr_bridge);
+
 export const OAUTH_FLOW = {
   INTERACTIVE: "interactive",
   M2M: "m2m",
@@ -81,6 +94,7 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
     client_id: credentials.client_id ?? null,
     client_secret: credentials.client_secret ?? null,
     scopes: credentials.scopes ?? null,
+    issuer: values.issuer ?? null,
     authorization_url: values.authorization_url ?? null,
     token_url: values.token_url ?? null,
     registration_url: values.registration_url ?? null,
@@ -316,6 +330,12 @@ export interface MCPToolsViewerProps {
   /** When true (interactive OAuth2), the server uses PKCE passthrough. */
   delegate_auth_to_upstream?: boolean | null;
   /**
+   * Read together with auth_type by gatewayMintsClientFor: an oauth_delegate dcr_bridge server is
+   * NOT gateway-minted (its interactive sign-in registers through the browser front door), so the
+   * tools-page Authorize must know the flag to decide whether to pre-register a client.
+   */
+  dcr_bridge?: boolean | null;
+  /**
    * Connection field present on every OAuth2 flow (interactive and M2M alike),
    * so it does not indicate the mode. Retained for callers/other uses; not read
    * for mode detection — see getMcpOAuthMode.
@@ -341,6 +361,7 @@ export interface MCPServer {
   transport?: string | null;
   auth_type?: string | null;
   oauth2_flow?: string | null;
+  issuer?: string | null;
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;

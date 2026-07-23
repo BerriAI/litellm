@@ -6,6 +6,7 @@ response validates without mirroring every proxy field. No untyped dicts.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, RootModel, model_validator
@@ -23,6 +24,10 @@ class BudgetWindow(BaseModel):
     max_budget: float
 
 
+class BudgetWindowState(BudgetWindow):
+    reset_at: datetime | None = None
+
+
 class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
@@ -37,6 +42,10 @@ class KeyLoggingCallback(BaseModel):
 
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
+
+
+class ObjectPermission(BaseModel):
+    mcp_servers: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -56,10 +65,16 @@ class KeyGenerateBody(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     allowed_routes: list[str] | None = None
+    allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyGenerateResponse(BaseModel):
+    key: str
+
+
+class KeyRegenerateBody(BaseModel):
     key: str
 
 
@@ -84,11 +99,13 @@ class KeyInfo(BaseModel):
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     team_id: str | None = None
+    blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
+    budget_limits: list[BudgetWindowState] | None = None
 
 
 class KeyInfoResponse(BaseModel):
@@ -96,6 +113,18 @@ class KeyInfoResponse(BaseModel):
 
 
 # ---------- customers ----------
+
+
+class CustomerNewBody(BaseModel):
+    user_id: str
+
+
+class CustomerResponse(BaseModel):
+    user_id: str | None = None
+
+
+class CustomerInfoParams(BaseModel):
+    end_user_id: str
 
 
 class CustomerDeleteBody(BaseModel):
@@ -109,9 +138,41 @@ class ChatMetadata(BaseModel):
     tags: list[str] | None = None
 
 
+class ImageUrl(BaseModel):
+    url: str
+
+
+class TextContentPart(BaseModel):
+    type: str = "text"
+    text: str
+
+
+class ImageContentPart(BaseModel):
+    type: str = "image_url"
+    image_url: ImageUrl
+
+
+ContentPart = TextContentPart | ImageContentPart
+
+
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str | list[ContentPart]
+
+
+class CacheControl(BaseModel):
+    type: str = "ephemeral"
+
+
+class TextBlock(BaseModel):
+    type: str = "text"
+    text: str
+    cache_control: CacheControl | None = None
+
+
+class RichMessage(BaseModel):
+    role: str
+    content: list[TextBlock]
 
 
 class ThinkingParam(BaseModel):
@@ -148,22 +209,43 @@ class ChatBody(BaseModel):
     tools: list[ChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    response_format: dict[str, object] | None = None
 
 
-class AnthropicMessagesBody(BaseModel):
-    model: str
-    messages: list[ChatMessage]
-    max_tokens: int
-    stream: bool | None = None
+class RouterSettingsOverride(BaseModel):
+    """Per-request `router_settings_override` in a /chat/completions body: the
+    reliability knobs (fallbacks by trigger, retry count) the reliability suite
+    drives per call instead of via static router config. Serialized exclude_none, so
+    an override sets only the strategies a test exercises. Each fallbacks map is
+    model_name -> the ordered fallback model_names to try."""
+
+    fallbacks: list[dict[str, list[str]]] | None = None
+    context_window_fallbacks: list[dict[str, list[str]]] | None = None
+    content_policy_fallbacks: list[dict[str, list[str]]] | None = None
+    num_retries: int | None = None
 
 
-class AnthropicMessagesResponse(BaseModel):
-    model: str | None = None
+class ReliabilityChatBody(ChatBody):
+    """A /chat/completions body carrying a per-request router_settings_override.
+    Composes ChatBody (no attribute repetition) and adds the override; serialized
+    exclude_none so an absent override never leaks into the request."""
+
+    router_settings_override: RouterSettingsOverride | None = None
+
+
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    function: ToolCallFunction = ToolCallFunction()
 
 
 class OutMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 class ChatChoice(BaseModel):
@@ -174,6 +256,10 @@ class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
 
 
+class CompletionTokensDetails(BaseModel):
+    reasoning_tokens: int | None = None
+
+
 class Usage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -181,6 +267,7 @@ class Usage(BaseModel):
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
 
 class ChatResponse(BaseModel):
@@ -189,6 +276,83 @@ class ChatResponse(BaseModel):
     choices: list[ChatChoice] = []
     usage: Usage | None = None
     service_tier: str | None = None
+
+
+# ---------- anthropic /v1/messages + count_tokens ----------
+
+
+class JsonSchemaProperty(BaseModel):
+    """One property in a tool's JSON-Schema `input_schema`. Only `type` is
+    modelled; the endpoints under test read no further into the schema."""
+
+    type: str
+
+
+class ToolInputSchema(BaseModel):
+    type: str = "object"
+    properties: dict[str, JsonSchemaProperty] = {}
+    required: list[str] = []
+
+
+class AnthropicToolSearchTool(BaseModel):
+    """The tool_search discovery tool. `type` carries the SDK-version-pinned
+    suffix (e.g. ``tool_search_tool_regex_20251119``) that LiteLLM keys its
+    per-provider beta-header translation on; `name` is the unsuffixed
+    canonical name the upstream accepts."""
+
+    type: str
+    name: str
+
+
+class AnthropicCustomTool(BaseModel):
+    name: str
+    description: str
+    input_schema: ToolInputSchema
+
+
+type AnthropicTool = AnthropicToolSearchTool | AnthropicCustomTool
+
+
+class AnthropicMessagesBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int
+    stream: bool | None = None
+    tools: list[AnthropicTool] | None = None
+
+
+class CountTokensBody(BaseModel):
+    """POST /v1/messages/count_tokens body: the /v1/messages shape minus
+    max_tokens (the endpoint only counts the prompt)."""
+
+    model: str
+    messages: list[ChatMessage]
+
+
+class AnthropicContentBlock(BaseModel):
+    type: str | None = None
+    text: str | None = None
+
+
+class AnthropicMessagesResponse(BaseModel):
+    """A /v1/messages answer. `content` is the Anthropic-native passthrough
+    shape; `choices` is the OpenAI-normalized shape LiteLLM emits for some
+    providers (e.g. Bedrock Converse). Presence of either proves the proxy
+    accepted and round-tripped the request. `extra="allow"` keeps the other
+    top-level keys so a shape-check failure can report the actual response keys
+    for triage."""
+
+    model_config = ConfigDict(extra="allow")
+    model: str | None = None
+    content: list[AnthropicContentBlock] | None = None
+    choices: list[ChatChoice] | None = None
+
+
+class CountTokensResponse(BaseModel):
+    """`/v1/messages/count_tokens` answer. `input_tokens` is required so a 200
+    whose body lacks it fails validation instead of passing vacuously."""
+
+    input_tokens: int
 
 
 class EmbedBody(BaseModel):
@@ -263,7 +427,7 @@ class SpendLogsParams(BaseModel):
             raise ValueError(
                 "unfiltered /spend/logs returns the entire spend table and OOMs the "
                 "runner on long-lived environments; filter by request_id or api_key, "
-                "or use Gateway.spend_logs_window for a bounded /spend/logs/v2 read"
+                "or use ProxyClient.spend_logs_window for a bounded /spend/logs/v2 read"
             )
         return self
 
@@ -422,6 +586,7 @@ class LiteLLMParamsBody(BaseModel):
 
     model: str
     api_key: str | None = None
+    litellm_credential_name: str | None = None
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
@@ -438,8 +603,16 @@ class LiteLLMParamsBody(BaseModel):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
     aws_batch_role_arn: str | None = None
+    aws_role_name: str | None = None
+    aws_session_name: str | None = None
+    aws_external_id: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    extra_headers: dict[str, str] | None = None
+    use_in_pass_through: bool | None = None
+    complexity_router_config: dict[str, object] | None = None
+    mock_response: str | None = None
+    timeout: float | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -466,6 +639,17 @@ class ModelNewResponse(BaseModel):
     model_id: str
 
 
+class ModelUpdateBody(BaseModel):
+    """POST /model/update body: the target deployment (`model_info.id`) plus the
+    `litellm_params` to merge over its stored params. The handler overlays only the
+    non-null fields, so a body carrying `input_cost_per_token` re-prices the
+    deployment while leaving its other params intact."""
+
+    model_config = ConfigDict(protected_namespaces=())
+    litellm_params: LiteLLMParamsBody
+    model_info: ModelInfoBody
+
+
 class ModelListEntry(BaseModel):
     id: str
 
@@ -482,12 +666,26 @@ class ModelDeleteBody(BaseModel):
     id: str
 
 
+class CredentialCreateBody(BaseModel):
+    credential_name: str
+    credential_values: dict[str, str]
+    credential_info: dict[str, str] = {}
+
+
+class CredentialCreateResponse(BaseModel):
+    success: bool
+
+
 # ---------- key / team / user / organization management ----------
 
 
 class KeyUpdateBody(BaseModel):
     key: str
     models: list[str]
+
+
+class KeyBlockBody(BaseModel):
+    key: str
 
 
 class KeyListParams(BaseModel):
@@ -503,15 +701,25 @@ class TeamMemberEntry(BaseModel):
     user_id: str
 
 
+class TeamMetadata(BaseModel):
+    disable_global_guardrails: bool | None = None
+
+
 class TeamNewBody(BaseModel):
     team_alias: str
     models: list[str] = []
     team_id: str | None = None
     organization_id: str | None = None
+    metadata: TeamMetadata | None = None
 
 
 class TeamNewResponse(BaseModel):
     team_id: str
+
+
+class TeamUpdateBody(BaseModel):
+    team_id: str
+    team_alias: str
 
 
 class TeamInfoParams(BaseModel):
@@ -543,6 +751,15 @@ class TeamDeleteBody(BaseModel):
     team_ids: list[str]
 
 
+class TeamListEntry(BaseModel):
+    team_id: str
+
+
+class TeamListResponse(RootModel[list[TeamListEntry]]):
+    """GET /team/list answers with a bare array of team objects (not an object
+    wrapping them). Only team_id is read; pydantic ignores the rest."""
+
+
 UserRole = Literal["proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer"]
 
 
@@ -554,6 +771,11 @@ class UserNewBody(BaseModel):
 
 class UserNewResponse(BaseModel):
     user_id: str
+
+
+class UserUpdateBody(BaseModel):
+    user_id: str
+    user_role: UserRole
 
 
 class UserInfoParams(BaseModel):
@@ -575,11 +797,20 @@ class UserDeleteBody(BaseModel):
     user_ids: list[str]
 
 
+class UserDeleteResponse(RootModel[int]):
+    pass
+
+
 class UserListParams(BaseModel):
     user_ids: str
 
 
+class UserListRow(BaseModel):
+    user_id: str
+
+
 class UserListResponse(BaseModel):
+    users: list[UserListRow]
     total: int
 
 
@@ -590,6 +821,11 @@ class OrgNewBody(BaseModel):
 
 class OrgNewResponse(BaseModel):
     organization_id: str
+
+
+class OrgUpdateBody(BaseModel):
+    organization_id: str
+    organization_alias: str
 
 
 class OrgInfoParams(BaseModel):
@@ -604,3 +840,46 @@ class OrgInfoResponse(BaseModel):
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+# ---------- tags (management) ----------
+
+
+class TagNewBody(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagDeleteBody(BaseModel):
+    name: str
+
+
+class TagListEntry(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class TagListResponse(RootModel[list[TagListEntry]]):
+    """GET /tag/list answers with a bare array of tag configs (the stored tags plus
+    any dynamically-seen spend tags), not an object wrapping them. Read the rows off
+    .root."""
+
+
+# ---------- health / lifecycle ----------
+
+
+class ReadinessResponse(BaseModel):
+    """GET /health/readiness (public probe). The low-detail payload a load
+    balancer sees: `status` plus the resolved DB state (`connected`,
+    `disconnected`, or `Not connected`)."""
+
+    status: str
+    db: str | None = None
+
+
+class ReadinessDetailsResponse(ReadinessResponse):
+    """GET /health/readiness/details (authenticated). Extends the public payload
+    with the diagnostics only an authenticated caller may read."""
+
+    litellm_version: str | None = None
+    success_callbacks: list[str] = []

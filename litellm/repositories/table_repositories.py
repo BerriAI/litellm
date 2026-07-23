@@ -77,6 +77,10 @@ class MCPUserCredentialsRepository(PrismaTableRepository):
     table_name = "litellm_mcpusercredentials"
 
 
+class MCPServerOAuthClientRepository(PrismaTableRepository):
+    table_name = "litellm_mcpserveroauthclient"
+
+
 class PromptRepository(PrismaTableRepository):
     table_name = "litellm_prompttable"
 
