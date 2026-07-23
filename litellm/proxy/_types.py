@@ -2230,6 +2230,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    disable_entity_spend_updates: Optional[bool] = Field(
+        None,
+        description=(
+            "If true, skip entity spend counter UPDATEs (key/user/team/org/agent/tag "
+            "and daily dimension spend tables) while still writing LiteLLM_SpendLogs. "
+            "Opposite of disable_spend_logs. Disables per-entity budget enforcement. "
+            "See https://github.com/BerriAI/litellm/issues/31866"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",

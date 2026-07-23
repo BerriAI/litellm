@@ -5301,6 +5301,31 @@ class ProxyUpdateSpend:
             return True
         return False
 
+    @staticmethod
+    def disable_entity_spend_updates() -> bool:
+        """
+        Returns True if entity-level spend counter UPDATEs should be skipped.
+
+        When True, raw spend log rows are still written to LiteLLM_SpendLogs via
+        `_insert_spend_log_to_db`, but the batch UPDATEs to the key, user,
+        end_user, team, team_member, org, agent, and tag spend counters — and
+        the daily dimension spend tables driven by `_batch_database_updates` —
+        are suppressed.
+
+        WARNING: Enabling this flag disables per-entity budget enforcement.
+        Per-key, per-user, and per-team budget limits will not be enforced while
+        this flag is active.
+
+        Set in config.yaml:
+          general_settings:
+            disable_entity_spend_updates: true
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        if general_settings.get("disable_entity_spend_updates") is True:
+            return True
+        return False
+
 
 async def update_spend(
     prisma_client: PrismaClient,

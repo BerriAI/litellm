@@ -379,3 +379,28 @@ def test_disable_spend_updates_error_when_general_settings_unavailable(
     monkeypatch.delattr(proxy_server_mod, "general_settings", raising=False)
     with pytest.raises(ImportError):
         ProxyUpdateSpend.disable_spend_updates()
+
+
+def test_disable_entity_spend_updates_reflects_general_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The static method delegates to ``general_settings['disable_entity_spend_updates']``."""
+    import litellm.proxy.proxy_server as proxy_server_mod
+
+    monkeypatch.setattr(
+        proxy_server_mod, "general_settings", {"disable_entity_spend_updates": True}
+    )
+    assert ProxyUpdateSpend.disable_entity_spend_updates() is True
+    assert isinstance(ProxyUpdateSpend.disable_entity_spend_updates(), bool)
+    assert isinstance(
+        ProxyUpdateSpend.__dict__["disable_entity_spend_updates"], staticmethod
+    )
+
+
+def test_disable_entity_spend_updates_default_false_without_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server_mod
+
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {})
+    assert ProxyUpdateSpend.disable_entity_spend_updates() is False

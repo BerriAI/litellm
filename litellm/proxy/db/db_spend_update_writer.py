@@ -187,20 +187,32 @@ class DBSpendUpdateWriter:
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
-            # Single task replaces 11 create_task() calls
-            asyncio.create_task(
-                self._batch_database_updates(
-                    response_cost=response_cost,
-                    user_id=user_id,
-                    hashed_token=hashed_token,
-                    team_id=team_id,
-                    org_id=org_id,
-                    end_user_id=end_user_id,
-                    prisma_client=prisma_client,
-                    litellm_proxy_budget_name=litellm_proxy_budget_name,
-                    payload=payload,
+            # Entity counter UPDATEs (key/user/team/org/agent/tag + daily
+            # dimension tables) are the high-contention path. Operators that
+            # only need raw SpendLogs for billing/audit can skip them via
+            # general_settings.disable_entity_spend_updates.
+            # See: https://github.com/BerriAI/litellm/issues/31866
+            if not ProxyUpdateSpend.disable_entity_spend_updates():
+                # Single task replaces 11 create_task() calls
+                asyncio.create_task(
+                    self._batch_database_updates(
+                        response_cost=response_cost,
+                        user_id=user_id,
+                        hashed_token=hashed_token,
+                        team_id=team_id,
+                        org_id=org_id,
+                        end_user_id=end_user_id,
+                        prisma_client=prisma_client,
+                        litellm_proxy_budget_name=litellm_proxy_budget_name,
+                        payload=payload,
+                    )
                 )
-            )
+            else:
+                verbose_proxy_logger.debug(
+                    "disable_entity_spend_updates=True. Skipping entity spend "
+                    "counter updates (key/user/team/org/agent/tag + daily "
+                    "spend tables). Raw spend logs are still written."
+                )
 
             self._enqueue_tool_registry_upsert(
                 kwargs=kwargs,
