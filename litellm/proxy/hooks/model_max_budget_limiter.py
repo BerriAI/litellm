@@ -264,8 +264,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         key_budget_config: BudgetConfig,
     ) -> float | None:
         model_group_spend_cache_key = (
-            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group_name}:"
-            f"{key_budget_config.budget_duration}"
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group_name}:{key_budget_config.budget_duration}"
         )
         return await self.dual_cache.async_get_cache(key=model_group_spend_cache_key)
 
