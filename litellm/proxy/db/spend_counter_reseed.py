@@ -21,6 +21,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     SpendLogsRepository,
     TeamMembershipRepository,
@@ -113,6 +114,9 @@ class SpendCounterReseed:
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
                 row = await OrganizationRepository(prisma_client).table.find_unique(where={"organization_id": org_id})
+            elif counter_key.startswith("spend:project:"):
+                project_id = counter_key[len("spend:project:") :]
+                row = await ProjectRepository(prisma_client).table.find_unique(where={"project_id": project_id})
             else:
                 return None
         except Exception:

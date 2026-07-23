@@ -2344,6 +2344,7 @@ async def increment_spend_counters(
     budget_reservation: Optional[dict] = None,
     end_user_id: Optional[str] = None,
     tags: Optional[List[str]] = None,
+    project_id: Optional[str] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2480,6 +2481,13 @@ async def increment_spend_counters(
             )
             if org_id is not None
             else None,
+            _increment_project_spend_counter(
+                project_id=project_id,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
+            )
+            if project_id is not None
+            else None,
         )
         if coro is not None
     )
@@ -2572,6 +2580,22 @@ async def _increment_org_spend_counter(
     await _init_and_increment_unreserved_spend_counter(
         counter_key=f"spend:org:{org_id}",
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
+        increment=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+
+
+async def _increment_project_spend_counter(
+    project_id: Optional[str],
+    response_cost: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if project_id is None:
+        return
+
+    await _init_and_increment_unreserved_spend_counter(
+        counter_key=f"spend:project:{project_id}",
+        source_cache_key=f"project_id:{project_id}",
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )

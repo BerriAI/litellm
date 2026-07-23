@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -605,6 +606,140 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:org:org-budget-shared"
     ) == pytest.approx(0.4)
+
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_reserve_project_budget_counter(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-project-budget",
+        spend=0.0,
+        project_id="project-budget-shared",
+    )
+    project_object = LiteLLM_ProjectTableCachedObj(
+        project_id="project-budget-shared",
+        spend=0.1,
+        created_by="test",
+        updated_by="test",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+    await key_cache.async_set_cache(
+        key="project_id:project-budget-shared",
+        value=project_object.model_dump(),
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.3,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            project_object=project_object,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:project:project-budget-shared"
+    ) == pytest.approx(0.4)
+    assert reservation is not None
+    reserved_keys = {entry["counter_key"] for entry in reservation["entries"]}
+    assert "spend:project:project-budget-shared" in reserved_keys
+
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_project_budget_counter_blocks_when_over_budget(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-project-over",
+        spend=0.0,
+        project_id="project-over",
+    )
+    project_object = LiteLLM_ProjectTableCachedObj(
+        project_id="project-over",
+        spend=1.0,
+        created_by="test",
+        updated_by="test",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+    await key_cache.async_set_cache(
+        key="project_id:project-over",
+        value=project_object.model_dump(),
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.2,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                project_object=project_object,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    assert exc_info.value.entity_type == "project"
+    assert exc_info.value.entity_id == "project-over"
+
+
+@pytest.mark.asyncio
+async def test_project_without_max_budget_skips_project_counter(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-project-no-budget",
+        spend=0.0,
+        max_budget=1.0,
+        project_id="project-no-budget",
+    )
+    project_object = LiteLLM_ProjectTableCachedObj(
+        project_id="project-no-budget",
+        spend=0.0,
+        created_by="test",
+        updated_by="test",
+        litellm_budget_table=None,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.3,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            project_object=project_object,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert counter_cache.in_memory_cache.get_cache(key="spend:project:project-no-budget") is None
+    assert reservation is not None
+    reserved_keys = {entry["counter_key"] for entry in reservation["entries"]}
+    assert "spend:project:project-no-budget" not in reserved_keys
+    assert "spend:key:key-project-no-budget" in reserved_keys
 
     await release_budget_reservation(reservation)
 
