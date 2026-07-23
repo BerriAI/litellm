@@ -244,6 +244,7 @@ class RAGRetrievalConfig(TypedDict, total=False):
     custom_llm_provider: str
     top_k: int  # max results from vector store
     filters: Optional[Dict[str, Any]]  # optional - vector store filters
+    retrieval_filter: Optional[Dict[str, Any]]  # optional - alias forwarded as vector store filters
 
 
 class RAGRerankConfig(TypedDict, total=False):
