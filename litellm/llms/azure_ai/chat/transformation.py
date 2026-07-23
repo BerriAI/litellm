@@ -1,7 +1,6 @@
 import enum
 import re
 from typing import Any, List, Optional, Tuple, cast
-from urllib.parse import urlparse
 
 import httpx
 from httpx import Response
@@ -12,6 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
+from litellm.llms.azure_ai.common_utils import azure_ai_use_api_key_header
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
@@ -85,11 +85,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        parsed_url = urlparse(api_base)
-        host = parsed_url.hostname
-        if host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")):
-            return True
-        return False
+        return azure_ai_use_api_key_header(api_base)
 
     def get_complete_url(
         self,
