@@ -1128,27 +1128,9 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/memory/_components/MemoryDetailDrawer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/memory/_components/MemoryEditModal.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
-    "no-restricted-imports": {
-      "count": 3
-    },
-    "react-hooks/preserve-manual-memoization": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.test.tsx": {

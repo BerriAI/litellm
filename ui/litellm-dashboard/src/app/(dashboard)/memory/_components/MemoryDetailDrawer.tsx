@@ -1,16 +1,18 @@
 "use client";
 
-import { Drawer, Space, Typography } from "antd";
 import React from "react";
 
 import { MemoryRow } from "@/components/networking";
-
-const { Text, Paragraph } = Typography;
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 interface MemoryDetailDrawerProps {
   row: MemoryRow | null;
   onClose: () => void;
 }
+
+const CODE_CLASS = "rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-xs text-foreground";
+const BLOCK_CLASS = "mt-1 rounded-md bg-muted p-3 font-mono whitespace-pre-wrap text-foreground";
+const LABEL_CLASS = "text-sm font-semibold text-foreground";
 
 function formatTimestamp(ts?: string): string {
   if (!ts) return "—";
@@ -24,90 +26,61 @@ function formatTimestamp(ts?: string): string {
 
 export function MemoryDetailDrawer({ row, onClose }: MemoryDetailDrawerProps) {
   return (
-    <Drawer
+    <Sheet
       open={!!row}
-      onClose={onClose}
-      title={
-        row ? (
-          <Space>
-            <Text code>{row.key}</Text>
-          </Space>
-        ) : (
-          "Memory"
-        )
-      }
-      width={720}
-      destroyOnClose
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      {row && (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-          <Space size="large" wrap>
-            <div>
-              <Text strong style={{ display: "block" }}>
-                Memory ID
-              </Text>
-              <Text code style={{ fontSize: 12 }}>
-                {row.memory_id}
-              </Text>
+      <SheetContent className="overflow-y-auto data-[side=right]:w-[720px] data-[side=right]:sm:max-w-[720px]">
+        <SheetHeader className="border-b">
+          <SheetTitle>{row ? <code className={CODE_CLASS}>{row.key}</code> : "Memory"}</SheetTitle>
+        </SheetHeader>
+        {row && (
+          <div className="flex flex-col gap-4 px-4 pb-4">
+            <div className="flex flex-wrap gap-x-8 gap-y-3">
+              <div>
+                <span className={`block ${LABEL_CLASS}`}>Memory ID</span>
+                <code className={CODE_CLASS}>{row.memory_id}</code>
+              </div>
+              <div>
+                <span className={`block ${LABEL_CLASS}`}>User ID</span>
+                <span className={row.user_id ? "text-sm text-foreground" : "text-sm text-muted-foreground"}>
+                  {row.user_id ?? "-"}
+                </span>
+              </div>
+              <div>
+                <span className={`block ${LABEL_CLASS}`}>Team ID</span>
+                <span className={row.team_id ? "text-sm text-foreground" : "text-sm text-muted-foreground"}>
+                  {row.team_id ?? "-"}
+                </span>
+              </div>
             </div>
             <div>
-              <Text strong style={{ display: "block" }}>
-                User ID
-              </Text>
-              <Text type={row.user_id ? undefined : "secondary"}>{row.user_id ?? "-"}</Text>
+              <span className={LABEL_CLASS}>Value</span>
+              <p className={`${BLOCK_CLASS} text-[13px]`}>{row.value}</p>
             </div>
-            <div>
-              <Text strong style={{ display: "block" }}>
-                Team ID
-              </Text>
-              <Text type={row.team_id ? undefined : "secondary"}>{row.team_id ?? "-"}</Text>
+            {row.metadata !== undefined && row.metadata !== null && (
+              <div>
+                <span className={LABEL_CLASS}>Metadata</span>
+                <p className={`${BLOCK_CLASS} text-xs`}>{JSON.stringify(row.metadata, null, 2)}</p>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>
+                Created {formatTimestamp(row.created_at)}
+                {row.created_by ? ` by ${row.created_by}` : ""}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                Updated {formatTimestamp(row.updated_at)}
+                {row.updated_by ? ` by ${row.updated_by}` : ""}
+              </span>
             </div>
-          </Space>
-          <div>
-            <Text strong>Value</Text>
-            <Paragraph
-              style={{
-                background: "#fafafa",
-                padding: 12,
-                borderRadius: 6,
-                whiteSpace: "pre-wrap",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: 13,
-              }}
-            >
-              {row.value}
-            </Paragraph>
           </div>
-          {row.metadata !== undefined && row.metadata !== null && (
-            <div>
-              <Text strong>Metadata</Text>
-              <Paragraph
-                style={{
-                  background: "#fafafa",
-                  padding: 12,
-                  borderRadius: 6,
-                  whiteSpace: "pre-wrap",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                  fontSize: 12,
-                }}
-              >
-                {JSON.stringify(row.metadata, null, 2)}
-              </Paragraph>
-            </div>
-          )}
-          <Space split={<Text type="secondary">·</Text>} wrap size="small" style={{ color: "rgba(0,0,0,0.45)" }}>
-            <Text type="secondary">
-              Created {formatTimestamp(row.created_at)}
-              {row.created_by ? ` by ${row.created_by}` : ""}
-            </Text>
-            <Text type="secondary">
-              Updated {formatTimestamp(row.updated_at)}
-              {row.updated_by ? ` by ${row.updated_by}` : ""}
-            </Text>
-          </Space>
-        </Space>
-      )}
-    </Drawer>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 
