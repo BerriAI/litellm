@@ -2547,7 +2547,7 @@ async def global_spend_refresh():
         finally:
             if new_client is not None:
                 try:
-                    await new_client.db.disconnect()
+                    await new_client.disconnect()
                 except Exception:
                     verbose_proxy_logger.exception(
                         "Failed to disconnect MonthlyGlobalSpend refresh client"

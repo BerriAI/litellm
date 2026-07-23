@@ -4411,13 +4411,13 @@ async def test_global_spend_refresh_disconnects_client_on_success(monkeypatch):
     fake_client.db = MagicMock()
     fake_client.db.connect = AsyncMock()
     fake_client.db.query_raw = AsyncMock(return_value=None)
-    fake_client.db.disconnect = AsyncMock()
+    fake_client.disconnect = AsyncMock()
 
     with patch("litellm.proxy.utils.PrismaClient", return_value=fake_client):
         result = await global_spend_refresh()
 
     assert result["status"] == "success"
-    fake_client.db.disconnect.assert_awaited_once()
+    fake_client.disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -4438,10 +4438,10 @@ async def test_global_spend_refresh_disconnects_client_on_failure(monkeypatch):
     fake_client.db = MagicMock()
     fake_client.db.connect = AsyncMock()
     fake_client.db.query_raw = AsyncMock(side_effect=Exception("refresh timed out"))
-    fake_client.db.disconnect = AsyncMock()
+    fake_client.disconnect = AsyncMock()
 
     with patch("litellm.proxy.utils.PrismaClient", return_value=fake_client):
         result = await global_spend_refresh()
 
     assert result["status"] == "failure"
-    fake_client.db.disconnect.assert_awaited_once()
+    fake_client.disconnect.assert_awaited_once()
