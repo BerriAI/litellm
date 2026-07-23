@@ -9028,3 +9028,68 @@ class TestUrllessIssuerDiscovery:
         anchored.assert_awaited_once_with("https://idp.example.com", None)
         resource_rooted.assert_not_awaited()
         assert built.token_url == "https://idp.example.com/token"
+
+
+@pytest.mark.asyncio
+class TestGatewayDCRSessionDoesNotInheritAdminViewAll:
+    """A gateway DCR session is a keyless subject held by a public OAuth client.
+
+    ``get_allowed_mcp_servers`` short-circuits to the entire registry for a principal with an admin
+    role and no explicit object permission. That is the dashboard's view-all behavior, and letting a
+    gateway session inherit it would hand an admin's MCP client every server on the proxy, so the
+    connect grid the user authorized servers on would stop describing what their client can reach.
+    """
+
+    @staticmethod
+    def _admin(is_mcp_gateway_session: bool):
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        return UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            is_mcp_gateway_session=is_mcp_gateway_session,
+        )
+
+    @staticmethod
+    def _registry():
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        return {
+            server_id: MCPServer(
+                server_id=server_id,
+                name=server_id,
+                server_name=server_id,
+                transport="http",
+                auth_type=MCPAuth.none,
+                allow_all_keys=False,
+            )
+            for server_id in ("granted-server", "other-server")
+        }
+
+    async def _allowed(self, manager, auth):
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        with patch.object(
+            MCPRequestHandler, "get_allowed_mcp_servers", new=AsyncMock(return_value=["granted-server"])
+        ):
+            return await manager.get_allowed_mcp_servers(user_api_key_auth=auth)
+
+    async def test_an_admin_dashboard_principal_still_sees_every_server(self):
+        """The existing view-all behavior must be untouched for everything that is not a session."""
+        manager = MCPServerManager()
+        manager.get_registry = MagicMock(return_value=self._registry())
+
+        assert sorted(await self._allowed(manager, self._admin(is_mcp_gateway_session=False))) == [
+            "granted-server",
+            "other-server",
+        ]
+
+    async def test_an_admin_connecting_through_the_gateway_gets_only_their_grants(self):
+        manager = MCPServerManager()
+        manager.get_registry = MagicMock(return_value=self._registry())
+
+        allowed = await self._allowed(manager, self._admin(is_mcp_gateway_session=True))
+
+        assert allowed == ["granted-server"]
+        assert "other-server" not in allowed

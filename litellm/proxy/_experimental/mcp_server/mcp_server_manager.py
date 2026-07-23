@@ -2234,8 +2234,17 @@ class MCPServerManager:
         )
 
         try:
-            # If admin but NO explicit object permission, get all servers
-            if user_api_key_auth and _user_has_admin_view(user_api_key_auth) and not has_explicit_object_permission:
+            # If admin but NO explicit object permission, get all servers.
+            # A gateway DCR session is excluded: it is a keyless subject that a public OAuth client
+            # holds, so letting it inherit the role-based view-all short-circuit would hand an
+            # admin's MCP client every server on the proxy, and the connect grid the user
+            # authorized servers on would no longer describe what their client can reach.
+            if (
+                user_api_key_auth
+                and not user_api_key_auth.is_mcp_gateway_session
+                and _user_has_admin_view(user_api_key_auth)
+                and not has_explicit_object_permission
+            ):
                 verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
                 return list(self.get_registry().keys())
 

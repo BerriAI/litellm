@@ -2605,6 +2605,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     is_session_token: bool = False
+    # Admitted through the aggregate gateway DCR front door: a keyless subject whose reach comes
+    # entirely from its own grants. Distinct from is_session_token, which means the dashboard UI
+    # session and carries budget semantics of its own.
+    is_mcp_gateway_session: bool = False
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used

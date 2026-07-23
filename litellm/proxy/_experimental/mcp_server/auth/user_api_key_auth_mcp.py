@@ -25,6 +25,14 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
     EnvelopeIdentity,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+    NotSessionBearer,
+    SessionBearerAdmitted,
+    SessionBearerInvalid,
+    is_session_bearer_shaped,
+    resolve_session_bearer,
+    session_keys_from_master_key,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_TeamTable,
@@ -124,6 +132,25 @@ def _has_client_supplied_mcp_auth(
     return bool(mcp_auth_header) or bool(mcp_server_auth_headers)
 
 
+def _is_aggregate_mcp_scope(
+    route: str,
+    mcp_servers: list[str] | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+) -> bool:
+    """True when a request targets the aggregate ``/mcp`` endpoint rather than any named server.
+
+    Aggregate scope means no target resolves from the path or ``x-mcp-servers``, and the caller
+    supplied no per-server MCP auth headers (which would make it a scripted client, not a
+    cold-start DCR one). Both the 401 challenge and the gateway session arm consume this, so the
+    scope the challenge advertises and the scope the session is admitted at cannot drift."""
+    if mcp_servers:
+        return False
+    if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
+        return False
+    return len(MCPRequestHandler._resolve_target_server_names(route, mcp_servers)) == 0
+
+
 def _is_aggregate_gateway_dcr_challenge_scope(
     route: str,
     mcp_servers: list[str] | None,
@@ -135,17 +162,11 @@ def _is_aggregate_gateway_dcr_challenge_scope(
     should receive the RFC 9728 401 challenge that advertises the gateway as
     the authorization server.
 
-    Fires only for a genuine 401 on the aggregate scope: any named target
-    (path or ``x-mcp-servers``) belongs to the per-server challenge paths, and
-    client-supplied MCP auth headers mean the caller is not a cold-start DCR
-    client. Fails closed to the original admission error otherwise."""
+    Fires only for a genuine 401 on the aggregate scope. Fails closed to the
+    original admission error otherwise."""
     if not _is_litellm_auth_admission_error(exc):
         return False
-    if mcp_servers:
-        return False
-    if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
-        return False
-    return len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0
+    return _is_aggregate_mcp_scope(route, mcp_servers, mcp_auth_header, mcp_server_auth_headers)
 
 
 def _aggregate_gateway_dcr_challenge(request: Request, invalid_token: bool) -> HTTPException:
@@ -317,6 +338,20 @@ class MCPRequestHandler:
             # for a delegated server, so validate it: identity / spend / rate
             # limits resolve and any stored upstream token can be forwarded.
             validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
+        elif (
+            oauth2_headers
+            and is_session_bearer_shaped(oauth2_headers["Authorization"])
+            and _is_aggregate_mcp_scope(request_route, mcp_servers, mcp_auth_header, mcp_server_auth_headers)
+        ):
+            # A gateway DCR session bearer at the aggregate scope. Placed after the explicit
+            # x-litellm-api-key arm, which keeps winning, and before the generic Authorization arm,
+            # which would otherwise feed this bearer to user_api_key_auth as if it were a litellm
+            # key and 401 on it.
+            validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
+                authorization_value=oauth2_headers["Authorization"],
+                request=request,
+                route=request_route,
+            )
         elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -627,6 +662,52 @@ class MCPRequestHandler:
                 assert_never(result)
 
     @staticmethod
+    async def _admit_gateway_session(
+        authorization_value: str,
+        request: Request,
+        route: str,
+    ) -> UserAPIKeyAuth:
+        """Admit a gateway DCR session bearer at the aggregate ``/mcp`` scope.
+
+        The bearer proves the user completed SSO when it was minted; it carries no authorization,
+        so everything that decides what the request may reach is resolved fresh here. The recovered
+        ``user_id`` reloads the live user record and the same centralized policy gate the key path
+        uses runs over it, which is what makes deactivating a user, blocking their team, or
+        exhausting a budget kill outstanding sessions on the next call instead of at expiry.
+
+        No upstream credential is injected, unlike the bridge envelope arm: the custody model vaults
+        every upstream token server-side, and egress resolves it by user at call time.
+
+        Fails closed with the aggregate challenge rather than a bare 401, so a spec-compliant client
+        re-runs the authorization flow instead of giving up. A session REFRESH token presented here
+        is rejected the same way: it is a valid gateway credential, but only ever at the token
+        endpoint.
+        """
+        from litellm.proxy.proxy_server import master_key
+
+        if not master_key:
+            raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
+
+        await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
+
+        result = resolve_session_bearer(
+            authorization_value,
+            session_keys_from_master_key(master_key),
+            datetime.now(timezone.utc),
+        )
+        match result:
+            case SessionBearerAdmitted():
+                admitted = await MCPRequestHandler._reload_admitted_user(
+                    result.principal.user_id, is_mcp_gateway_session=True
+                )
+                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+                return admitted
+            case SessionBearerInvalid() | NotSessionBearer():
+                raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
+            case _:
+                assert_never(result)
+
+    @staticmethod
     async def _run_pre_db_read_auth_checks(request: Request, route: str) -> None:
         """Run the proxy-wide gates ``user_api_key_auth`` applies before any key lookup: the
         request-size and body-safety limits, the IP allowlist, and the ``general_settings``
@@ -665,7 +746,7 @@ class MCPRequestHandler:
                 assert_never(identity.subject_type)
 
     @staticmethod
-    async def _reload_admitted_user(user_id: str) -> UserAPIKeyAuth:
+    async def _reload_admitted_user(user_id: str, is_mcp_gateway_session: bool = False) -> UserAPIKeyAuth:
         """Reload the live user an interactively-minted envelope references and admit them as
         themselves.
 
@@ -726,6 +807,20 @@ class MCPRequestHandler:
             user_role=user_object.user_role,
             object_permission=object_permission,
             object_permission_id=user_object.object_permission_id,
+            # Bind the org so the org MCP ceiling and the org budget check, both of which return
+            # early without an org_id, actually apply to an admitted subject. A ceiling only ever
+            # narrows, so this cannot widen what the subject reaches.
+            org_id=user_object.organization_id,
+            # The user-level limits are the ONLY rate limits this principal can bind: every other
+            # limiter descriptor keys on api_key, team_id, or end_user_id, none of which a keyless
+            # subject has. Without them _create_rate_limit_descriptors returns an empty list and
+            # the limiter silently enforces nothing.
+            user_rpm_limit=user_object.rpm_limit,
+            user_tpm_limit=user_object.tpm_limit,
+            user_email=user_object.user_email,
+            user_max_budget=user_object.max_budget,
+            user_spend=user_object.spend,
+            is_mcp_gateway_session=is_mcp_gateway_session,
         )
 
     @staticmethod

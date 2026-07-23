@@ -5070,6 +5070,26 @@ class TestMCPDcrBridgeDelegateAdmission:
     _MASTER_KEY = "sk-bridge-master-key-for-envelope-derivation"
 
     @staticmethod
+    def _user_row(**overrides):
+        """A real user row rather than a MagicMock: the reload reads typed fields off it, and a
+        mock silently answers every attribute, so assertions against it can pass vacuously."""
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        return LiteLLM_UserTable(
+            **{
+                "user_id": "sso-user-7",
+                "user_role": None,
+                "max_budget": None,
+                "spend": 0.0,
+                "models": [],
+                "metadata": {"scim_active": True},
+                "object_permission": None,
+                "object_permission_id": None,
+                **overrides,
+            }
+        )
+
+    @staticmethod
     def _bridge_delegate_server(server_name="bridge_delegate_server", dcr_bridge=True, alias=None):
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -5299,15 +5319,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             ) as mock_auth,
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
-            self._patch_user_reload(
-                return_value=MagicMock(
-                    user_id="sso-user-7",
-                    metadata={"scim_active": True},
-                    user_role=None,
-                    object_permission=None,
-                    object_permission_id=None,
-                )
-            ) as get_user_object,
+            self._patch_user_reload(return_value=self._user_row()) as get_user_object,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             (auth_result, _h, _s, mcp_server_auth_headers, _o, _r) = await MCPRequestHandler.process_mcp_request(scope)
@@ -5342,10 +5354,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             self._patch_user_reload(
-                return_value=MagicMock(
-                    user_id="sso-user-7",
-                    metadata={"scim_active": True},
-                    user_role=None,
+                return_value=self._user_row(
                     object_permission=object_permission,
                     object_permission_id="op-user-7",
                 )
@@ -6261,3 +6270,193 @@ class TestAggregateGatewayDcrChallenge:
             with pytest.raises(ProxyException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope())
         assert str(exc_info.value.code) == "500"
+
+
+@pytest.mark.asyncio
+class TestGatewayDCRSessionAdmission:
+    """The aggregate front door's admission arm.
+
+    A gateway DCR session bearer carries identity only, so these tests pin that authorization is
+    resolved fresh from the live user record on every call, that the arm fails closed with the
+    challenge a spec client can act on, and that it never fires outside the aggregate scope.
+    """
+
+    _MASTER_KEY = "sk-gateway-session-tests"
+    _AUTH_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
+
+    def _bearer(self, user_id: str = "user-1", client_id: str = "llm_dcrc_client") -> str:
+        from datetime import datetime, timezone
+
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            session_keys_from_master_key,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+            SessionPrincipal,
+            mint_session_token,
+        )
+
+        minted = mint_session_token(
+            SessionPrincipal(user_id=user_id, client_id=client_id),
+            session_keys_from_master_key(self._MASTER_KEY),
+            datetime.now(timezone.utc),
+        )
+        return minted.token.get_secret_value()
+
+    def _refresh_bearer(self, user_id: str = "user-1") -> str:
+        from datetime import datetime, timezone
+
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            session_keys_from_master_key,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+            SessionPrincipal,
+            mint_session_refresh_token,
+        )
+
+        minted = mint_session_refresh_token(
+            SessionPrincipal(user_id=user_id, client_id="llm_dcrc_client"),
+            session_keys_from_master_key(self._MASTER_KEY),
+            datetime.now(timezone.utc),
+        )
+        return minted.token.get_secret_value()
+
+    def _scope(self, bearer: str, path: str = "/mcp", extra_headers=None):
+        headers = [(b"authorization", f"Bearer {bearer}".encode())]
+        headers.extend(extra_headers or [])
+        return {"type": "http", "method": "POST", "path": path, "headers": headers}
+
+    def _user_row(self, **overrides):
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        return LiteLLM_UserTable(
+            **{
+                "user_id": "user-1",
+                "user_role": "internal_user",
+                "max_budget": None,
+                "spend": 0.0,
+                "models": [],
+                "organization_id": "org-42",
+                "rpm_limit": 11,
+                "tpm_limit": 2222,
+                "user_email": "user@example.com",
+                **overrides,
+            }
+        )
+
+    @contextlib.contextmanager
+    def _rig(self, user_row=None):
+        """Real session crypto, stubbed persistence and policy gate.
+
+        Only the DB read and the shared policy gate are stubbed; the bearer is genuinely minted and
+        genuinely opened, so a break in the crypto or the arm's wiring surfaces here.
+        """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        async def _no_pre_db_checks(request, route):
+            return None
+
+        async def _no_policy(admitted, request, route):
+            return None
+
+        async def _get_user_object(**kwargs):
+            return user_row if user_row is not None else self._user_row()
+
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch.object(MCPRequestHandler, "_run_pre_db_read_auth_checks", _no_pre_db_checks),
+            patch.object(MCPRequestHandler, "_enforce_admitted_live_policy", _no_policy),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", _get_user_object),
+        ):
+            yield
+
+    async def test_a_valid_session_bearer_is_admitted_as_the_sealed_user(self):
+        with self._rig():
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(self._bearer()))
+
+        assert auth.user_id == "user-1"
+        assert auth.is_mcp_gateway_session is True
+        assert auth.api_key is None
+
+    async def test_the_admitted_subject_binds_its_org_so_the_org_ceiling_applies(self):
+        """get_allowed_mcp_servers and the org budget check both return early without an org_id,
+        so an unbound org means the ceiling silently never applies."""
+        with self._rig():
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(self._bearer()))
+
+        assert auth.org_id == "org-42"
+
+    async def test_the_admitted_subject_binds_the_only_rate_limits_it_can(self):
+        """Every other limiter descriptor keys on api_key, team_id or end_user_id, none of which a
+        keyless subject has; without the user-level limits the limiter enforces nothing at all."""
+        with self._rig():
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(self._scope(self._bearer()))
+
+        assert (auth.user_rpm_limit, auth.user_tpm_limit) == (11, 2222)
+
+    async def test_an_expired_or_tampered_bearer_gets_the_reauthorize_challenge(self):
+        tampered = self._bearer()[:-3] + "AAA"
+
+        with self._rig():
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(tampered))
+
+        assert exc_info.value.status_code == 401
+        assert 'error="invalid_token"' in exc_info.value.headers["WWW-Authenticate"]
+        assert "resource_metadata=" in exc_info.value.headers["WWW-Authenticate"]
+
+    async def test_a_refresh_token_is_never_usable_at_the_tool_call_edge(self):
+        """A refresh token is a valid gateway credential, but only at the token endpoint. It must
+        fail closed here rather than fall through to another admission arm."""
+        with self._rig():
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(self._refresh_bearer()))
+
+        assert exc_info.value.status_code == 401
+        assert 'error="invalid_token"' in exc_info.value.headers["WWW-Authenticate"]
+
+    async def test_a_session_bearer_does_not_admit_at_a_named_server_scope(self):
+        """The session grants the aggregate scope. A named target belongs to the per-server paths,
+        so the bearer must fall through to normal admission there instead of being honored."""
+        called = {}
+
+        async def _record(api_key, request):
+            called["api_key"] = api_key
+            return UserAPIKeyAuth(user_id="fell-through")
+
+        with self._rig(), patch(self._AUTH_PATCH_TARGET, side_effect=_record):
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(
+                self._scope(self._bearer(), path="/mcp/some_server")
+            )
+
+        assert auth.user_id == "fell-through"
+        assert auth.is_mcp_gateway_session is False
+
+    async def test_an_explicit_litellm_key_still_wins_over_a_session_bearer(self):
+        async def _key_auth(api_key, request):
+            return UserAPIKeyAuth(user_id="key-owner", api_key="sk-real")
+
+        with self._rig(), patch(self._AUTH_PATCH_TARGET, side_effect=_key_auth):
+            auth, *_rest = await MCPRequestHandler.process_mcp_request(
+                self._scope(self._bearer(), extra_headers=[(b"x-litellm-api-key", b"sk-real")])
+            )
+
+        assert auth.user_id == "key-owner"
+        assert auth.is_mcp_gateway_session is False
+
+    async def test_a_bearer_signed_under_a_different_master_key_is_rejected(self):
+        with self._rig():
+            with patch("litellm.proxy.proxy_server.master_key", "sk-a-totally-different-master-key"):
+                with pytest.raises(HTTPException) as exc_info:
+                    await MCPRequestHandler.process_mcp_request(self._scope(self._bearer()))
+
+        assert exc_info.value.status_code == 401
+
+    async def test_a_scim_deactivated_user_cannot_use_an_outstanding_session(self):
+        """The bearer is a reference, not an authorization: offboarding must land on the next call
+        rather than at token expiry."""
+        with self._rig(user_row=self._user_row(metadata={"scim_active": False})):
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(self._bearer()))
+
+        assert exc_info.value.status_code == 401
