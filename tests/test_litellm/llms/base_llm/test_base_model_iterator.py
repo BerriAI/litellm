@@ -256,3 +256,159 @@ async def test_aclose_is_noop_without_http_response():
     )
 
     await iterator.aclose()
+
+
+class ContentEchoIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        choices = chunk.get("choices") or []
+        content = choices[0].get("delta", {}).get("content", "") if choices else ""
+        return GenericStreamingChunk(
+            text=content or "",
+            is_finished=False,
+            finish_reason="",
+            usage=None,
+            index=0,
+            tool_use=None,
+        )
+
+
+class TestDoneMarkerExactMatch:
+    def test_content_containing_done_substring_is_not_treated_as_stream_end(self):
+        lines = [
+            'data: {"id":"1","choices":[{"delta":{"content":"foo [DONE] bar"}}]}',
+            "data: [DONE]",
+        ]
+        iterator = ContentEchoIterator(streaming_response=iter(lines), sync_stream=True)
+
+        chunks = list(iterator)
+
+        assert len(chunks) == 2
+        assert chunks[0]["text"] == "foo [DONE] bar"
+        assert chunks[0]["is_finished"] is False
+        assert chunks[1]["is_finished"] is True
+        assert chunks[1]["finish_reason"] == "stop"
+
+    def test_done_line_variants_still_terminate(self):
+        for line in ["data: [DONE]", "data:[DONE]", "[DONE]", "data:  [DONE]"]:
+            iterator = ContentEchoIterator(
+                streaming_response=iter([line]), sync_stream=True
+            )
+            chunks = list(iterator)
+            assert len(chunks) == 1
+            assert chunks[0]["is_finished"] is True
+
+
+class TestUnicodeLineSeparatorSplitRecovery:
+    def test_line_split_at_unicode_separator_is_rejoined(self):
+        lines = [
+            'data: {"id":"1","choices":[{"delta":{"content":"foo',
+            'bar"}}]}',
+            "data: [DONE]",
+        ]
+        iterator = ContentEchoIterator(streaming_response=iter(lines), sync_stream=True)
+
+        chunks = list(iterator)
+
+        streamed_text = "".join(chunk["text"] for chunk in chunks)
+        assert streamed_text == "foobar"
+        assert all(chunk["is_finished"] is False for chunk in chunks[:-1])
+        assert chunks[-1]["is_finished"] is True
+
+    def test_line_split_into_three_fragments_is_rejoined(self):
+        lines = [
+            'data: {"id":"1","choices":[{"delta":{"content":"a',
+            "b",
+            'c"}}]}',
+            "data: [DONE]",
+        ]
+        iterator = ContentEchoIterator(streaming_response=iter(lines), sync_stream=True)
+
+        chunks = list(iterator)
+
+        assert "".join(chunk["text"] for chunk in chunks) == "abc"
+
+    def test_pending_fragment_does_not_corrupt_next_valid_line(self):
+        lines = [
+            'data: {"broken',
+            'data: {"id":"1","choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ]
+        iterator = ContentEchoIterator(streaming_response=iter(lines), sync_stream=True)
+
+        chunks = list(iterator)
+
+        assert "".join(chunk["text"] for chunk in chunks) == "ok"
+        assert chunks[-1]["is_finished"] is True
+
+    def test_new_json_object_arriving_at_capacity_blowout_is_seeded(self):
+        from litellm.llms.base_llm.base_model_iterator import MAX_PARTIAL_JSON_LINE_CHARS
+
+        oversized_head = 'data: {"pad":"' + "x" * (MAX_PARTIAL_JSON_LINE_CHARS - 8)
+        lines = [
+            oversized_head,
+            'data: {"id":"1","choices":[{"delta":{"content":"after reset',
+            '"}}]}',
+            "data: [DONE]",
+        ]
+        iterator = ContentEchoIterator(streaming_response=iter(lines), sync_stream=True)
+
+        chunks = list(iterator)
+
+        assert "".join(chunk["text"] for chunk in chunks) == "after reset"
+        assert chunks[-1]["is_finished"] is True
+
+    def test_fragment_buffer_is_bounded_by_fragment_count(self):
+        from litellm.llms.base_llm.base_model_iterator import MAX_PARTIAL_JSON_LINE_FRAGMENTS
+
+        lines = (
+            ['data: {"choices":[{"delta":{"content":"runaway']
+            + ["a"] * MAX_PARTIAL_JSON_LINE_FRAGMENTS
+            + [
+                'z"}}]}',
+                'data: {"id":"1","choices":[{"delta":{"content":"ok"}}]}',
+                "data: [DONE]",
+            ]
+        )
+        iterator = ContentEchoIterator(streaming_response=iter(lines), sync_stream=True)
+
+        chunks = list(iterator)
+
+        streamed_text = "".join(chunk["text"] for chunk in chunks)
+        assert "runaway" not in streamed_text
+        assert streamed_text == "ok"
+
+    def test_oversized_object_start_is_not_buffered(self):
+        from litellm.llms.base_llm.base_model_iterator import MAX_PARTIAL_JSON_LINE_CHARS
+
+        oversized_start = 'data: {"choices":[{"delta":{"content":"huge' + "x" * MAX_PARTIAL_JSON_LINE_CHARS
+        lines = [
+            oversized_start,
+            '"}}]}',
+            'data: {"id":"1","choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ]
+        iterator = ContentEchoIterator(streaming_response=iter(lines), sync_stream=True)
+
+        chunks = list(iterator)
+
+        streamed_text = "".join(chunk["text"] for chunk in chunks)
+        assert "huge" not in streamed_text
+        assert streamed_text == "ok"
+
+    @pytest.mark.asyncio
+    async def test_line_split_at_unicode_separator_is_rejoined_async(self):
+        async def async_gen():
+            for line in [
+                'data: {"id":"1","choices":[{"delta":{"content":"foo',
+                'bar"}}]}',
+                "data: [DONE]",
+            ]:
+                yield line
+
+        iterator = ContentEchoIterator(
+            streaming_response=async_gen(), sync_stream=False
+        )
+
+        chunks = [chunk async for chunk in iterator]
+
+        assert "".join(chunk["text"] for chunk in chunks) == "foobar"
