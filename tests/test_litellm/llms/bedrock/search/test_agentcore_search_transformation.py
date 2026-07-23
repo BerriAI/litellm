@@ -1,14 +1,16 @@
 """
 Tests for Amazon Bedrock AgentCore Web Search integration.
+
+Mirror of tests/search_tests/test_agentcore_search.py placed in the
+test_litellm tree so the AgentCoreSearchConfig transformation is exercised by
+the sharded CI (coverage collection runs against this tree).
 """
 
 import json
 import os
-import sys
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
