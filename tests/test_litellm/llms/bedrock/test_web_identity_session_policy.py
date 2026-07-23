@@ -206,6 +206,55 @@ class TestBedrockMantleActionsCovered:
         )
 
 
+class TestBedrockCountTokensCovered:
+    """#33142: ``BaseAWSLLM._auth_with_web_identity_token`` omits
+    ``bedrock:CountTokens`` from the inline STS session policy, so OIDC
+    auth paths 403 on the Bedrock count-tokens handler even when the
+    assumed role's identity policy explicitly allows the action. STS
+    session policies are a permission ceiling; missing entries silently
+    down-grade effective permissions.
+
+    Source-level mirror of the ``TestBedrockMantleActionsCovered``
+    block above."""
+
+    def test_bedrock_count_tokens_present_in_session_policy(self):
+        policy = _captured_policy()
+        all_actions: set = set()
+        for stmt in policy["Statement"]:
+            stmt_actions = stmt.get("Action")
+            if isinstance(stmt_actions, str):
+                all_actions.add(stmt_actions)
+            elif isinstance(stmt_actions, list):
+                all_actions.update(stmt_actions)
+        assert "bedrock:CountTokens" in all_actions, (
+            "bedrock:CountTokens missing from session policy; "
+            "bedrock/count_tokens/* requests via OIDC auth will 403 "
+            "even when the IAM role allows the action (#33142)"
+        )
+
+    def test_bedrock_count_tokens_lives_on_bedrock_statement(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "BedrockLiteLLM")
+        actions = stmt["Action"]
+        if isinstance(actions, str):
+            actions = [actions]
+        assert "bedrock:CountTokens" in actions, (
+            "bedrock:CountTokens should be granted by the existing "
+            "BedrockLiteLLM statement, not a separate ad-hoc one"
+        )
+
+    def test_no_bedrock_wildcard_added(self):
+        policy = _captured_policy()
+        stmt = _statement_by_sid(policy, "BedrockLiteLLM")
+        actions = stmt["Action"]
+        if isinstance(actions, str):
+            actions = [actions]
+        assert "bedrock:*" not in actions, (
+            "session policy must not grant bedrock:*; the ceiling "
+            "should match the documented action set"
+        )
+
+
 def _make_jwt(payload: dict) -> str:
     def _segment(data: dict) -> str:
         return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
