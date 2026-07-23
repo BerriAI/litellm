@@ -157,6 +157,7 @@ class ProxyClient:
         model_name: str,
         litellm_params: LiteLLMParamsBody,
         mode: ModelMode | None = None,
+        base_model: str | None = None,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
         model_id, once the model is actually servable on the data plane.
@@ -175,7 +176,7 @@ class ProxyClient:
                 json=ModelNewBody(
                     model_name=model_name,
                     litellm_params=litellm_params,
-                    model_info=ModelInfoBody(mode=mode),
+                    model_info=ModelInfoBody(mode=mode, base_model=base_model),
                 ),
                 response_type=ModelNewResponse,
             )

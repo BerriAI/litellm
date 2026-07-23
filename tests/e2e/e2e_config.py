@@ -38,6 +38,20 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 
+AZURE_CHAT_DEPLOYMENTS = tuple(
+    os.environ.get(var, default)
+    for var, default in (
+        ("E2E_AZURE_SOL_MODEL", "gpt-5.6-sol"),
+        ("E2E_AZURE_TERRA_MODEL", "gpt-5.6-terra"),
+        ("E2E_AZURE_LUNA_MODEL", "gpt-5.6-luna"),
+    )
+)
+
+AZURE_CUSTOM_NAME_DEPLOYMENT = os.environ.get("E2E_AZURE_CUSTOM_MODEL", "gpt-5.6-sol-e2e")
+AZURE_CUSTOM_BASE_MODEL = os.environ.get("E2E_AZURE_CUSTOM_BASE_MODEL", "azure/gpt-5.6-sol")
+
+AZURE_GPT4O_DEPLOYMENT = os.environ.get("E2E_AZURE_GPT4O_MODEL", "gpt-4o")
+
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
 # read exported spans back through it.

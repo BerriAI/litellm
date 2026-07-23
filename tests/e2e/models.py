@@ -201,6 +201,7 @@ class ChatBody(BaseModel):
     messages: list[ChatMessage]
     stream: bool = False
     max_tokens: int | None = None
+    max_completion_tokens: int | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
@@ -276,6 +277,21 @@ class ChatResponse(BaseModel):
     choices: list[ChatChoice] = []
     usage: Usage | None = None
     service_tier: str | None = None
+
+
+class ChatStreamDelta(BaseModel):
+    content: str | None = None
+
+
+class ChatStreamChoice(BaseModel):
+    delta: ChatStreamDelta | None = None
+
+
+class ChatStreamChunk(BaseModel):
+    id: str | None = None
+    object: str | None = None
+    model: str | None = None
+    choices: list[ChatStreamChoice] = []
 
 
 # ---------- anthropic /v1/messages + count_tokens ----------
@@ -613,6 +629,8 @@ class LiteLLMParamsBody(BaseModel):
     complexity_router_config: dict[str, object] | None = None
     mock_response: str | None = None
     timeout: float | None = None
+    max_tokens: int | None = None
+    drop_params: bool | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -625,6 +643,7 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
+    base_model: str | None = None
 
 
 class ModelNewBody(BaseModel):
