@@ -633,6 +633,52 @@ def test_bedrock_deepseek_r1_reasoning_params_not_forwarded_by_map(param):
     assert request.get("additionalModelRequestFields") is None
 
 
+@pytest.mark.parametrize(
+    "model, param, value, kept_key",
+    [
+        (
+            "bedrock/us.anthropic.claude-opus-4-20250514-v1:0",
+            "thinking",
+            {"type": "enabled", "budget_tokens": 1024},
+            "thinking",
+        ),
+        (
+            "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            "thinking",
+            {"type": "enabled", "budget_tokens": 1024},
+            "thinking",
+        ),
+        (
+            "bedrock/openai.gpt-oss-safeguard-20b-1:0",
+            "reasoning_effort",
+            "high",
+            "reasoning_effort",
+        ),
+        (
+            "bedrock/us.amazon.nova-2-lite-v1:0",
+            "reasoning_effort",
+            "high",
+            "reasoningConfig",
+        ),
+    ],
+)
+def test_bedrock_non_deepseek_reasoning_params_preserved(model, param, value, kept_key):
+    """The DeepSeek leak fix must only drop reasoning request params for DeepSeek.
+
+    Claude behind an application-inference-profile ARN, gpt-oss-safeguard (absent from the
+    cost map so `supports_reasoning` is False), and Nova 2 all reason via a request param and
+    must keep it. Regression guard against gating the drop on a positive allowlist, which
+    silently degraded reasoning for anything the allowlist/ARN introspection missed."""
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={param: value, "max_tokens": 100},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert kept_key in optional_params
+
+
 def test_get_supported_openai_params_bedrock_converse():
     """
     Test that all documented bedrock converse models have the same set of supported openai params when using
