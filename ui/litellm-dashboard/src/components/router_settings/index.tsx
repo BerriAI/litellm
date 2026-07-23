@@ -85,6 +85,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     }
 
     const router_settings = formValue.routerSettings;
+    const modifiedRouterSettings = formValue.modifiedRouterSettings || [];
 
     const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
     const jsonKeys = new Set(["model_group_alias"]);
@@ -129,6 +130,9 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       Object.entries(settingsToUpdate)
         .map(([key, value]) => {
           if (tabOwnedKeys.has(key)) {
+            return null;
+          }
+          if (key === "default_litellm_params" && !modifiedRouterSettings.includes(key)) {
             return null;
           }
           if (key !== "routing_strategy_args" && key !== "routing_strategy" && key !== "enable_tag_filtering") {

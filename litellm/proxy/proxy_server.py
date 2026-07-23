@@ -14878,6 +14878,16 @@ def _apply_webhook_role_gate(webhook_map, is_full_admin: bool):
     return {alert_type: "REDACTED" for alert_type in webhook_map}
 
 
+def _apply_router_settings_role_gate(router_settings: dict, is_full_admin: bool) -> dict:
+    default_litellm_params = router_settings.get("default_litellm_params")
+    if is_full_admin or not isinstance(default_litellm_params, dict):
+        return router_settings
+    return {
+        **router_settings,
+        "default_litellm_params": SENSITIVE_DATA_MASKER.mask_dict(default_litellm_params),
+    }
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -15545,7 +15555,7 @@ async def get_config(
         if llm_router is None:
             _router_settings = {}
         else:
-            _router_settings = llm_router.get_settings()
+            _router_settings = _apply_router_settings_role_gate(llm_router.get_settings(), is_full_admin)
 
         return {
             "status": "success",

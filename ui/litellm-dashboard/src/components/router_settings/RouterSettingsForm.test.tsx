@@ -11,11 +11,29 @@ vi.mock("antd", async (importOriginal) => {
   return {
     ...actual,
     Select: Object.assign(
-      ({ value, onChange, children }: any) => (
-        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-          {children}
-        </select>
-      ),
+      ({ value, onChange, children, mode, options, "data-testid": testId }: any) =>
+        mode === "multiple" ? (
+          <select
+            multiple
+            data-testid={testId || "multi-select"}
+            value={value ?? []}
+            onChange={(e) => onChange(Array.from(e.target.selectedOptions).map((o: any) => o.value))}
+          >
+            {(options || []).map((option: any) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            data-testid={testId || "strategy-select"}
+            value={value ?? ""}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            {children}
+          </select>
+        ),
       {
         Option: ({ value, children }: any) => <option value={value}>{children}</option>,
       },
@@ -101,7 +119,7 @@ describe("RouterSettingsForm", () => {
     const user = userEvent.setup();
     render(<RouterSettingsForm {...baseProps} onChange={onChange} />);
 
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getAllByRole("switch")[0]);
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ enableTagFiltering: true }));
   });
@@ -109,5 +127,80 @@ describe("RouterSettingsForm", () => {
   it("should show the Reliability & Retries section", () => {
     render(<RouterSettingsForm {...baseProps} />);
     expect(screen.getByText("Reliability & Retries")).toBeInTheDocument();
+  });
+
+  it("should show frontend-defined optional pre-call checks without backend field metadata", () => {
+    render(<RouterSettingsForm {...baseProps} />);
+
+    const select = screen.getByTestId("optional-pre-call-checks-select") as HTMLSelectElement;
+    const optionValues = Array.from(select.options).map((o) => o.value);
+    expect(optionValues).toContain("prompt_caching");
+    expect(optionValues).toContain("router_budget_limiting");
+  });
+
+  it("should call onChange with the updated optional_pre_call_checks when the selector changes", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps,
+      onChange,
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    await user.selectOptions(screen.getByTestId("optional-pre-call-checks-select"), "prompt_caching");
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routerSettings: expect.objectContaining({ optional_pre_call_checks: ["prompt_caching"] }),
+      }),
+    );
+  });
+
+  it("should render cache-control fields without rendering the raw Default LiteLLM Params input", () => {
+    const props = {
+      ...baseProps,
+      value: {
+        ...defaultValue,
+        routerSettings: {
+          default_litellm_params: {
+            timeout: 30,
+            cache_control_injection_points: [{ location: "message", role: "system", index: -1 }],
+          },
+        },
+      },
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    expect(screen.queryByText("Default LiteLLM Params")).not.toBeInTheDocument();
+    expect(screen.getByText("Cache Control Injection Points")).toBeInTheDocument();
+    expect(screen.getByTestId("cache-control-index-input-0")).toHaveValue("-1");
+  });
+
+  it("should mark default_litellm_params as modified when cache control changes", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps,
+      onChange,
+      value: {
+        ...defaultValue,
+        routerSettings: { default_litellm_params: { timeout: 30 } },
+      },
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routerSettings: {
+          default_litellm_params: {
+            timeout: 30,
+            cache_control_injection_points: [{ location: "message" }],
+          },
+        },
+        modifiedRouterSettings: ["default_litellm_params"],
+      }),
+    );
   });
 });

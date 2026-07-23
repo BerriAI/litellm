@@ -709,6 +709,7 @@ class Router:
 
         self.alerting_config: Optional[AlertingConfig] = alerting_config
 
+        self.optional_pre_call_checks: OptionalPreCallChecks = []
         if optional_pre_call_checks is not None:
             self.add_optional_pre_call_checks(optional_pre_call_checks)
 
@@ -1591,6 +1592,8 @@ class Router:
     def add_optional_pre_call_checks(self, optional_pre_call_checks: Optional[OptionalPreCallChecks]):
         if optional_pre_call_checks is None:
             return
+
+        self.optional_pre_call_checks = list(dict.fromkeys([*self.optional_pre_call_checks, *optional_pre_call_checks]))
 
         # ---------------------------------------------------------------------
         # Unified deployment affinity (session stickiness)
@@ -9892,6 +9895,8 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "default_litellm_params",
+            "optional_pre_call_checks",
         ]
 
         for var in vars_to_include:
@@ -9906,6 +9911,73 @@ class Router:
 
         _settings_to_return["routing_groups"] = [group.model_dump() for group in self._routing_groups.values()]
         return _settings_to_return
+
+    def _replace_default_litellm_params_setting(self, value: dict | None) -> None:
+        if value is not None:
+            self.default_litellm_params = value
+
+    def _remove_optional_pre_call_checks(self, removed_checks: OptionalPreCallChecks) -> list[str]:
+        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+            EncryptedContentAffinityCheck,
+        )
+
+        optional_callbacks = self.optional_callbacks or []
+
+        if any(
+            check in removed_checks
+            for check in ("deployment_affinity", "responses_api_deployment_check", "session_affinity")
+        ):
+            for callback in optional_callbacks:
+                if not isinstance(callback, DeploymentAffinityCheck):
+                    continue
+                if "deployment_affinity" in removed_checks:
+                    callback.enable_user_key_affinity = False
+                if "responses_api_deployment_check" in removed_checks:
+                    callback.enable_responses_api_affinity = False
+                if "session_affinity" in removed_checks:
+                    callback.enable_session_id_affinity = False
+                break
+
+        if "encrypted_content_affinity" in removed_checks:
+            for callback in optional_callbacks:
+                if isinstance(callback, EncryptedContentAffinityCheck):
+                    callback.enable_global_affinity = False
+                    break
+
+        removable_callback_types = {
+            "prompt_caching": PromptCachingDeploymentCheck,
+            "enforce_model_rate_limits": ModelRateLimitingCheck,
+            "router_budget_limiting": RouterBudgetLimiting,
+        }
+        retained_checks: list[str] = []
+        for check, callback_type in removable_callback_types.items():
+            if check not in removed_checks:
+                continue
+            if check == "router_budget_limiting" and RouterBudgetLimiting.should_init_router_budget_limiter(
+                model_list=self.model_list, provider_budget_config=self.provider_budget_config
+            ):
+                retained_checks.append(check)
+                continue
+            litellm.logging_callback_manager.remove_callbacks_by_type(optional_callbacks, callback_type)
+            litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, callback_type)
+            if check == "router_budget_limiting":
+                self.router_budget_logger = None
+        return retained_checks
+
+    def _apply_optional_pre_call_checks_setting(self, value: OptionalPreCallChecks | None) -> None:
+        if value is None:
+            return
+        new_checks = [check for check in value if check not in self.optional_pre_call_checks]
+        removed_checks = [check for check in self.optional_pre_call_checks if check not in value]
+        if new_checks:
+            self.add_optional_pre_call_checks(new_checks)
+        retained_checks = self._remove_optional_pre_call_checks(removed_checks) if removed_checks else []
+        self.optional_pre_call_checks = list(dict.fromkeys([*value, *retained_checks]))
+
+    _CUSTOM_UPDATE_SETTINGS_HANDLERS: dict = {
+        "default_litellm_params": _replace_default_litellm_params_setting,
+        "optional_pre_call_checks": _apply_optional_pre_call_checks_setting,
+    }
 
     def update_settings(self, **kwargs):
         """
@@ -9929,6 +10001,8 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "default_litellm_params",
+            "optional_pre_call_checks",
         ]
 
         _int_settings = [
@@ -9956,6 +10030,8 @@ class Router:
                         value = RetryPolicy(**value)
                     if value is None or isinstance(value, RetryPolicy):
                         setattr(self, var, value)
+                elif var in self._CUSTOM_UPDATE_SETTINGS_HANDLERS:
+                    self._CUSTOM_UPDATE_SETTINGS_HANDLERS[var](self, kwargs[var])
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
