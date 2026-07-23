@@ -716,7 +716,8 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
     Whether ``toolSpec.strict`` can be forwarded to Bedrock Converse for ``model``.
 
     Non-Anthropic Bedrock families (Nova, Llama, GPT-OSS) reject the field
-    outright. Anthropic models forward it unless their entry in
+    outright. Claude Sonnet 5 also rejects the field. Other Anthropic models
+    forward it unless their entry in
     ``model_prices_and_context_window.json`` sets
     ``bedrock_converse_supports_strict_tools: false`` — Bedrock routes those
     (Opus 4.7/4.8, see #31582) through a stricter validator that rejects the
@@ -725,6 +726,8 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
     """
     base = get_bedrock_base_model(model)
     if not base.startswith("anthropic"):
+        return False
+    if base == "anthropic.claude-sonnet-5":
         return False
     flag = _get_bedrock_converse_strict_tools_flag(base)
     return flag if flag is not None else True
