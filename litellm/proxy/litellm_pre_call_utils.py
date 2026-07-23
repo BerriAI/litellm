@@ -1447,6 +1447,9 @@ async def add_litellm_data_to_request(
         if "user" not in data:
             data["user"] = user
 
+    if litellm.overwrite_user_with_key_hash is True and user_api_key_dict.api_key is not None:
+        data["user"] = user_api_key_dict.api_key
+
     data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 
     ## Dynamic api version (Azure OpenAI endpoints) ##

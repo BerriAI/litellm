@@ -5226,3 +5226,74 @@ async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags
     tags = updated["litellm_metadata"]["tags"]
     assert "header-tag" in tags
     assert "body-tag" in tags
+
+
+def _make_chat_request_mock() -> MagicMock:
+    return _make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"})
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_clobbers_caller_supplied_user(monkeypatch):
+    """The flag exists so providers can ban by a tamper-proof id; a caller-chosen
+    `user` must never survive, and the raw sk- key must never be forwarded."""
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_key = "sk-overwrite-user-test-1234"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    data = {"model": "gpt-4o", "user": "attacker-chosen-id"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hash_token(raw_key)
+    assert updated_data["user"] != "attacker-chosen-id"
+    assert raw_key not in updated_data["user"]
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_sets_user_when_absent(monkeypatch):
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_key = "sk-overwrite-user-test-5678"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    data = {"model": "gpt-4o"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hash_token(raw_key)
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_disabled_preserves_caller_user():
+    assert litellm.overwrite_user_with_key_hash is False
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-overwrite-user-test-9999")
+    data = {"model": "gpt-4o", "user": "caller-chosen-id"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
