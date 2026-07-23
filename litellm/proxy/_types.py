@@ -2616,6 +2616,17 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # key off. Server-only and stripped from validated input for the same reason as the marker
     # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
     mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
+    via_virtual_key: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Server-only marker set exclusively by the DB virtual-key and master-key auth paths via "
+            "post-construction assignment. Stripped from validated input so custom auth handlers, JWT "
+            "claims, or key metadata cannot forge it. Gates overwrite_user_with_key_hash stamping: only "
+            "a credential the proxy itself validated as a key may be forwarded as the provider-facing "
+            "user id."
+        ),
+    )
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
@@ -2641,6 +2652,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
+        values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
