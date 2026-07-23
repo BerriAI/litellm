@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import UnknownApiError, unwrap
 from guardrails_client import GuardrailsClient, OpenAIModerationParamsBody
 from lifecycle import ResourceManager
@@ -34,7 +34,6 @@ class TestOpenAIModerationGuardrail:
     def test_moderation_blocks_flagged_input(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        require_env("OPENAI_API_KEY", "GEMINI_API_KEY")
         model = client.create_backend_model(resources, prefix="e2e-moderation-backend")
 
         name = f"e2e-openai-moderation-{unique_marker()}"

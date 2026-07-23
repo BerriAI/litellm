@@ -8,9 +8,11 @@ a 200 means the guardrail never ran.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import UnknownApiError
 from guardrails_client import GuardrailsClient
 from lifecycle import ResourceManager
@@ -33,11 +35,8 @@ class TestBedrockGuardrail:
     def test_bedrock_pre_call_blocks_harmful_prompt(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        (identifier, version) = require_env(
-            "BEDROCK_GUARDRAIL_IDENTIFIER",
-            "BEDROCK_GUARDRAIL_VERSION",
-        )
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
+        identifier = os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"]
+        version = os.environ["BEDROCK_GUARDRAIL_VERSION"]
 
         name = f"e2e-bedrock-guard-{unique_marker()}"
         guardrail_id = client.create_bedrock_guardrail(
