@@ -891,6 +891,33 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
+        elif input_item.get("type") == "reasoning":
+            # FIX (BerriAI/litellm#26395 — Responses-API path):
+            # ``ResponseReasoningItemParam`` carries the prior-turn
+            # chain-of-thought summary. The fall-through ``else`` branch
+            # below would treat it as generic user/assistant content and
+            # place the reasoning text into the regular ``content``
+            # field of an extra assistant message. That has two bad effects
+            # for downstream Chat-Completion providers:
+            #   1. The reasoning text pollutes the prompt as visible
+            #      content, inflating tokens and confusing the model.
+            #   2. The adjacent assistant message ends up WITHOUT a
+            #      ``reasoning_content`` field — and DeepSeek V4 rejects
+            #      that with HTTP 400
+            #      "reasoning_content must be passed back".
+            #
+            # Minimum-viable fix: skip the reasoning item entirely (return
+            # []) so it does not end up in the Chat-Completion ``messages``
+            # array at all. Provider-specific transformations downstream
+            # (e.g. ``DeepSeekChatConfig._transform_messages``) are then
+            # responsible for injecting an empty ``reasoning_content`` on
+            # the adjacent assistant message if the provider requires it.
+            #
+            # A future improvement could merge the reasoning text into the
+            # adjacent assistant message's ``reasoning_content`` field for
+            # full fidelity; this PR deliberately stops at the minimum
+            # change that unblocks the bridge.
+            return []
         else:
             content = input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
