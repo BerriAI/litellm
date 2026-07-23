@@ -4,7 +4,8 @@ organizations, teams, and keys.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Set, Union
 
 from fastapi import HTTPException, status
 
@@ -64,6 +65,57 @@ async def attach_object_permission_to_dict(
     return data_dict
 
 
+@dataclass(frozen=True, slots=True)
+class ObjectPermissionUpsert:
+    object_permission_id: str
+    record: dict[str, object]
+
+
+async def prepare_object_permission_upsert(
+    new_object_permission: Mapping[str, object],
+    existing_object_permission_id: str | None,
+    prisma_client: PrismaClient,
+) -> ObjectPermissionUpsert:
+    """
+    Read-and-merge half of an object permission upsert; performs no writes.
+
+    Merges the sent grants over the existing row (looked up by
+    ``existing_object_permission_id``, or a fresh uuid when the entity has none) and
+    returns the id plus the full record to upsert. The id is pinned inside the record
+    because the column has ``@default(uuid())``, so a create without it would mint a
+    different id than the one the caller links. ``mcp_tool_permissions`` is serialized
+    to a JSON string to avoid GraphQL parsing issues (e.g. server IDs starting with
+    "3e64" being interpreted as floats).
+
+    Keeping this separate from the write lets callers run the upsert inside the same
+    transaction as the row that links ``object_permission_id``, so a rolled-back
+    update cannot leave permission changes live.
+    """
+    object_permission_id = existing_object_permission_id or str(uuid.uuid4())
+    existing_object_permission = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        where={"object_permission_id": object_permission_id},
+    )
+    existing_fields: dict[str, object] = (
+        existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
+        if existing_object_permission is not None
+        else {}
+    )
+    merged: dict[str, object] = {
+        **existing_fields,
+        **new_object_permission,
+        "object_permission_id": object_permission_id,
+    }
+    record: dict[str, object] = {
+        **merged,
+        **(
+            {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
+            if "mcp_tool_permissions" in merged
+            else {}
+        ),
+    }
+    return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
+
+
 async def handle_update_object_permission_common(
     data_json: Dict,
     existing_object_permission_id: Optional[str],
@@ -93,50 +145,23 @@ async def handle_update_object_permission_common(
     if prisma_client is None:
         raise ValueError("Prisma client not found")
 
-    #########################################################
-    # Ensure `object_permission` is not added to the data_json
-    # We need to update the entity at the object_permission_id level in the LiteLLM_ObjectPermissionTable
-    #########################################################
-    new_object_permission: Union[dict, str] = data_json.pop("object_permission", None)
+    new_object_permission: Union[dict, str, None] = data_json.pop("object_permission", None)
     if new_object_permission is None:
         return None
 
-    # Lookup existing object permission ID and update that entry
-    object_permission_id_to_use: str = existing_object_permission_id or str(uuid.uuid4())
-    existing_object_permissions_dict: Dict = {}
-
-    existing_object_permission = await ObjectPermissionRepository(prisma_client).table.find_unique(
-        where={"object_permission_id": object_permission_id_to_use},
-    )
-
-    # Update the object permission
-    if existing_object_permission is not None:
-        existing_object_permissions_dict = existing_object_permission.model_dump(exclude_unset=True, exclude_none=True)
-
-    # Handle string JSON object permission
     if isinstance(new_object_permission, str):
         new_object_permission = json.loads(new_object_permission)
 
-    if isinstance(new_object_permission, dict):
-        existing_object_permissions_dict.update(new_object_permission)
-
-    #########################################################
-    # Serialize mcp_tool_permissions JSON field to avoid GraphQL parsing issues
-    # (e.g., server IDs starting with "3e64" being interpreted as floats)
-    #########################################################
-    if "mcp_tool_permissions" in existing_object_permissions_dict:
-        existing_object_permissions_dict["mcp_tool_permissions"] = safe_dumps(
-            existing_object_permissions_dict["mcp_tool_permissions"]
-        )
-
-    #########################################################
-    # Commit the update to the LiteLLM_ObjectPermissionTable
-    #########################################################
+    upsert = await prepare_object_permission_upsert(
+        new_object_permission=new_object_permission if isinstance(new_object_permission, dict) else {},
+        existing_object_permission_id=existing_object_permission_id,
+        prisma_client=prisma_client,
+    )
     created_object_permission_row = await ObjectPermissionRepository(prisma_client).table.upsert(
-        where={"object_permission_id": object_permission_id_to_use},
+        where={"object_permission_id": upsert.object_permission_id},
         data={
-            "create": existing_object_permissions_dict,
-            "update": existing_object_permissions_dict,
+            "create": upsert.record,
+            "update": upsert.record,
         },
     )
 

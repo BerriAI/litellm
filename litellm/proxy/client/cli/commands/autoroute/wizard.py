@@ -111,12 +111,12 @@ def run_configure_wizard(ctx: click.Context) -> Path:
     api_key = ctx.obj["api_key"]
     client = Client(base_url=base_url, api_key=api_key)
 
-    raw_groups = client.model_groups.info()
-    if not isinstance(raw_groups, list):
+    raw_models = client.models.list()
+    if not isinstance(raw_models, list):
         raise click.ClickException(
-            f"Unexpected response from /model_group/info: expected a list, got {type(raw_groups).__name__}"
+            f"Unexpected response from /v1/models: expected a list, got {type(raw_models).__name__}"
         )
-    discovered = parse_discovered_models(raw_groups)
+    discovered = parse_discovered_models(raw_models)
     chat_pool = chat_models(discovered)
     embedding_pool = embedding_models(discovered)
 
