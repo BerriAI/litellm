@@ -157,21 +157,9 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/caching/_components/cache_dashboard.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
+  "src/app/(dashboard)/caching/_components/CacheAnalyticsTab.tsx": {
     "no-restricted-imports": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 3
-    },
-    "react-hooks/purity": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/caching/_components/cache_health.tsx": {
