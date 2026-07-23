@@ -695,7 +695,7 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.JinaAIEmbeddingConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "xai":
+    elif custom_llm_provider in ["xai", "xai-oauth"]:
         (
             api_base,
             dynamic_api_key,

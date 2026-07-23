@@ -435,7 +435,7 @@ async def _arealtime(
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_external_id=aws_external_id,
         )
-    elif _custom_llm_provider == "xai":
+    elif _custom_llm_provider in ["xai", "xai-oauth"]:
         api_base = (
             dynamic_api_base or litellm_params.api_base or get_secret_str("XAI_API_BASE") or "https://api.x.ai/v1"
         )
@@ -548,7 +548,7 @@ async def _realtime_health_check(
             api_base=api_base or "https://api.openai.com/",
             query_params={"model": model},
         )
-    elif custom_llm_provider == "xai":
+    elif custom_llm_provider in ["xai", "xai-oauth"]:
         url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
     elif custom_llm_provider == "vertex_ai":
         vertex_model_params = model_params or {}

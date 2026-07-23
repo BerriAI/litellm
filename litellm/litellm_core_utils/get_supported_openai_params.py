@@ -90,7 +90,7 @@ def get_supported_openai_params(
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "baseten":
         return litellm.BasetenConfig().get_supported_openai_params(model=model)
-    elif custom_llm_provider == "xai":
+    elif custom_llm_provider in ["xai", "xai-oauth"]:
         return litellm.XAIChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "ai21_chat" or custom_llm_provider == "ai21":
         return litellm.AI21ChatConfig().get_supported_openai_params(model=model)

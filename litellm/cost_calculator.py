@@ -632,7 +632,7 @@ def cost_per_token(
         return tencent_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
         return perplexity_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "xai":
+    elif custom_llm_provider in ["xai", "xai-oauth"]:
         return xai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "lemonade":
         return lemonade_cost_per_token(model=model, usage=usage_block)

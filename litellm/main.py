@@ -993,7 +993,7 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-        if web_search_options is not None and custom_llm_provider == "xai":
+        if web_search_options is not None and custom_llm_provider in ["xai", "xai-oauth"]:
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
 
@@ -5477,7 +5477,7 @@ def completion(  # type: ignore
         elif custom_llm_provider == "ragflow":
             ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
             response = _complete_ragflow(_dispatch_ctx)
-        elif custom_llm_provider == "xai":
+        elif custom_llm_provider in ["xai", "xai-oauth"]:
             ## COMPLETION CALL
             response = _complete_xai(_dispatch_ctx)
         elif custom_llm_provider == "groq":
