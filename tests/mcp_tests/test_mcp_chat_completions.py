@@ -464,9 +464,9 @@ async def test_completion_mcp_with_streaming_no_timeout_error(monkeypatch):
 async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
     """
     Test that MCP metadata is added correctly to streaming chunks:
-    - mcp_list_tools should be in the first chunk
-    - mcp_tool_calls and mcp_call_results should be in the final chunk of initial response
-    - Follow-up response should be streamed after initial response
+    - mcp_list_tools should be in the first chunk yielded to the client
+    - mcp_tool_calls and mcp_call_results should be in the final chunk of the follow-up response
+    - The intermediate tool-call turn must not leak into the client stream (issue #31910)
     """
     from types import SimpleNamespace
     from unittest.mock import patch
@@ -734,95 +734,59 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
             all_chunks = executor.submit(consume_stream).result()
         assert len(all_chunks) > 0, "Should have received streaming chunks"
 
-        # Find chunks from initial response (with tool_calls finish_reason)
-        initial_chunks_list = []
-        follow_up_chunks_list = []
-        for chunk in all_chunks:
-            if hasattr(chunk, "choices") and chunk.choices:
-                choice = chunk.choices[0]
-                if (
-                    hasattr(choice, "finish_reason")
-                    and choice.finish_reason == "tool_calls"
-                ):
-                    initial_chunks_list.append(chunk)
-                elif (
-                    hasattr(choice, "finish_reason") and choice.finish_reason == "stop"
-                ):
-                    follow_up_chunks_list.append(chunk)
-                elif (
-                    not hasattr(choice, "finish_reason") or choice.finish_reason is None
-                ):
-                    # Chunks without finish_reason could be from either stream
-                    # Check if we've seen tool_calls yet
-                    if initial_chunks_list:
-                        follow_up_chunks_list.append(chunk)
-                    else:
-                        initial_chunks_list.append(chunk)
+        finish_reasons = [
+            chunk.choices[0].finish_reason
+            for chunk in all_chunks
+            if chunk.choices and chunk.choices[0].finish_reason is not None
+        ]
+        assert finish_reasons == ["stop"], (
+            f"Intermediate tool-call turn must not leak; expected a single stop. Got: {finish_reasons}"
+        )
+        assert all(
+            not getattr(chunk.choices[0].delta, "tool_calls", None)
+            for chunk in all_chunks
+            if chunk.choices and chunk.choices[0].delta
+        ), "tool_call deltas must not leak into the client stream"
 
-        # Verify initial response chunks
-        assert len(initial_chunks_list) > 0, "Should have initial response chunks"
-
-        # Find the final chunk from initial response (with tool_calls finish_reason)
-        initial_final_chunk = None
-        for chunk in initial_chunks_list:
-            if hasattr(chunk, "choices") and chunk.choices:
-                choice = chunk.choices[0]
-                if (
-                    hasattr(choice, "finish_reason")
-                    and choice.finish_reason == "tool_calls"
-                ):
-                    initial_final_chunk = chunk
-                    break
-
-        if initial_final_chunk is None and initial_chunks_list:
-            initial_final_chunk = initial_chunks_list[-1]
-
+        first_chunk = all_chunks[0]
+        first_provider_fields = getattr(
+            first_chunk.choices[0].delta, "provider_specific_fields", None
+        )
         assert (
-            initial_final_chunk is not None
-        ), "Should have a final chunk from initial response"
+            first_provider_fields is not None
+        ), "First chunk should have provider_specific_fields"
+        assert (
+            "mcp_list_tools" in first_provider_fields
+        ), "First chunk should have mcp_list_tools"
 
-        # Verify mcp_list_tools is in the first chunk of initial response
-        first_chunk = initial_chunks_list[0] if initial_chunks_list else None
-        assert first_chunk is not None, "Should have a first chunk"
-        if hasattr(first_chunk, "choices") and first_chunk.choices:
-            choice = first_chunk.choices[0]
-            if hasattr(choice, "delta") and choice.delta:
-                provider_fields = getattr(
-                    choice.delta, "provider_specific_fields", None
-                )
-                assert (
-                    provider_fields is not None
-                ), "First chunk should have provider_specific_fields"
-                assert (
-                    "mcp_list_tools" in provider_fields
-                ), "First chunk should have mcp_list_tools"
+        final_chunk = all_chunks[-1]
+        assert final_chunk.choices[0].finish_reason == "stop"
+        final_provider_fields = getattr(
+            final_chunk.choices[0].delta, "provider_specific_fields", None
+        )
+        assert (
+            final_provider_fields is not None
+        ), "Final chunk should have provider_specific_fields"
+        assert "mcp_tool_calls" in final_provider_fields, "Should have mcp_tool_calls"
+        assert (
+            "mcp_call_results" in final_provider_fields
+        ), "Should have mcp_call_results"
 
-        # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
-        if hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices:
-            choice = initial_final_chunk.choices[0]
-            if hasattr(choice, "delta") and choice.delta:
-                provider_fields = getattr(
-                    choice.delta, "provider_specific_fields", None
-                )
-                assert (
-                    provider_fields is not None
-                ), "Final chunk should have provider_specific_fields"
-                assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
-                assert (
-                    "mcp_call_results" in provider_fields
-                ), "Should have mcp_call_results"
-
-        # Verify follow-up response chunks are present
-        assert len(follow_up_chunks_list) > 0, "Should have follow-up response chunks"
+        content = "".join(
+            chunk.choices[0].delta.content or ""
+            for chunk in all_chunks
+            if chunk.choices and chunk.choices[0].delta
+        )
+        assert content == "Hello world!"
 
 
 @pytest.mark.asyncio
 async def test_mcp_streaming_metadata_ordering(monkeypatch):
     """
     Test that MCP metadata appears in the correct order:
-    - mcp_list_tools should appear in the first chunk (before tool_calls)
-    - mcp_tool_calls and mcp_call_results should appear in the final chunk of initial response
-    - Follow-up response should be streamed after initial response completes
+    - mcp_list_tools should appear in the first chunk yielded to the client
+    - mcp_tool_calls and mcp_call_results should appear in the terminal chunk of the stream
+    - The client stream must contain exactly one terminal finish_reason (issue #31910)
     """
     from types import SimpleNamespace
     from unittest.mock import patch
@@ -1069,66 +1033,38 @@ async def test_mcp_streaming_metadata_ordering(monkeypatch):
             all_chunks = executor.submit(consume_stream).result()
         assert len(all_chunks) > 0, "Should have received streaming chunks"
 
-        # Track when we see each type of metadata
-        mcp_list_tools_seen = False
-        mcp_tool_calls_seen = False
-        mcp_call_results_seen = False
-        tool_calls_finish_reason_seen = False
-        follow_up_content_seen = False
+        finish_reasons = [
+            chunk.choices[0].finish_reason
+            for chunk in all_chunks
+            if chunk.choices and chunk.choices[0].finish_reason is not None
+        ]
+        assert finish_reasons == ["stop"], (
+            f"Client stream must contain exactly one terminal finish_reason. Got: {finish_reasons}"
+        )
 
-        for i, chunk in enumerate(all_chunks):
-            if hasattr(chunk, "choices") and chunk.choices:
-                choice = chunk.choices[0]
-                if hasattr(choice, "delta") and choice.delta:
-                    provider_fields = getattr(
-                        choice.delta, "provider_specific_fields", None
-                    )
-                    if provider_fields:
-                        if "mcp_list_tools" in provider_fields:
-                            mcp_list_tools_seen = True
-                            # mcp_list_tools should appear before tool_calls finish_reason
-                            assert (
-                                not tool_calls_finish_reason_seen
-                            ), "mcp_list_tools should appear before tool_calls finish_reason"
-                        if "mcp_tool_calls" in provider_fields:
-                            mcp_tool_calls_seen = True
-                        if "mcp_call_results" in provider_fields:
-                            mcp_call_results_seen = True
-
-                if (
-                    hasattr(choice, "finish_reason")
-                    and choice.finish_reason == "tool_calls"
-                ):
-                    tool_calls_finish_reason_seen = True
-                    # mcp_tool_calls and mcp_call_results should be in the same chunk as tool_calls finish_reason
-                    if hasattr(choice, "delta") and choice.delta:
-                        provider_fields = getattr(
-                            choice.delta, "provider_specific_fields", None
-                        )
-                        assert provider_fields is not None
-                        assert (
-                            "mcp_tool_calls" in provider_fields
-                        ), "mcp_tool_calls should be in the chunk with tool_calls finish_reason"
-                        assert (
-                            "mcp_call_results" in provider_fields
-                        ), "mcp_call_results should be in the chunk with tool_calls finish_reason"
-
-                if hasattr(choice, "delta") and choice.delta and choice.delta.content:
-                    content = choice.delta.content
-                    if content and (
-                        "Hello" in content or "world" in content or "!" in content
-                    ):
-                        follow_up_content_seen = True
-                        # Follow-up content should appear after tool_calls finish_reason
-                        assert (
-                            tool_calls_finish_reason_seen
-                        ), "Follow-up content should appear after tool_calls finish_reason"
-
-        # Verify all metadata was seen
-        assert mcp_list_tools_seen, "Should have seen mcp_list_tools"
-        assert mcp_tool_calls_seen, "Should have seen mcp_tool_calls"
-        assert mcp_call_results_seen, "Should have seen mcp_call_results"
+        first_provider_fields = getattr(
+            all_chunks[0].choices[0].delta, "provider_specific_fields", None
+        )
         assert (
-            tool_calls_finish_reason_seen
-        ), "Should have seen tool_calls finish_reason"
-        assert follow_up_content_seen, "Should have seen follow-up content"
+            first_provider_fields is not None and "mcp_list_tools" in first_provider_fields
+        ), "mcp_list_tools should be in the first chunk"
+
+        terminal_chunk = all_chunks[-1]
+        assert terminal_chunk.choices[0].finish_reason == "stop"
+        terminal_provider_fields = getattr(
+            terminal_chunk.choices[0].delta, "provider_specific_fields", None
+        )
+        assert terminal_provider_fields is not None
+        assert (
+            "mcp_tool_calls" in terminal_provider_fields
+        ), "mcp_tool_calls should be in the terminal chunk"
+        assert (
+            "mcp_call_results" in terminal_provider_fields
+        ), "mcp_call_results should be in the terminal chunk"
+
+        content = "".join(
+            chunk.choices[0].delta.content or ""
+            for chunk in all_chunks
+            if chunk.choices and chunk.choices[0].delta
+        )
+        assert content == "Hello world!", "Follow-up answer content must reach the client"
