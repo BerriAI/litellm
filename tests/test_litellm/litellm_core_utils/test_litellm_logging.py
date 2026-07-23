@@ -2478,6 +2478,49 @@ def test_get_assembled_streaming_response_returns_result_for_streaming():
     assert assembled is result
 
 
+def test_get_assembled_streaming_response_handles_dict_response_on_completed_event():
+    """
+    Regression for streaming /v1/responses success logging: the ResponseCompletedEvent
+    can carry a plain dict in its `.response` field at runtime (the models allow extra
+    and the event may be constructed without validation). Accessing `result.response.usage`
+    then raised `'dict' object has no attribute 'usage'`, which crashed the success handler
+    before the spend log was written. The assembler must normalize the dict and compute usage.
+    """
+    import datetime
+
+    from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+
+    logging_obj = _make_logging_obj(stream=True)
+    response_dict = {
+        "id": "resp-dict-1",
+        "created_at": 1234567890,
+        "output": [],
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 22,
+            "total_tokens": 33,
+        },
+    }
+    event = ResponseCompletedEvent.model_construct(
+        type="response.completed", response=response_dict
+    )
+    assert isinstance(event.response, dict)
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert isinstance(assembled, ResponsesAPIResponse)
+    assert assembled.id == "resp-dict-1"
+    assert assembled.usage["prompt_tokens"] == 11
+    assert assembled.usage["completion_tokens"] == 22
+    assert assembled.usage["total_tokens"] == 33
+
+
 def test_streaming_success_handler_includes_vertex_ai_metadata_in_standard_logging():
     """Assembled streaming responses should include Vertex AI metadata in logging payload."""
     import datetime
