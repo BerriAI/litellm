@@ -48,6 +48,7 @@ from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
+from litellm.integrations.tickerr import TickerrLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     VectorStorePreCallHook,
 )
@@ -107,6 +108,7 @@ class CustomLoggerRegistry:
         "mavvrik": MavvrikFocusLogger,
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
+        "tickerr": TickerrLogger,
         "newrelic": NewRelicLogger,
     }
 
