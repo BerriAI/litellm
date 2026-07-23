@@ -2068,8 +2068,11 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         return
 
     try:
-        from azure.identity import DefaultAzureCredential
         from azure.keyvault.secrets import SecretClient
+
+        from litellm.secret_managers.get_azure_ad_token_provider import (
+            get_azure_credential,
+        )
 
         # Set your Azure Key Vault URI
         KVUri = os.getenv("AZURE_KEY_VAULT_URI", None)
@@ -2077,7 +2080,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         if KVUri is None:
             raise Exception("Error when loading keys from Azure Key Vault: AZURE_KEY_VAULT_URI is not set.")
 
-        credential = DefaultAzureCredential()
+        credential = get_azure_credential()
 
         # Create the SecretClient using the credential
         client = SecretClient(vault_url=KVUri, credential=credential)

@@ -417,6 +417,47 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
     assert result is None
 
 
+def test_load_from_azure_key_vault_uses_shared_credential_builder(monkeypatch):
+    """The Key Vault loader must build its credential via the shared
+    ``get_azure_credential`` helper (so workload identity and other credential
+    types are honored) rather than hard-coding ``DefaultAzureCredential``."""
+    import litellm
+    import litellm.secret_managers.get_azure_ad_token_provider as azure_cred_mod
+
+    monkeypatch.setenv("AZURE_KEY_VAULT_URI", "https://example.vault.azure.net/")
+    monkeypatch.setattr(litellm, "secret_manager_client", None, raising=False)
+
+    sentinel_credential = object()
+    sentinel_client = object()
+    observed = {}
+
+    def fake_get_azure_credential():
+        observed["credential_built"] = True
+        return sentinel_credential
+
+    fake_secret_client_module = MagicMock()
+
+    def fake_secret_client(vault_url, credential):
+        observed["vault_url"] = vault_url
+        observed["credential"] = credential
+        return sentinel_client
+
+    fake_secret_client_module.SecretClient = fake_secret_client
+    monkeypatch.setattr(azure_cred_mod, "get_azure_credential", fake_get_azure_credential)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "azure.keyvault.secrets",
+        fake_secret_client_module,
+    )
+
+    load_from_azure_key_vault(use_azure_key_vault=True)
+
+    assert observed["credential_built"] is True
+    assert observed["credential"] is sentinel_credential
+    assert observed["vault_url"] == "https://example.vault.azure.net/"
+    assert litellm.secret_manager_client is sentinel_client
+
+
 # ---------------------------------------------------------------------------
 # cost_tracking
 # ---------------------------------------------------------------------------
