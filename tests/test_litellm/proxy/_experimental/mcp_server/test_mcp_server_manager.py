@@ -3031,7 +3031,7 @@ class TestMCPServerManager:
             registration_url="https://discovered.example.com/register",
         )
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             assert server_url == "https://example.com/mcp"
             # oauth2 (browser flow) keeps the origin fallback; only OBO disables it.
             assert allow_origin_fallback is True
@@ -5426,7 +5426,7 @@ class TestMCPServerTimestamps:
         manager = MCPServerManager()
         calls: list[bool] = []
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             calls.append(allow_origin_fallback)
             return MCPOAuthMetadata(
                 scopes=None,
@@ -5461,7 +5461,7 @@ class TestMCPServerTimestamps:
         manager = MCPServerManager()
         calls: list[str] = []
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             calls.append(server_url)
             raise AssertionError("discovery must not run when token_exchange_endpoint is configured")
 
@@ -5491,7 +5491,7 @@ class TestMCPServerTimestamps:
         back to the row, so the next rebuild skips discovery instead of re-running it every time."""
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             assert server_url == "https://example.com/mcp"
             assert allow_origin_fallback is False  # OBO never guesses the origin
             return MCPOAuthMetadata(
@@ -5602,7 +5602,7 @@ class TestMCPServerTimestamps:
         _dcr_bridge_relays_client_registration keys off that column."""
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             assert allow_origin_fallback is True
             return MCPOAuthMetadata(
                 scopes=["mcp.read", "mcp.write"],
@@ -5817,7 +5817,7 @@ class TestMCPServerTimestamps:
         persist_discovered_endpoints=False neither the oauth2 nor the OBO write-back may fire."""
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             return MCPOAuthMetadata(
                 scopes=["s1"],
                 authorization_url="https://idp.example.com/authorize",
@@ -8539,7 +8539,7 @@ class TestOBOEndpointDiscovery:
         )
         seen = []
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             seen.append((server_url, allow_origin_fallback))
             return discovered
 
@@ -8567,7 +8567,7 @@ class TestOBOEndpointDiscovery:
     async def test_config_obo_with_configured_endpoint_skips_discovery(self):
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             raise AssertionError("discovery must not run when the endpoint is configured")
 
         manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
@@ -9028,3 +9028,162 @@ class TestUrllessIssuerDiscovery:
         anchored.assert_awaited_once_with("https://idp.example.com", None)
         resource_rooted.assert_not_awaited()
         assert built.token_url == "https://idp.example.com/token"
+
+
+class TestDiscoveryFailureLogging:
+    """LIT-4658: a misconfigured MCP server url must be diagnosable from default-level server logs.
+
+    Discovery failures used to die at debug level and the config-load path emitted no warning at
+    all, so the only operator-facing signal was the bare 400 at /authorize."""
+
+    def _connect_error_client(self, url: str) -> MagicMock:
+        client = MagicMock()
+        client.get = AsyncMock(
+            side_effect=httpx.ConnectError(f"[Errno 8] nodename nor servname provided for {url}")
+        )
+        return client
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_warns_with_redacted_attempts_on_connect_error(self, caplog):
+        manager = MCPServerManager()
+        secret_url = "https://typo-host.example.com/mcp/s/PATHSECRET/mcp"
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=self._connect_error_client(secret_url),
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            result = await manager._descovery_metadata(secret_url, warn_when_no_metadata=True)
+        assert result is None
+        assert "found no authorization server metadata" in caplog.text
+        assert "ConnectError" in caplog.text
+        assert "https://typo-host.example.com" in caplog.text
+        # hosted MCP urls embed credentials in the path; neither the url nor the exception
+        # text may leak it into warning-level logs
+        assert "PATHSECRET" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_stays_silent_without_warn_flag(self, caplog):
+        manager = MCPServerManager()
+        url = "https://typo-host.example.com/mcp"
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=self._connect_error_client(url),
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            result = await manager._descovery_metadata(url)
+        assert result is None
+        assert "found no authorization server metadata" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_attempt_trail_names_each_failed_step(self, caplog):
+        manager = MCPServerManager()
+        url = "https://real-host.example.com/mcp-typo"
+        client = MagicMock()
+        client.get = AsyncMock(
+            return_value=httpx.Response(404, request=httpx.Request("GET", url))
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=client,
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            result = await manager._descovery_metadata(url, warn_when_no_metadata=True)
+        assert result is None
+        assert "HTTP 404" in caplog.text
+        assert "well-known protected-resource lookup found no authorization servers" in caplog.text
+        assert "origin fallback" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_warns_when_endpoints_unresolved(self, caplog):
+        manager = MCPServerManager()
+        manager._descovery_metadata = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        config = {
+            "typo_server": {
+                "url": "https://typo.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+        assert "typo_server" in caplog.text
+        assert "authorization_url, token_url" in caplog.text
+        assert "unresolved" in caplog.text
+        assert "verify the configured server url" in caplog.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_config",
+        [
+            {
+                "authorization_url": "https://idp.example.com/auth",
+                "token_url": "https://idp.example.com/token",
+            },
+            {
+                "oauth2_flow": "client_credentials",
+                "token_url": "https://idp.example.com/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+            },
+        ],
+    )
+    async def test_load_servers_from_config_silent_when_flow_needs_covered(self, caplog, extra_config):
+        """Manually covered endpoints and M2M servers (which never need authorization_url) must not
+        warn on every reload; the warning is a misconfiguration signal, not discovery telemetry."""
+        manager = MCPServerManager()
+        manager._descovery_metadata = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        config = {
+            "covered_server": {
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
+                **extra_config,
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+        assert "unresolved" not in caplog.text
+        assert "no discovery source" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_config_server_without_discovery_source_warns_about_missing_endpoints(self, caplog):
+        manager = MCPServerManager()
+        manager._register_openapi_tools = AsyncMock()  # type: ignore[attr-defined]
+        config = {
+            "spec_only": {
+                "spec_path": "https://example.com/openapi.yaml",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+        assert "no discovery source" in caplog.text
+        assert "authorization_url and token_url are not set manually" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_db_build_warns_when_discovery_fails_for_oauth2_row(self, caplog):
+        manager = MCPServerManager()
+        manager._descovery_metadata = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        record = LiteLLM_MCPServerTable(
+            server_id="typo-row-1",
+            server_name="typo_row",
+            url="https://typo.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+        assert "typo_row" in caplog.text
+        assert "authorization_url, token_url" in caplog.text
+        assert "unresolved" in caplog.text
