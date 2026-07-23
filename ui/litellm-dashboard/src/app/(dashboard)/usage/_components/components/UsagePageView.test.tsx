@@ -1157,6 +1157,7 @@ describe("UsagePage", () => {
 
       expect(screen.getByText("Cost")).toBeInTheDocument();
       expect(screen.getByText("Model Activity")).toBeInTheDocument();
+      expect(screen.getByText("Public Model Activity")).toBeInTheDocument();
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();

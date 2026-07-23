@@ -136,6 +136,13 @@ def update_breakdown_metrics(
         breakdown.model_groups[record.model_group].metrics = update_metrics(
             breakdown.model_groups[record.model_group].metrics, record
         )
+        if record.model:
+            if record.model not in breakdown.model_groups[record.model_group].model_breakdown:
+                breakdown.model_groups[record.model_group].model_breakdown[record.model] = SpendMetrics()
+            breakdown.model_groups[record.model_group].model_breakdown[record.model] = update_metrics(
+                breakdown.model_groups[record.model_group].model_breakdown[record.model],
+                record,
+            )
 
         # Update API key breakdown for this model
         if record.api_key not in breakdown.model_groups[record.model_group].api_key_breakdown:
@@ -150,6 +157,14 @@ def update_breakdown_metrics(
             breakdown.model_groups[record.model_group].api_key_breakdown[record.api_key].metrics,
             record,
         )
+        if record.model:
+            key_metrics = breakdown.model_groups[record.model_group].api_key_breakdown[record.api_key]
+            if record.model not in key_metrics.model_breakdown:
+                key_metrics.model_breakdown[record.model] = SpendMetrics()
+            key_metrics.model_breakdown[record.model] = update_metrics(
+                key_metrics.model_breakdown[record.model],
+                record,
+            )
 
     if record.mcp_namespaced_tool_name:
         if record.mcp_namespaced_tool_name not in breakdown.mcp_servers:
@@ -490,7 +505,9 @@ def _build_aggregated_sql_query(
             (date, model),
             (date, model, api_key),
             (date, model_group),
+            (date, model, model_group),
             (date, model_group, api_key),
+            (date, api_key, model, model_group),
             (date, custom_llm_provider),
             (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name),
@@ -594,7 +611,9 @@ _GROUP_DATE_API_KEY = 31  # 0b0011111
 _GROUP_DATE_MODEL = 47  # 0b0101111
 _GROUP_DATE_MODEL_API_KEY = 15  # 0b0001111
 _GROUP_DATE_MODEL_GROUP = 55  # 0b0110111
+_GROUP_DATE_MODEL_MODEL_GROUP = 39  # 0b0100111
 _GROUP_DATE_MODEL_GROUP_API_KEY = 23  # 0b0010111
+_GROUP_DATE_MODEL_MODEL_GROUP_API_KEY = 7  # 0b0000111
 _GROUP_DATE_PROVIDER = 59  # 0b0111011
 _GROUP_DATE_PROVIDER_API_KEY = 27  # 0b0011011
 _GROUP_DATE_MCP = 61  # 0b0111101
@@ -671,9 +690,14 @@ def _aggregate_grouping_sets_records_sync(
         if parent is None:
             parent = MetricWithMetadata(metrics=SpendMetrics(), metadata={})
             target[parent_key] = parent
-        parent.api_key_breakdown[api_key] = KeyMetricWithMetadata(
-            metrics=metrics, metadata=_key_metadata(api_key_metadata, api_key)
-        )
+        existing = parent.api_key_breakdown.get(api_key)
+        if existing is None:
+            parent.api_key_breakdown[api_key] = KeyMetricWithMetadata(
+                metrics=metrics, metadata=_key_metadata(api_key_metadata, api_key)
+            )
+        else:
+            existing.metrics = metrics
+            existing.metadata = _key_metadata(api_key_metadata, api_key)
 
     for record in records:
         level = record.group_level
@@ -704,6 +728,13 @@ def _aggregate_grouping_sets_records_sync(
         elif level == _GROUP_DATE_MODEL_GROUP:
             if record.model_group:
                 assign_metric_with_metadata(breakdown.model_groups, record.model_group, metrics)
+        elif level == _GROUP_DATE_MODEL_MODEL_GROUP:
+            if record.model_group and record.model:
+                parent = breakdown.model_groups.get(record.model_group)
+                if parent is None:
+                    parent = MetricWithMetadata(metrics=SpendMetrics(), metadata={})
+                    breakdown.model_groups[record.model_group] = parent
+                parent.model_breakdown[record.model] = metrics
         elif level == _GROUP_DATE_MODEL_GROUP_API_KEY:
             if record.model_group and record.api_key:
                 assign_api_key_breakdown(
@@ -712,6 +743,20 @@ def _aggregate_grouping_sets_records_sync(
                     record.api_key,
                     metrics,
                 )
+        elif level == _GROUP_DATE_MODEL_MODEL_GROUP_API_KEY:
+            if record.model_group and record.model and record.api_key:
+                parent = breakdown.model_groups.get(record.model_group)
+                if parent is None:
+                    parent = MetricWithMetadata(metrics=SpendMetrics(), metadata={})
+                    breakdown.model_groups[record.model_group] = parent
+                key_metrics = parent.api_key_breakdown.get(record.api_key)
+                if key_metrics is None:
+                    key_metrics = KeyMetricWithMetadata(
+                        metrics=SpendMetrics(),
+                        metadata=_key_metadata(api_key_metadata, record.api_key),
+                    )
+                    parent.api_key_breakdown[record.api_key] = key_metrics
+                key_metrics.model_breakdown[record.model] = metrics
         elif level == _GROUP_DATE_PROVIDER:
             provider = record.custom_llm_provider or "unknown"
             assign_metric_with_metadata(breakdown.providers, provider, metrics)
