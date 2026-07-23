@@ -464,6 +464,13 @@ class CallTypes(str, Enum):
     # Claude Code Call Types
     #########################################################
     acreate_skill = "acreate_skill"
+    aupdate_skill = "aupdate_skill"
+    aget_skill_content = "aget_skill_content"
+    acreate_skill_version = "acreate_skill_version"
+    alist_skill_versions = "alist_skill_versions"
+    aget_skill_version = "aget_skill_version"
+    aget_skill_version_content = "aget_skill_version_content"
+    adelete_skill_version = "adelete_skill_version"
 
 
 CallTypesLiteral = Literal[
@@ -524,6 +531,13 @@ CallTypesLiteral = Literal[
     "aresponses",
     "responses",
     "acreate_skill",
+    "aupdate_skill",
+    "aget_skill_content",
+    "acreate_skill_version",
+    "alist_skill_versions",
+    "aget_skill_version",
+    "aget_skill_version_content",
+    "adelete_skill_version",
     "acreate_realtime_client_secret",
     "arealtime_calls",
     "acreate_realtime_transcription_session",

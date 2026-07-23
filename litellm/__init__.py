@@ -1268,6 +1268,20 @@ from .skills.main import (
     aget_skill,
     delete_skill,
     adelete_skill,
+    create_skill_version,
+    acreate_skill_version,
+    list_skill_versions,
+    alist_skill_versions,
+    get_skill_version,
+    aget_skill_version,
+    delete_skill_version,
+    adelete_skill_version,
+    update_skill,
+    aupdate_skill,
+    get_skill_content,
+    aget_skill_content,
+    get_skill_version_content,
+    aget_skill_version_content,
 )
 from .evals.main import (
     create_eval,
@@ -1356,6 +1370,20 @@ from .skills.main import (
     aget_skill,
     delete_skill,
     adelete_skill,
+    create_skill_version,
+    acreate_skill_version,
+    list_skill_versions,
+    alist_skill_versions,
+    get_skill_version,
+    aget_skill_version,
+    delete_skill_version,
+    adelete_skill_version,
+    update_skill,
+    aupdate_skill,
+    get_skill_content,
+    aget_skill_content,
+    get_skill_version_content,
+    aget_skill_version_content,
 )
 from .containers.main import *
 from .ocr.main import *
@@ -1770,6 +1798,12 @@ if TYPE_CHECKING:
     )
     from .llms.anthropic.skills.transformation import (
         AnthropicSkillsConfig as AnthropicSkillsConfig,
+    )
+    from .llms.openai.skills.transformation import (
+        OpenAISkillsConfig as OpenAISkillsConfig,
+    )
+    from .llms.azure.skills.transformation import (
+        AzureOpenAISkillsConfig as AzureOpenAISkillsConfig,
     )
     from .llms.base_llm.skills.transformation import (
         BaseSkillsAPIConfig as BaseSkillsAPIConfig,

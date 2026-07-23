@@ -13,6 +13,10 @@ import httpx
 import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.skill_id_utils import (
+    encode_skill_id,
+    get_original_skill_id,
+)
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_skills import (
@@ -32,6 +36,31 @@ DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
 
 # Initialize LiteLLM skills handler (lazy - only used when custom_llm_provider="litellm")
 _litellm_skills_handler = None
+
+
+def _get_skill_model(kwargs: dict[str, Any]) -> str | None:
+    model = kwargs.get("_litellm_skill_model") or kwargs.get("model")
+    return model if isinstance(model, str) and model else None
+
+
+def _get_native_skill_model(custom_llm_provider: str | None, kwargs: dict[str, Any]) -> str | None:
+    if custom_llm_provider not in {LlmProviders.OPENAI.value, LlmProviders.AZURE.value}:
+        return None
+    return _get_skill_model(kwargs)
+
+
+def _wrap_skill_response(response: Any, model: str | None) -> Any:
+    if model is None:
+        return response
+    if hasattr(response, "id") and isinstance(response.id, str):
+        response.id = encode_skill_id(response.id, model)
+    if hasattr(response, "data") and isinstance(response.data, list):
+        for item in response.data:
+            if hasattr(item, "id") and isinstance(item.id, str):
+                item.id = encode_skill_id(item.id, model)
+    if hasattr(response, "skill_id") and isinstance(response.skill_id, str):
+        response.skill_id = encode_skill_id(response.skill_id, model)
+    return response
 
 
 def _get_user_api_key_auth_from_kwargs(kwargs: Dict[str, Any]) -> Optional[Any]:
@@ -119,7 +148,7 @@ async def acreate_skill(
             response = await init_response
         else:
             response = init_response
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -205,7 +234,7 @@ def create_skill(
             raise ValueError(f"CREATE skill is not supported for {custom_llm_provider}")
 
         # Validate environment and get headers
-        headers = extra_headers or {}
+        headers = dict(extra_headers or {})
         headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
@@ -215,11 +244,12 @@ def create_skill(
             headers=headers,
         )
 
-        # Get API base and URL
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
-        url = skills_api_provider_config.get_complete_url(api_base=api_base, endpoint="skills")
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
+        url = skills_api_provider_config.get_complete_url(
+            api_base=api_base,
+            endpoint="skills",
+            litellm_params=litellm_params,
+        )
 
         # Pre-call logging
         litellm_logging_obj.update_from_kwargs(
@@ -247,7 +277,7 @@ def create_skill(
             shared_session=kwargs.get("shared_session"),
         )
 
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -262,6 +292,8 @@ def create_skill(
 async def alist_skills(
     limit: Optional[int] = None,
     page: Optional[str] = None,
+    after: str | None = None,
+    order: str | None = None,
     source: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
@@ -294,6 +326,8 @@ async def alist_skills(
             list_skills,
             limit=limit,
             page=page,
+            after=after,
+            order=order,
             source=source,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -310,7 +344,7 @@ async def alist_skills(
             response = await init_response
         else:
             response = init_response
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -325,6 +359,8 @@ async def alist_skills(
 def list_skills(
     limit: Optional[int] = None,
     page: Optional[str] = None,
+    after: str | None = None,
+    order: str | None = None,
     source: Optional[str] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
@@ -388,6 +424,10 @@ def list_skills(
             list_params["limit"] = limit
         if page is not None:
             list_params["page"] = page
+        if after is not None:
+            list_params["after"] = after
+        if order is not None:
+            list_params["order"] = order
         if source is not None:
             list_params["source"] = source
 
@@ -396,7 +436,7 @@ def list_skills(
             list_params.update(extra_query)  # type: ignore
 
         # Validate environment and get headers
-        headers = extra_headers or {}
+        headers = dict(extra_headers or {})
         headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
@@ -432,7 +472,7 @@ def list_skills(
             shared_session=kwargs.get("shared_session"),
         )
 
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -489,7 +529,7 @@ async def aget_skill(
             response = await init_response
         else:
             response = init_response
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -536,6 +576,8 @@ def get_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
+        skill_id = get_original_skill_id(skill_id)
+
         # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
             return _get_litellm_skills_handler().get_skill_handler(
@@ -557,18 +599,15 @@ def get_skill(
             raise ValueError(f"GET skill is not supported for {custom_llm_provider}")
 
         # Validate environment and get headers
-        headers = extra_headers or {}
+        headers = dict(extra_headers or {})
         headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
-        # Get API base
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_get_skill_request(
             skill_id=skill_id,
-            api_base=api_base or DEFAULT_ANTHROPIC_API_BASE,
+            api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -598,7 +637,7 @@ def get_skill(
             shared_session=kwargs.get("shared_session"),
         )
 
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -655,7 +694,7 @@ async def adelete_skill(
             response = await init_response
         else:
             response = init_response
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -702,6 +741,8 @@ def delete_skill(
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
+        skill_id = get_original_skill_id(skill_id)
+
         # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
             return _get_litellm_skills_handler().delete_skill_handler(
@@ -723,18 +764,15 @@ def delete_skill(
             raise ValueError(f"DELETE skill is not supported for {custom_llm_provider}")
 
         # Validate environment and get headers
-        headers = extra_headers or {}
+        headers = dict(extra_headers or {})
         headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
-        # Get API base
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_delete_skill_request(
             skill_id=skill_id,
-            api_base=api_base or DEFAULT_ANTHROPIC_API_BASE,
+            api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -764,7 +802,7 @@ def delete_skill(
             shared_session=kwargs.get("shared_session"),
         )
 
-        return response
+        return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -773,3 +811,430 @@ def delete_skill(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def _run_skill_operation(
+    operation: str,
+    skill_id: str,
+    version: str | None = None,
+    files: list[Any] | None = None,
+    default: bool | None = None,
+    default_version: str | None = None,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    is_async = kwargs.pop("_skill_is_async", False) is True
+    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")
+    litellm_params = GenericLiteLLMParams(**kwargs)
+    custom_llm_provider = custom_llm_provider or kwargs.get("custom_llm_provider")
+    if custom_llm_provider is None:
+        raise ValueError("custom_llm_provider is required for native Skills operations")
+    skill_id = get_original_skill_id(skill_id)
+    skills_api_provider_config = ProviderConfigManager.get_provider_skills_api_config(
+        provider=litellm.LlmProviders(custom_llm_provider)
+    )
+    if skills_api_provider_config is None or not getattr(skills_api_provider_config, "is_openai_native", False):
+        raise ValueError(f"{operation} skill operation is not supported for {custom_llm_provider}")
+
+    headers = skills_api_provider_config.validate_environment(
+        headers=dict(extra_headers or {}), litellm_params=litellm_params
+    )
+    request_body: dict[str, Any] = dict(extra_body or {})
+    if operation == "update":
+        if default_version is None:
+            raise ValueError("default_version is required")
+        request_body["default_version"] = default_version
+    elif operation == "create_version":
+        if files is not None:
+            request_body["files"] = files
+        if default is not None:
+            request_body["default"] = default
+
+    query_params: dict[str, Any] = dict(extra_query or {})
+    if operation == "list_versions":
+        if after is not None:
+            query_params["after"] = after
+        if limit is not None:
+            query_params["limit"] = limit
+        if order is not None:
+            query_params["order"] = order
+
+    url = skills_api_provider_config.get_skill_operation_url(
+        operation=operation,
+        skill_id=skill_id,
+        version=version,
+        litellm_params=litellm_params,
+    )
+    response = base_llm_http_handler.skill_operation_handler(
+        method={
+            "update": "POST",
+            "content": "GET",
+            "create_version": "POST",
+            "list_versions": "GET",
+            "version": "GET",
+            "version_content": "GET",
+            "delete_version": "DELETE",
+        }[operation],
+        operation=operation,
+        url=url,
+        skills_api_provider_config=skills_api_provider_config,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params,
+        logging_obj=litellm_logging_obj,
+        request_body=request_body or None,
+        query_params=query_params or None,
+        extra_headers=headers,
+        timeout=timeout or request_timeout,
+        _is_async=is_async,
+        client=kwargs.get("client"),
+        shared_session=kwargs.get("shared_session"),
+    )
+    if is_async:
+        return response
+    return _wrap_skill_response(response, _get_native_skill_model(custom_llm_provider, kwargs))
+
+
+async def _call_skill_operation_async(function: Any, **kwargs) -> Any:
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(function, **kwargs))
+    if asyncio.iscoroutine(result):
+        result = await result
+    return result
+
+
+@client
+def update_skill(
+    skill_id: str,
+    default_version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    return _run_skill_operation(
+        operation="update",
+        skill_id=skill_id,
+        default_version=default_version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        extra_body=extra_body,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+async def aupdate_skill(
+    skill_id: str,
+    default_version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    kwargs["_skill_is_async"] = True
+    return await _call_skill_operation_async(
+        update_skill,
+        skill_id=skill_id,
+        default_version=default_version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        extra_body=extra_body,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+def create_skill_version(
+    skill_id: str,
+    files: list[Any] | None = None,
+    default: bool | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    return _run_skill_operation(
+        operation="create_version",
+        skill_id=skill_id,
+        files=files,
+        default=default,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        extra_body=extra_body,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+async def acreate_skill_version(
+    skill_id: str,
+    files: list[Any] | None = None,
+    default: bool | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    kwargs["_skill_is_async"] = True
+    return await _call_skill_operation_async(
+        create_skill_version,
+        skill_id=skill_id,
+        files=files,
+        default=default,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        extra_body=extra_body,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+def list_skill_versions(
+    skill_id: str,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    return _run_skill_operation(
+        operation="list_versions",
+        skill_id=skill_id,
+        after=after,
+        limit=limit,
+        order=order,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+async def alist_skill_versions(
+    skill_id: str,
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    kwargs["_skill_is_async"] = True
+    return await _call_skill_operation_async(
+        list_skill_versions,
+        skill_id=skill_id,
+        after=after,
+        limit=limit,
+        order=order,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+def get_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    return _run_skill_operation(
+        operation="version",
+        skill_id=skill_id,
+        version=version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+async def aget_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    kwargs["_skill_is_async"] = True
+    return await _call_skill_operation_async(
+        get_skill_version,
+        skill_id=skill_id,
+        version=version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+def delete_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    return _run_skill_operation(
+        operation="delete_version",
+        skill_id=skill_id,
+        version=version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+async def adelete_skill_version(
+    skill_id: str,
+    version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    kwargs["_skill_is_async"] = True
+    return await _call_skill_operation_async(
+        delete_skill_version,
+        skill_id=skill_id,
+        version=version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+def get_skill_content(
+    skill_id: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    return _run_skill_operation(
+        operation="content",
+        skill_id=skill_id,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+async def aget_skill_content(
+    skill_id: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    kwargs["_skill_is_async"] = True
+    return await _call_skill_operation_async(
+        get_skill_content,
+        skill_id=skill_id,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+def get_skill_version_content(
+    skill_id: str,
+    version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    return _run_skill_operation(
+        operation="version_content",
+        skill_id=skill_id,
+        version=version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
+
+
+@client
+async def aget_skill_version_content(
+    skill_id: str,
+    version: str,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> Any:
+    kwargs["_skill_is_async"] = True
+    return await _call_skill_operation_async(
+        get_skill_version_content,
+        skill_id=skill_id,
+        version=version,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        timeout=timeout,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )

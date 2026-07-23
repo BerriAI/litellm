@@ -11383,6 +11383,7 @@ class BaseLLMHTTPHandler:
         self,
         request_body: Dict,
         headers: dict,
+        skills_api_provider_config: Optional["BaseSkillsAPIConfig"] = None,
     ) -> tuple[Optional[Dict], Optional[list]]:
         """
         Helper to prepare multipart/form-data request for skills API.
@@ -11398,13 +11399,19 @@ class BaseLLMHTTPHandler:
             return None, None
 
         # Remove content-type header if present - httpx will set it automatically for multipart
-        if "content-type" in headers:
-            del headers["content-type"]
+        for header_name in list(headers):
+            if header_name.lower() == "content-type":
+                del headers[header_name]
 
         # Prepare files for multipart upload
         files = []
+        file_field_name = (
+            skills_api_provider_config.get_skill_file_field_name(request_body)
+            if skills_api_provider_config is not None
+            else "files[]"
+        )
         for file_obj in request_body["files"]:
-            files.append(("files[]", file_obj))
+            files.append((file_field_name, file_obj))
 
         # Prepare data (non-file fields)
         data = {k: v for k, v in request_body.items() if k != "files"}
@@ -11459,7 +11466,11 @@ class BaseLLMHTTPHandler:
 
         try:
             # Check if files are present - use multipart/form-data
-            data, files = self._prepare_skill_multipart_request(request_body=request_body, headers=headers)
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body,
+                headers=headers,
+                skills_api_provider_config=skills_api_provider_config,
+            )
 
             if files is not None:
                 response = sync_httpx_client.post(url=url, headers=headers, data=data, files=files, timeout=timeout)
@@ -11513,7 +11524,11 @@ class BaseLLMHTTPHandler:
 
         try:
             # Check if files are present - use multipart/form-data
-            data, files = self._prepare_skill_multipart_request(request_body=request_body, headers=headers)
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body,
+                headers=headers,
+                skills_api_provider_config=skills_api_provider_config,
+            )
 
             if files is not None:
                 response = await async_httpx_client.post(
@@ -11837,6 +11852,137 @@ class BaseLLMHTTPHandler:
             )
 
         return skills_api_provider_config.transform_delete_skill_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def skill_operation_handler(
+        self,
+        method: str,
+        operation: str,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        request_body: dict[str, Any] | None = None,
+        query_params: dict[str, Any] | None = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Any | Coroutine[Any, Any, Any]:
+        if _is_async:
+            return self.async_skill_operation_handler(
+                method=method,
+                operation=operation,
+                url=url,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                request_body=request_body,
+                query_params=query_params,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+        logging_obj.pre_call(
+            input=request_body or {}, api_key="", additional_args={"api_base": url, "headers": headers}
+        )
+        try:
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body or {},
+                headers=headers,
+                skills_api_provider_config=skills_api_provider_config,
+            )
+            request_kwargs: dict[str, Any] = {"url": url, "headers": headers, "timeout": timeout}
+            if query_params:
+                request_kwargs["params"] = query_params
+            if files is not None:
+                request_kwargs.update({"data": data, "files": files})
+            elif method.upper() in {"POST", "PATCH", "PUT"}:
+                request_kwargs["json"] = request_body or {}
+            request_method = getattr(sync_httpx_client, method.lower())
+            response = request_method(**request_kwargs)
+        except Exception as e:  # noqa: BLE001  # provider transport errors use LiteLLM error mapping
+            raise self._handle_error(e=e, provider_config=skills_api_provider_config)
+
+        if response.status_code >= 400:
+            raise skills_api_provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+        return skills_api_provider_config.transform_skill_operation_response(
+            operation=operation,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_skill_operation_handler(
+        self,
+        method: str,
+        operation: str,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        request_body: dict[str, Any] | None = None,
+        query_params: dict[str, Any] | None = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Any:
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+        logging_obj.pre_call(
+            input=request_body or {}, api_key="", additional_args={"api_base": url, "headers": headers}
+        )
+        try:
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body or {},
+                headers=headers,
+                skills_api_provider_config=skills_api_provider_config,
+            )
+            request_kwargs: dict[str, Any] = {"url": url, "headers": headers, "timeout": timeout}
+            if query_params:
+                request_kwargs["params"] = query_params
+            if files is not None:
+                request_kwargs.update({"data": data, "files": files})
+            elif method.upper() in {"POST", "PATCH", "PUT"}:
+                request_kwargs["json"] = request_body or {}
+            request_method = getattr(async_httpx_client, method.lower())
+            response = await request_method(**request_kwargs)
+        except Exception as e:  # noqa: BLE001  # provider transport errors use LiteLLM error mapping
+            raise self._handle_error(e=e, provider_config=skills_api_provider_config)
+
+        if response.status_code >= 400:
+            raise skills_api_provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+        return skills_api_provider_config.transform_skill_operation_response(
+            operation=operation,
             raw_response=response,
             logging_obj=logging_obj,
         )

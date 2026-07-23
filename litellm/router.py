@@ -1450,6 +1450,21 @@ class Router:
         self.alist_skills = self.factory_function(litellm.alist_skills, call_type="alist_skills")
         self.aget_skill = self.factory_function(litellm.aget_skill, call_type="aget_skill")
         self.adelete_skill = self.factory_function(litellm.adelete_skill, call_type="adelete_skill")
+        self.aupdate_skill = self.factory_function(litellm.aupdate_skill, call_type="aupdate_skill")
+        self.aget_skill_content = self.factory_function(litellm.aget_skill_content, call_type="aget_skill_content")
+        self.acreate_skill_version = self.factory_function(
+            litellm.acreate_skill_version, call_type="acreate_skill_version"
+        )
+        self.alist_skill_versions = self.factory_function(
+            litellm.alist_skill_versions, call_type="alist_skill_versions"
+        )
+        self.aget_skill_version = self.factory_function(litellm.aget_skill_version, call_type="aget_skill_version")
+        self.aget_skill_version_content = self.factory_function(
+            litellm.aget_skill_version_content, call_type="aget_skill_version_content"
+        )
+        self.adelete_skill_version = self.factory_function(
+            litellm.adelete_skill_version, call_type="adelete_skill_version"
+        )
 
     def _initialize_interactions_endpoints(self):
         """Initialize Google Interactions API endpoints."""
@@ -5557,6 +5572,13 @@ class Router:
             "alist_skills",
             "aget_skill",
             "adelete_skill",
+            "aupdate_skill",
+            "aget_skill_content",
+            "acreate_skill_version",
+            "alist_skill_versions",
+            "aget_skill_version",
+            "aget_skill_version_content",
+            "adelete_skill_version",
             "acreate_interaction",
             "create_interaction",
             "aget_interaction",
@@ -5753,7 +5775,15 @@ class Router:
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
+                "aupdate_skill",
+                "aget_skill_content",
+                "acreate_skill_version",
+                "alist_skill_versions",
+                "aget_skill_version",
+                "aget_skill_version_content",
+                "adelete_skill_version",
             ):
+                kwargs["_litellm_skill_model"] = kwargs.get("model")
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,

@@ -57,6 +57,7 @@ class BaseSkillsAPIConfig(ABC):
         api_base: Optional[str],
         endpoint: str,
         skill_id: Optional[str] = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> str:
         """
         Get the complete URL for the API request
@@ -72,6 +73,14 @@ class BaseSkillsAPIConfig(ABC):
         if api_base is None:
             raise ValueError("api_base is required")
         return f"{api_base}/v1/{endpoint}"
+
+    def get_skill_file_field_name(self, request_body: dict) -> str:
+        return "files[]"
+
+    def get_api_base(self, litellm_params: GenericLiteLLMParams) -> str | None:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        return AnthropicModelInfo.get_api_base(litellm_params.api_base)
 
     @abstractmethod
     def transform_create_skill_request(
