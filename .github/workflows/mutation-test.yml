@@ -1,17 +1,30 @@
 name: "Mutation Test (manual)"
 
-# Manually-triggered mutation testing. Runs mutmut against the scope
-# configured in [tool.mutmut] in pyproject.toml (currently the
-# litellm/proxy/management_endpoints/ folder). Intended cadence is roughly
-# weekly — clicked from the Actions tab when someone wants a fresh report.
+# Manually-triggered mutation testing against litellm/proxy/management_endpoints/.
+# Intended cadence is roughly weekly — clicked from the Actions tab.
 #
-# Uploads a structured `mutation-report.md` (Meta ACH-style: original +
-# mutated function with `# MUTANT START`/`# MUTANT END` delimiters + the
-# existing tests + a task instruction) as a workflow artifact. Failures
+# Why this is sharded: the folder is ~34k LOC / 24 files. mutmut runs the
+# matching test suite per surviving mutant, and `mutate_only_covered_lines`
+# is disabled (it produced zero mutants under mutmut's mutants/ sandbox — see
+# the note in [tool.mutmut] in pyproject.toml). One job cannot finish the
+# folder inside GitHub's hard 360-min runner cap, and that cap cannot be
+# raised. So instead of one long job we fan out: one matrix job per source
+# file (each with its own 350-min budget, running in parallel) and a
+# per-file resumable cache so a file that still overflows its budget
+# continues from where it stopped on the next weekly run.
+#
+# Each shard uploads its own structured `mutation-report.md` (Meta ACH-style:
+# original + mutated function with `# MUTANT START`/`# MUTANT END` delimiters
+# + the existing tests + a task instruction) as a workflow artifact. Failures
 # do not block anything because nothing depends on this workflow.
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Optional: limit to a single source file stem (e.g. mcp_management_endpoints). Empty = all files."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -21,12 +34,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mutation:
-    name: Run mutmut
+  discover:
+    name: Discover source files
     runs-on: ubuntu-latest
-    # Whole-folder mutation against ~15 files / ~7.5k LOC can take hours.
-    # 350 minutes is just under the GitHub-hosted job cap of 360 minutes.
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      # Build the shard matrix: one entry per mutatable source file. Each
+      # entry pins the per-shard test scope to the file's matching
+      # test_<stem>.py (so a mutant only re-runs its own file's tests, not
+      # all 45k LOC of tests in the folder); files with no matching test
+      # file fall back to the whole folder.
+      - name: List files
+        id: list
+        env:
+          ONLY: ${{ github.event.inputs.only }}
+        run: |
+          matrix=$(python3 - <<'PY'
+          import json, os, glob
+          only = os.environ.get("ONLY", "").strip()
+          out = []
+          for src in sorted(glob.glob("litellm/proxy/management_endpoints/*.py")):
+              stem = os.path.basename(src)[:-3]
+              if stem == "__init__":
+                  continue
+              if only and stem != only:
+                  continue
+              tf = f"tests/test_litellm/proxy/management_endpoints/test_{stem}.py"
+              tests = tf if os.path.exists(tf) else "tests/test_litellm/proxy/management_endpoints/"
+              out.append({"name": stem, "src": src, "tests": tests})
+          print(json.dumps(out))
+          PY
+          )
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Shards: $matrix"
+
+  mutation:
+    name: "mutmut: ${{ matrix.shard.name }}"
+    needs: discover
+    runs-on: ubuntu-latest
+    # Per-shard budget, just under the GitHub-hosted 360-min job cap. The
+    # mutmut step itself is wall-clock-bounded below to a value lower than
+    # this so it exits cleanly (persisting progress + cache) instead of
+    # being hard-killed on job timeout.
     timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      # Cap parallelism so we don't exhaust the org's runner pool with one
+      # workflow; remaining shards queue and start as runners free up.
+      max-parallel: 8
+      matrix:
+        shard: ${{ fromJSON(needs.discover.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -53,6 +115,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      # Per-shard resumable mutmut state. mutmut writes progress incrementally
+      # into mutants/; restoring last run's state lets a shard that exhausted
+      # its budget continue instead of restarting. Saved under a run-unique
+      # key; restore-keys pulls the most recent prior state for this file.
+      - name: Restore mutmut state
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: mutants
+          key: mutmut-${{ matrix.shard.name }}-${{ github.run_id }}
+          restore-keys: |
+            mutmut-${{ matrix.shard.name }}-
+
       - name: Install dependencies
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
@@ -62,6 +136,29 @@ jobs:
           PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      # Narrow [tool.mutmut] to this shard's single source file and its
+      # matching test file. Done in-place in CI only; the committed config
+      # keeps the whole-folder default for local/manual runs.
+      - name: Scope config to shard
+        env:
+          SHARD_SRC: ${{ matrix.shard.src }}
+          SHARD_TESTS: ${{ matrix.shard.tests }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          src = os.environ["SHARD_SRC"]
+          tests = os.environ["SHARD_TESTS"]
+          p = "pyproject.toml"
+          s = open(p).read()
+          s = re.sub(r'paths_to_mutate = \[.*?\]',
+                     'paths_to_mutate = [\n    "%s",\n]' % src, s, flags=re.S)
+          s = re.sub(r'tests_dir = \[.*?\]',
+                     'tests_dir = [\n    "%s",\n]' % tests, s, flags=re.S)
+          open(p, "w").write(s)
+          PY
+          echo "--- [tool.mutmut] now ---"
+          sed -n '/\[tool.mutmut\]/,/^\[/p' pyproject.toml
 
       # mutmut 3.x runs tests inside a `mutants/` sandbox where it injects
       # mutation trampolines. uv installs the project as editable by default,
@@ -91,7 +188,13 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p mutants
-          uv run --no-sync --with mutmut==3.5.0 mutmut run 2>&1 | tee mutmut-run.log
+          # Wall-clock bound below the 350-min job timeout so mutmut receives
+          # SIGTERM and exits cleanly — persisting incremental progress so the
+          # cache + report steps still run and the next weekly run resumes.
+          # Exit 124 (timeout) is expected and non-fatal for this report job.
+          timeout --signal=TERM 330m \
+            uv run --no-sync --with mutmut==3.5.0 mutmut run 2>&1 | tee mutmut-run.log \
+            || echo "mutmut exited non-zero (timeout/survivors) — continuing to report"
 
       # Generate the structured report. The script embeds the enclosing
       # function source for each survivor (via Python AST) and includes the
@@ -105,21 +208,29 @@ jobs:
           uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
           uv run --no-sync --with mutmut==3.5.0 mutmut results > mutmut-results.txt 2>&1
           uv run --no-sync python scripts/mutation_report.py
-          # The full report can be very long for big test files; the run-page
-          # summary cuts off at 1 MB. Append the head of the report (summary
-          # + survivor list) and link out to the artifact for the full body.
           {
+            echo "## Mutation shard: ${{ matrix.shard.name }}"
+            echo ""
             head -c 900000 mutation-report.md
             echo ""
             echo ""
             echo "_Full report (with embedded function bodies and test files) is in the workflow artifact._"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Explicit save so a shard that hit its wall-clock bound (job did NOT
+      # fail, mutmut just exited early) still persists state for resume.
+      - name: Save mutmut state
+        if: always()
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: mutants
+          key: mutmut-${{ matrix.shard.name }}-${{ github.run_id }}
+
       - name: Upload mutmut artifacts
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: mutmut-${{ github.run_id }}-${{ github.run_attempt }}
+          name: mutmut-${{ matrix.shard.name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             mutation-report.md
             mutmut-results.txt

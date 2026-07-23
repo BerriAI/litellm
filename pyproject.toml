@@ -335,12 +335,13 @@ tests_dir = [
 also_copy = [
     "litellm/",
 ]
-# Run the test suite once before mutation to gather line coverage, then skip
-# mutating lines no test exercises. Those mutants would survive regardless
-# (no test hits the line to kill them), so generating them wastes hours of CI.
-# The score now reads as "mutation score over covered code" — pair with a
-# line-coverage number when reporting.
-mutate_only_covered_lines = true
+# NOTE: `mutate_only_covered_lines` is intentionally NOT set. Under mutmut's
+# `mutants/` sandbox + PYTHONPATH=mutants, coverage records hit lines under
+# `mutants/litellm/...` while mutmut queries the un-prefixed `litellm/...`
+# path, so every line looked uncovered and mutmut generated zero mutants
+# ("could not find any test case for any mutant"). Runtime is instead bounded
+# by sharding one source file per CI matrix job (see mutation-test.yml), each
+# with its own 350-min budget and a resumable cache.
 # Disable rerun/parallel plugins for mutation runs:
 # - pytest-retry triggers an `INTERNALERROR: no option named 'filtered_exceptions'`
 #   when invoked via mutmut's in-process `pytest.main()` call.
