@@ -558,3 +558,146 @@ async def test_async_log_success_event_skips_redis_push_without_redis(budget_lim
                 kwargs, response_obj=None, start_time=None, end_time=None
             )
             mock_push.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Model-group (shared) budgets
+# ---------------------------------------------------------------------------
+
+
+def test_get_request_model_budget_key_and_config_group_match(budget_limiter):
+    """
+    A budget entry that carries a `models` list defines a model-group budget.
+    Any request model in that list must resolve to the group name (the dict key),
+    so every model in the group shares one spend counter.
+    """
+    internal_budget = {
+        "opus-family": GenericBudgetInfo(
+            budget_limit=50.0,
+            time_period="30d",
+            models=["claude-opus-4", "claude-opus-4-1"],
+        ),
+        "gpt-4": GenericBudgetInfo(budget_limit=100.0, time_period="1d"),
+    }
+
+    # both group members resolve to the SAME budget key (the group name)
+    key_a, config_a = budget_limiter._get_request_model_budget_key_and_config(
+        model="claude-opus-4", internal_model_max_budget=internal_budget
+    )
+    key_b, config_b = budget_limiter._get_request_model_budget_key_and_config(
+        model="claude-opus-4-1", internal_model_max_budget=internal_budget
+    )
+    assert key_a == key_b == "opus-family"
+    assert config_a.max_budget == config_b.max_budget == 50.0
+
+    # provider-prefixed group member still resolves to the group
+    key_c, _ = budget_limiter._get_request_model_budget_key_and_config(
+        model="anthropic/claude-opus-4", internal_model_max_budget=internal_budget
+    )
+    assert key_c == "opus-family"
+
+    # a plain per-model entry resolves to the model name, not a group
+    key_d, config_d = budget_limiter._get_request_model_budget_key_and_config(
+        model="gpt-4", internal_model_max_budget=internal_budget
+    )
+    assert key_d == "gpt-4"
+    assert config_d.max_budget == 100.0
+
+    # a model in no group and no per-model entry resolves to nothing
+    assert (
+        budget_limiter._get_request_model_budget_key_and_config(
+            model="gemini-2.5-pro", internal_model_max_budget=internal_budget
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_is_key_within_model_budget_group_reads_group_counter(budget_limiter):
+    """
+    Enforcement for any group member must read spend from the group counter
+    (budget_key == group name), so combined spend across the group is enforced.
+    """
+    user_api_key = UserAPIKeyAuth(
+        token="test-key",
+        key_alias="test-alias",
+        model_max_budget={
+            "opus-family": {
+                "budget_limit": 50.0,
+                "time_period": "30d",
+                "models": ["claude-opus-4", "claude-opus-4-1"],
+            }
+        },
+    )
+
+    seen_models = []
+
+    async def _spend(user_api_key_hash, model, key_budget_config):
+        seen_models.append(model)
+        return 60.0
+
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", side_effect=_spend
+    ):
+        # spend already over the shared 50.0 budget -> every member is blocked
+        for member in ("claude-opus-4", "claude-opus-4-1", "anthropic/claude-opus-4-1"):
+            with pytest.raises(litellm.BudgetExceededError):
+                await budget_limiter.is_key_within_model_budget(user_api_key, member)
+
+    # all members were looked up under the single group counter
+    assert seen_models == ["opus-family", "opus-family", "opus-family"]
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_group_members_share_one_counter(budget_limiter):
+    """
+    Core regression for model-group budgets: spend from two DIFFERENT models in a
+    group must increment the SAME cache key (the group name) so the budget is
+    combined. Before this feature each model incremented its own key, letting a
+    developer exceed the intended total by spreading usage across the family.
+    """
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    virtual_key = "test-key-hash"
+    budget_duration = "30d"
+    user_api_key_model_max_budget = {
+        "opus-family": {
+            "budget_limit": 50.0,
+            "time_period": budget_duration,
+            "models": ["claude-opus-4", "claude-opus-4-1"],
+        },
+    }
+
+    def _kwargs_for(model_group):
+        return {
+            "standard_logging_object": {
+                "response_cost": 0.10,
+                "model": model_group,
+                "model_group": model_group,
+                "metadata": {"user_api_key_hash": virtual_key},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_model_max_budget": user_api_key_model_max_budget,
+                },
+            },
+        }
+
+    expected_key = (
+        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:opus-family:{budget_duration}"
+    )
+
+    with patch.object(
+        budget_limiter, "_increment_spend_for_key", new_callable=AsyncMock
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            _kwargs_for("claude-opus-4"), None, None, None
+        )
+        await budget_limiter.async_log_success_event(
+            _kwargs_for("claude-opus-4-1"), None, None, None
+        )
+
+    spend_keys = [c.kwargs["spend_key"] for c in mock_increment.call_args_list]
+    assert spend_keys == [expected_key, expected_key]
