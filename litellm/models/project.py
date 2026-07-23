@@ -27,6 +27,8 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     model_spend: Optional[dict] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
+    model_itpm_limit: dict | None = None
+    model_otpm_limit: dict | None = None
     blocked: bool = False
     object_permission_id: Optional[str] = None
     created_by: Optional[str] = None

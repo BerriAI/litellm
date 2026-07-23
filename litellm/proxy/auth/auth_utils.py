@@ -990,7 +990,7 @@ def get_key_model_tpm_limit(
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_accessor_key: Literal["team_metadata", "organization_metadata", "project_metadata"],
-    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit", "model_itpm_limit", "model_otpm_limit"],
 ) -> Optional[Dict[str, int]]:
     if getattr(user_api_key_dict, metadata_accessor_key):
         return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
@@ -1074,6 +1074,22 @@ def get_project_model_tpm_limit(
 ) -> Optional[Dict[str, int]]:
     if user_api_key_dict.project_metadata:
         return user_api_key_dict.project_metadata.get("model_tpm_limit")
+    return None
+
+
+def get_project_model_itpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> dict[str, int] | None:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_itpm_limit")
+    return None
+
+
+def get_project_model_otpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> dict[str, int] | None:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_otpm_limit")
     return None
 
 
