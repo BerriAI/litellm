@@ -9,6 +9,11 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
+from litellm.types.responses.main import (
+    GenericResponseOutputItem,
+    OutputText,
+)
+
 sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
 from litellm.constants import (
@@ -1034,3 +1039,104 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+    # ------------------------------------------------------------------ #
+    # Real GenericResponseOutputItem (Pydantic) tests                   #
+    # ------------------------------------------------------------------ #
+    # These exercise the path taken when use_chat_completions_api: true
+    # bridges to chat completions.  The chat-completion bridge produces
+    # GenericResponseOutputItem Pydantic instances, NOT OpenAI SDK types
+    # or plain dicts.  MagicMock passes isinstance(item, X) for any X,
+    # so mock-only tests could never catch the Pydantic-vs-dict mismatch.
+    # ------------------------------------------------------------------ #
+
+    def _make_real_response(self, output: list) -> Any:
+        """Build a real ResponsesAPIResponse with the given output items."""
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_real",
+            output=output,
+            created_at=0,
+            model="test",
+            object="response",
+            status="completed",
+        )
+
+    def test_generic_output_item_message_pydantic(self):
+        """GenericResponseOutputItem (type=message) Pydantic -> text block."""
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_1",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="Hello from Pydantic!",
+                    annotations=[],
+                )
+            ],
+        )
+        response = self._make_real_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Hello from Pydantic!"
+
+    def test_generic_output_item_reasoning_pydantic(self):
+        """GenericResponseOutputItem (type=reasoning) Pydantic -> thinking block."""
+        item = GenericResponseOutputItem(
+            type="reasoning",
+            id="rs_1",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="I need to think about this first.",
+                    annotations=[],
+                )
+            ],
+        )
+        response = self._make_real_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "thinking"
+        assert "think" in result["content"][0]["thinking"]
+
+    def test_generic_output_item_reasoning_plus_message_pydantic(self):
+        """Reasoning + message GenericResponseOutputItem -> thinking + text."""
+        reasoning = GenericResponseOutputItem(
+            type="reasoning",
+            id="rs_1",
+            status="completed",
+            role="assistant",
+            content=[OutputText(
+                type="output_text",
+                text="Let me reason step by step.",
+                annotations=[],
+            )],
+        )
+        message = GenericResponseOutputItem(
+            type="message",
+            id="msg_1",
+            status="completed",
+            role="assistant",
+            content=[OutputText(
+                type="output_text",
+                text="The answer is 42.",
+                annotations=[],
+            )],
+        )
+        response = self._make_real_response(output=[reasoning, message])
+        result: Any = _ADAPTER.translate_response(response)
+        types = [b["type"] for b in result["content"]]
+        assert "thinking" in types
+        assert "text" in types
+        texts = {
+            b["type"]: b.get("text") or b.get("thinking", "")
+            for b in result["content"]
+        }
+        assert "Let me reason" in texts["thinking"]
+        assert "answer is 42" in texts["text"]
