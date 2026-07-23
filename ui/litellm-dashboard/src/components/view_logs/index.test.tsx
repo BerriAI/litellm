@@ -166,6 +166,22 @@ describe("SpendLogsTable", () => {
       await waitForWindowSeconds(15);
     });
 
+    it("passes request_id to uiSpendLogsCall when searching by Request ID", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      const searchInput = screen.getByPlaceholderText("Search by Request ID");
+      await user.type(searchInput, "req-off-page");
+
+      await waitFor(
+        () => {
+          const lastCall = vi.mocked(uiSpendLogsCall).mock.calls.at(-1)?.[0];
+          expect(lastCall?.params?.request_id).toBe("req-off-page");
+        },
+        { timeout: 1000 },
+      );
+    });
+
     it("should update the time-range button label to 'Last Minute' after selecting it", async () => {
       const user = userEvent.setup();
       renderWithProviders(<SpendLogsTable {...defaultProps} />);
