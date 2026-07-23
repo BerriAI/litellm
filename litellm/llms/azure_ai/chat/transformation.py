@@ -169,8 +169,20 @@ class AzureAIStudioConfig(OpenAIConfig):
         - Azure AI Studio doesn't support content as a list. This handles:
             1. Transforms list content to a string.
             2. If message contains an image or audio, send as is (user-intended)
+            3. Strips Anthropic-only fields (thinking_blocks, provider_specific_fields,
+               cache_control) that the Anthropic-messages adapter attaches for
+               Anthropic-format clients. Strict OpenAI-compatible backends behind
+               Azure AI Foundry reject them with "Extra inputs are not permitted".
         """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
+        )
+
         for message in messages:
+            if isinstance(message, dict):
+                for _field in ("thinking_blocks", "provider_specific_fields", "cache_control"):
+                    filter_value_from_dict(cast(dict, message), _field)
+
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue

@@ -262,3 +262,46 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def test_transform_messages_strips_anthropic_only_fields():
+    """Azure AI Foundry backends reject non-spec fields the Anthropic-messages adapter attaches
+    (thinking_blocks, provider_specific_fields, cache_control). _transform_messages must strip them,
+    including the nested tool_calls[].function.provider_specific_fields.
+
+    Regression for https://github.com/BerriAI/litellm/issues/33961
+    """
+    config = AzureAIStudioConfig()
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "let me read it", "signature": "", "cache_control": {}}
+            ],
+            "provider_specific_fields": {"foo": "bar"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "abc"},
+                    },
+                }
+            ],
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    result = config._transform_messages(messages, model="azure_ai/fw-glm-5.2")
+    assistant = result[1]
+
+    assert "thinking_blocks" not in assistant
+    assert "provider_specific_fields" not in assistant
+    assert "cache_control" not in assistant
+    assert "provider_specific_fields" not in assistant["tool_calls"][0]["function"]
+    assert assistant["content"] == "I can help."
+    assert assistant["tool_calls"][0]["function"]["name"] == "read_file"
