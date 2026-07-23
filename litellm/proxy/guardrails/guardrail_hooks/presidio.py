@@ -86,6 +86,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_anonymizer_api_base: Optional[str] = None,
         output_parse_pii: Optional[bool] = False,
         apply_to_output: bool = False,
+        mask_pii_fail_closed: bool = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
         pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = None,
@@ -104,6 +105,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
+        self.mask_pii_fail_closed = mask_pii_fail_closed
 
         # When output_parse_pii or apply_to_output is enabled, the guardrail must
         # also run on post_call to unmask/mask the response.  Expand the event_hook
@@ -309,7 +311,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 def _fail_on_invalid_response(
                     reason: str,
                 ) -> List[PresidioAnalyzeResponseItem]:
-                    should_fail_closed = bool(self.pii_entities_config) or self.output_parse_pii or self.apply_to_output
+                    should_fail_closed = (
+                        bool(self.pii_entities_config)
+                        or self.output_parse_pii
+                        or self.apply_to_output
+                        or self.mask_pii_fail_closed
+                    )
                     if should_fail_closed:
                         raise GuardrailRaisedException(
                             guardrail_name=self.guardrail_name,
@@ -1059,6 +1066,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
         return response
 
+    def _fail_closed_if_enabled(self, message: str, *, cause: Optional[BaseException] = None) -> None:
+        """Raise a fail-closed ``GuardrailRaisedException`` when
+        ``mask_pii_fail_closed`` is set, so an unmaskable streaming shape blocks
+        instead of forwarding unmasked output; a no-op otherwise."""
+        if self.mask_pii_fail_closed:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=message,
+                should_wrap_with_default_message=False,
+            ) from cause
+
     async def _stream_apply_output_masking(
         self,
         response: Any,
@@ -1081,9 +1099,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
+                    self._fail_closed_if_enabled(
+                        "Presidio apply_to_output cannot mask raw byte-stream output; failing closed."
+                    )
                     yield chunk  # type: ignore[misc]
                     continue
                 else:
+                    self._fail_closed_if_enabled(
+                        "Presidio apply_to_output cannot mask this mixed/unknown stream shape; failing closed."
+                    )
                     if all_chunks:
                         # Flush buffered chunks and switch to transparent passthrough for this stream shape.
                         # NOTE: these buffered chunks are emitted unmasked because this
@@ -1116,6 +1140,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             assembled_model_response = stream_chunk_builder(chunks=all_chunks, messages=request_data.get("messages"))
 
             if not isinstance(assembled_model_response, ModelResponse):
+                self._fail_closed_if_enabled(
+                    "Presidio apply_to_output could not reassemble the stream to mask it; failing closed."
+                )
                 for chunk in all_chunks:
                     yield chunk
                 return
@@ -1129,8 +1156,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             mock_response_stream = convert_model_response_to_streaming(assembled_model_response)
             yield mock_response_stream
 
+        except GuardrailRaisedException:
+            # A fail-closed signal (mask_pii_fail_closed) must propagate, not be
+            # swallowed into an unmasked passthrough below.
+            raise
         except Exception as e:
             verbose_proxy_logger.error(f"Error masking streaming PII output: {str(e)}")
+            # Masking failed for a reason other than an explicit fail-closed signal
+            # (analyzer/anonymizer transport error, reconstruction failure, …).
+            # Forwarding the buffered chunks would leak unmasked output, so honor
+            # fail-closed instead of passing through.
+            self._fail_closed_if_enabled(
+                "Presidio apply_to_output failed to mask streaming output; failing closed.",
+                cause=e,
+            )
             for chunk in all_chunks:
                 yield chunk
 
