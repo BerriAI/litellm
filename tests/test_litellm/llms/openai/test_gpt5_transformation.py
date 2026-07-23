@@ -274,6 +274,78 @@ def test_gpt5_drops_reasoning_effort_xhigh_when_requested(config: OpenAIConfig):
     assert "reasoning_effort" not in params
 
 
+FUNCTION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_capital",
+        "parameters": {"type": "object", "properties": {"country": {"type": "string"}}},
+    },
+}
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.4"])
+def test_gpt5_4_plus_function_tools_default_reasoning_effort_none(config: OpenAIConfig, model: str):
+    """gpt-5.4+ reject function tools with a non-'none' reasoning_effort on chat completions.
+
+    Regression for https://github.com/BerriAI/litellm/issues/33221: when the caller omits
+    reasoning_effort, litellm must default it to 'none' so tool calls succeed instead of
+    hitting 'Function tools with reasoning_effort are not supported ... in /v1/chat/completions'.
+    """
+    params = config.map_openai_params(
+        non_default_params={"tools": [FUNCTION_TOOL]},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_4_plus_function_tools_preserves_explicit_reasoning_effort(config: OpenAIConfig):
+    """An explicit reasoning_effort must not be overwritten by the tools default.
+
+    (Explicit effort + tools is routed to the Responses API bridge upstream; the chat
+    mapping itself must leave the caller's value untouched.)
+    """
+    params = config.map_openai_params(
+        non_default_params={"tools": [FUNCTION_TOOL], "reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.6-sol",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "high"
+
+
+def test_gpt5_4_plus_without_tools_does_not_default_reasoning_effort(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={},
+        optional_params={},
+        model="gpt-5.6-sol",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in params
+
+
+def test_gpt5_4_plus_non_function_tools_do_not_default_reasoning_effort(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"tools": [{"type": "custom", "custom": {"name": "x"}}]},
+        optional_params={},
+        model="gpt-5.6-sol",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in params
+
+
+def test_gpt5_1_function_tools_do_not_default_reasoning_effort(config: OpenAIConfig):
+    """The tools default is scoped to gpt-5.4+; gpt-5.1 must keep its existing behavior."""
+    params = config.map_openai_params(
+        non_default_params={"tools": [FUNCTION_TOOL]},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in params
+
+
 # GPT-5.1 temperature handling tests
 def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     """Test that models supporting reasoning_effort='none' are correctly detected via model map."""
