@@ -1672,6 +1672,30 @@ class ProxyBaseLLMRequestProcessing:
 
         response = responses[1]
 
+        # GH#30566: set overhead duration for non-chat-completions
+        # routes (/v1/messages, /v1/responses). Chat completions
+        # already have litellm_overhead_time_ms from the SDK.
+        # Only set the overhead field directly (don't call
+        # update_response_metadata which also touches cost).
+        _overhead_hidden_params = getattr(response, "_hidden_params", {}) or {}
+        if not _overhead_hidden_params.get("litellm_overhead_time_ms") and route_type not in (
+            "acompletion",
+            "completion",
+        ):
+            end_time = datetime.now()
+            _logging_obj = self.data.get("litellm_logging_obj")
+            if _logging_obj is not None and _logging_obj.start_time is not None:
+                overhead_ms = (end_time - _logging_obj.start_time).total_seconds() * 1000 - (
+                    _logging_obj.model_call_details.get("llm_api_duration_ms", 0)
+                )
+                if not isinstance(_overhead_hidden_params, dict):
+                    _overhead_hidden_params = {}
+                _overhead_hidden_params["litellm_overhead_time_ms"] = overhead_ms
+                if hasattr(response, "_hidden_params"):
+                    response._hidden_params = _overhead_hidden_params
+                elif isinstance(response, dict):
+                    response["_hidden_params"] = _overhead_hidden_params
+
         _exception_raised = False
         try:
             hidden_params = get_hidden_params_dict(response)
