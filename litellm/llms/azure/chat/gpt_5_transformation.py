@@ -9,6 +9,7 @@ from litellm.llms.openai.chat.gpt_5_transformation import (
     _get_effort_level,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.utils import _is_explicitly_disabled_factory
 
 from .gpt_transformation import AzureOpenAIConfig
 
@@ -19,6 +20,22 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
+    def _model_for_capability_lookup(cls, model: str) -> str:
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            return "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        if model.startswith("azure/"):
+            return model
+        return "azure/" + model
+
+    @classmethod
+    def _rejects_non_default_temperature(cls, model: str) -> bool:
+        return _is_explicitly_disabled_factory(
+            model=cls._model_for_capability_lookup(model),
+            custom_llm_provider=None,
+            key="supports_non_default_temperature",
+        )
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Override to handle gpt5_series/ prefix used for Azure routing.
 
@@ -27,11 +44,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         entry. Strip the prefix and prepend ``azure/`` so the lookup finds
         ``azure/gpt-5.1`` in model_prices_and_context_window.json.
         """
-        if model.startswith(cls.GPT5_SERIES_ROUTE):
-            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
-        elif not model.startswith("azure/"):
-            model = "azure/" + model
-        return super()._supports_reasoning_effort_level(model, level)
+        return super()._supports_reasoning_effort_level(cls._model_for_capability_lookup(model), level)
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
@@ -93,6 +106,20 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
     ) -> dict:
+        temperature_value = non_default_params.get("temperature")
+        if self._rejects_non_default_temperature(model) and temperature_value not in (None, 1):
+            if litellm.drop_params is True or drop_params is True:
+                non_default_params = {key: value for key, value in non_default_params.items() if key != "temperature"}
+            else:
+                raise UnsupportedParamsError(
+                    status_code=400,
+                    message=(
+                        f"Azure OpenAI {model} does not support temperature={temperature_value}. "
+                        "Only temperature=1 is supported. "
+                        "To drop unsupported params set `litellm.drop_params = True`"
+                    ),
+                )
+
         reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(reasoning_effort_value)
 

@@ -50,6 +50,78 @@ def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):
         )
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "azure/gpt-5.5",
+        "azure/gpt-5.5-2026-04-23",
+        "azure/gpt-5.6",
+        "azure/gpt-5.6-luna",
+        "azure/gpt-5.6-sol",
+        "azure/gpt-5.6-terra",
+        "azure/us/gpt-5.6-sol",
+        "azure/eu/gpt-5.5-2026-04-23",
+        "gpt5_series/gpt-5.6-luna",
+        "gpt-5.6-sol",
+    ],
+)
+def test_azure_gpt5_5_and_5_6_non_default_temperature(
+    config: AzureOpenAIGPT5Config,
+    model: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    assert (
+        config.map_openai_params(
+            non_default_params={"temperature": 0.3},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        == {}
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    assert (
+        config.map_openai_params(
+            non_default_params={"temperature": 0.3},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        == {}
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.3},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "temperature"),
+    [
+        ("azure/gpt-5.4", 0.3),
+        ("azure/gpt-5.5", 1),
+        ("azure/gpt-5.6-sol", 1.0),
+    ],
+)
+def test_azure_gpt5_temperature_supported_values_unchanged(
+    config: AzureOpenAIGPT5Config,
+    model: str,
+    temperature: float,
+):
+    assert config.map_openai_params(
+        non_default_params={"temperature": temperature},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )["temperature"] == temperature
+
+
 def test_azure_gpt5_series_transform_request(config: AzureOpenAIGPT5Config):
     request = config.transform_request(
         model="gpt5_series/gpt-5",
