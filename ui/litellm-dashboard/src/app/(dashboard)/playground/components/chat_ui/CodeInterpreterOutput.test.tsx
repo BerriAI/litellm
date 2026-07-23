@@ -295,6 +295,100 @@ describe("CodeInterpreterOutput", () => {
     });
   });
 
+  it("revokes created object URLs on unmount", async () => {
+    let urlCounter = 0;
+    (URL.createObjectURL as ReturnType<typeof vi.fn>).mockImplementation(() => `blob:test-${++urlCounter}`);
+
+    const mockBlob = new Blob(["image data"], { type: "image/png" });
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockResolvedValue(mockBlob),
+    });
+
+    const annotations = [
+      {
+        type: "container_file_citation" as const,
+        container_id: "container-1",
+        file_id: "file-1",
+        filename: "chart.png",
+        start_index: 0,
+        end_index: 10,
+      },
+      {
+        type: "container_file_citation" as const,
+        container_id: "container-1",
+        file_id: "file-2",
+        filename: "plot.jpg",
+        start_index: 0,
+        end_index: 10,
+      },
+    ];
+
+    const { unmount } = render(
+      <CodeInterpreterOutput
+        code="import matplotlib.pyplot as plt"
+        annotations={annotations}
+        accessToken="test-token"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
+    });
+
+    unmount();
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test-1");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test-2");
+  });
+
+  it("does not leak object URLs from fetches that complete after unmount", async () => {
+    let urlCounter = 0;
+    (URL.createObjectURL as ReturnType<typeof vi.fn>).mockImplementation(() => `blob:late-${++urlCounter}`);
+
+    const mockBlob = new Blob(["image data"], { type: "image/png" });
+    let resolveBlob: (value: Blob) => void;
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockReturnValue(
+        new Promise<Blob>((resolve) => {
+          resolveBlob = resolve;
+        }),
+      ),
+    });
+
+    const annotations = [
+      {
+        type: "container_file_citation" as const,
+        container_id: "container-1",
+        file_id: "file-1",
+        filename: "chart.png",
+        start_index: 0,
+        end_index: 10,
+      },
+    ];
+
+    const { unmount } = render(
+      <CodeInterpreterOutput
+        code="import matplotlib.pyplot as plt"
+        annotations={annotations}
+        accessToken="test-token"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    unmount();
+    resolveBlob!(mockBlob);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const created = (URL.createObjectURL as ReturnType<typeof vi.fn>).mock.results.map((r) => r.value);
+    const revoked = (URL.revokeObjectURL as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(revoked).toEqual(expect.arrayContaining(created));
+  });
+
   it("should handle fetch errors gracefully", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     (global.fetch as any).mockRejectedValue(new Error("Network error"));

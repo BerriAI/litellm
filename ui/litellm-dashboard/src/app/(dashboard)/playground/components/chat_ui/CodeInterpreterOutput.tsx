@@ -39,6 +39,9 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
 
   // Fetch images from container files API
   useEffect(() => {
+    const createdUrls: string[] = [];
+    const abortController = new AbortController();
+
     const fetchImages = async () => {
       for (const annotation of annotations) {
         const isImage =
@@ -58,16 +61,21 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
                 headers: {
                   [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
                 },
+                signal: abortController.signal,
               },
             );
 
             if (response.ok) {
               const blob = await response.blob();
+              if (abortController.signal.aborted) return;
               const url = URL.createObjectURL(blob);
+              createdUrls.push(url);
               setImageUrls((prev) => ({ ...prev, [annotation.file_id]: url }));
             }
           } catch (error) {
-            console.error("Error fetching image:", error);
+            if (!abortController.signal.aborted) {
+              console.error("Error fetching image:", error);
+            }
           } finally {
             setLoadingImages((prev) => ({ ...prev, [annotation.file_id]: false }));
           }
@@ -81,7 +89,8 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
 
     // Cleanup URLs on unmount
     return () => {
-      Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url));
+      abortController.abort();
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [annotations, accessToken, proxyBaseUrl]);
 
