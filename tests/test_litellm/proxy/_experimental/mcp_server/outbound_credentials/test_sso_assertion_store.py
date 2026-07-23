@@ -542,7 +542,7 @@ async def test_source_missing_sso_env_is_unavailable_not_expired():
 async def test_source_dead_grant_is_negative_cached_one_post_per_window():
     """A dead refresh grant costs one token-endpoint POST per negative-TTL window, not one per
     egress call, and the negative entry expires so a re-login is honored within the window."""
-    clock = {"now": datetime.now(timezone.utc)}
+    clock = {"now": time.time()}
     posts: list[dict] = []
     state = {"stored": _stored(-100)}
 
@@ -564,7 +564,7 @@ async def test_source_dead_grant_is_negative_cached_one_post_per_window():
     assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
     assert len(posts) == 1
 
-    clock["now"] = clock["now"] + timedelta(seconds=31)
+    clock["now"] = clock["now"] + 31.0
     state["stored"] = _stored(3600)
     lookup = await source.fetch_usable("alice")
     assert isinstance(lookup, UsableSsoAssertion)
@@ -662,9 +662,11 @@ async def test_source_concurrent_expired_fetches_refresh_once():
 async def test_source_memoizes_usable_lookups_within_ttl():
     """A usable assertion is served from the in-process memo, so repeated egress calls do not
     pay a DB read per call; the memo expires with the TTL and the row is re-read."""
-    clock = {"now": datetime.now(timezone.utc)}
+    clock = {"now": time.time()}
     fetches: list[str] = []
-    stored = _stored(3600)
+    # No declared expiry, so the cache horizon is the default TTL rather than the token's own
+    # expiry (an assertion that declares one is cached exactly until it becomes refresh-eligible).
+    stored = _stored(None)
 
     async def fetch(user_id: str):
         fetches.append(user_id)
@@ -677,13 +679,13 @@ async def test_source_memoizes_usable_lookups_within_ttl():
         return None
 
     source = LiveSsoAssertionSource(
-        fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"], memo_ttl_seconds=60.0
+        fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"], cache_ttl_seconds=60.0
     )
     first = await source.fetch_usable("alice")
     second = await source.fetch_usable("alice")
     assert isinstance(first, UsableSsoAssertion) and isinstance(second, UsableSsoAssertion)
     assert fetches == ["alice"]
-    clock["now"] = clock["now"] + timedelta(seconds=61)
+    clock["now"] = clock["now"] + 61.0
     third = await source.fetch_usable("alice")
     assert isinstance(third, UsableSsoAssertion)
     assert fetches == ["alice", "alice"]
@@ -716,7 +718,7 @@ async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
     """A store read failure must fail closed as absent (never raise into egress), and a warm
     memo entry keeps serving through the outage."""
     calls = {"n": 0}
-    stored = _stored(3600)
+    stored = _stored(None)
 
     async def flaky_fetch(user_id: str):
         calls["n"] += 1
@@ -730,18 +732,18 @@ async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
     async def post(url, form):
         return None
 
-    clock = {"now": datetime.now(timezone.utc)}
+    clock = {"now": time.time()}
     source = LiveSsoAssertionSource(
         fetch=flaky_fetch,
         persist=persist,
         post=post,
         getenv=_SSO_ENV.get,
         now=lambda: clock["now"],
-        memo_ttl_seconds=60.0,
+        cache_ttl_seconds=60.0,
     )
     assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
     assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
-    clock["now"] = clock["now"] + timedelta(seconds=61)
+    clock["now"] = clock["now"] + 61.0
     assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)
 
 
