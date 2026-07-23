@@ -718,6 +718,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
@@ -4222,6 +4223,39 @@ class TestValidateAndFixThinkingParam:
         assert "budget_tokens" not in thinking
 
 
+def test_azure_ai_gpt_image_models_in_cost_map():
+    """
+    Test that azure_ai/gpt-image-2 and azure_ai/gpt-image-to-image entries 
+    are correctly configured in model_prices_and_context_window.json.
+
+    Prices:
+    - Text Input:  $5/M tokens
+    - Image Input: $8/M tokens
+    - Image Output: $30/M tokens
+
+    Closes https://github.com/BerriAI/litellm/issues/26765
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for key in ["azure_ai/gpt-image-2", "azure_ai/gpt-image-to-image"]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "azure_ai"
+        assert info["mode"] == "image_generation"
+        assert info["input_cost_per_token"] == 5e-06
+        assert info["input_cost_per_image_token"] == 8e-06
+        assert info["output_cost_per_image_token"] == 3e-05
+        assert info["cache_read_input_image_token_cost"] == 2e-06
+        assert info["supports_vision"] is True
+        assert info.get("output_cost_per_token") is None, f"Spurious output_cost_per_token found for {key}"
+        assert info.get("supports_pdf_input") is None, f"Unexpected supports_pdf_input found for {key}"
+
+
 def test_deepseek_v4_models_in_cost_map():
     """
     Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
@@ -4558,6 +4592,7 @@ def test_fireworks_models_in_backup_cost_map():
         assert model_cost.get(short_key) == model_cost.get(
             long_key
         ), f"short-form {short_key} does not match long-form {long_key}"
+
 
 
 class TestBedrockBaseModelLabelKeepsTools:
