@@ -76,8 +76,10 @@ export function legacyPageHref(pageKey: string): string {
 export function legacyKeyForPathname(pathname: string): string | null {
   const base = uiBase();
   const rel = (pathname.startsWith(base) ? pathname.slice(base.length) : pathname).replace(/^\/+|\/+$/g, "");
+  const firstSegment = rel.split("/")[0] ?? "";
+  if (!firstSegment) return null;
   for (const [key, segment] of Object.entries(MIGRATED_PAGES)) {
-    if (rel === segment) return key;
+    if (firstSegment === segment) return key;
   }
   return null;
 }
