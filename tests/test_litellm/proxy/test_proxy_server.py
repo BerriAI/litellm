@@ -877,6 +877,52 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
 
     mock_proxy_config.add_deployment.assert_not_called()
     mock_proxy_config.init_mcp_servers_from_db.assert_awaited_once()
+    mock_proxy_config.init_agents_from_db.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_init_agents_from_db_respects_supported_db_objects(monkeypatch):
+    """
+    Regression (#33062): agents created via the UI are persisted to the DB
+    regardless of store_model_in_db, but the in-memory registry that GET
+    /v1/agents reads is hydrated from the DB only by the store_model_in_db
+    model-sync loop (add_deployment). init_agents_from_db hydrates agents from
+    the DB by default so they survive a restart, but skips it when an explicit
+    supported_db_objects allowlist omits "agents".
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config = ProxyConfig()
+    with (
+        patch.object(config, "_init_agents_in_db", new=AsyncMock()) as mock_init,
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+    ):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        await config.init_agents_from_db()
+        mock_init.assert_awaited_once()
+
+        mock_init.reset_mock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"supported_db_objects": ["models"]},
+        )
+        await config.init_agents_from_db()
+        mock_init.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_init_agents_from_db_skips_without_prisma(monkeypatch):
+    """init_agents_from_db must be a no-op when there is no DB configured."""
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config = ProxyConfig()
+    with (
+        patch.object(config, "_init_agents_in_db", new=AsyncMock()) as mock_init,
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        await config.init_agents_from_db()
+        mock_init.assert_not_awaited()
 
 
 @pytest.mark.asyncio
