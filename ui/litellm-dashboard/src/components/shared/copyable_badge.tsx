@@ -20,14 +20,23 @@ export function CopyableBadge({
   dataTestId,
 }: CopyableBadgeProps) {
   return (
-    <Tag color={color} className="m-0 inline-flex max-w-full items-center gap-1" data-testid={dataTestId}>
-      <Tooltip>
-        <TooltipTrigger className="max-w-full cursor-default border-0 bg-transparent p-0">
-          <span className={cn("block truncate", maxWidthClassName)}>{value}</span>
-        </TooltipTrigger>
-        <TooltipContent>{value}</TooltipContent>
-      </Tooltip>
-      <CopyButton value={value} label={`Copy ${value}`} iconClassName="size-3" />
-    </Tag>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Tag color={color} className="m-0 max-w-full cursor-default" data-testid={dataTestId}>
+            <span className={cn("block truncate", maxWidthClassName)}>{value}</span>
+          </Tag>
+        }
+      />
+      <TooltipContent className="max-w-sm">
+        <span className="break-all">{value}</span>
+        <CopyButton
+          value={value}
+          label={`Copy ${value}`}
+          iconClassName="size-3"
+          className="text-background/70 hover:bg-transparent hover:text-background"
+        />
+      </TooltipContent>
+    </Tooltip>
   );
 }
