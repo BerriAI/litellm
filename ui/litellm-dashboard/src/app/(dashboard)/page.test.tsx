@@ -96,6 +96,21 @@ describe("dashboard landing keyless redirect", () => {
     expect(mockUseKeys.mock.calls[0][3]).toBe(false);
   });
 
+  it("holds the loading screen on the landing until the role hydrates, instead of flashing the dashboard", () => {
+    state.userRole = "";
+    render(<CreateKeyPage />);
+    expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("api-keys-dashboard")).not.toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("does not hold the dashboard for an unhydrated role outside the post-login landing", () => {
+    state.login = null;
+    state.userRole = "";
+    render(<CreateKeyPage />);
+    expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+  });
+
   it("holds the loading screen while the key lookup is in flight", () => {
     state.keysLoading = true;
     render(<CreateKeyPage />);

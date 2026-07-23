@@ -93,10 +93,12 @@ function CreateKeyPageContent() {
 
   const isPostLoginLanding = searchParams.get("login") === "success";
   const isSignedIn = !authLoading && Boolean(token);
+  const isAwaitingRole = isPostLoginLanding && isSignedIn && userRole === "";
   const shouldCheckForKeys = isPostLoginLanding && isSignedIn && internalUserRoles.includes(userRole);
   const { data: keysData, isLoading: keysLoading } = useKeys(1, 1, { userID }, shouldCheckForKeys);
   const isKeylessLanding = shouldCheckForKeys && !keysLoading && keysData?.keys?.length === 0;
   const isResolvingKeylessLanding = (shouldCheckForKeys && keysLoading) || isKeylessLanding;
+  const isResolvingLanding = isAwaitingRole || isResolvingKeylessLanding;
 
   useEffect(() => {
     if (isKeylessLanding && !didReturnRedirectRef.current) {
@@ -104,7 +106,7 @@ function CreateKeyPageContent() {
     }
   }, [isKeylessLanding, router]);
 
-  const isRedirecting = redirectToLogin || isLegacyRedirect || isResolvingKeylessLanding;
+  const isRedirecting = redirectToLogin || isLegacyRedirect || isResolvingLanding;
 
   if (authLoading || isRedirecting) {
     return <LoadingScreen />;
