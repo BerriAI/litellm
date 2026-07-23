@@ -1603,6 +1603,7 @@ export const modelInfoCall = async (
   teamId?: string,
   sortBy?: string,
   sortOrder?: string,
+  model?: string,
 ) => {
   /**
    * Get all models on proxy
@@ -1615,6 +1616,9 @@ export const modelInfoCall = async (
     params.append("size", size.toString());
     if (search && search.trim()) {
       params.append("search", search.trim());
+    }
+    if (model && model.trim()) {
+      params.append("model", model.trim());
     }
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());

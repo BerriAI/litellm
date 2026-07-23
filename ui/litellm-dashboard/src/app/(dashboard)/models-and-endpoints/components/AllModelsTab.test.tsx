@@ -38,7 +38,7 @@ const mockUseModelsInfo = vi.fn(() => ({
 })) as any;
 
 vi.mock("../../hooks/models/useModels", () => ({
-  useModelsInfo: (page?: number, size?: number, search?: string) => mockUseModelsInfo(page, size, search),
+  useModelsInfo: (...args: any[]) => mockUseModelsInfo(...args),
 }));
 
 // Mock the useModelCostMap hook
@@ -658,5 +658,115 @@ describe("AllModelsTab", () => {
     await waitFor(() => {
       expect(mockSetSelectedModelId).toHaveBeenCalledWith("clickable-model-id");
     });
+  });
+
+  it("should filter by public model name via the server query instead of the current page (regression #32573)", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-page1": { litellm_provider: "openai" },
+        "gpt-4-page2": { litellm_provider: "openai" },
+      }),
+    );
+
+    const rowFor = (modelName: string) => ({
+      model_name: modelName,
+      litellm_model_name: modelName,
+      provider: "openai",
+      model_info: {
+        id: `id-${modelName}`,
+        db_model: true,
+        direct_access: true,
+        access_via_team_ids: [],
+        access_groups: [],
+      },
+    });
+
+    mockUseModelsInfo.mockImplementation((...args: any[]) => {
+      const model = args[7];
+      const rows = model === "gpt-4-page2" ? [rowFor("gpt-4-page2")] : [rowFor("gpt-4-page1")];
+      return {
+        data: createPaginatedModelData(rows, rows.length, 1, 1, 50),
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      };
+    });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="gpt-4-page2" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-page2")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("gpt-4-page1")).not.toBeInTheDocument();
+    expect(mockUseModelsInfo).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "gpt-4-page2",
+    );
+  });
+
+  it("should not send a model filter for the 'all' and 'wildcard' buckets", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(createModelCostMapMock({ "openai/*": { litellm_provider: "openai" } }));
+
+    mockUseModelsInfo.mockReturnValue({
+      data: createPaginatedModelData(
+        [
+          {
+            model_name: "openai/*",
+            litellm_model_name: "openai/*",
+            provider: "openai",
+            model_info: {
+              id: "id-wildcard",
+              db_model: true,
+              direct_access: true,
+              access_via_team_ids: [],
+              access_groups: [],
+            },
+          },
+        ],
+        1,
+        1,
+        1,
+        50,
+      ),
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="wildcard" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("openai/*")).toBeInTheDocument();
+    });
+    expect(mockUseModelsInfo).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    );
   });
 });

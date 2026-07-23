@@ -109,6 +109,7 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -133,6 +134,34 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
+    );
+  });
+
+  it("should forward the exact public model name filter to modelInfoCall", async () => {
+    (modelInfoCall as any).mockResolvedValue(mockPaginatedModelInfoResponse);
+
+    const { result } = renderHook(
+      () => useModelsInfo(1, 50, undefined, undefined, undefined, undefined, undefined, "gpt-4"),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(modelInfoCall).toHaveBeenCalledWith(
+      "test-access-token",
+      "test-user-id",
+      "Admin",
+      1,
+      50,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "gpt-4",
     );
   });
 
