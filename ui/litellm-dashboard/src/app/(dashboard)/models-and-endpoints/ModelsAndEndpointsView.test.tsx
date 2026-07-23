@@ -22,8 +22,19 @@ const localStorageMock = (() => {
 })();
 Object.defineProperty(window, "localStorage", { value: localStorageMock });
 
+const { mockPush, mockReplace, navState } = vi.hoisted(() => ({
+  mockPush: vi.fn(),
+  mockReplace: vi.fn(),
+  navState: { pathname: "/models-and-endpoints" },
+}));
+vi.mock("next/navigation", () => ({
+  usePathname: () => navState.pathname,
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+}));
+
 // Minimal stubs to avoid Next.js router and network usage during render
 vi.mock("@/components/networking", () => ({
+  serverRootPath: "",
   credentialListCall: vi.fn().mockResolvedValue({ credentials: [] }),
   modelInfoCall: vi.fn().mockResolvedValue({ data: [] }),
   modelCostMap: vi.fn().mockResolvedValue({}),
@@ -89,6 +100,9 @@ const createQueryClient = () =>
 
 describe("ModelsAndEndpointsView", () => {
   beforeEach(() => {
+    navState.pathname = "/models-and-endpoints";
+    mockPush.mockClear();
+    mockReplace.mockClear();
     mockUseModelsInfo.mockReturnValue({
       data: { data: [] },
       isLoading: false,
@@ -192,6 +206,23 @@ describe("ModelsAndEndpointsView", () => {
       refetch: vi.fn(),
     });
 
+    navState.pathname = "/models-and-endpoints/health";
+    const queryClient = createQueryClient();
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ModelsAndEndpointsView premiumUser={false} teams={[]} />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(mockHealthCheckComponent).toHaveBeenCalled();
+    const healthCheckProps = mockHealthCheckComponent.mock.calls[0][0];
+    expect(healthCheckProps.all_models_on_proxy).toEqual(["deployment-id-1", "deployment-id-2"]);
+    expect(healthCheckProps.all_models_on_proxy).not.toContain("gpt-4");
+  });
+
+  it("selecting a tab navigates to that tab's path instead of updating local state", async () => {
     const queryClient = createQueryClient();
     const { getByRole } = render(
       <QueryClientProvider client={queryClient}>
@@ -199,14 +230,31 @@ describe("ModelsAndEndpointsView", () => {
       </QueryClientProvider>,
     );
 
-    const healthStatusTab = getByRole("tab", { name: "Health Status" });
     await act(async () => {
-      healthStatusTab.click();
+      getByRole("tab", { name: "Health Status" }).click();
     });
 
-    expect(mockHealthCheckComponent).toHaveBeenCalled();
-    const healthCheckProps = mockHealthCheckComponent.mock.calls[0][0];
-    expect(healthCheckProps.all_models_on_proxy).toEqual(["deployment-id-1", "deployment-id-2"]);
-    expect(healthCheckProps.all_models_on_proxy).not.toContain("gpt-4");
+    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/models-and-endpoints\/health\/$/));
+  });
+
+  it("redirects to the base models path when a tab path is not permitted for the role", async () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "123",
+      token: "123",
+      userRole: "Internal User",
+      userId: "123",
+    });
+    navState.pathname = "/models-and-endpoints/llm-credentials";
+
+    const queryClient = createQueryClient();
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ModelsAndEndpointsView premiumUser={false} teams={[]} />
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringMatching(/\/models-and-endpoints\/$/));
   });
 });

@@ -15,6 +15,8 @@ import { Providers, getPlaceholder, getProviderModels } from "@/components/provi
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { transformModelData } from "./utils/modelDataTransformer";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import { modelTabHref, slugFromPathname } from "@/app/(dashboard)/models-and-endpoints/tabRoutes";
+import { usePathname, useRouter } from "next/navigation";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
@@ -55,6 +57,8 @@ const HEALTH_PAGE_SIZE = 50;
 
 const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
   const { accessToken, token, userRole, userId: userID } = useAuthorized();
+  const pathname = usePathname();
+  const router = useRouter();
   const [addModelForm] = Form.useForm();
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [providerModels, setProviderModels] = useState<Array<string>>([]);
@@ -69,7 +73,6 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
   const [healthPagination, setHealthPagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: HEALTH_PAGE_SIZE,
@@ -150,6 +153,27 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true;
   // Hide tab if user is NOT a proxy admin AND (internal user with setting enabled OR not a team admin)
   const shouldHideAddModelTab = !isProxyAdmin && (addModelDisabledForInternalUsers || !isUserTeamAdmin);
+  const isAdmin = all_admin_roles.includes(userRole);
+
+  const visibleSlugs = useMemo<string[]>(
+    () => [
+      "",
+      ...(shouldHideAddModelTab ? [] : ["add"]),
+      ...(isAdmin
+        ? ["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"]
+        : []),
+    ],
+    [shouldHideAddModelTab, isAdmin],
+  );
+
+  const activeSlug = slugFromPathname(pathname);
+  const activeTabIndex = Math.max(0, visibleSlugs.indexOf(activeSlug));
+
+  useEffect(() => {
+    if (activeSlug !== "" && !visibleSlugs.includes(activeSlug)) {
+      router.replace(modelTabHref(""));
+    }
+  }, [activeSlug, visibleSlugs, router]);
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelCostMapData);
@@ -327,15 +351,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
             />
           ) : (
             (() => {
-              // Build a single source-of-truth list of {tab, panel} pairs.
-              // Conditionally-hidden tabs (e.g. "Add Model" for non-admin) get
-              // filtered out as a unit so tab indices and panel indices can
-              // never drift apart — Tremor's TabList and TabPanels filter
-              // falsy children inconsistently, which previously caused
-              // "click LLM Credentials, see nothing" for Admin Viewer.
-              const isAdmin = all_admin_roles.includes(userRole);
-              const visibleTabs: Array<{ tab: React.ReactElement; panel: React.ReactElement }> = [
-                {
+              const tabBySlug: Record<string, { tab: React.ReactElement; panel: React.ReactElement }> = {
+                "": {
                   tab: <Tab key="all-models">{isAdmin ? "All Models" : "Your Models"}</Tab>,
                   panel: (
                     <AllModelsTab
@@ -349,9 +366,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     />
                   ),
                 },
-              ];
-              if (!shouldHideAddModelTab) {
-                visibleTabs.push({
+                add: {
                   tab: <Tab key="add-model">Add Model</Tab>,
                   panel: (
                     <TabPanel key="add-model" className="h-full">
@@ -373,94 +388,90 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                       />
                     </TabPanel>
                   ),
-                });
-              }
-              if (isAdmin) {
-                visibleTabs.push(
-                  {
-                    tab: <Tab key="llm-credentials">LLM Credentials</Tab>,
-                    panel: (
-                      <TabPanel key="llm-credentials">
-                        <CredentialsPanel uploadProps={uploadProps} />
-                      </TabPanel>
-                    ),
-                  },
-                  {
-                    tab: <Tab key="pass-through">Pass-Through Endpoints</Tab>,
-                    panel: (
-                      <TabPanel key="pass-through">
-                        <PassThroughSettings
-                          accessToken={accessToken}
-                          userRole={userRole}
-                          userID={userID}
-                          premiumUser={premiumUser}
-                        />
-                      </TabPanel>
-                    ),
-                  },
-                  {
-                    tab: <Tab key="health-status">Health Status</Tab>,
-                    panel: (
-                      <TabPanel key="health-status">
-                        <HealthCheckComponent
-                          accessToken={accessToken}
-                          modelData={processedHealthModelData}
-                          all_models_on_proxy={healthModelIdsOnProxy}
-                          getDisplayModelName={getDisplayModelName}
-                          setSelectedModelId={setSelectedModelId}
-                          teams={teams}
-                          isLoading={isLoadingHealthModels}
-                          pagination={healthPagination}
-                          onPaginationChange={setHealthPagination}
-                          rowCount={healthRowCount}
-                        />
-                      </TabPanel>
-                    ),
-                  },
-                  {
-                    tab: <Tab key="model-retry-settings">Model Retry Settings</Tab>,
-                    panel: (
-                      <ModelRetrySettingsTab
-                        key="model-retry-settings"
-                        selectedModelGroup={retryScope}
-                        setSelectedModelGroup={setRetryScope}
-                        availableModelGroups={availableModelGroups}
-                        globalRetryPolicy={globalRetryPolicy}
-                        setGlobalRetryPolicy={setGlobalRetryPolicy}
-                        defaultRetry={defaultRetry}
-                        modelGroupRetryPolicy={modelGroupRetryPolicy}
-                        setModelGroupRetryPolicy={setModelGroupRetryPolicy}
-                        handleSaveRetrySettings={handleSaveRetrySettings}
-                        isSaving={updateRetryPolicy.isPending}
+                },
+                "llm-credentials": {
+                  tab: <Tab key="llm-credentials">LLM Credentials</Tab>,
+                  panel: (
+                    <TabPanel key="llm-credentials">
+                      <CredentialsPanel uploadProps={uploadProps} />
+                    </TabPanel>
+                  ),
+                },
+                "pass-through": {
+                  tab: <Tab key="pass-through">Pass-Through Endpoints</Tab>,
+                  panel: (
+                    <TabPanel key="pass-through">
+                      <PassThroughSettings
+                        accessToken={accessToken}
+                        userRole={userRole}
+                        userID={userID}
+                        premiumUser={premiumUser}
                       />
-                    ),
-                  },
-                  {
-                    tab: <Tab key="model-group-alias">Model Group Alias</Tab>,
-                    panel: (
-                      <TabPanel key="model-group-alias">
-                        <ModelGroupAliasSettings
-                          accessToken={accessToken}
-                          initialModelGroupAlias={modelGroupAlias}
-                          onAliasUpdate={setModelGroupAlias}
-                        />
-                      </TabPanel>
-                    ),
-                  },
-                  {
-                    tab: <Tab key="price-data-reload">Price Data Reload</Tab>,
-                    panel: <PriceDataManagementTab key="price-data-reload" />,
-                  },
-                );
-              }
+                    </TabPanel>
+                  ),
+                },
+                health: {
+                  tab: <Tab key="health-status">Health Status</Tab>,
+                  panel: (
+                    <TabPanel key="health-status">
+                      <HealthCheckComponent
+                        accessToken={accessToken}
+                        modelData={processedHealthModelData}
+                        all_models_on_proxy={healthModelIdsOnProxy}
+                        getDisplayModelName={getDisplayModelName}
+                        setSelectedModelId={setSelectedModelId}
+                        teams={teams}
+                        isLoading={isLoadingHealthModels}
+                        pagination={healthPagination}
+                        onPaginationChange={setHealthPagination}
+                        rowCount={healthRowCount}
+                      />
+                    </TabPanel>
+                  ),
+                },
+                "retry-settings": {
+                  tab: <Tab key="model-retry-settings">Model Retry Settings</Tab>,
+                  panel: (
+                    <ModelRetrySettingsTab
+                      key="model-retry-settings"
+                      selectedModelGroup={retryScope}
+                      setSelectedModelGroup={setRetryScope}
+                      availableModelGroups={availableModelGroups}
+                      globalRetryPolicy={globalRetryPolicy}
+                      setGlobalRetryPolicy={setGlobalRetryPolicy}
+                      defaultRetry={defaultRetry}
+                      modelGroupRetryPolicy={modelGroupRetryPolicy}
+                      setModelGroupRetryPolicy={setModelGroupRetryPolicy}
+                      handleSaveRetrySettings={handleSaveRetrySettings}
+                      isSaving={updateRetryPolicy.isPending}
+                    />
+                  ),
+                },
+                "model-group-alias": {
+                  tab: <Tab key="model-group-alias">Model Group Alias</Tab>,
+                  panel: (
+                    <TabPanel key="model-group-alias">
+                      <ModelGroupAliasSettings
+                        accessToken={accessToken}
+                        initialModelGroupAlias={modelGroupAlias}
+                        onAliasUpdate={setModelGroupAlias}
+                      />
+                    </TabPanel>
+                  ),
+                },
+                "price-data": {
+                  tab: <Tab key="price-data-reload">Price Data Reload</Tab>,
+                  panel: <PriceDataManagementTab key="price-data-reload" />,
+                },
+              };
               return (
                 <TabGroup
-                  index={selectedTabIndex}
-                  onIndexChange={setSelectedTabIndex}
+                  index={activeTabIndex}
+                  onIndexChange={(index) => router.push(modelTabHref(visibleSlugs[index] ?? ""))}
                   className="gap-2 h-[75vh] w-full "
                 >
                   <TabList className="flex justify-between mt-2 w-full items-center">
-                    <div className="flex">{visibleTabs.map((t) => t.tab)}</div>
+                    <div className="flex">{visibleSlugs.map((slug) => tabBySlug[slug].tab)}</div>
 
                     <div className="flex items-center space-x-2 self-center">
                       {lastRefreshed && <span className="text-xs text-gray-500">Last Refreshed: {lastRefreshed}</span>}
@@ -473,7 +484,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                       />
                     </div>
                   </TabList>
-                  <TabPanels>{visibleTabs.map((t) => t.panel)}</TabPanels>
+                  <TabPanels>{visibleSlugs.map((slug) => tabBySlug[slug].panel)}</TabPanels>
                 </TabGroup>
               );
             })()
