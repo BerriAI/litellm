@@ -509,6 +509,107 @@ def test_get_standard_logging_payload_trace_id():
     assert isinstance(result, str)
 
 
+def test_get_standard_logging_payload_trace_id_prioritizes_trace_id_when_flag_on(monkeypatch):
+    """With request_correlation_in_logs on, an explicit litellm_trace_id wins over litellm_session_id."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "default-trace-id"
+
+    litellm_params = {"litellm_trace_id": "the-trace-id", "litellm_session_id": "the-session-id"}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "the-trace-id"
+
+
+def test_get_standard_logging_payload_trace_id_prioritizes_session_id_when_flag_off(monkeypatch):
+    """With request_correlation_in_logs off (default), legacy behavior is preserved:
+    litellm_session_id still wins over litellm_trace_id."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "default-trace-id"
+
+    litellm_params = {"litellm_trace_id": "the-trace-id", "litellm_session_id": "the-session-id"}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "the-session-id"
+
+
+def test_get_standard_logging_payload_session_id_when_flag_on(monkeypatch):
+    """Test _get_standard_logging_payload_session_id with different input scenarios, flag enabled"""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_session_id = ""
+
+    # Test case 1: litellm_session_id provided directly in litellm_params
+    litellm_params = {"litellm_session_id": "dynamic-session-id"}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "dynamic-session-id"
+
+    # Test case 2: falls back to metadata.session_id when not in litellm_params directly
+    litellm_params = {"metadata": {"session_id": "metadata-session-id"}}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "metadata-session-id"
+
+    # Test case 3: falls back to logging_obj.litellm_session_id when nothing else is set
+    mock_logging_obj.litellm_session_id = "obj-session-id"
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params={}
+    )
+    assert result == "obj-session-id"
+
+    # Test case 4: empty string when no session id was supplied anywhere
+    mock_logging_obj.litellm_session_id = ""
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params={}
+    )
+    assert result == ""
+
+    # Test case 5: non-string session id in params is coerced to str
+    litellm_params = {"litellm_session_id": 98765}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == "98765"
+    assert isinstance(result, str)
+
+    # Test case 6: trace_id and session_id are independent - passing only a trace id
+    # must not populate session_id
+    litellm_params = {"litellm_trace_id": "some-trace-id"}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == ""
+
+
+def test_get_standard_logging_payload_session_id_empty_when_flag_off(monkeypatch):
+    """When request_correlation_in_logs is off (default), session_id is always empty,
+    even if litellm_session_id was explicitly supplied - preserves the pre-existing
+    StandardLoggingPayload shape for callers who haven't opted in."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_session_id = "obj-session-id"
+
+    litellm_params = {"litellm_session_id": "dynamic-session-id"}
+    result = StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
+        logging_obj=mock_logging_obj, litellm_params=litellm_params
+    )
+    assert result == ""
+
+
 def test_truncate_standard_logging_payload():
     """
     1. original messages, response, and error_str should NOT BE MODIFIED, since these are from kwargs
