@@ -23,6 +23,7 @@ from typing import (
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_text_blocks_from_anthropic_messages,
 )
@@ -434,6 +435,7 @@ def anthropic_messages_handler(
 
     metadata = validate_anthropic_api_metadata(metadata)
 
+    anthropic_server_fallbacks = kwargs.pop(ANTHROPIC_SERVER_SIDE_FALLBACKS_PARAM, None)
     local_vars = locals()
     is_async = kwargs.pop("is_async", False)
     # Use provided client or create a new one
@@ -575,7 +577,7 @@ def anthropic_messages_handler(
         )
 
     local_vars.update(kwargs)
-    anthropic_messages_optional_request_params = (
+    anthropic_messages_optional_request_params = dict(
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,
             model=model,
@@ -583,6 +585,8 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
     )
+    if custom_llm_provider == LlmProviders.ANTHROPIC.value and isinstance(anthropic_server_fallbacks, list):
+        anthropic_messages_optional_request_params["fallbacks"] = anthropic_server_fallbacks
     if is_reasoning_auto_summary_enabled():
         thinking_param = anthropic_messages_optional_request_params.get("thinking")
         if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
@@ -595,7 +599,7 @@ def anthropic_messages_handler(
         model=model,
         messages=messages,
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,

@@ -9,6 +9,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.anthropic.common_utils import (
+    normalize_anthropic_server_side_fallbacks,
+)
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     AnthropicContextManagementError,
 )
@@ -21,7 +24,10 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_set_request_parsed_body,
+)
 from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
@@ -61,10 +67,26 @@ def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
         usage.pop("total_tokens", None)
 
 
+async def _normalize_anthropic_server_side_fallback_request(
+    request: Request,
+) -> None:
+    normalized_request_data = normalize_anthropic_server_side_fallbacks(
+        request_data=await _read_request_body(request=request),
+        headers=dict(request.headers),
+    )
+    _safe_set_request_parsed_body(
+        request=request,
+        parsed_body=normalized_request_data,
+    )
+
+
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
-    dependencies=[Depends(user_api_key_auth)],
+    dependencies=[
+        Depends(_normalize_anthropic_server_side_fallback_request),
+        Depends(user_api_key_auth),
+    ],
 )
 async def anthropic_response(
     fastapi_response: Response,
