@@ -39,6 +39,8 @@ from litellm import (
 from litellm._logging import (
     _is_debugging_on,
     _redact_string,
+    reset_session_id,
+    reset_trace_id,
     set_session_id,
     set_trace_id,
     verbose_logger,
@@ -354,10 +356,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
 
-        set_trace_id(self.litellm_trace_id)
+        self._trace_id_token = set_trace_id(self.litellm_trace_id)
         _sid = (kwargs or {}).get("litellm_session_id")
         self.litellm_session_id: str = str(_sid) if _sid else ""
-        set_session_id(self.litellm_session_id)
+        self._session_id_token = set_session_id(self.litellm_session_id)
+        self._correlation_context_restored = False
 
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
@@ -1974,10 +1977,28 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_success_handler(result=complete_streaming_response)
         return
 
+    def _restore_correlation_context(self) -> None:
+        """Reset trace_id/session_id contextvars to their pre-call value.
+
+        Without this, a nested LiteLLM call sharing the same asyncio Task as an
+        outer request (e.g. a guardrail's own LLM-as-judge call, an MCP sampling
+        call) would leave the outer request's subsequent log lines stamped with
+        the nested call's trace_id/session_id instead of its own.
+
+        Idempotent - safe to call from every terminal handler regardless of
+        which one ends up firing for this attempt.
+        """
+        if self._correlation_context_restored:
+            return
+        self._correlation_context_restored = True
+        reset_trace_id(self._trace_id_token)
+        reset_session_id(self._session_id_token)
+
     def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         verbose_logger.debug(f"Logging Details LiteLLM-Success Call: Cache_hit={cache_hit}")
         if not self.should_run_logging(event_type="sync_success"):  # prevent double logging
             return
+        self._restore_correlation_context()
         start_time, end_time, result = self._success_handler_helper_fn(
             start_time=start_time,
             end_time=end_time,
@@ -2389,6 +2410,7 @@ class Logging(LiteLLMLoggingBaseClass):
             event_type="async_success"
         ):  # prevent double logging (non-streaming)
             return
+        self._restore_correlation_context()
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
@@ -2776,6 +2798,7 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug(f"Logging Details LiteLLM-Failure Call: {litellm.failure_callback}")
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
             return
+        self._restore_correlation_context()
         litellm_params = self.model_call_details.get("litellm_params", {})
         is_sync_request = self._is_sync_litellm_request(litellm_params)
 
@@ -2948,6 +2971,7 @@ class Logging(LiteLLMLoggingBaseClass):
         await self.special_failure_handlers(exception=exception)
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
             return
+        self._restore_correlation_context()
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,
             traceback_exception=traceback_exception,

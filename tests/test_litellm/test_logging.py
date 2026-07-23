@@ -555,3 +555,78 @@ def test_plain_formatter_unchanged_when_flag_disabled(monkeypatch):
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_restore_correlation_context_resets_to_pre_call_value():
+    """_restore_correlation_context() must put trace_id_var/session_id_var back to
+    whatever they were immediately before this Logging instance was constructed.
+    This is the mechanism that prevents a nested call (e.g. a guardrail's own
+    LLM-as-judge call sharing the same asyncio Task) from leaking its trace_id/
+    session_id into the outer call's subsequent log lines."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace")
+    session_id_var.set("outer-session")
+    try:
+        inner = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="inner-call",
+            function_id="fn-inner",
+            kwargs={"litellm_session_id": "inner-session"},
+        )
+        assert trace_id_var.get() == inner.litellm_trace_id
+        assert session_id_var.get() == "inner-session"
+
+        inner._restore_correlation_context()
+
+        assert trace_id_var.get() == "outer-trace"
+        assert session_id_var.get() == "outer-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_restore_correlation_context_is_idempotent():
+    """Calling _restore_correlation_context() more than once must not raise,
+    since success_handler/failure_handler could both end up calling it for the
+    same instance in edge cases."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-idempotent",
+        function_id="fn-idempotent",
+        kwargs={},
+    )
+    log_obj._restore_correlation_context()
+    log_obj._restore_correlation_context()  # must not raise
+
+
+def test_set_trace_id_strips_control_characters():
+    """set_trace_id() must strip \\r/\\n/escape sequences so a caller-controlled
+    trace id can't forge fake log entries when interpolated into plain-text logs."""
+    token = set_trace_id('evil\r\n{"level": "CRITICAL", "message": "forged"}')
+    try:
+        value = trace_id_var.get()
+        assert "\r" not in value
+        assert "\n" not in value
+    finally:
+        trace_id_var.reset(token)
+
+
+def test_set_session_id_bounds_length():
+    """set_session_id() must bound length so an oversized caller-supplied value
+    isn't repeated across every log line for the request."""
+    token = set_session_id("a" * 1000)
+    try:
+        assert len(session_id_var.get()) == 256
+    finally:
+        session_id_var.reset(token)
