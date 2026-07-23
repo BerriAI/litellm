@@ -22,9 +22,9 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import unwrap
-from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, OcrBody, OcrDocument, OcrResponse
+from proxy_client import ProxyClient
 
 pytestmark = pytest.mark.e2e
 
@@ -143,14 +143,14 @@ def _assert_ocr_document(response: OcrResponse) -> None:
 class TestRustOcrGateway:
     @pytest.mark.parametrize("case", RUST_OCR_CASES, ids=_CASE_IDS)
     def test_rust_ocr_response(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager, case: _OcrCase
+        self, proxy: ProxyClient, resources: ResourceManager, case: _OcrCase
     ) -> None:
         model = f"rust-ocr-{case.suffix}-{unique_marker()}"
-        model_id = endpoints_client.create_model(model, case.provider.litellm_params())
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        model_id = proxy.create_model(model, case.provider.litellm_params())
+        resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
 
-        response = unwrap(endpoints_client.proxy.ocr(key, OcrBody(model=model, document=case.document)))
+        response = unwrap(proxy.ocr(key, OcrBody(model=model, document=case.document)))
         _assert_ocr_document(response)
 
 

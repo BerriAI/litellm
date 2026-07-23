@@ -1,8 +1,7 @@
 """Live e2e: POST /v1/images/generations returns an image.
 
-Registers an OpenAI image deployment at runtime and asserts the response carries a
-generated image (url or base64). Migrated from
-litellm-regression-tests/tests/test_inference_endpoints.py.
+Registers an image deployment at runtime, drives it through the real OpenAI SDK
+(LIT-4577), and asserts the response carries a generated image (url or base64).
 """
 
 from __future__ import annotations
@@ -10,50 +9,58 @@ from __future__ import annotations
 import pytest
 
 from e2e_config import require_env, unique_marker
-from e2e_http import require_successful_call
-from endpoints_client import EndpointsClient, ImagesResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from proxy_client import ProxyClient
+from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
 
-def _assert_image_returned(body: str) -> None:
-    parsed = ImagesResult.model_validate_json(body)
-    assert parsed.data, f"/images/generations returned no data: {body[:300]}"
-    first = parsed.data[0]
-    assert first.b64_json or first.url, (
-        f"generated image has neither b64_json nor url: {body[:300]}"
-    )
+def _assert_image_returned(
+    proxy: ProxyClient,
+    resources: ResourceManager,
+    sdk: SdkClients,
+    prefix: str,
+    params: LiteLLMParamsBody,
+) -> None:
+    model = f"{prefix}-{unique_marker()}"
+    model_id = proxy.create_model(model, params)
+    resources.defer(lambda: proxy.delete_model(model_id))
+    client = sdk.openai(resources.key())
+
+    images = client.images.generate(model=model, prompt="Draw a cute cat", n=1, size="1024x1024")
+    data = images.data or []
+    assert data, f"/images/generations returned no data: {images!r}"
+    first = data[0]
+    assert first.b64_json or first.url, "generated image has neither b64_json nor url"
 
 
 class TestImageGeneration:
     @pytest.mark.covers("llm.images_generations.openai.basic.nonstream.works")
     def test_image_generation_returns_image(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = f"e2e-image-{unique_marker()}"
-        model_id = endpoints_client.create_model(
-            model,
-            LiteLLMParamsBody(
-                model="openai/gpt-image-1-mini", api_key="os.environ/OPENAI_API_KEY"
-            ),
+        _assert_image_returned(
+            proxy,
+            resources,
+            sdk,
+            "e2e-image",
+            LiteLLMParamsBody(model="openai/gpt-image-1-mini", api_key="os.environ/OPENAI_API_KEY"),
         )
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
-        key = resources.key()
 
-        result = endpoints_client.images(key, model, "Draw a cute cat")
-        require_successful_call(result)
-        _assert_image_returned(result.body)
-
-    @pytest.mark.covers("llm.images_generations.bedrock.basic.nonstream.works", exercised_on=["images_generations"])
+    @pytest.mark.covers(
+        "llm.images_generations.bedrock.basic.nonstream.works", exercised_on=["images_generations"]
+    )
     def test_bedrock_image_generation_returns_image(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
-        model = f"e2e-bedrock-image-{unique_marker()}"
-        model_id = endpoints_client.create_model(
-            model,
+        _assert_image_returned(
+            proxy,
+            resources,
+            sdk,
+            "e2e-bedrock-image",
             LiteLLMParamsBody(
                 model="bedrock/amazon.titan-image-generator-v2:0",
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
@@ -61,9 +68,3 @@ class TestImageGeneration:
                 aws_region_name="os.environ/AWS_REGION",
             ),
         )
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
-        key = resources.key()
-
-        result = endpoints_client.images(key, model, "Draw a cute cat")
-        require_successful_call(result)
-        _assert_image_returned(result.body)
