@@ -220,6 +220,7 @@ class A2AConfig(BaseConfig):
 
         # Create single A2A message with full conversation context
         a2a_message = {
+            "kind": "message",
             "role": "user",
             "parts": [{"kind": "text", "text": full_context}],
             "messageId": str(uuid.uuid4()),
@@ -235,7 +236,10 @@ class A2AConfig(BaseConfig):
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
-            "params": {"message": a2a_message},
+            "params": {
+                "message": a2a_message,
+                "configuration": {"blocking": True},
+            },
         }
 
         return request_data
@@ -370,6 +374,7 @@ class A2AConfig(BaseConfig):
         role = message.get("role", "user")
 
         return {
+            "kind": "message",
             "role": role,
             "parts": [{"kind": "text", "text": str(content)}],
             "messageId": str(uuid.uuid4()),

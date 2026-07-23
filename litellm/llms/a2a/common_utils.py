@@ -2,6 +2,7 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
+import json
 from typing import Any, Dict, List
 
 from pydantic import BaseModel
@@ -80,8 +81,16 @@ def extract_text_from_a2a_message(message: Dict[str, Any], depth: int = 0, max_d
     text_parts: List[str] = []
 
     for part in parts:
-        if part.get("kind") == "text":
+        kind = part.get("kind")
+        if kind == "text":
             text_parts.append(part.get("text", ""))
+        elif kind == "data":
+            data = part.get("data")
+            if data is not None:
+                try:
+                    text_parts.append(json.dumps(data, ensure_ascii=False))
+                except (TypeError, ValueError):
+                    text_parts.append(str(data))
         # Handle nested parts if they exist
         elif "parts" in part:
             nested_text = extract_text_from_a2a_message(part, depth + 1, max_depth)
