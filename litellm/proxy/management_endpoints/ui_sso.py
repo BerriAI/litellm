@@ -3203,6 +3203,7 @@ class SSOAuthenticationHandler:
             auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
             disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
             server_root_path=get_server_root_path(),
+            reset_password_required=False,
         )
 
         jwt_token = jwt.encode(
@@ -3217,7 +3218,11 @@ class SSOAuthenticationHandler:
         if return_to is not None and SSOAuthenticationHandler._validate_return_to(return_to):
             code = secrets.token_urlsafe(32)
             cache_key = f"login_code:{code}"
-            cache_value = {"token": jwt_token, "redirect_url": return_to}
+            cache_value = {
+                "token": jwt_token,
+                "redirect_url": return_to,
+                "reset_password_required": False,
+            }
             if redis_usage_cache is not None:
                 await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
             else:

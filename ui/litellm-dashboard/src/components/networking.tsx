@@ -995,6 +995,8 @@ export interface UserInfoV2Response {
   metadata: Record<string, any> | null;
   created_at: string | null;
   updated_at: string | null;
+  password_updated_at: string | null;
+  reset_password_required: boolean;
   sso_user_id: string | null;
   teams: string[];
 }
@@ -1013,6 +1015,37 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
     console.error("Failed to fetch user info v2:", error);
     throw error;
   }
+};
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export interface ChangePasswordResponse {
+  success: boolean;
+  message: string;
+}
+
+export const changePassword = async (
+  accessToken: string,
+  data: ChangePasswordRequest,
+): Promise<ChangePasswordResponse> => {
+  return await apiClient.post(`/user/change_password`, { accessToken, body: data });
+};
+
+export interface ResetPasswordRequest {
+  user_id?: string;
+  user_email?: string;
+  new_password?: string;
+  require_reset?: boolean;
+}
+
+export const resetPassword = async (
+  accessToken: string,
+  data: ResetPasswordRequest,
+): Promise<ChangePasswordResponse> => {
+  return await apiClient.post(`/user/reset_password`, { accessToken, body: data });
 };
 
 export const userInfoCall = async (
@@ -7089,6 +7122,7 @@ interface LoginResponse {
   token?: string;
   code?: string;
   expires_in?: number;
+  reset_password_required?: boolean;
 }
 
 export const loginCall = async (username: string, password: string, useV3?: boolean): Promise<LoginResponse> => {

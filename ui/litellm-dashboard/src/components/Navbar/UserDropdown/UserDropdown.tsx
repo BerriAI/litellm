@@ -9,9 +9,11 @@ import {
   setLocalStorageItem,
 } from "@/utils/localStorageUtils";
 import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
+import ChangePasswordModal from "./ChangePasswordModal";
 import {
   CrownOutlined,
   DownOutlined,
+  KeyOutlined,
   LogoutOutlined,
   MailOutlined,
   SafetyOutlined,
@@ -69,11 +71,12 @@ interface UserDropdownProps {
 }
 
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar", collapsed = false }) => {
-  const { userId, userEmail, userRole, premiumUser } = useAuthorized();
+  const { userId, userEmail, userRole, premiumUser, accessToken } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   useEffect(() => {
     const storedValue = getLocalStorageItem("disableShowNewBadge");
@@ -81,6 +84,16 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   }, []);
 
   const userItems: MenuProps["items"] = [
+    {
+      key: "change-password",
+      label: (
+        <Space>
+          <KeyOutlined />
+          Change Password
+        </Space>
+      ),
+      onClick: () => setChangePasswordOpen(true),
+    },
     {
       key: "logout",
       label: (
@@ -206,65 +219,74 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   const displayName = navAccountDisplayName(userEmail, userId);
 
   return (
-    <Dropdown
-      trigger={["click"]}
-      placement={variant === "sidebar" ? "topLeft" : "bottomRight"}
-      menu={{ items: userItems }}
-      popupRender={(menu) => (
-        <div className="rounded-lg bg-white shadow-lg" data-testid="user-dropdown-panel">
-          {renderUserInfoSection()}
-          <Divider style={{ margin: 0 }} />
-          {React.cloneElement(menu as React.ReactElement, {
-            style: { boxShadow: "none" },
-          })}
-        </div>
+    <>
+      {accessToken && (
+        <ChangePasswordModal
+          accessToken={accessToken}
+          open={changePasswordOpen}
+          onClose={() => setChangePasswordOpen(false)}
+        />
       )}
-    >
-      {variant === "sidebar" ? (
-        <button
-          type="button"
-          className={cn(
-            "flex w-full items-center rounded-lg border border-transparent transition-colors hover:bg-sidebar-accent",
-            collapsed ? "justify-center px-0 py-1" : "gap-2.5 px-2 py-1.5 text-left",
-          )}
-          aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
-          aria-haspopup="menu"
-          title={collapsed ? displayName : undefined}
-        >
-          <Avatar className="size-[30px] shadow-inner ring-1 ring-black/5" aria-hidden>
-            <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          {!collapsed && (
-            <>
-              <span className="min-w-0 flex-1 leading-tight">
-                <span className="block truncate text-[13px] font-medium text-sidebar-foreground">{displayName}</span>
-                {userRole && <span className="block truncate text-[11px] text-muted-foreground">{userRole}</span>}
-              </span>
-              <ChevronsUpDown size={16} strokeWidth={1.75} className="shrink-0 text-muted-foreground" aria-hidden />
-            </>
-          )}
-        </button>
-      ) : (
-        <Button
-          type="text"
-          className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-gray-100!"
-          aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
-          aria-haspopup="menu"
-        >
-          <Avatar className="shadow-inner ring-1 ring-black/5" aria-hidden>
-            <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
-            {displayName}
-          </span>
-          <DownOutlined className="hidden shrink-0 text-[10px] text-gray-400 md:inline" aria-hidden />
-        </Button>
-      )}
-    </Dropdown>
+      <Dropdown
+        trigger={["click"]}
+        placement={variant === "sidebar" ? "topLeft" : "bottomRight"}
+        menu={{ items: userItems }}
+        popupRender={(menu) => (
+          <div className="rounded-lg bg-white shadow-lg" data-testid="user-dropdown-panel">
+            {renderUserInfoSection()}
+            <Divider style={{ margin: 0 }} />
+            {React.cloneElement(menu as React.ReactElement, {
+              style: { boxShadow: "none" },
+            })}
+          </div>
+        )}
+      >
+        {variant === "sidebar" ? (
+          <button
+            type="button"
+            className={cn(
+              "flex w-full items-center rounded-lg border border-transparent transition-colors hover:bg-sidebar-accent",
+              collapsed ? "justify-center px-0 py-1" : "gap-2.5 px-2 py-1.5 text-left",
+            )}
+            aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+            aria-haspopup="menu"
+            title={collapsed ? displayName : undefined}
+          >
+            <Avatar className="size-[30px] shadow-inner ring-1 ring-black/5" aria-hidden>
+              <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            {!collapsed && (
+              <>
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block truncate text-[13px] font-medium text-sidebar-foreground">{displayName}</span>
+                  {userRole && <span className="block truncate text-[11px] text-muted-foreground">{userRole}</span>}
+                </span>
+                <ChevronsUpDown size={16} strokeWidth={1.75} className="shrink-0 text-muted-foreground" aria-hidden />
+              </>
+            )}
+          </button>
+        ) : (
+          <Button
+            type="text"
+            className="flex! max-w-[min(200px,34vw)] items-center gap-2 rounded-md! py-0.5! pl-1! pr-2! transition-colors hover:bg-gray-100!"
+            aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+            aria-haspopup="menu"
+          >
+            <Avatar className="shadow-inner ring-1 ring-black/5" aria-hidden>
+              <AvatarFallback className="font-semibold text-white" style={{ backgroundColor: `hsl(${hue} 46% 38%)` }}>
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <span className="hidden min-w-0 truncate text-left text-sm font-medium leading-none text-gray-900 md:inline">
+              {displayName}
+            </span>
+            <DownOutlined className="hidden shrink-0 text-[10px] text-gray-400 md:inline" aria-hidden />
+          </Button>
+        )}
+      </Dropdown>
+    </>
   );
 };
 

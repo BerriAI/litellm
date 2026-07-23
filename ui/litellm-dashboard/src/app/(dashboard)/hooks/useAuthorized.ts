@@ -4,11 +4,13 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, getLoginUrl, storeReturnUrl } from "@/utils/returnUrlUtils";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo } from "react";
 import { formatUserRole } from "@/utils/roles";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 const useAuthorized = () => {
+  const router = useRouter();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
@@ -35,8 +37,20 @@ const useAuthorized = () => {
         clearTokenCookies();
       }
       redirectToLogin();
+      return;
     }
-  }, [isLoading, isAuthorized, token, redirectToLogin]);
+
+    // Force password reset before allowing dashboard access. The login page also
+    // redirects here, but this guards stale tokens and admin resets that occur
+    // during an active session.
+    if (
+      decoded?.reset_password_required &&
+      typeof window !== "undefined" &&
+      !window.location.pathname.startsWith("/ui/reset-password")
+    ) {
+      router.replace("/ui/reset-password");
+    }
+  }, [isLoading, isAuthorized, token, redirectToLogin, decoded, router]);
 
   return {
     isLoading,
@@ -49,6 +63,7 @@ const useAuthorized = () => {
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
     showSSOBanner: decoded?.login_method === "username_password",
+    resetPasswordRequired: decoded?.reset_password_required ?? false,
   };
 };
 

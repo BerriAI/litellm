@@ -23,6 +23,7 @@ import {
   UserInfoV2Response,
   userDeleteCall,
   userUpdateUserCall,
+  resetPassword,
   modelAvailableCall,
   invitationCreateCall,
   getProxyBaseUrl,
@@ -32,8 +33,8 @@ import {
   teamMemberDeleteCall,
   Member,
 } from "@/components/networking";
-import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
-import { rolesWithWriteAccess } from "@/utils/roles";
+import { Button as AntdButton, Modal, Select as AntdSelect, Form, Input, Checkbox, Tooltip } from "antd";
+import { rolesWithWriteAccess, isAdminRole } from "@/utils/roles";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -78,6 +79,11 @@ export default function UserInfoView({
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState<string | null>(null);
+  const [resetPasswordSuccess, setResetPasswordSuccess] = useState<string | null>(null);
+  const [resetPasswordForm] = Form.useForm();
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(initialTab);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -250,7 +256,7 @@ export default function UserInfoView({
 
   const availableTeamsForAdd = allTeams.filter((t) => !teamDetails.some((td) => td.team_id === t.team_id));
 
-  const handleResetPassword = async () => {
+  const handleGenerateResetLink = async () => {
     if (!accessToken) {
       NotificationsManager.fromBackend("Access token not found");
       return;
@@ -310,6 +316,29 @@ export default function UserInfoView({
     } catch (error) {
       console.error("Error updating user:", error);
       NotificationsManager.fromBackend("Failed to update user");
+    }
+  };
+
+  const handleAdminResetPassword = async (values: {
+    new_password?: string;
+    require_reset: boolean;
+  }) => {
+    if (!accessToken || !userData) return;
+    setIsResettingPassword(true);
+    setResetPasswordError(null);
+    setResetPasswordSuccess(null);
+    try {
+      const response = await resetPassword(accessToken, {
+        user_id: userData.user_id,
+        new_password: values.new_password,
+        require_reset: values.require_reset,
+      });
+      setResetPasswordSuccess(response.message);
+      resetPasswordForm.resetFields();
+    } catch (error) {
+      setResetPasswordError(error instanceof Error ? error.message : "Failed to reset password");
+    } finally {
+      setIsResettingPassword(false);
     }
   };
 
@@ -384,7 +413,7 @@ export default function UserInfoView({
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
-            <Button icon={RefreshIcon} variant="secondary" onClick={handleResetPassword} className="flex items-center">
+            <Button icon={RefreshIcon} variant="secondary" onClick={handleGenerateResetLink} className="flex items-center">
               Reset Password
             </Button>
             <Button
@@ -534,6 +563,75 @@ export default function UserInfoView({
                 />
               ) : (
                 <div className="space-y-4">
+                  {userRole && isAdminRole(userRole) && (
+                    <>
+                      <div className="flex justify-end">
+                        <AntdButton onClick={() => setIsResetPasswordModalOpen(true)}>
+                          Reset Password
+                        </AntdButton>
+                      </div>
+                      <Modal
+                        title="Reset Password"
+                        open={isResetPasswordModalOpen}
+                        onCancel={() => {
+                          setIsResetPasswordModalOpen(false);
+                          setResetPasswordError(null);
+                          setResetPasswordSuccess(null);
+                          resetPasswordForm.resetFields();
+                        }}
+                        footer={null}
+                      >
+                        {resetPasswordError && (
+                          <div className="mb-4 text-red-600">{resetPasswordError}</div>
+                        )}
+                        {resetPasswordSuccess && (
+                          <div className="mb-4 text-green-600">{resetPasswordSuccess}</div>
+                        )}
+                        <Form
+                          form={resetPasswordForm}
+                          onFinish={handleAdminResetPassword}
+                          layout="vertical"
+                          initialValues={{ require_reset: true }}
+                        >
+                          <Form.Item
+                            label="New Password (optional)"
+                            name="new_password"
+                            rules={[
+                              {
+                                min: 8,
+                                message: "Password must be at least 8 characters",
+                              },
+                            ]}
+                          >
+                            <Input.Password placeholder="Leave blank to keep current password" />
+                          </Form.Item>
+                          <Form.Item name="require_reset" valuePropName="checked">
+                            <Checkbox>Require password reset on next login</Checkbox>
+                          </Form.Item>
+                          <div className="flex justify-end gap-2">
+                            <AntdButton
+                              onClick={() => {
+                                setIsResetPasswordModalOpen(false);
+                                setResetPasswordError(null);
+                                setResetPasswordSuccess(null);
+                                resetPasswordForm.resetFields();
+                              }}
+                            >
+                              Cancel
+                            </AntdButton>
+                            <AntdButton
+                              type="primary"
+                              htmlType="submit"
+                              loading={isResettingPassword}
+                              disabled={isResettingPassword}
+                            >
+                              Reset Password
+                            </AntdButton>
+                          </div>
+                        </Form>
+                      </Modal>
+                    </>
+                  )}
                   <div>
                     <Text className="font-medium">User ID</Text>
                     <div className="flex items-center cursor-pointer">
@@ -575,6 +673,16 @@ export default function UserInfoView({
                   <div>
                     <Text className="font-medium">Last Updated</Text>
                     <Text>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : "Unknown"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Password Updated</Text>
+                    <Text>{userData.password_updated_at ? new Date(userData.password_updated_at).toLocaleString() : "Never"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Reset Password Required</Text>
+                    <Text>{userData.reset_password_required ? "Yes" : "No"}</Text>
                   </div>
 
                   <div>

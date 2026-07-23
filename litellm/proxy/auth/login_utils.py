@@ -87,6 +87,7 @@ class LoginResult:
     user_email: Optional[str]
     user_role: str
     login_method: Literal["sso", "username_password"]
+    reset_password_required: bool
 
     def __init__(
         self,
@@ -95,12 +96,14 @@ class LoginResult:
         user_email: Optional[str],
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
+        reset_password_required: bool = False,
     ):
         self.user_id = user_id
         self.key = key
         self.user_email = user_email
         self.user_role = user_role
         self.login_method = login_method
+        self.reset_password_required = reset_password_required
 
 
 async def authenticate_user(
@@ -242,6 +245,7 @@ async def authenticate_user(
             user_email=None,
             user_role=user_role,
             login_method="username_password",
+            reset_password_required=False,
         )
 
     elif _user_row is not None:
@@ -290,12 +294,15 @@ async def authenticate_user(
 
             key = response["token"]  # type: ignore
 
+            reset_password_required = getattr(_user_row, "reset_password_required", False)
+
             return LoginResult(
                 user_id=user_id,
                 key=key,
                 user_email=user_email,
                 user_role=cast(str, user_role),
                 login_method="username_password",
+                reset_password_required=bool(reset_password_required),
             )
         else:
             raise ProxyException(
@@ -341,4 +348,5 @@ def create_ui_token_object(
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        reset_password_required=login_result.reset_password_required,
     )

@@ -257,6 +257,8 @@ model LiteLLM_UserTable {
     model_max_budget Json @default("{}")
     created_at      DateTime?               @default(now()) @map("created_at")
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
+    password_updated_at DateTime?           @map("password_updated_at")
+    reset_password_required Boolean         @default(false) @map("reset_password_required")
 
     // relations
     litellm_organization_table LiteLLM_OrganizationTable?                   @relation(fields: [organization_id], references: [organization_id])
