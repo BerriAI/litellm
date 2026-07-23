@@ -1352,7 +1352,8 @@ class ProxyLogging:
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
-        self._init_response_taking_too_long_task(data=data)
+        if call_type != CallTypes.call_mcp_tool.value:
+            self._init_response_taking_too_long_task(data=data)
 
         if data is None:
             return None
