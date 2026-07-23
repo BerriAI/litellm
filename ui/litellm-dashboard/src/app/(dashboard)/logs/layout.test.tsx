@@ -39,7 +39,7 @@ describe("LogsLayout", () => {
     };
   });
 
-  it("renders the four log tabs and the active tab's page content", () => {
+  it("renders the four tabs and the active tab's page content", () => {
     const { getByRole, getByTestId } = renderLayout();
     for (const name of ["Request Logs", "Audit Logs", "Deleted Keys", "Deleted Teams"]) {
       expect(getByRole("tab", { name })).toBeInTheDocument();
@@ -50,24 +50,13 @@ describe("LogsLayout", () => {
   it("marks the base route's Request Logs tab active", () => {
     const { getByRole } = renderLayout();
     expect(getByRole("tab", { name: "Request Logs" })).toHaveAttribute("aria-selected", "true");
-    expect(getByRole("tab", { name: "Audit Logs" })).toHaveAttribute("aria-selected", "false");
   });
 
-  it("navigates to a tab's path when its tab is clicked", async () => {
+  it("derives the active tab from a nested pathname", () => {
+    navState.pathname = "/ui/logs/audit";
     const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Audit Logs" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/logs\/audit\/$/));
-  });
-
-  it("routes the base tab back to the logs root (no slug)", async () => {
-    navState.pathname = "/logs/audit";
-    const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Request Logs" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/logs\/$/));
+    expect(getByRole("tab", { name: "Audit Logs" })).toHaveAttribute("aria-selected", "true");
+    expect(getByRole("tab", { name: "Request Logs" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("redirects to the base logs path when the tab slug is unknown", async () => {

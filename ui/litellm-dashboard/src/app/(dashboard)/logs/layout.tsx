@@ -1,38 +1,28 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AntDLoadingSpinner } from "@/components/ui/AntDLoadingSpinner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { logsTabHref, slugFromPathname, type LogsTabSlug } from "@/app/(dashboard)/logs/tabRoutes";
+import { logsRoutes } from "@/app/(dashboard)/logs/tabRoutes";
+import { useTabRouting } from "@/app/(dashboard)/hooks/useTabRouting";
+import { TabRouteBar } from "@/app/(dashboard)/components/TabRouteBar";
 
 const BASE_TAB_KEY = "request-logs";
 
-const ORDERED_KEYS: Array<"" | LogsTabSlug> = ["", "audit", "deleted-keys", "deleted-teams"];
-
-const TAB_LABELS: Record<"" | LogsTabSlug, string> = {
-  "": "Request Logs",
-  audit: "Audit Logs",
-  "deleted-keys": "Deleted Keys",
-  "deleted-teams": "Deleted Teams",
-};
+const TABS = [
+  { key: BASE_TAB_KEY, label: "Request Logs" },
+  { key: "audit", label: "Audit Logs" },
+  { key: "deleted-keys", label: "Deleted Keys" },
+  { key: "deleted-teams", label: "Deleted Teams" },
+] as const;
 
 export default function LogsLayout({ children }: { children: ReactNode }) {
   const { accessToken, token, userRole, userId } = useAuthorized();
-  const pathname = usePathname();
-  const router = useRouter();
-
-  const activeSlug = slugFromPathname(pathname);
-  const isKnownSlug = ORDERED_KEYS.some((slug) => slug === activeSlug);
-  const activeKey = isKnownSlug ? activeSlug || BASE_TAB_KEY : BASE_TAB_KEY;
-
-  useEffect(() => {
-    if (activeSlug !== "" && !isKnownSlug) {
-      window.location.replace(logsTabHref(""));
-    }
-  }, [activeSlug, isKnownSlug]);
+  const { activeKey } = useTabRouting({
+    routes: logsRoutes,
+    baseTabKey: BASE_TAB_KEY,
+    visibleKeys: logsRoutes.slugs,
+  });
 
   const hasCredentials = Boolean(accessToken && token);
   const hasIdentity = Boolean(userRole && userId);
@@ -47,16 +37,7 @@ export default function LogsLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="w-full p-6 overflow-x-hidden box-border">
-      <Tabs value={activeKey} onValueChange={(key) => router.push(logsTabHref(key === BASE_TAB_KEY ? "" : key))}>
-        <TabsList variant="line">
-          {ORDERED_KEYS.map((slug) => (
-            <TabsTrigger key={slug || BASE_TAB_KEY} value={slug || BASE_TAB_KEY}>
-              {TAB_LABELS[slug]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-
+      <TabRouteBar routes={logsRoutes} baseTabKey={BASE_TAB_KEY} activeKey={activeKey} tabs={TABS} />
       <div className="mt-4">{children}</div>
     </div>
   );
