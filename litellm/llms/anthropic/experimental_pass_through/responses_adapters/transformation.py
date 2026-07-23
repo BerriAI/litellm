@@ -8,6 +8,7 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+import litellm
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -374,7 +375,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         # metadata user_id -> user
         metadata = anthropic_request.get("metadata")
-        if isinstance(metadata, dict) and "user_id" in metadata:
+        if isinstance(metadata, dict) and "user_id" in metadata and litellm.drop_params is not True:
             responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
         return responses_kwargs
