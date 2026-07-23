@@ -8579,6 +8579,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.image_generation import (
+                get_byteplus_image_generation_config,
+            )
+
+            return get_byteplus_image_generation_config(model)
         elif LlmProviders.AIML == provider:
             from litellm.llms.aiml.image_generation import (
                 get_aiml_image_generation_config,
