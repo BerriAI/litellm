@@ -23,6 +23,10 @@ from typing import (
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.file_id_utils import (
+    get_original_file_id,
+    is_model_embedded_id,
+)
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -660,11 +664,6 @@ def update_responses_tools_with_model_file_ids(
     """
     if not tools or not isinstance(tools, list):
         return tools
-
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        get_original_file_id,
-        is_model_embedded_id,
-    )
 
     # Pass 1: decode unified vector_store_ids (no mapping needed)
     tools = _decode_vector_store_ids_in_tools(tools) or tools
