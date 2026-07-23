@@ -7392,10 +7392,16 @@ def _keepalive_from_deployment_config(request_data: dict[str, Any], response: An
         if deployment is not None:
             return getattr(deployment.litellm_params, "keepalive_seconds", None)
 
-    for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or []:
-        raw = (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")
-        if raw is not None:
-            return raw
+    # No model_id to pin down which deployment actually served this stream: only
+    # trust the fallback when every deployment under this model_name agrees, so we
+    # never apply one deployment's interval (or disable) to another's stream.
+    configured_values = {
+        raw
+        for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or []
+        if (raw := (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")) is not None
+    }
+    if len(configured_values) == 1:
+        return configured_values.pop()
     return None
 
 
@@ -7475,7 +7481,7 @@ async def async_data_generator(
             if item is _STREAM_KEEPALIVE:
                 yield ": ping\n\n"
                 continue
-            chunk = cast(Any, item)
+            chunk = cast(Any, item)  # cast-ok: sentinel already handled above, item is a real chunk here
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
                 chunk, _str_so_far = await _apply_streaming_chunk_hooks(
