@@ -674,6 +674,7 @@ class RedisCache(BaseCache):
                 str(e),
                 value,
             )
+            raise e
 
     async def _pipeline_helper(
         self,
@@ -758,6 +759,7 @@ class RedisCache(BaseCache):
                 str(e),
                 cache_value,
             )
+            raise e
 
     async def _set_cache_sadd_helper(
         self,
@@ -842,6 +844,7 @@ class RedisCache(BaseCache):
                 str(e),
                 value,
             )
+            raise e
 
     @_redis_circuit_breaker_guard
     async def batch_cache_write(self, key, value, **kwargs):
@@ -1106,6 +1109,7 @@ class RedisCache(BaseCache):
                 )
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {str(e)}")
+            raise e
 
     @_redis_circuit_breaker_guard
     async def async_batch_get_cache(
