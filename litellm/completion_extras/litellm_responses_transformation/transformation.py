@@ -1302,6 +1302,55 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
+        elif event_type == "response.incomplete":
+            response_data = parsed_chunk.get("response", {}) or {}
+            if isinstance(response_data, BaseModel):
+                response_data = response_data.model_dump()
+
+            incomplete_details = response_data.get("incomplete_details")
+            if isinstance(incomplete_details, BaseModel):
+                incomplete_details = incomplete_details.model_dump()
+            content_filters = response_data.get("content_filters")
+            if isinstance(content_filters, BaseModel):
+                content_filters = content_filters.model_dump()
+
+            finish_reason = "length"
+            if (
+                isinstance(incomplete_details, dict)
+                and incomplete_details.get("reason") == "content_filter"
+            ):
+                finish_reason = "content_filter"
+
+            provider_specific_fields = {}
+            if content_filters is not None:
+                provider_specific_fields["content_filters"] = content_filters
+            if incomplete_details is not None:
+                provider_specific_fields["incomplete_details"] = incomplete_details
+
+            usage = None
+            if response_data.get("usage"):
+                from litellm.responses.utils import ResponseAPILoggingUtils
+
+                usage = (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        response_data.get("usage")
+                    )
+                )
+
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            content="",
+                            provider_specific_fields=provider_specific_fields or None,
+                        ),
+                        finish_reason=finish_reason,
+                    )
+                ],
+                provider_specific_fields=provider_specific_fields or None,
+                usage=usage,
+            )
         elif event_type == "response.completed":
             # Response is fully complete - now we can signal is_finished=True
             # This ensures we don't prematurely end the stream before tool_calls arrive
