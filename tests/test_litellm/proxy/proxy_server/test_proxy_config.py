@@ -2178,6 +2178,47 @@ async def test_ProxyConfig__update_general_settings_none_input_noop():
         await pc._update_general_settings(db_general_settings=12345)  # type: ignore[arg-type]
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_env_true_overrides_db_false(
+    monkeypatch,
+):
+    """STORE_MODEL_IN_DB=True env var must win over a stale DB `false`.
+
+    Regression test for the case where a periodic config refresh pulled
+    ``store_model_in_db: false`` from the DB's general_settings and silently
+    disabled the feature even though the operator set STORE_MODEL_IN_DB=True.
+    """
+    monkeypatch.setenv("STORE_MODEL_IN_DB", "True")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+    pc = ProxyConfig()
+    await pc._update_general_settings({"store_model_in_db": False})
+
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.store_model_in_db is True
+    assert ps.general_settings.get("store_model_in_db") is True
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_db_false_applied_without_env(
+    monkeypatch,
+):
+    """Without the env override, a DB `false` still takes effect as before."""
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+    pc = ProxyConfig()
+    await pc._update_general_settings({"store_model_in_db": False})
+
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.store_model_in_db is False
+    assert ps.general_settings.get("store_model_in_db") is False
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_config_fields
 # ---------------------------------------------------------------------------

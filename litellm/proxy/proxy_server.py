@@ -5930,6 +5930,8 @@ class ProxyConfig:
                 store_model_in_db = value.lower() == "true"
             else:
                 store_model_in_db = bool(value)
+            if get_secret_bool("STORE_MODEL_IN_DB", False) is True:
+                store_model_in_db = True
             general_settings["store_model_in_db"] = store_model_in_db
 
         ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
