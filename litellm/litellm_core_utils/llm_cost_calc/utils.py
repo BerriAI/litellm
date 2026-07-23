@@ -248,10 +248,11 @@ def _get_token_base_cost(
     threshold_keys = [
         k
         for k in model_info
-        if k.startswith(_ABOVE_THRESHOLD_KEY_PREFIXES)
+        if "_above_" in k
         and k.endswith("_tokens")
         and "_above_1hr" not in k
         and not k.endswith(_SERVICE_TIER_SUFFIXES)
+        and k.startswith(_ABOVE_THRESHOLD_KEY_PREFIXES)
     ]
     if not threshold_keys:
         return (
