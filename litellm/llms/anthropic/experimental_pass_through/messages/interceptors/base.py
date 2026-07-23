@@ -26,6 +26,19 @@ class MessagesInterceptor(ABC):
     ) -> bool:
         """Return True if this interceptor should handle the request."""
 
+    def resolve_gate_provider(
+        self,
+        model: str,
+        custom_llm_provider: Optional[str],
+        tools: Optional[List[Dict]],
+    ) -> Optional[str]:
+        """Return the provider ``can_handle`` should be gated on (default: unchanged).
+
+        An interceptor may override this when ``custom_llm_provider`` was
+        name-inferred from a proxy alias and does not reflect the routed deployment.
+        """
+        return custom_llm_provider
+
     @abstractmethod
     async def handle(
         self,

@@ -306,14 +306,15 @@ async def anthropic_messages(
     # Named params on `anthropic_messages` are bound to locals, not `**kwargs`,
     # so forward them explicitly — otherwise interceptor sub-calls drop them.
     for interceptor in get_messages_interceptors():
-        if interceptor.can_handle(tools, custom_llm_provider):
+        gate_provider = interceptor.resolve_gate_provider(model, custom_llm_provider, tools)
+        if interceptor.can_handle(tools, gate_provider):
             return await interceptor.handle(
                 model=model,
                 messages=messages,
                 tools=tools,
                 stream=original_stream,
                 max_tokens=max_tokens,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=gate_provider,
                 api_key=api_key,
                 api_base=api_base,
                 metadata=metadata,

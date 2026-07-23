@@ -51,6 +51,30 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         is_non_native = custom_llm_provider not in ADVISOR_NATIVE_PROVIDERS
         return has_advisor and is_non_native
 
+    def resolve_gate_provider(
+        self,
+        model: str,
+        custom_llm_provider: Optional[str],
+        tools: Optional[List[Dict]],
+    ) -> Optional[str]:
+        """Gate on the deployment provider, not the alias's name-inferred one.
+
+        A proxy alias using Anthropic naming may route to a non-Anthropic
+        deployment; gating on the name-inferred ``anthropic`` would skip
+        orchestration and leak the advisor tool_use. Re-resolve via the router
+        when an advisor tool is present and the provider is unset/name-inferred
+        Anthropic; otherwise leave it unchanged.
+        """
+        if custom_llm_provider not in (None, "", "anthropic"):
+            return custom_llm_provider
+        if not tools or not any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in tools):
+            return custom_llm_provider
+        try:
+            _, resolved_provider, _ = _resolve_call_target(model, custom_llm_provider)
+            return resolved_provider or custom_llm_provider
+        except Exception:
+            return custom_llm_provider
+
     async def handle(
         self,
         *,
@@ -97,21 +121,23 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         metadata_base: Dict = dict(kwargs.pop("metadata", None) or {})
         iteration = 0
 
+        executor_model, executor_provider, executor_extra = _resolve_call_target(model, custom_llm_provider)
+
         while True:
             # --- Executor call (always non-streaming) ---
             executor_response: AnthropicMessagesResponse = await _call_messages_handler(
-                model=model,
+                model=executor_model,
                 messages=current_messages,
                 tools=executor_tools,
                 stream=False,
                 max_tokens=max_tokens,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=executor_provider,
                 metadata={
                     **metadata_base,
                     "advisor_sub_call": False,
                     "parent_request_id": parent_request_id,
                 },
-                **kwargs,
+                **{**executor_extra, **kwargs},
             )
 
             advisor_use_block = _find_advisor_tool_use(executor_response)
@@ -133,13 +159,14 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             advisor_messages = _build_advisor_context(current_messages, executor_response, advisor_use_block)
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
+            adv_model, adv_provider, adv_extra = _resolve_call_target(advisor_model, None)
             advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
-                model=advisor_model,
+                model=adv_model,
                 messages=advisor_messages,
                 tools=None,
                 stream=False,
                 max_tokens=max_tokens,
-                custom_llm_provider=None,  # let litellm resolve from model name
+                custom_llm_provider=adv_provider,
                 metadata={
                     **metadata_base,
                     "advisor_sub_call": True,
@@ -147,6 +174,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 },
                 api_key=advisor_api_key,
                 api_base=advisor_api_base,
+                **adv_extra,
             )
 
             advisor_text = _extract_response_text(advisor_response)
@@ -163,6 +191,74 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+# Backend routing/credential keys forwarded onto the router-bypassing sub-call.
+# Allowlist (not blocklist) so request-shaping params that are also explicit
+# named args (max_tokens, tools, …) can't collide with them.
+_FORWARDED_DEPLOYMENT_PARAMS = frozenset(
+    {
+        # AWS Bedrock / SageMaker
+        "aws_region_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_session_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_bedrock_runtime_endpoint",
+        "aws_profile_name",
+        # GCP Vertex
+        "vertex_project",
+        "vertex_location",
+        "vertex_credentials",
+        # Azure / misc backends
+        "api_version",
+        "watsonx_region_name",
+    }
+)
+
+
+def _resolve_model_via_router(alias: str):
+    """Resolve a proxy ``model_list`` alias to ``(deployment_model, litellm_params)``
+    via the router. Falls back to ``(alias, {})`` when no router is configured or the
+    alias is unknown (SDK / native use).
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:
+        return alias, {}
+    if llm_router is None:
+        return alias, {}
+    try:
+        deployment = llm_router.get_available_deployment(model=alias)
+    except Exception:
+        return alias, {}
+    if not deployment:
+        return alias, {}
+    litellm_params = dict(deployment.get("litellm_params") or {})
+    resolved_model = litellm_params.pop("model", None) or alias
+    return resolved_model, litellm_params
+
+
+def _resolve_call_target(alias: str, custom_llm_provider: Optional[str]):
+    """Resolve an alias to ``(model, custom_llm_provider, extra_routing_kwargs)``
+    for a router-bypassing sub-call, preferring the deployment's explicit provider
+    over name inference. Falls back to the alias unchanged when no router is set.
+    """
+    resolved_model, params = _resolve_model_via_router(alias)
+    explicit_provider = params.get("custom_llm_provider")
+    if explicit_provider:
+        provider = explicit_provider
+    elif resolved_model != alias:
+        try:
+            _, provider, _, _ = litellm.get_llm_provider(model=resolved_model)
+        except Exception:
+            provider = custom_llm_provider
+    else:
+        provider = custom_llm_provider
+    extra = {k: v for k, v in params.items() if k in _FORWARDED_DEPLOYMENT_PARAMS and v is not None}
+    return resolved_model, provider, extra
 
 
 def _allow_client_side_advisor_credentials() -> bool:
