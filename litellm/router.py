@@ -2892,7 +2892,7 @@ class Router:
                         if model_name is not None:
                             self.success_calls[model_name] -= 1
                         _strip_http_framing_headers(fetch_err)
-                        raise fetch_err
+                        raise
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,
