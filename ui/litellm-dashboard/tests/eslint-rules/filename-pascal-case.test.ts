@@ -12,6 +12,10 @@ ruleTester.run("filename-pascal-case", rule as never, {
     { code: "export const x = 1;", filename: "src/app/teams/page.tsx" },
     { code: "export const x = 1;", filename: "src/app/teams/layout.tsx" },
     { code: "export const x = 1;", filename: "src/app/teams/not-found.tsx" },
+    { code: "export const x = 1;", filename: "src/app/global-error.tsx" },
+    { code: "export const x = 1;", filename: "src/app/apple-icon.tsx" },
+    { code: "export const x = 1;", filename: "src/app/opengraph-image.tsx" },
+    { code: "export const x = 1;", filename: "src/app/twitter-image.tsx" },
     { code: "export const x = 1;", filename: "src/components/TeamInfo.test.tsx" },
     { code: "export const x = 1;", filename: "src/components/view_users.test.tsx" },
     { code: "export const x = 1;", filename: "src/components/TeamInfo.spec.tsx" },
@@ -31,6 +35,13 @@ ruleTester.run("filename-pascal-case", rule as never, {
       code: "export const x = 1;",
       filename: "src/components/teamInfo.tsx",
       errors: [{ messageId: "notPascalCase", data: { name: "teamInfo.tsx", suggestion: "TeamInfo" } }],
+    },
+    {
+      code: "export const x = 1;",
+      filename: "src/components/my-component.utils.tsx",
+      errors: [
+        { messageId: "notPascalCase", data: { name: "my-component.utils.tsx", suggestion: "MyComponent.utils" } },
+      ],
     },
   ],
 });

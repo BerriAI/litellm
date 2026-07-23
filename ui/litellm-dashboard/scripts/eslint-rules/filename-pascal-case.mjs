@@ -42,11 +42,12 @@ const rule = {
     if (rest.includes("test") || rest.includes("spec")) return {};
     if (NEXT_RESERVED.has(head)) return {};
     if (PASCAL_CASE.test(head)) return {};
-    const suggestion = head
+    const pascalHead = head
       .split(/[-_]/)
       .filter(Boolean)
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join("");
+    const suggestion = [pascalHead, ...rest].join(".");
     return {
       Program(node) {
         context.report({ node, messageId: "notPascalCase", data: { name: `${stem}.tsx`, suggestion } });
