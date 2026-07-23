@@ -1,19 +1,19 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 import { Tabs } from "antd";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useTabRouting } from "@/app/(dashboard)/hooks/useTabRouting";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
 import ModelInfoView from "@/components/model_info_view";
 import TeamInfoView from "@/components/team/TeamInfo";
-import { modelTabHref, slugFromPathname, type ModelTabSlug } from "@/app/(dashboard)/models-and-endpoints/tabRoutes";
+import { modelsRoutes, type ModelTabSlug } from "@/app/(dashboard)/models-and-endpoints/tabRoutes";
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 
@@ -33,8 +33,6 @@ export default function ModelsAndEndpointsLayout({ children }: { children: React
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const { data: teams, isLoading: teamsLoading } = useTeams();
   const { data: uiSettings, isLoading: uiSettingsLoading } = useUISettings();
-  const pathname = usePathname();
-  const router = useRouter();
   const queryClient = useQueryClient();
   const { modelId, teamId, close } = useModelDetailRouting();
   const { availableModelAccessGroups, allModelsOnProxy } = useModelDashboardData();
@@ -60,18 +58,13 @@ export default function ModelsAndEndpointsLayout({ children }: { children: React
     [shouldHideAddModelTab, isAdmin],
   );
 
-  const activeSlug = slugFromPathname(pathname);
-  const isKnownSlug = visibleSlugs.some((slug) => slug === activeSlug);
-  const activeKey = isKnownSlug ? activeSlug || BASE_TAB_KEY : BASE_TAB_KEY;
-
-  useEffect(() => {
-    if (teamsLoading || uiSettingsLoading) {
-      return;
-    }
-    if (activeSlug !== "" && !isKnownSlug) {
-      window.location.replace(modelTabHref(""));
-    }
-  }, [activeSlug, isKnownSlug, teamsLoading, uiSettingsLoading]);
+  const tabRoutingConfig = {
+    routes: modelsRoutes,
+    baseTabKey: BASE_TAB_KEY,
+    visibleKeys: visibleSlugs.filter(Boolean),
+    ready: !teamsLoading && !uiSettingsLoading,
+  };
+  const { activeKey, onTabChange } = useTabRouting(tabRoutingConfig);
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
   const tabItems = visibleSlugs.map((slug) => {
@@ -137,7 +130,7 @@ export default function ModelsAndEndpointsLayout({ children }: { children: React
         ) : (
           <Tabs
             activeKey={activeKey}
-            onChange={(key) => router.push(modelTabHref(key === BASE_TAB_KEY ? "" : key))}
+            onChange={onTabChange}
             items={tabItems}
             tabBarExtraContent={{
               right: (
