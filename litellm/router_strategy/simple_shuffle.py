@@ -41,9 +41,9 @@ def simple_shuffle(
 
     ############## Check if 'weight' or 'rpm' or 'tpm' param set for a weighted pick #################
     for weight_by in ["weight", "rpm", "tpm"]:
-        weight = healthy_deployments[0].get("litellm_params").get(weight_by, None)
-        if weight is not None:
-            weights = [m["litellm_params"].get(weight_by, 0) for m in healthy_deployments]
+        raw_weights = [m["litellm_params"].get(weight_by, None) for m in healthy_deployments]
+        if any(weight is not None for weight in raw_weights):
+            weights = [weight if weight is not None else 0 for weight in raw_weights]
             verbose_router_logger.debug(f"\nweight {weights}")
             total_weight = sum(weights)
             if total_weight <= 0:
