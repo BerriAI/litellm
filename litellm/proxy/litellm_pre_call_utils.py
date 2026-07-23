@@ -416,6 +416,9 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     2. ``x-litellm-session-id`` (explicit)
     3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
+    4. W3C ``traceparent`` header — the full value is used as the session id.
+       This allows chaining LLM calls that are part of one agent /
+       distributed-trace interaction.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -430,6 +433,8 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
         normalized.get("x-litellm-trace-id")
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
+        or normalized.get("traceparent")
+        or None
     )
 
 
