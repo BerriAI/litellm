@@ -831,6 +831,22 @@
         "search": true
       }
     },
+    "edenai": {
+      "display_name": "Eden AI (`edenai`)",
+      "url": "https://docs.litellm.ai/docs/providers/edenai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "e2b": {
       "display_name": "E2B (`e2b`)",
       "url": "https://docs.litellm.ai/docs/providers/e2b",
