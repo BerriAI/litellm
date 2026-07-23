@@ -1994,6 +1994,54 @@ class TestShouldRunGuardrailModelGroupGate:
         result = g.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call)
         assert result is False
 
+    def test_routed_request_uses_metadata_model_group(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"ai-gateway-low-intelligence-general"}))
+        result = g.should_run_guardrail(
+            data={
+                "model": "bedrock/anthropic.claude-haiku-3",
+                "litellm_metadata": {"model_group": "ai-gateway-low-intelligence-general"},
+            },
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        assert result is True
+
+    def test_routed_request_scoped_out_model_group_blocked(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"ai-gateway-low-intelligence-general"}))
+        result = g.should_run_guardrail(
+            data={
+                "model": "bedrock/anthropic.claude-sonnet-3-7",
+                "litellm_metadata": {"model_group": "ai-gateway-high-intelligence-general"},
+            },
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        assert result is False
+
+    def test_update_in_memory_normalizes_model_groups(self):
+        from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+
+        g = self._guardrail()
+        g.update_in_memory_litellm_params(
+            LitellmParams(
+                guardrail="test-guardrail",
+                mode="pre_call",
+                default_on=True,
+                apply_guardrail_to_model_groups=["  AI-Gateway-Low  ", "AI-GATEWAY-HIGH"],
+            )
+        )
+        stored = getattr(g, "apply_guardrail_to_model_groups")
+        assert isinstance(stored, frozenset)
+        assert stored == frozenset({"ai-gateway-low", "ai-gateway-high"})
+        assert g.should_run_guardrail(
+            data={"model": "ai-gateway-low"}, event_type=GuardrailEventHooks.pre_call
+        ) is True
+        assert g.should_run_guardrail(
+            data={"model": "ai-gateway-other"}, event_type=GuardrailEventHooks.pre_call
+        ) is False
+
 
 class TestResolveMetadataModelGroup:
     def test_litellm_metadata_takes_priority(self):

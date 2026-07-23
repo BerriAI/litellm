@@ -719,8 +719,9 @@ class CustomGuardrail(CustomLogger):
         """
         apply_guardrail_to_model_groups: frozenset[str] = getattr(self, "apply_guardrail_to_model_groups", frozenset())
         if apply_guardrail_to_model_groups:
-            model_group = data.get("model") or self._resolve_metadata_model_group(data)
-            if str(model_group or "").strip().lower() not in apply_guardrail_to_model_groups:
+            model = str(data.get("model") or "").strip().lower()
+            model_group = str(self._resolve_metadata_model_group(data) or "").strip().lower()
+            if model not in apply_guardrail_to_model_groups and model_group not in apply_guardrail_to_model_groups:
                 return False
 
         requested_guardrails = self.get_guardrail_from_metadata(data)
@@ -1156,6 +1157,8 @@ class CustomGuardrail(CustomLogger):
         Update the guardrails litellm params in memory
         """
         for key, value in vars(litellm_params).items():
+            if key == "apply_guardrail_to_model_groups" and isinstance(value, list):
+                value = frozenset(str(v).strip().lower() for v in value if str(v).strip())
             setattr(self, key, value)
 
     def get_guardrails_messages_for_call_type(
