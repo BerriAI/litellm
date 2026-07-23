@@ -178,6 +178,29 @@ class BaseSearchConfig:
         """
         return headers
 
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: Union[dict, list[dict]],
+        api_base: str,
+        api_key: str | None = None,
+    ) -> tuple[dict, bytes | None]:
+        """
+        OPTIONAL
+
+        Sign the request. Providers like Bedrock AgentCore need to SigV4-sign
+        the request before sending it to the API.
+
+        For all other providers, this is a no-op and we just return the headers.
+
+        Returns:
+            Tuple of (headers, signed_json_body). When signed_json_body is not
+            None, the handler MUST send it verbatim as the request body —
+            re-serializing the payload would invalidate the signature.
+        """
+        return headers, None
+
     def get_complete_url(
         self,
         api_base: Optional[str],

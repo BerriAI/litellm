@@ -1,0 +1,39 @@
+# Claude Code / Anthropic-native web search on Bedrock, backed by
+# Amazon Bedrock AgentCore Web Search (AWS-managed web index, no third-party
+# search API). See litellm/llms/bedrock/search/transformation.py for details.
+
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region_name: us-east-1
+
+search_tools:
+  - search_tool_name: agentcore-search
+    litellm_params:
+      search_provider: agentcore
+      # Your AgentCore Gateway MCP endpoint (gateway must have a `web-search`
+      # connector target). Alternatively set the AGENTCORE_GATEWAY_URL env var.
+      api_base: https://<gateway-id>.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp
+
+      # The gateway exposes the connector as "<target-name>___WebSearch".
+      # Default is "web-search-tool___WebSearch", matching the target name used
+      # in the AWS docs' boto3/CLI setup examples. Set this ONLY if your target
+      # was created with a different name (misconfiguration surfaces as an MCP
+      # "tool not found" error):
+      # tool_name: MyWebSearchTarget___WebSearch
+
+      # AWS_IAM gateway (default): SigV4-signed. Omit keys to use the standard
+      # AWS credential chain (env / profile / IRSA / instance role), or set them
+      # explicitly:
+      # aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      # aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+
+      # CUSTOM_JWT gateway alternative — OAuth2 bearer token instead of SigV4:
+      # api_key: os.environ/AGENTCORE_GATEWAY_TOKEN
+
+litellm_settings:
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]
+    search_tool_name: agentcore-search
