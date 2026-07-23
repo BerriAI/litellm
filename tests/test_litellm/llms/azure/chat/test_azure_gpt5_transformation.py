@@ -1,12 +1,20 @@
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 
 
 @pytest.fixture()
 def config() -> AzureOpenAIGPT5Config:
     return AzureOpenAIGPT5Config()
+
+
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
@@ -299,3 +307,72 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+def test_azure_gpt5_5_temperature_dropped_without_reasoning_effort(
+    config: AzureOpenAIGPT5Config,
+):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.1},
+        optional_params={},
+        model="azure/gpt-5.5",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+    )
+    assert "temperature" not in params
+
+
+def test_azure_gpt5_5_temperature_error_without_reasoning_effort(
+    config: AzureOpenAIGPT5Config,
+):
+    with pytest.raises(
+        litellm.utils.UnsupportedParamsError,
+        match="reasoning_effort resolves to 'medium'",
+    ):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.1},
+            optional_params={},
+            model="azure/gpt-5.5",
+            drop_params=False,
+            api_version="2025-01-01-preview",
+        )
+
+
+def test_azure_gpt5_5_series_temperature_dropped_without_reasoning_effort(
+    config: AzureOpenAIGPT5Config,
+):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.1},
+        optional_params={},
+        model="gpt5_series/gpt-5.5",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+    )
+    assert "temperature" not in params
+
+
+def test_azure_gpt5_5_bare_deployment_temperature_error_without_reasoning_effort(
+    config: AzureOpenAIGPT5Config,
+):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.1},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+            api_version="2025-01-01-preview",
+        )
+
+
+def test_azure_gpt5_5_temperature_with_explicit_reasoning_effort_none(
+    config: AzureOpenAIGPT5Config,
+):
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.1, "reasoning_effort": "none"},
+        optional_params={},
+        model="azure/gpt-5.5",
+        drop_params=False,
+        api_version="2025-01-01-preview",
+    )
+    assert params["temperature"] == 0.1
+    assert params["reasoning_effort"] == "none"

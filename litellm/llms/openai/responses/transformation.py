@@ -113,22 +113,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if self._is_gpt_5_model(model=model):
             temperature = params.get("temperature")
             if temperature is not None and temperature != 1:
+                from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
                 reasoning = params.get("reasoning") or {}
                 effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
                 supports_none = self._supports_reasoning_effort_none(model=model)
-                if supports_none and (effort == "none" or effort is None):
+                if supports_none and OpenAIGPT5Config._effort_resolves_to_none(model, effort, supports_none):
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
                 else:
                     raise litellm.UnsupportedParamsError(
-                        message=(
-                            "gpt-5 models don't support temperature={}. "
-                            "Only temperature=1 is supported. "
-                            "For models like gpt-5.1/5.4, temperature is supported "
-                            "when reasoning.effort='none' (or not specified). "
-                            "To drop unsupported params set `litellm.drop_params = True`"
-                        ).format(temperature),
+                        message=OpenAIGPT5Config._unsupported_temperature_message(model, temperature, effort),
                         status_code=400,
                     )
 
