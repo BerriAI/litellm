@@ -287,18 +287,29 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     def _get_matching_model_group_budget_configs(
         self, model: str, internal_model_max_budget: GenericBudgetConfigType
     ) -> tuple[tuple[str, BudgetConfig], ...]:
-        model_without_provider = self._get_model_without_custom_llm_provider(model)
+        request_variants = self._model_name_variants(model)
         return tuple(
             (_group_name, _config)
             for _group_name, _config in internal_model_max_budget.items()
             if _config.models
             and any(
-                _member == model
-                or _member == model_without_provider
-                or self._get_model_without_custom_llm_provider(_member) == model
-                for _member in _config.models
+                _member in request_variants or model in self._model_name_variants(_member) for _member in _config.models
             )
         )
+
+    def _model_name_variants(self, model: str) -> frozenset[str]:
+        """
+        The name itself plus its provider-stripped forms: without the first
+        segment (`huggingface/meta-llama/Llama-3.1-8B` -> `meta-llama/Llama-3.1-8B`)
+        and without everything before the last slash (`openai/gpt-4` -> `gpt-4`).
+
+        Group matching compares one side's raw name against the other side's
+        variants, never stripped-vs-stripped, so a provider-prefixed member
+        still pins its group to that provider's route.
+        """
+        if "/" not in model:
+            return frozenset({model})
+        return frozenset({model, model.split("/", 1)[1], self._get_model_without_custom_llm_provider(model)})
 
     def _get_model_without_custom_llm_provider(self, model: str) -> str:
         if "/" in model:

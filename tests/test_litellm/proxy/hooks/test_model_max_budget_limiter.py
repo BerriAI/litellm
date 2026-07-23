@@ -253,3 +253,40 @@ async def test_end_user_group_budget_within_budget_passes():
 
     assert await limiter.is_end_user_within_model_budget(END_USER_ID, OPUS_GROUP_BUDGET, "anthropic-opus-4-7") is True
     assert await limiter.is_end_user_within_model_budget(END_USER_ID, OPUS_GROUP_BUDGET, "anthropic-opus-4-8") is True
+
+
+@pytest.mark.asyncio
+async def test_group_budget_matches_namespaced_model_with_provider_prefix():
+    namespaced_group_budget = {
+        "llama-family": {
+            "models": ["meta-llama/Llama-3.1-8B", "meta-llama/Llama-3.1-70B"],
+            "budget_limit": 10.0,
+            "time_period": "30d",
+        }
+    }
+    limiter = _make_limiter()
+    key = _make_key(namespaced_group_budget)
+
+    await _log_spend(limiter, "huggingface/meta-llama/Llama-3.1-8B", 11.0, namespaced_group_budget)
+
+    with pytest.raises(litellm.BudgetExceededError, match="model group=llama-family"):
+        await limiter.is_key_within_model_budget(key, "huggingface/meta-llama/Llama-3.1-70B")
+    with pytest.raises(litellm.BudgetExceededError, match="model group=llama-family"):
+        await limiter.is_key_within_model_budget(key, "meta-llama/Llama-3.1-8B")
+
+
+@pytest.mark.asyncio
+async def test_group_member_with_provider_prefix_does_not_match_other_provider():
+    pinned_group_budget = {
+        "openai-gpt4": {
+            "models": ["openai/gpt-4"],
+            "budget_limit": 10.0,
+            "time_period": "30d",
+        }
+    }
+    limiter = _make_limiter()
+    key = _make_key(pinned_group_budget)
+
+    await _log_spend(limiter, "gpt-4", 11.0, pinned_group_budget)
+
+    assert await limiter.is_key_within_model_budget(key, "azure/gpt-4") is True
