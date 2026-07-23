@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple, Union, Dict, Literal
 
+import litellm
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -138,7 +139,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
-            elif not drop_params:
+            elif not (drop_params or litellm.drop_params):
                 from litellm.utils import UnsupportedParamsError
 
                 raise UnsupportedParamsError(
