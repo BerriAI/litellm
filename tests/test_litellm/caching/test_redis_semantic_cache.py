@@ -901,10 +901,11 @@ def test_redis_get_embedding_routes_through_router(monkeypatch):
     cache.embedding_model = "sem-embed"
 
     router = MagicMock()
+    router.get_model_list = MagicMock(return_value=[{"model_name": "sem-embed"}])
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
-    fake_proxy.llm_model_list = [{"model_name": "sem-embed"}]
+    fake_proxy.llm_model_list = None
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
     with patch("litellm.embedding") as direct_embed:
@@ -1145,10 +1146,10 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
     cache.embedding_model = "sem-embed"
 
     router = MagicMock()
+    router.get_model_list = MagicMock(return_value=[{"model_name": "sem-embed"}])
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
-    fake_proxy.llm_model_list = [{"model_name": "sem-embed"}]
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
     await cache._get_async_embedding(

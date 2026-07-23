@@ -22,7 +22,6 @@ def test_qdrant_semantic_cache_initialization(monkeypatch):
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -82,7 +81,6 @@ def test_qdrant_semantic_cache_get_cache_hit():
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -162,7 +160,6 @@ def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"result": {"exists": True}}
@@ -323,7 +320,6 @@ def test_qdrant_semantic_cache_get_cache_miss():
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -379,7 +375,6 @@ async def test_qdrant_semantic_cache_async_get_cache_hit():
             "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
         ) as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -470,7 +465,6 @@ async def test_qdrant_semantic_cache_async_get_cache_miss():
             "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
         ) as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -530,7 +524,6 @@ def test_qdrant_semantic_cache_set_cache():
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -596,7 +589,6 @@ async def test_qdrant_semantic_cache_async_set_cache():
             "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
         ) as mock_async_client,
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -666,7 +658,6 @@ def test_qdrant_semantic_cache_custom_vector_size():
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection does NOT exist (so it will be created)
         mock_exists_response = MagicMock()
         mock_exists_response.status_code = 200
@@ -727,7 +718,6 @@ def test_qdrant_semantic_cache_default_vector_size():
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection exists check
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -763,7 +753,6 @@ def test_qdrant_semantic_cache_large_vector_size():
         ) as mock_sync_client,
         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
     ):
-
         # Mock the collection does NOT exist (so it will be created)
         mock_exists_response = MagicMock()
         mock_exists_response.status_code = 200
@@ -809,10 +798,10 @@ def test_qdrant_semantic_cache_large_vector_size():
         assert create_payload["vectors"]["size"] == 4096
 
 
-def _router_proxy_module(router, model_name):
+def _router_proxy_module(router):
     mod = types.ModuleType("litellm.proxy.proxy_server")
     mod.llm_router = router
-    mod.llm_model_list = [{"model_name": model_name}]
+    mod.llm_model_list = None
     return mod
 
 
@@ -832,13 +821,14 @@ def test_qdrant_sync_get_cache_routes_through_router(monkeypatch):
     cache.sync_client.post.return_value = search_response
 
     router = MagicMock()
+    router.get_model_list = MagicMock(return_value=[{"model_name": "sem-embed"}])
     router.embedding = MagicMock(
         return_value={"data": [{"embedding": [0.3, 0.3, 0.3]}]}
     )
     monkeypatch.setitem(
         sys.modules,
         "litellm.proxy.proxy_server",
-        _router_proxy_module(router, "sem-embed"),
+        _router_proxy_module(router),
     )
 
     with patch("litellm.embedding") as direct_embed:
@@ -892,11 +882,12 @@ async def test_qdrant_async_embedding_forwards_full_metadata(monkeypatch):
     cache.embedding_model = "sem-embed"
 
     router = MagicMock()
+    router.get_model_list = MagicMock(return_value=[{"model_name": "sem-embed"}])
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     monkeypatch.setitem(
         sys.modules,
         "litellm.proxy.proxy_server",
-        _router_proxy_module(router, "sem-embed"),
+        _router_proxy_module(router),
     )
 
     await cache._get_async_embedding(
