@@ -21,6 +21,7 @@ from typing import (
 )
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
     sanitize_tool_use_ids_in_anthropic_messages,
@@ -590,6 +591,35 @@ def anthropic_messages_handler(
                 **thinking_param,
                 "display": "summarized",
             }
+
+    # Apply `cache_control_injection_points` (model-config prompt caching) on the
+    # native Anthropic /v1/messages path. The OpenAI-shaped chat/completions
+    # path picks this up automatically via litellm_logging_obj.async_get_chat_completion_prompt
+    # in litellm.completion, but the /v1/messages handler does not pass through
+    # that hook — historically silently no-op'ing model-config caching for
+    # Claude Code users routed to anthropic/bedrock-claude deployments.
+    # See customer report: bedrock/us.anthropic.claude-sonnet-4-5 with
+    # cache_control_injection_points produced cache_creation_input_tokens=0
+    # on /v1/messages while working on /v1/chat/completions.
+    if "cache_control_injection_points" in kwargs:
+        _system = anthropic_messages_optional_request_params.get("system")
+        _tools = anthropic_messages_optional_request_params.get("tools")
+        # Mutates kwargs in place (pops the key) so it does not leak into the
+        # upstream provider request as an unknown field.
+        (
+            messages,
+            new_system,
+            new_tools,
+        ) = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=_system,
+            tools=_tools,
+            non_default_params=kwargs,
+        )
+        if new_system is not None:
+            anthropic_messages_optional_request_params["system"] = new_system
+        if new_tools is not None:
+            anthropic_messages_optional_request_params["tools"] = new_tools
 
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
