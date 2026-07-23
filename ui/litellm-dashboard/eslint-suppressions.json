@@ -2134,9 +2134,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "no-restricted-syntax": {
       "count": 3
     },
