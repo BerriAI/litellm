@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -1559,6 +1560,100 @@ async def test_should_skip_reservation_when_counter_increment_fails(
             key="spend:key:key-budget-reserve-unavailable"
         )
         is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(
+    spend_counter_state,
+    monkeypatch,
+):
+    """#33923: with fail_closed_budget_enforcement on, a failed reservation write
+    must reject instead of silently degrading to read-time-only enforcement."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-reserve-fail-closed",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    async def fail_increment_cache(*args, **kwargs):
+        raise RuntimeError("counter unavailable")
+
+    monkeypatch.setattr(counter_cache, "async_increment_cache", fail_increment_cache)
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.5,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-reserve-fail-closed"
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_releases_earlier_counters_before_503(
+    spend_counter_state,
+):
+    """#33923: when a later counter's reservation write fails in strict mode, the
+    counters that already reserved must be released before the 503 propagates."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-fail-closed-release",
+        spend=0.0,
+        max_budget=1.0,
+        budget_limits=[
+            {
+                "budget_duration": "1h",
+                "max_budget": 1.0,
+            }
+        ],
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.5,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-fail-closed-release"
+        )
+        == 0.0
     )
 
 
