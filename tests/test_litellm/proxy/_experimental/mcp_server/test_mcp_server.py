@@ -919,9 +919,32 @@ def test_normalize_resource_contents_blob_with_metadata():
     result = _normalize_resource_contents(contents)
 
     assert len(result) == 1
-    assert result[0].content == "aGVsbG8="
+    assert result[0].content == b"hello"
     assert result[0].mime_type == "image/png"
     assert result[0].meta == meta
+
+
+def test_normalize_resource_contents_decodes_blob_content_to_bytes():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    contents = [
+        BlobResourceContents(
+            uri="https://example.com/archive.tar.gz",
+            blob="H4sIAAAAAAACAw==",
+            mimeType="application/gzip",
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].content == b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03"
+    assert result[0].mime_type == "application/gzip"
 
 
 def test_normalize_resource_contents_preserves_empty_metadata():
