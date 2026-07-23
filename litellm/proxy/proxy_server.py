@@ -9728,6 +9728,10 @@ async def audio_transcriptions(
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
 
+        if data.get("response_format") in ("text", "srt", "vtt"):
+            from fastapi.responses import Response as FastAPIResponse
+            return FastAPIResponse(content=response.text, media_type="text/plain")
+
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
