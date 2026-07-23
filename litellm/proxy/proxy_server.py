@@ -1027,6 +1027,11 @@ async def proxy_startup_event(app: FastAPI):
         redis_usage_cache=transaction_buffer_redis_cache,
     )
 
+    ## Warn if running in an orchestrator without Redis ##
+    ProxyStartupEvent._warn_no_redis_multi_instance(
+        redis_usage_cache=redis_usage_cache,
+    )
+
     ## SEMANTIC TOOL FILTER ##
     # Read litellm_settings from config for semantic filter initialization
     try:
@@ -7614,6 +7619,65 @@ class ProxyStartupEvent:
         cost_tracking()
 
         proxy_logging_obj.startup_event(llm_router=llm_router, redis_usage_cache=redis_usage_cache)
+
+    @staticmethod
+    def _warn_no_redis_multi_instance(
+        redis_usage_cache: Optional[RedisCache],
+    ) -> None:
+        """
+        Emit a startup warning when the proxy is running inside a container
+        orchestrator (Kubernetes, ECS, etc.) without Redis configured.
+
+        Without Redis, features like rate limiting, spend tracking, SSO
+        login, health-check coordination, and cron-job deduplication only
+        work within a single process. Multiple replicas will each maintain
+        independent in-memory state, leading to silent correctness issues.
+        """
+        if redis_usage_cache is not None:
+            return
+
+        _orchestrator_env_vars = (
+            "KUBERNETES_SERVICE_HOST",
+            "ECS_CONTAINER_METADATA_URI",
+            "ECS_CONTAINER_METADATA_URI_V4",
+            "NOMAD_ALLOC_ID",
+            "FLY_APP_NAME",
+        )
+        detected = next(
+            (var for var in _orchestrator_env_vars if os.environ.get(var)),
+            None,
+        )
+        if detected is None:
+            return
+
+        verbose_proxy_logger.warning(
+            "\n"
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
+            "WARNING: Redis is not configured but this instance appears\n"
+            "to be running inside a container orchestrator (%s is set).\n"
+            "If you are running multiple replicas, the following features\n"
+            "will NOT work correctly without Redis:\n"
+            " - rate limiting (TPM/RPM limits enforced per-instance, not globally)\n"
+            " - spend tracking (each replica tracks independently)\n"
+            " - SSO / UI login (auth codes not shared across replicas)\n"
+            " - health-check coordination (duplicate checks across replicas)\n"
+            " - cron-job deduplication (every replica runs every job)\n"
+            " - cooldown sharing (model cooldowns not propagated)\n"
+            "\n"
+            "To fix this, add a Redis cache in your proxy config:\n"
+            "\n"
+            "  litellm_settings:\n"
+            "    cache: true\n"
+            "    cache_params:\n"
+            "      type: redis\n"
+            "      host: os.environ/REDIS_HOST\n"
+            "      port: os.environ/REDIS_PORT\n"
+            "      password: os.environ/REDIS_PASSWORD\n"
+            "\n"
+            "or set REDIS_HOST / REDIS_PORT / REDIS_PASSWORD env vars.\n"
+            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n",
+            detected,
+        )
 
     @staticmethod
     def _validate_redis_transaction_buffer_config(
