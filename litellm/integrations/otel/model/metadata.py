@@ -39,9 +39,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Mapping, cast
 
+
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.utils import as_str, to_seconds
+from litellm.integrations.otel.plumbing.context import request_destinations
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -194,6 +197,11 @@ class LLMCallEvent:
     # The ``standard_callback_dynamic_params`` routing the call to a per-tenant
     # tracer (its own exporter/endpoint), or ``None`` when the call isn't scoped.
     dynamic_params: Any
+    # The admin-resolved OTLP destinations (endpoint + auth headers) for this call's
+    # identity chain, fanned out to. Empty when none are assigned. Read from the
+    # server-only request ContextVar the proxy anchors at auth time, so it is never
+    # request-derived and never travels through the request or provider body.
+    otel_destinations: tuple[OtelDestination, ...]
     # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
     # the ``pre_call`` hook but never made an upstream call, so they get no span.
     is_no_upstream_call: bool
@@ -209,10 +217,12 @@ class LLMCallEvent:
         payload = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation = resolve_operation(as_str(kwargs.get("call_type")))
         model = as_str(kwargs.get("model")) or ""
+        dynamic_params = kwargs.get("standard_callback_dynamic_params")
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,
-            dynamic_params=kwargs.get("standard_callback_dynamic_params"),
+            dynamic_params=dynamic_params,
+            otel_destinations=request_destinations(),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),

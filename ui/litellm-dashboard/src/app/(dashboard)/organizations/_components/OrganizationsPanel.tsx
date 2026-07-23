@@ -6,6 +6,7 @@ import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import LoggingExportersSelect from "@/components/logging_credentials/LoggingExportersSelect";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -108,6 +109,10 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
           }
           delete values.allowed_mcp_servers_and_groups;
         }
+      }
+
+      if (!Array.isArray(values.logging_exporters) || values.logging_exporters.length === 0) {
+        delete values.logging_exporters;
       }
 
       await organizationCreateCall(accessToken, values);
@@ -270,6 +275,14 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
               accessToken={accessToken || ""}
               placeholder="Select MCP servers and access groups (optional)"
             />
+          </Form.Item>
+
+          <Form.Item
+            label="Logging Exporters"
+            name="logging_exporters"
+            tooltip="Admin-owned trace destinations this org exports to. Resolved server-side and fanned out to every team and key under it. Manage destinations under Settings -> Logging Callbacks."
+          >
+            <LoggingExportersSelect />
           </Form.Item>
 
           <Form.Item label="Metadata" name="metadata">

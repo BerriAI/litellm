@@ -440,6 +440,11 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
 
 LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED = 499
 
+# Reserved key/team logging callback var that binds the callback to a named OTEL
+# credential in the registry (an admin-owned reference resolved server-side into a
+# trace destination, never forwarded as a request parameter).
+LITELLM_LOGGING_CREDENTIAL_NAME_KEY = "litellm_logging_credential_name"
+
 EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60))  # 24 hours in seconds
 EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(
     os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8)

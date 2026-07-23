@@ -42,6 +42,8 @@ if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
     from opentelemetry.sdk.metrics.export import MetricReader
 
+    from litellm.integrations.otel.model.destination import OtelDestination
+
 _SPAN_KIND_BY_ROLE_KIND: dict[LiteLLMSpanKind, SpanKind] = {
     LiteLLMSpanKind.SERVER: SpanKind.SERVER,
     LiteLLMSpanKind.CLIENT: SpanKind.CLIENT,
@@ -110,13 +112,47 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     if not endpoint:
         return endpoint
     endpoint = endpoint.rstrip("/")
-    # Splunk Observability uses ``/v2/trace/otlp``; never rewrite it.
-    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint:
+    # Some vendors expose a complete traces ingest path that is NOT the OTLP-standard
+    # ``/v1/traces`` base: Splunk Observability uses ``/v2/trace/otlp`` and Langtrace
+    # ingests at ``/api/trace``. Appending ``/v1/traces`` to those 404s, so never
+    # rewrite them.
+    if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint or endpoint.endswith("/api/trace"):
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
         if endpoint.endswith(other_signal):
             return endpoint[: -len(other_signal)] + "/v1/traces"
     return endpoint + "/v1/traces"
+
+
+# Backends whose OTLP transport is gRPC. Arize's OTLP endpoint
+# (``otlp.arize.com``) speaks gRPC; every other current preset speaks OTLP/HTTP.
+# Single source of truth shared by the per-tenant fan-out processor and the
+# ``TenantTracerCache`` so the two never disagree on a destination's transport.
+_GRPC_BACKENDS = frozenset({"arize"})
+
+
+def default_otlp_kind_for_backend(callback_name: "str | None") -> str:
+    """The intrinsic OTLP transport for a backend's own OTLP endpoint."""
+    return "otlp_grpc" if callback_name in _GRPC_BACKENDS else "otlp_http"
+
+
+def destination_resource_attrs(destination: "OtelDestination") -> dict[str, str]:
+    """The backend-required Resource attributes a destination carries on every span.
+
+    Backend-agnostic: each backend's destination builder (``presets.destinations``)
+    declares whatever Resource attributes its ingestion needs, and this just reads
+    them. Backends that route by auth header (langfuse, weave, generic OTLP) declare
+    none; Arize declares ``model_id`` / ``arize.project.name`` because it selects the
+    project from the Resource, not a header. New backends needing Resource-level
+    routing only have to populate ``resource_attributes`` in their builder.
+
+    Shared by the two export paths that reach a per-tenant destination -- the
+    ``TenantFanOutSpanProcessor`` (proxy-internal spans) and the ``TenantTracerCache``
+    clone provider (the gen-AI span) -- so the gen-AI span and its parents always
+    carry the SAME Resource and a backend like Arize renders one connected trace
+    instead of an orphaned subtree.
+    """
+    return dict(destination.resource_attributes)
 
 
 def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
@@ -399,6 +435,8 @@ def build_tracer_provider(
     exporter: SpanExporter | None = None,
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
+    tenant_fan_out_owner: str | None = None,
+    attach_tenant_fan_out: bool = False,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -407,11 +445,29 @@ def build_tracer_provider(
     ``config.exporters`` entry — this is what fans spans out to multiple
     backends. ``exporter`` and ``use_simple_processor`` are explicit overrides:
     pass a single exporter to attach exactly that one (used by tests).
+
+    ``attach_tenant_fan_out`` — attach a ``TenantFanOutSpanProcessor`` that forwards
+    each finished proxy-internal span (FastAPI server, ``auth`` phase, DB lookups, the
+    cost ledger) to the request's admin-resolved destinations. The MAIN v2 logger
+    provider always opts in, EVEN when no backend is named (the generic global logger
+    published for a destination-only deployment) -- otherwise the server span never
+    reaches the destination and its gen-AI child is orphaned. ``tenant_fan_out_owner``
+    is the owning backend name when one exists; it is informational (the fan-out skips
+    the gen-AI span by attribute and forwards internal spans to every destination).
+    The per-tenant clone providers (built by ``TenantTracerCache``) pass neither, so
+    the LLM-call span exported through them is not also fanned out here.
     """
     provider = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
+
+    if attach_tenant_fan_out or tenant_fan_out_owner is not None:
+        from litellm.integrations.otel.plumbing.routing import (
+            TenantFanOutSpanProcessor,
+        )
+
+        provider.add_span_processor(TenantFanOutSpanProcessor(owner_callback_name=tenant_fan_out_owner))
 
     if exporter is not None:
         provider.add_span_processor(_processor_for(exporter, use_simple_processor))

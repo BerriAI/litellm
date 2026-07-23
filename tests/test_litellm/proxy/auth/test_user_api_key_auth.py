@@ -3796,6 +3796,37 @@ async def test_builder_succeeds_when_db_lookup_returns_valid_token():
     mock_return.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_builder_hoists_destinations_before_post_lookup_auth_checks():
+    valid_token = UserAPIKeyAuth(api_key="sk-db-lookup-test", token="hashed-valid")
+    get_key_object = AsyncMock(return_value=valid_token)
+
+    async def _assert_hoisted_first(*args, **kwargs):
+        assert mock_hoist.await_count == 1
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._return_user_api_key_auth_obj",
+            new_callable=AsyncMock,
+            return_value=valid_token,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._hoist_request_destinations",
+            new_callable=AsyncMock,
+        ) as mock_hoist,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+            new_callable=AsyncMock,
+            side_effect=_assert_hoisted_first,
+        ) as mock_enforce,
+    ):
+        result = await _run_builder_with_key_lookup(get_key_object)
+
+    assert result is valid_token
+    mock_hoist.assert_awaited_once()
+    mock_enforce.assert_awaited_once()
+
+
 def _mint_cli_session_token(monkeypatch, *, user_id="cli-admin"):
     """Mint a CLI session token for a PROXY_ADMIN user so auth resolves on the
     admin early-return path (no prisma/common_checks needed)."""
@@ -3995,7 +4026,9 @@ async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypa
     assert call_kwargs["valid_token_dict"]["user_id"] == "internal-user-1"
     assert call_kwargs["valid_token_dict"]["team_id"] == "team-abc"
     assert call_kwargs["valid_token_dict"]["is_session_token"] is True
-    assert call_kwargs["valid_token_dict"]["user_role"] == LitellmUserRoles.INTERNAL_USER
+    assert (
+        call_kwargs["valid_token_dict"]["user_role"] == LitellmUserRoles.INTERNAL_USER
+    )
     assert result.is_session_token is True
 
 

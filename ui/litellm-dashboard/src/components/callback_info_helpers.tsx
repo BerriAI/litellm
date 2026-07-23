@@ -14,7 +14,7 @@ interface CallbackConfig {
   displayName: string;
   logo?: string;
   supports_key_team_logging: boolean;
-  dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
+  dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number" | "credential">;
   description: string;
 }
 
@@ -23,11 +23,10 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "arize",
     displayName: "Arize",
     logo: arizeLogo.src,
-    supports_key_team_logging: true,
-    dynamic_params: {
-      arize_api_key: "password",
-      arize_space_id: "password",
-    },
+    // OTEL v2 destination: assigned per identity via the "Logging Exporters" field
+    // (metadata.logging_exporters), not configured as a per-team callback here.
+    supports_key_team_logging: false,
+    dynamic_params: {},
     description: "Arize Logging Integration",
   },
   {
@@ -104,13 +103,20 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     id: "langfuse_otel",
     displayName: "Langfuse OTEL",
     logo: langfuseLogo.src,
-    supports_key_team_logging: true,
-    dynamic_params: {
-      langfuse_public_key: "text",
-      langfuse_secret_key: "password",
-      langfuse_host: "text",
-    },
+    // OTEL v2 destination: assigned per identity via the "Logging Exporters" field
+    // (metadata.logging_exporters), not configured as a per-team callback here.
+    supports_key_team_logging: false,
+    dynamic_params: {},
     description: "Langfuse v3 OTEL Logging Integration",
+  },
+  {
+    id: "weave_otel",
+    displayName: "Weave OTEL",
+    // OTEL v2 destination: assigned per identity via the "Logging Exporters" field
+    // (metadata.logging_exporters), not configured as a per-team callback here.
+    supports_key_team_logging: false,
+    dynamic_params: {},
+    description: "Weave (W&B) OTEL Logging Integration",
   },
   {
     id: "langsmith",

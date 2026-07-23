@@ -223,6 +223,23 @@ export interface CredentialItem {
     custom_llm_provider?: string;
     description?: string;
     required?: boolean;
+    // "logging" tags an admin-owned trace destination (Option A: lives in the
+    // free-form credential_info, no schema migration). Absent = a provider credential.
+    credential_type?: string;
+    // Non-secret destination host/endpoint, surfaced in the logging credentials list.
+    host?: string;
+    // Admin-owned access grant for a logging destination: who may see/assign it.
+    // global reaches everyone; teams/orgs list ids. Visibility only -- on its own it
+    // never enables tracing for a request.
+    access?: {
+      global?: boolean;
+      teams?: string[];
+      orgs?: string[];
+    };
+    // Explicit global/default: when true the destination exports on every request
+    // without being named on any key/team/org. The deliberate replacement for the
+    // old behavior where access.global implicitly auto-enabled.
+    auto_enable?: boolean;
   };
 }
 

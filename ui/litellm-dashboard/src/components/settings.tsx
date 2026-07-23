@@ -32,6 +32,7 @@ import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import {
+  credentialDeleteCall,
   deleteCallback,
   getCallbackConfigsCall,
   getCallbacksCall,
@@ -39,7 +40,20 @@ import {
   setCallbacksCall,
 } from "./networking";
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
-import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
+import { AlertingObject, CredentialAccess, ResolvedScope } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import EditLoggingCredentialModal from "./logging_credentials/EditLoggingCredentialModal";
+import AccessControlFields from "./logging_credentials/AccessControlFields";
+import { loggingExportersOf } from "./logging_credentials/loggingExportersOf";
+import {
+  backendLabel,
+  createLoggingCredential,
+  LOGGING_BACKEND_IDS,
+  NON_CALLBACK_LOGGING_IDS,
+} from "./logging_credentials/loggingCredentialApi";
+import { LOGGING_DESTINATION_BACKENDS } from "./logging_credentials/loggingDestinationFields";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
@@ -245,6 +259,78 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [isAddingCallback, setIsAddingCallback] = useState(false);
   const [isDeletingCallback, setIsDeletingCallback] = useState(false);
 
+  // OTEL trace destinations are credentials tagged credential_type=logging; they share
+  // the one Active Logging Callbacks table as rows alongside config callbacks.
+  const { data: credentialData, refetch: refetchCredentials } = useCredentials();
+  const { data: teamsData } = useTeams();
+  const { data: orgsData } = useOrganizations();
+  const [editAccessFor, setEditAccessFor] = useState<{ name: string; access?: CredentialAccess } | null>(null);
+  // access for the destination branch of the unified Add modal
+  const [addAccess, setAddAccess] = useState<CredentialAccess>({});
+  // explicit global/default (auto_enable) opt-in for the destination branch
+  const [addAutoEnable, setAddAutoEnable] = useState(false);
+  const addingDestination = selectedCallback != null && LOGGING_BACKEND_IDS.has(selectedCallback);
+  const addingDestinationFields = LOGGING_DESTINATION_BACKENDS.find((b) => b.id === selectedCallback)?.fields ?? [];
+
+  const teamAlias = (id: string): string => {
+    const t = (teamsData ?? []).find((team) => team.team_id === id);
+    return t?.team_alias || id;
+  };
+  const orgAlias = (id: string): string => {
+    const o = (orgsData ?? []).find((org) => org.organization_id === id);
+    return o?.organization_alias || id;
+  };
+
+  // For each destination, the Scope column reflects BOTH directions:
+  //  (a) destination-side credential_info.access (global/teams/orgs on the credential)
+  //  (b) identity-side metadata.logging_exporters on each team/org that lists this destination
+  // The resolver unions them at request time; the column unions them at render time.
+  const resolveScope = (destinationName: string, access?: CredentialAccess): ResolvedScope => {
+    const teams = new Set<string>();
+    const orgs = new Set<string>();
+    let global = access?.global === true;
+    for (const teamId of access?.teams ?? []) teams.add(teamAlias(teamId));
+    for (const orgId of access?.orgs ?? []) orgs.add(orgAlias(orgId));
+    for (const team of teamsData ?? []) {
+      const exporters = loggingExportersOf(team);
+      if (exporters.includes(destinationName)) {
+        teams.add(team.team_alias || team.team_id);
+      }
+    }
+    for (const org of orgsData ?? []) {
+      const exporters = loggingExportersOf(org);
+      if (exporters.includes(destinationName)) {
+        orgs.add(org.organization_alias || org.organization_id);
+      }
+    }
+    return { global, teams: Array.from(teams), orgs: Array.from(orgs) };
+  };
+
+  const destinationRows: AlertingObject[] = (credentialData?.credentials ?? [])
+    .filter((c) => c.credential_info?.credential_type === "logging")
+    .map((c) => ({
+      name: c.credential_name,
+      variables: {} as AlertingObject["variables"],
+      credentialName: c.credential_name,
+      destinationLabel: c.credential_info?.host
+        ? `${backendLabel(c.credential_info?.description)} · ${c.credential_info.host}`
+        : backendLabel(c.credential_info?.description),
+      access: c.credential_info?.access,
+      autoEnable: c.credential_info?.auto_enable === true,
+      resolvedScope: resolveScope(c.credential_name, c.credential_info?.access),
+    }));
+
+  const handleDeleteDestination = async (name: string) => {
+    if (!accessToken) return;
+    try {
+      await credentialDeleteCall(accessToken, name);
+      NotificationsManager.success("Logging destination deleted");
+      refetchCredentials();
+    } catch (error) {
+      NotificationsManager.fromBackend(parseErrorMessage(error));
+    }
+  };
+
   useEffect(() => {
     if (!accessToken) {
       return;
@@ -381,6 +467,35 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const addNewCallbackCall = async (formValues: Record<string, any>) => {
     const new_callback = formValues?.callback;
     if (!new_callback) {
+      return;
+    }
+    if (LOGGING_BACKEND_IDS.has(new_callback) && accessToken) {
+      const backendDef = LOGGING_DESTINATION_BACKENDS.find((b) => b.id === new_callback);
+      const fields = backendDef?.fields ?? [];
+      const values = Object.fromEntries(
+        fields.filter((f) => formValues[f.name]).map((f) => [f.name, formValues[f.name]]),
+      );
+      const host = backendDef ? formValues[backendDef.hostField] : undefined;
+      const hasAccess = addAccess.global || addAccess.teams?.length || addAccess.orgs?.length;
+      try {
+        await createLoggingCredential(accessToken, {
+          credentialName: formValues.credential_name,
+          backend: new_callback,
+          values,
+          host,
+          access: hasAccess ? addAccess : undefined,
+          autoEnable: addAutoEnable,
+        });
+        NotificationsManager.success("Logging destination created");
+        refetchCredentials();
+        setShowAddCallbacksModal(false);
+        setSelectedCallback(null);
+        setAddAccess({});
+        setAddAutoEnable(false);
+        addForm.resetFields();
+      } catch (error) {
+        NotificationsManager.fromBackend(parseErrorMessage(error));
+      }
       return;
     }
     await handleCallbackSubmit(formValues, new_callback, false);
@@ -581,7 +696,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabPanels>
             <TabPanel>
               <LoggingCallbacksTable
-                callbacks={callbacks}
+                callbacks={[...callbacks.filter((c) => !NON_CALLBACK_LOGGING_IDS.has(c.name)), ...destinationRows]}
                 availableCallbacks={allCallbacks}
                 isLoading={isLoadingCallbacks}
                 onAdd={() => setShowAddCallbacksModal(true)}
@@ -589,7 +704,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   setSelectedEditCallback(cb);
                   setShowEditCallback(true);
                 }}
-                onDelete={(cb) => handleDeleteCallback(cb)}
+                onEditAccess={(cb) =>
+                  cb.credentialName && setEditAccessFor({ name: cb.credentialName, access: cb.access })
+                }
+                onDelete={(cb) =>
+                  cb.credentialName ? handleDeleteDestination(cb.credentialName) : handleDeleteCallback(cb)
+                }
                 onTest={async (cb) => {
                   try {
                     await serviceHealthCheck(accessToken, cb.name);
@@ -599,6 +719,16 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   }
                 }}
               />
+              {accessToken && (
+                <EditLoggingCredentialModal
+                  accessToken={accessToken}
+                  credentialName={editAccessFor?.name ?? null}
+                  access={editAccessFor?.access}
+                  open={editAccessFor != null}
+                  onClose={() => setEditAccessFor(null)}
+                  onSaved={() => refetchCredentials()}
+                />
+              )}
             </TabPanel>
             <TabPanel>
               <div className="p-8">
@@ -707,6 +837,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           setShowAddCallbacksModal(false);
           setSelectedCallback(null);
           setSelectedCallbackParams([]);
+          setAddAccess({});
+          setAddAutoEnable(false);
         }}
         footer={null}
       >
@@ -728,16 +860,54 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           labelAlign="left"
         >
           <CallbackSelector
-            callbackConfigs={callbackConfigs}
+            callbackConfigs={[
+              ...callbackConfigs.filter((c: { id: string }) => !NON_CALLBACK_LOGGING_IDS.has(c.id)),
+              ...LOGGING_DESTINATION_BACKENDS.map((b) => ({ id: b.id, displayName: b.label, logo: "" })),
+            ]}
             selectedCallback={selectedCallback}
             onCallbackChange={handleSelectedCallbackChange}
           />
 
-          <DynamicParamsFields
-            params={selectedCallbackParams}
-            callbackConfigs={callbackConfigs}
-            selectedCallback={selectedCallback}
-          />
+          {addingDestination ? (
+            <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+              <FormItem
+                label={<span className="text-sm font-medium text-gray-700">Name</span>}
+                name="credential_name"
+                rules={[{ required: true, message: "Please enter a name" }]}
+              >
+                <Input size="large" placeholder="e.g. langfuse-eu" />
+              </FormItem>
+              {addingDestinationFields.map((f) => (
+                <FormItem
+                  key={f.name}
+                  label={<span className="text-sm font-medium text-gray-700">{f.label}</span>}
+                  name={f.name}
+                  rules={
+                    f.optional ? undefined : [{ required: true, message: `Please enter the ${f.label.toLowerCase()}` }]
+                  }
+                >
+                  {f.type === "password" ? (
+                    <Input.Password size="large" placeholder={f.placeholder} />
+                  ) : (
+                    <Input size="large" placeholder={f.placeholder} />
+                  )}
+                </FormItem>
+              ))}
+              <AccessControlFields value={addAccess} onChange={setAddAccess} />
+              <Form.Item
+                label="Auto-enable for all requests"
+                tooltip="When on, every request exports its traces to this destination automatically, without being named on a key, team, or org. The explicit global default; replaces relying on Global to auto-enable."
+              >
+                <Switch checked={addAutoEnable} onChange={setAddAutoEnable} />
+              </Form.Item>
+            </div>
+          ) : (
+            <DynamicParamsFields
+              params={selectedCallbackParams}
+              callbackConfigs={callbackConfigs}
+              selectedCallback={selectedCallback}
+            />
+          )}
 
           <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
             <Button2
@@ -745,6 +915,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 setShowAddCallbacksModal(false);
                 setSelectedCallback(null);
                 setSelectedCallbackParams([]);
+                setAddAccess({});
+                setAddAutoEnable(false);
                 addForm.resetFields();
               }}
               disabled={isAddingCallback}
@@ -752,7 +924,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               Cancel
             </Button2>
             <Button2 htmlType="submit" loading={isAddingCallback} disabled={isAddingCallback}>
-              {isAddingCallback ? "Adding..." : "Add Callback"}
+              {isAddingCallback ? "Adding..." : "Add"}
             </Button2>
           </div>
         </Form>

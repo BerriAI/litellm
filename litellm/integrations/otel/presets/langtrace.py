@@ -7,6 +7,7 @@ from litellm.integrations.otel.presets.utils import ensure_mappers
 def langtrace_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     """Compose the Langtrace mapper on top of the customer's OTLP destination.
 

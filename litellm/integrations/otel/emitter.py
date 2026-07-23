@@ -213,6 +213,43 @@ class SpanEmitter:
         self.finish_span(role, span, data, end_time_ns=end_time_ns)
         return span
 
+    def emit_fanout(
+        self,
+        role: SpanRole,
+        data: SpanData,
+        parent_context: Context | None = None,
+        *,
+        start_time_ns: int | None = None,
+        end_time_ns: int | None = None,
+        tracers: Sequence[Tracer],
+    ) -> Span | None:
+        """Emit one logical span once per tracer, deduping the call ONCE.
+
+        A backend that selects its target from the Resource (Arize's project) needs a
+        separately-tagged span per Resource group, so ``tracers`` is one tracer per group
+        (from ``TenantTracerCache.tracers_for``). Dedup runs once on the call id so a
+        sync+async double-firing still coalesces, then a span is started and finished on
+        each tracer (each provider stamps its own Resource). Returns the first span (or
+        ``None`` if deduped/empty).
+        """
+        dedup_key = data.identity.call_id if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData)) else None
+        if self._seen(dedup_key, role):
+            return None
+        name = _NAME_BUILDERS[role](data)
+        first: Span | None = None
+        for tracer in tracers:
+            span = self.start_span(
+                role,
+                name,
+                parent_context=parent_context,
+                start_time_ns=start_time_ns,
+                tracer=tracer,
+            )
+            self.finish_span(role, span, data, end_time_ns=end_time_ns)
+            if first is None:
+                first = span
+        return first
+
     def finish_span(
         self,
         role: SpanRole,

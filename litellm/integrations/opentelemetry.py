@@ -3088,6 +3088,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if signal_type == "traces" and "/v2/trace/otlp" in endpoint:
             return endpoint
 
+        # Langtrace ingests traces at /api/trace (a complete path, not an OTLP base). Do not rewrite.
+        if signal_type == "traces" and endpoint.endswith("/api/trace"):
+            return endpoint
+
         # Check if endpoint already ends with the correct signal path
         target_path = f"/v1/{signal_type}"
         if endpoint.endswith(target_path):

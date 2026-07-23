@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -97,12 +97,6 @@ describe("LoggingCallbacksTable", () => {
     expect(onDelete).toHaveBeenCalledWith(callback);
   });
 
-  // Regression: `/get_callbacks` returns the same `name` twice when a
-  // callback is registered for both success and failure (e.g. `generic_api`
-  // → POST to spend-log on both 200 and 4xx/5xx). The UI used to ignore
-  // the `type` field and render every row as "Success", masking the
-  // failure registration. Reading `record.type` fixes the badge AND
-  // composing the row id with type avoids React's duplicate-key warning.
   it("renders distinct Success and Failure badges for same-name dual registration", () => {
     render(
       <LoggingCallbacksTable
@@ -122,5 +116,110 @@ describe("LoggingCallbacksTable", () => {
     expect(screen.getAllByText("Custom Callback API")).toHaveLength(2);
     expect(screen.getByText("Success")).toBeInTheDocument();
     expect(screen.getByText("Failure")).toBeInTheDocument();
+  });
+
+  it("renders a global destination's scope and manual assignment mode", () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[
+          {
+            name: "langfuse-eu",
+            variables: baseVars,
+            credentialName: "langfuse-eu",
+            access: { global: true },
+            resolvedScope: { global: true, teams: [], orgs: [] },
+          },
+        ]}
+        availableCallbacks={{}}
+      />,
+    );
+    expect(screen.getByText("Global access")).toBeInTheDocument();
+    expect(screen.getByText("Manual assignment")).toBeInTheDocument();
+    expect(screen.queryByText("Success")).not.toBeInTheDocument();
+  });
+
+  it("renders a scoped destination's resolved teams and orgs", () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[
+          {
+            name: "arize-eu",
+            variables: baseVars,
+            credentialName: "arize-eu",
+            access: { teams: ["t1", "t2"], orgs: ["o1"] },
+            resolvedScope: { global: false, teams: ["t1", "t2"], orgs: ["o1"] },
+          },
+        ]}
+        availableCallbacks={{}}
+      />,
+    );
+    expect(screen.getByText("team: t1")).toBeInTheDocument();
+    expect(screen.getByText("team: t2")).toBeInTheDocument();
+    expect(screen.getByText("org: o1")).toBeInTheDocument();
+  });
+
+  it("renders auto-enable mode for a destination", () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[
+          {
+            name: "otel-auto",
+            variables: baseVars,
+            credentialName: "otel-auto",
+            access: { teams: ["t1"] },
+            autoEnable: true,
+            resolvedScope: { global: false, teams: ["t1"], orgs: [] },
+          },
+        ]}
+        availableCallbacks={{}}
+      />,
+    );
+    expect(screen.getByText("Auto-enabled")).toBeInTheDocument();
+  });
+
+  it("a destination row edits access and deletes without exposing callback actions", async () => {
+    const user = userEvent.setup();
+    const onEditAccess = vi.fn();
+    const onDelete = vi.fn();
+    const onTest = vi.fn();
+    const callback = {
+      name: "dest",
+      variables: baseVars,
+      credentialName: "dest",
+      access: { global: true },
+      resolvedScope: { global: true, teams: [], orgs: [] },
+    };
+    render(
+      <LoggingCallbacksTable
+        callbacks={[callback]}
+        availableCallbacks={{}}
+        onEditAccess={onEditAccess}
+        onDelete={onDelete}
+        onTest={onTest}
+      />,
+    );
+
+    await user.click(screen.getByTestId("callback-actions-dest-success"));
+    expect(screen.queryByTestId("callback-action-test")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("callback-action-edit")).not.toBeInTheDocument();
+    await user.click(await screen.findByTestId("destination-action-edit-access"));
+    expect(onEditAccess).toHaveBeenCalledWith(callback);
+
+    await user.click(screen.getByTestId("callback-actions-dest-success"));
+    await user.click(await screen.findByTestId("destination-action-delete"));
+    expect(onDelete).toHaveBeenCalledWith(callback);
+    expect(onTest).not.toHaveBeenCalled();
+  });
+
+  it("a config callback row renders an empty scope", () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[{ name: "datadog", type: "success", variables: baseVars }]}
+        availableCallbacks={{}}
+      />,
+    );
+    const row = screen.getByText("datadog").closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText("—")).toBeInTheDocument();
   });
 });

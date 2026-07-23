@@ -47,6 +47,7 @@ interface EditTeamModalProps {
 }
 
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import LoggingExportersSelect from "./logging_credentials/LoggingExportersSelect";
 import { teamCreateCall } from "./networking";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 
@@ -339,6 +340,13 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           };
 
           formValues.metadata = JSON.stringify(metadata);
+        }
+
+        // logging_exporters is a top-level typed field on the team (its own column),
+        // not part of the free-form metadata blob; send it as-is when set so the user
+        // can assign destinations from the new-team form (instead of create-then-edit).
+        if (!Array.isArray(formValues.logging_exporters) || formValues.logging_exporters.length === 0) {
+          delete formValues.logging_exporters;
         }
 
         if (formValues.secret_manager_settings) {
@@ -1093,6 +1101,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   <b>Logging Settings</b>
                 </AccordionHeader>
                 <AccordionBody>
+                  <Form.Item
+                    label="Logging Exporters"
+                    name="logging_exporters"
+                    tooltip="Admin-owned trace destinations this team exports to. Resolved server-side and fanned out (added to the key's and org's). Manage destinations under Settings -> Logging Callbacks."
+                    className="mt-4"
+                  >
+                    <LoggingExportersSelect />
+                  </Form.Item>
                   <div className="mt-4">
                     <PremiumLoggingSettings
                       value={loggingSettings}

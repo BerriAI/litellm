@@ -8,6 +8,33 @@ export interface AlertingObject {
   // every row to render as "Success".
   type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
+  // Present only on rows backed by a logging credential (an OTEL trace
+  // destination). Config-callback rows leave these unset, which is how the table
+  // tells the two apart.
+  credentialName?: string;
+  destinationLabel?: string;
+  access?: CredentialAccess;
+  // True when credential_info.auto_enable=true: destination exports on every
+  // request without needing explicit key/team/org assignment. Distinct from
+  // access.global (which controls visibility/assignability, not routing).
+  autoEnable?: boolean;
+  // The union of identities that route to this destination, resolved at render
+  // time from both directions (destination-side credential_info.access AND
+  // identity-side metadata.logging_exporters). Display labels only -- ids are
+  // not surfaced here. global=true bypasses the lists.
+  resolvedScope?: ResolvedScope;
+}
+
+export interface CredentialAccess {
+  global?: boolean;
+  teams?: string[];
+  orgs?: string[];
+}
+
+export interface ResolvedScope {
+  global: boolean;
+  teams: string[];
+  orgs: string[];
 }
 
 export interface AlertingVariables {

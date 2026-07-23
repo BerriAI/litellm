@@ -8,7 +8,7 @@ import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Form, Modal, Tag } from "antd";
 import { KeyInfoHeader } from "./KeyInfoHeader";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
@@ -16,6 +16,9 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
+import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
@@ -70,6 +73,8 @@ export default function KeyInfoView({
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
+  const { data: keyCredentialsData } = useCredentials();
+  const { data: keyOrganizationsData } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -85,6 +90,26 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
+
+  // Destinations whose credential_info.access targets THIS key (via its team_id,
+  // its team's organization_id, or global). Rendered alongside the key's own
+  // metadata.logging_exporters so the Logging Exporters section reflects BOTH
+  // routing directions, matching the resolver's union at request time.
+  const scopedExportersForKey = useMemo<string[]>(() => {
+    const keyTeamId = (currentKeyData as { team_id?: string | null } | undefined)?.team_id ?? null;
+    const team = (teamsData ?? []).find((t) => t.team_id === keyTeamId);
+    const teamOrgId = (team as { organization_id?: string | null } | undefined)?.organization_id ?? null;
+    return (keyCredentialsData?.credentials ?? [])
+      .filter((c) => c.credential_info?.credential_type === "logging")
+      .filter((c) => {
+        const access = c.credential_info?.access;
+        if (!access) return false;
+        if (access.global === true) return true;
+        if (Array.isArray(access.teams) && keyTeamId && access.teams.includes(keyTeamId)) return true;
+        return Array.isArray(access.orgs) && teamOrgId != null && access.orgs.includes(teamOrgId);
+      })
+      .map((c) => c.credential_name);
+  }, [keyCredentialsData?.credentials, currentKeyData, teamsData, keyOrganizationsData]);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
@@ -681,6 +706,8 @@ export default function KeyInfoView({
 
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
+                loggingExporters={loggingExportersOf(currentKeyData)}
+                scopedExporters={scopedExportersForKey}
                 disabledCallbacks={
                   Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks)
                     ? mapInternalToDisplayNames(currentKeyData.metadata.litellm_disabled_callbacks)
@@ -960,6 +987,8 @@ export default function KeyInfoView({
 
                   <LoggingSettingsView
                     loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
+                    loggingExporters={loggingExportersOf(currentKeyData)}
+                    scopedExporters={scopedExportersForKey}
                     disabledCallbacks={
                       Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks)
                         ? mapInternalToDisplayNames(currentKeyData.metadata.litellm_disabled_callbacks)

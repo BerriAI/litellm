@@ -256,12 +256,13 @@ lives in [`plumbing/`](./plumbing):
 - [`presets/`](./presets) — each preset reads one integration's env vars and
   returns an `OpenTelemetryV2Config` (exporter destination + mapper vocabularies
   + resource attributes). `PRESET_BY_CALLBACK` maps a callback name (`"arize"`,
-  `"langfuse_otel"`, …) to its preset. Integrations that support team/key-scoped
-  credentials also provide a per-request OTLP header builder
-  (`DYNAMIC_HEADERS_BY_CALLBACK`). Presets do **no** network I/O at build time:
-  AgentOps, for example, mints its JWT lazily inside a custom exporter on the
-  first export (in the `BatchSpanProcessor` worker thread), never on the event
-  loop.
+  `"langfuse_otel"`, …) to its preset. Per-key/team routing is **not** here: a
+  destination is admin-owned infrastructure, resolved server-side from a named
+  credential into an `OtelDestination` (`destinations.py`) and applied by
+  `plumbing/routing.py`. Nothing in `presets/` reads vendor credentials or a host
+  off a request. Presets do **no** network I/O at build time: AgentOps, for
+  example, mints its JWT lazily inside a custom exporter on the first export (in
+  the `BatchSpanProcessor` worker thread), never on the event loop.
 
 ## Extending
 
@@ -270,7 +271,8 @@ lives in [`plumbing/`](./plumbing):
   `key -> extractor` tables) and register it in `mappers/__init__._MAPPER_BY_NAME`.
 - **A new integration**: add a preset in `presets/` that returns an
   `OpenTelemetryV2Config`, and register it in `presets/__init__.PRESET_BY_CALLBACK`.
-  If it supports dynamic credentials, add a header builder to
-  `DYNAMIC_HEADERS_BY_CALLBACK`.
+  For admin-owned per-key/team destinations, add an adapter mapping the named
+  credential's values to an `OtelDestination` in `destinations._ADAPTERS` (or rely
+  on the generic `otel_endpoint`/`otel_headers` passthrough).
 - **A new span kind**: add a role to `spans.py` (registry entry + name builder),
   a payload dataclass in `payloads.py`, and a branch in the relevant mapper(s).

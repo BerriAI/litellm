@@ -111,15 +111,13 @@ def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_Tea
     return False
 
 
-async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
-    """
-    Check if user is an org admin for the team's organization.
+async def _is_user_org_admin_for_org_id(user_api_key_dict: UserAPIKeyAuth, organization_id: str | None) -> bool:
+    """Check if the caller has the ORG_ADMIN role in the given organization.
 
-    Returns True if:
-    - The team belongs to an organization, AND
-    - The user has org_admin role in that organization
+    Returns False when ``organization_id`` is falsy or the caller has no user_id,
+    so the caller can pass an optional org_id directly without branching.
     """
-    if not team_obj.organization_id or not user_api_key_dict.user_id:
+    if not organization_id or not user_api_key_dict.user_id:
         return False
 
     from litellm.proxy.auth.auth_checks import get_user_object
@@ -139,11 +137,18 @@ async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_ob
     if caller_user is None:
         return False
 
-    for m in caller_user.organization_memberships or []:
-        if m.organization_id == team_obj.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value:
-            return True
+    return any(
+        m.organization_id == organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        for m in (caller_user.organization_memberships or [])
+    )
 
-    return False
+
+async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
+    """Check if user is an org admin for the team's organization."""
+    return await _is_user_org_admin_for_org_id(
+        user_api_key_dict=user_api_key_dict,
+        organization_id=team_obj.organization_id,
+    )
 
 
 def _team_member_has_permission(

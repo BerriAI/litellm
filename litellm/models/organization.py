@@ -22,6 +22,7 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     spend: float = 0.0
     metadata: Optional[dict] = None
     models: List[str] = []
+    logging_exporters: list[str] | None = None
     model_spend: Optional[dict] = {}
     created_by: str
     updated_by: str

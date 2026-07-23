@@ -59,6 +59,7 @@ from litellm.integrations.otel.model.spans import SpanRole, span_role_for_servic
 from litellm.integrations.otel.model.utils import to_ns
 
 if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.utils import (
         StandardLoggingGuardrailInformation,
@@ -113,18 +114,19 @@ _OPEN_CALLS_MAX = 10_000
 class _LLMCallSpan:
     """The state carried from the ``pre_call`` boundary to span close.
 
-    ``span`` is the live span when it could be opened at the boundary (the server
-    span was ambient), or ``None`` when creation was deferred because no ambient
-    parent was visible — in which case the async callback creates it against its
-    own (worker-copied) ambient context using ``start_time_ns``. The presence of
-    a carrier for a call at all is the proof that ``pre_call`` ran, i.e. that an
-    upstream call was actually attempted.
+    ``spans`` is one live span per destination Resource group (a backend like Arize
+    routing two projects yields two), opened at the boundary when the server span was
+    ambient. It is empty when creation was deferred because no ambient parent was visible
+    — in which case the async callback creates the span(s) against its own
+    (worker-copied) ambient context using ``start_time_ns``. The presence of a carrier
+    for a call at all is the proof that ``pre_call`` ran, i.e. that an upstream call was
+    actually attempted.
     """
 
-    __slots__ = ("span", "start_time_ns")
+    __slots__ = ("spans", "start_time_ns")
 
-    def __init__(self, span: "Span | None", start_time_ns: int | None) -> None:
-        self.span = span
+    def __init__(self, spans: "tuple[Span, ...]", start_time_ns: int | None) -> None:
+        self.spans = spans
         self.start_time_ns = start_time_ns
 
 
@@ -144,7 +146,13 @@ class OpenTelemetryV2(CustomLogger):
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
-            tracer_provider if tracer_provider is not None else build_tracer_provider(self.config)
+            tracer_provider
+            if tracer_provider is not None
+            else build_tracer_provider(
+                self.config,
+                tenant_fan_out_owner=callback_name,
+                attach_tenant_fan_out=True,
+            )
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
@@ -157,6 +165,11 @@ class OpenTelemetryV2(CustomLogger):
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
+        # call_ids for which the LLM-call span has already been emitted; lets
+        # _close_llm_call no-op on duplicate callbacks (success + failure both
+        # firing, or success firing twice) instead of double-exporting the
+        # deferred-emit span. Bounded LRU, same size as _open_llm_calls.
+        self._closed_call_ids: "OrderedDict[str, None]" = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
     def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
@@ -215,6 +228,15 @@ class OpenTelemetryV2(CustomLogger):
         if getattr(proxy_server, "open_telemetry_logger", None) is None:
             setattr(proxy_server, "open_telemetry_logger", self)
 
+    def _destinations_for_backend(self, call: "LLMCallEvent") -> tuple:
+        """The call's admin-resolved destinations that belong to THIS logger's backend.
+
+        A request fans out across whatever exporters its identity chain is assigned;
+        each logger exports only the destinations tagged with its own callback_name,
+        so each backend's span keeps its own attribute vocabulary.
+        """
+        return tuple(d for d in call.otel_destinations if d.callback_name == self.callback_name)
+
     # ====================================================================== #
     #  LLM-call callbacks — the span is opened at the ``pre_call`` boundary and
     #  closed here. See ``log_pre_api_call``.
@@ -250,21 +272,27 @@ class OpenTelemetryV2(CustomLogger):
         if call_id in self._open_llm_calls:
             return
         start_time_ns = to_ns(datetime.now())
-        span: Span | None = None
+        # One live span per destination Resource group (Arize routing two projects
+        # yields two; header-routed backends yield one). Empty until a recordable
+        # parent is confirmed.
+        spans: tuple[Span, ...] = ()
         # Parent to the request's anchored root span (stable across the request),
         # falling back to ambient on the SDK path. Open the span live only when
         # that resolves to a recordable parent; otherwise defer to the close
         # callback (the thread-pool case, where the anchor isn't visible here).
         parent_context = resolve_request_span_context()
         if is_recordable_span(get_current_span(parent_context)):
-            span = self._emitter.start_span(
-                SpanRole.LLM_CALL,
-                call.provisional_span_name,
-                parent_context=parent_context,
-                start_time_ns=start_time_ns,
-                tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
+            spans = tuple(
+                self._emitter.start_span(
+                    SpanRole.LLM_CALL,
+                    call.provisional_span_name,
+                    parent_context=parent_context,
+                    start_time_ns=start_time_ns,
+                    tracer=tracer,
+                )
+                for tracer in self._tenant_tracers.tracers_for(self.tracer, self._destinations_for_backend(call))
             )
-        self._open_llm_calls[call_id] = _LLMCallSpan(span=span, start_time_ns=start_time_ns)
+        self._open_llm_calls[call_id] = _LLMCallSpan(spans=spans, start_time_ns=start_time_ns)
         # Evict the oldest open call if the map is over budget. A call that opens
         # but never closes (a stream that only fires stream events) would linger
         # otherwise; the evicted span is simply dropped (never exported).
@@ -403,49 +431,108 @@ class OpenTelemetryV2(CustomLogger):
     ) -> Span | None:
         """Finish the LLM-call span opened at ``pre_call`` (or create it deferred).
 
-        No carrier for this call id means ``pre_call`` never ran — the request was
-        rejected at the gate or blocked by a pre-call guardrail before any upstream
-        call — so there is nothing to record and no phantom span.
+        Missing carrier has two shapes. ``pre_call`` genuinely never ran -- the
+        request was rejected at the gate or blocked by a pre-call guardrail before
+        any upstream call, so no payload exists and dropping is correct. OR this
+        v2 instance was lazily activated AFTER ``pre_call`` iterated the callback
+        list (the destination-resolver path: a credential resolved a backend the
+        YAML didn't pre-list), so the upstream call DID happen, the payload IS
+        set, and the admin-resolved destinations name this backend -- emit a
+        deferred span with the success event's start time so the per-tenant
+        exporter ships it.
         """
         call = LLMCallEvent.from_dict(kwargs)
         call_id = call.call_id
-        # ``pop`` is the dedup: this method runs from both the success and failure
-        # paths, and whichever fires first removes the carrier and closes the span.
+
+        # Dedup guard: a normal close pops the carrier and emits a span. If a
+        # second close fires for the same call_id (success + failure callbacks
+        # are wired separately, custom callbacks can fan out, etc.), the
+        # carrier is already gone and a payload+destinations combination would
+        # otherwise emit a second deferred span.
+        if call_id and call_id in self._closed_call_ids:
+            return None
+
         carrier = self._open_llm_calls.pop(call_id, None) if call_id else None
-        if carrier is None:
-            return None
         payload = call.payload
+
+        if carrier is None:
+            destinations = self._destinations_for_backend(call)
+            if payload is None or not destinations:
+                return None
+            self._mark_closed(call_id)
+            return self._emit_deferred_llm_call(
+                payload,
+                destinations,
+                to_ns(start_time),
+                to_ns(end_time),
+                call.time_to_first_chunk_seconds,
+            )
+
+        end_time_ns = to_ns(end_time)
+        self._mark_closed(call_id)
         if payload is None:
-            if carrier.span is not None:
-                # Opened at the boundary but the payload never materialized — end
-                # it (named provisionally) so it isn't leaked as an open span.
-                carrier.span.end(end_time=to_ns(end_time))
+            for span in carrier.spans:
+                span.end(end_time=end_time_ns)
             return None
+
         data = LLMCallSpanData.from_standard_logging_payload(
             payload,
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
         )
-        end_time_ns = to_ns(end_time)
-        if carrier.span is not None:
-            # Born at the boundary: stamp attributes from the typed payload, set
-            # status, and end it. Its parent (the server span) was captured at
-            # creation from real ambient context.
-            self._emitter.finish_span(SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns)
-            return carrier.span
-        # Deferred: ``pre_call`` saw no recordable parent, so create the span now.
-        # The worker copied the request task's context, which carries the anchored
-        # root span — parent to it (ambient fallback on the SDK path). Seed identity
-        # Baggage so the span — and the SDK path, which has none — is labeled
-        # consistently.
+        if carrier.spans:
+            for span in carrier.spans:
+                self._emitter.finish_span(SpanRole.LLM_CALL, span, data, end_time_ns=end_time_ns)
+            return carrier.spans[0]
+        return self._emit_deferred_llm_call(
+            payload,
+            self._destinations_for_backend(call),
+            carrier.start_time_ns,
+            end_time_ns,
+            call.time_to_first_chunk_seconds,
+        )
+
+    def _mark_closed(self, call_id: str | None) -> None:
+        """Remember a call_id has been closed so a duplicate callback no-ops.
+
+        Bounded by the same ceiling as ``_open_llm_calls`` to prevent unbounded
+        growth; oldest entries are evicted FIFO.
+        """
+        if not call_id:
+            return
+        self._closed_call_ids[call_id] = None
+        if len(self._closed_call_ids) > _OPEN_CALLS_MAX:
+            self._closed_call_ids.popitem(last=False)
+
+    def _emit_deferred_llm_call(
+        self,
+        payload: "StandardLoggingPayload",
+        destinations: "tuple[OtelDestination, ...]",
+        start_time_ns: int | None,
+        end_time_ns: int | None,
+        time_to_first_chunk_seconds: float | None = None,
+    ) -> Span | None:
+        """Emit an LLM-call span outside the ``pre_call`` boundary.
+
+        Two callers: the SDK thread-pool path (carrier existed but ``pre_call``
+        saw no recordable parent) and the destination-resolver path (this v2
+        instance was born after ``pre_call`` ran, so no carrier was ever opened).
+        Both anchor to the request's root span via the worker-copied context and
+        seed identity Baggage so the span is labeled consistently.
+        """
+        data = LLMCallSpanData.from_standard_logging_payload(
+            payload,
+            capture_content=self.config.capture_span_content,
+            time_to_first_chunk_seconds=time_to_first_chunk_seconds,
+        )
         parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
-        return self._emitter.emit(
+        return self._emitter.emit_fanout(
             SpanRole.LLM_CALL,
             data,
             parent_context=parent_ctx,
-            start_time_ns=carrier.start_time_ns,
+            start_time_ns=start_time_ns,
             end_time_ns=end_time_ns,
-            tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
+            tracers=self._tenant_tracers.tracers_for(self.tracer, destinations),
         )
 
     # ====================================================================== #

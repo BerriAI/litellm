@@ -465,6 +465,16 @@ def test_otlp_traces_endpoint_normalization():
         norm("https://x.splunk.com/v2/trace/otlp")
         == "https://x.splunk.com/v2/trace/otlp"
     )
+    # Langtrace ingests at /api/trace (a complete path, not an OTLP base) — appending
+    # /v1/traces 404s, so it must be left intact (regression for the double-append bug).
+    assert (
+        norm("https://app.langtrace.ai/api/trace")
+        == "https://app.langtrace.ai/api/trace"
+    )
+    assert (
+        norm("https://app.langtrace.ai/api/trace/")
+        == "https://app.langtrace.ai/api/trace"
+    )
     assert norm(None) is None
 
 

@@ -21,6 +21,7 @@ type LoggingCallbacksProps = {
   onTest?: (callback: AlertingObject) => void | Promise<void>;
   onEdit?: (callback: AlertingObject) => void;
   onDelete?: (callback: AlertingObject) => void;
+  onEditAccess?: (callback: AlertingObject) => void;
   onAdd?: () => void;
 };
 
@@ -45,12 +46,13 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   onTest = () => {},
   onEdit = () => {},
   onDelete = () => {},
+  onEditAccess = () => {},
   onAdd = () => {},
 }) => {
   const columns = useMemo(() => {
-    const deps = { availableCallbacks, onTest, onEdit, onDelete };
+    const deps = { availableCallbacks, onTest, onEdit, onDelete, onEditAccess };
     return getLoggingCallbacksTableColumns(deps);
-  }, [availableCallbacks, onTest, onEdit, onDelete]);
+  }, [availableCallbacks, onTest, onEdit, onDelete, onEditAccess]);
 
   return (
     <div className="mt-4 flex w-full flex-col gap-4">

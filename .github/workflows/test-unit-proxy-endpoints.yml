@@ -26,6 +26,7 @@ jobs:
     with:
       test-path: >-
         tests/test_litellm/proxy/management_endpoints
+        tests/test_litellm/proxy/credential_endpoints
         tests/test_litellm/proxy/guardrails
         tests/test_litellm/proxy/management_helpers
         tests/test_litellm/proxy/anthropic_endpoints

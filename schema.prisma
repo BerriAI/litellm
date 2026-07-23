@@ -87,6 +87,7 @@ model LiteLLM_OrganizationTable {
     budget_id String
     metadata  Json  @default("{}")
     models     String[]
+    logging_exporters String[] @default([]) // admin-owned OTEL trace destinations assigned to this org (credential names)
     spend      Float    @default(0.0)
     model_spend      Json @default("{}")
     object_permission_id String?
@@ -142,6 +143,7 @@ model LiteLLM_TeamTable {
     team_member_permissions String[] @default([])
     access_group_ids String[] @default([])
     policies         String[] @default([])
+    logging_exporters String[] @default([]) // admin-owned OTEL trace destinations assigned to this team (credential names)
     default_team_member_models String[] @default([]) // default allowed_models for newly added team members; empty = no per-member restriction
     budget_limits Json? // per-model budget limits for the team
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
@@ -210,6 +212,7 @@ model LiteLLM_DeletedTeamTable {
     team_member_permissions String[] @default([])
     access_group_ids String[] @default([])
     policies                String[] @default([])
+    logging_exporters       String[] @default([])
     model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false)
 
@@ -442,6 +445,7 @@ model LiteLLM_VerificationToken {
     key_type         String?
     policies         String[] @default([])
     access_group_ids String[] @default([])
+    logging_exporters String[] @default([]) // admin-owned OTEL trace destinations assigned to this key (credential names)
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
     budget_fallbacks Json @default("{}")
@@ -537,6 +541,7 @@ model LiteLLM_DeletedVerificationToken {
     key_type                String?
     policies                String[] @default([])
     access_group_ids String[] @default([])
+    logging_exporters       String[] @default([])
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
     budget_fallbacks        Json     @default("{}")

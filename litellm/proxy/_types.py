@@ -16,7 +16,10 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
-from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.constants import (
+    LITELLM_LOGGING_CREDENTIAL_NAME_KEY,
+    MCP_STDIO_ALLOWED_COMMANDS,
+)
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
@@ -770,6 +773,12 @@ class LiteLLMRoutes(enum.Enum):
         # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
         "/guardrails/submissions",
         "/guardrails/submissions/{guardrail_id}",
+        # Logging-credential routes. GET filters to logging-typed for non-admins;
+        # PATCH delegates to decide_credential_patch in credential_endpoints, which
+        # only allows a team-admin to append their own team_id to access.teams.
+        # POST and DELETE stay proxy-admin only via is_admin_gated_credential_info.
+        "/credentials",
+        "/credentials/{credential_name}",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -1074,6 +1083,7 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
+    logging_exporters: list[str] | None = None
     tags: Optional[List[str]] = None
     disable_global_guardrails: Optional[bool] = None
     throttle_on_budget_exceeded: Optional[bool] = None
@@ -1768,6 +1778,7 @@ class NewTeamRequest(TeamBase):
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
+    logging_exporters: list[str] | None = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
@@ -1834,6 +1845,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
+    logging_exporters: list[str] | None = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     disable_global_guardrails: Optional[bool] = None
     team_member_budget: Optional[float] = None
@@ -1908,7 +1920,7 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars = values.get("callback_vars", {})
-        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys()) | {LITELLM_LOGGING_CREDENTIAL_NAME_KEY}
         for key, value in callback_vars.items():
             if key not in valid_keys:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
@@ -1947,7 +1959,7 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
                 "callbacks": [],
                 "callback_vars": {},
             }
-        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys())
+        valid_keys = set(StandardCallbackDynamicParams.__annotations__.keys()) | {LITELLM_LOGGING_CREDENTIAL_NAME_KEY}
         if callback_vars is not None:
             for key in callback_vars:
                 if key not in valid_keys:
@@ -1988,6 +2000,7 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     models: List = []
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    logging_exporters: list[str] | None = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
 
@@ -2760,6 +2773,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
+    logging_exporters: list[str] | None = None
     updated_by: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     model_tpm_limit: Optional[Dict[str, int]] = None

@@ -24,7 +24,7 @@
     "limit": 130
   },
   "ANN401": {
-    "limit": 2075
+    "limit": 2074
   },
   "ASYNC230": {
     "limit": 14
@@ -237,7 +237,7 @@
     "limit": 41
   },
   "RUF022": {
-    "limit": 85
+    "limit": 84
   },
   "RUF023": {
     "limit": 5
@@ -306,7 +306,7 @@
     "limit": 9
   },
   "TID251": {
-    "limit": 2701
+    "limit": 2700
   },
   "TRY002": {
     "limit": 548
@@ -363,6 +363,6 @@
     "limit": 105
   },
   "UP045": {
-    "limit": 18461
+    "limit": 18458
   }
 }

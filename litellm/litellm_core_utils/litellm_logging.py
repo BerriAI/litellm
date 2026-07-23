@@ -3938,9 +3938,9 @@ def _init_custom_logger_compatible_class(
 
             otel_config = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint="https://langtrace.ai/api/trace",
+                endpoint="https://app.langtrace.ai/api/trace",
             )
-            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = f"api_key={os.getenv('LANGTRACE_API_KEY')}"
+            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = f"x-api-key={os.getenv('LANGTRACE_API_KEY')}"
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry) and callback.callback_name == "langtrace":
                     return callback  # type: ignore
@@ -4002,6 +4002,13 @@ def _init_custom_logger_compatible_class(
             _otel_logger = WeaveOtelLogger(config=otel_config, callback_name="weave_otel")
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
+        elif logging_integration == "generic":
+            # Generic OTLP passthrough: a vendor-neutral OpenTelemetryV2 logger whose
+            # per-destination exporter is attached by the admin-owned destination, so a
+            # ``generic`` destination gets the full trace (incl. the gen-AI span), not
+            # just proxy-internal spans. Only meaningful as an admin-owned destination,
+            # so there is no legacy fallback: None when no v2 logger is constructed.
+            return _maybe_construct_otel_v2("generic", _in_memory_loggers)
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PagerDutyAlerting):
@@ -4126,16 +4133,39 @@ def _init_custom_logger_compatible_class(
     return None
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Optional[Any]:
-    """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
-    instance configured via the preset for ``callback_name``.
+def _has_admin_owned_logging_destination(callback_name: str) -> bool:
+    """Whether an admin has registered a logging destination for this backend.
 
-    Returns ``None`` when V2 is off OR when there's no preset registered for
+    Admin-owned trace destinations (``logging`` credentials, created from the UI)
+    are an OTEL v2 feature: the v2 logger fans a request's spans out to each
+    destination using that destination's own credentials. So when one exists for
+    ``callback_name`` the v2 logger must own the backend even if the global
+    ``LITELLM_OTEL_V2`` flag is off, otherwise activation falls back to the legacy
+    global logger, which ignores the per-destination credentials and exports with
+    whatever (often absent) global env credentials are set.
+    """
+    import litellm
+
+    return any(
+        (info := credential.credential_info or {}).get("credential_type") == "logging"
+        and info.get("description") == callback_name
+        for credential in litellm.credential_list
+    )
+
+
+def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Optional[Any]:
+    """Build (or reuse) a single ``OpenTelemetryV2`` instance configured via the
+    preset for ``callback_name`` when V2 owns this backend.
+
+    V2 owns the backend when the global ``LITELLM_OTEL_V2`` flag is on, or when an
+    admin-owned logging destination is registered for it (which is itself a V2-only
+    feature). Returns ``None`` otherwise, or when there's no preset registered for
     ``callback_name`` — callers should then fall through to the legacy path.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
-    if not is_otel_v2_enabled():
+    has_admin_dest = _has_admin_owned_logging_destination(callback_name)
+    if not is_otel_v2_enabled() and not has_admin_dest:
         return None
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
@@ -4147,10 +4177,13 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Op
         if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
             return callback
     try:
-        config = preset_fn()
+        # An admin-owned destination carries its own per-tenant credentials, so a
+        # credential-mandatory preset may degrade rather than raise. A purely global
+        # callback with no destination must still raise on missing credentials; the
+        # raise is swallowed here so the caller defers to the legacy path and customers
+        # get the same loud error story they had before V2 landed.
+        config = preset_fn(allow_missing_credentials=has_admin_dest)
     except Exception:
-        # If env vars are missing or the preset raises, defer to the legacy path
-        # so customers get the same error story they had before V2 landed.
         return None
     v2_logger = OpenTelemetryV2(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
@@ -4320,6 +4353,12 @@ def get_custom_logger_compatible_class(
                 raise ValueError("ARIZE_API_KEY not found in environment variables")
             for callback in _in_memory_loggers:
                 if isinstance(callback, ArizeLogger) and callback.callback_name == "arize":
+                    return callback
+        elif logging_integration == "generic":
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == "generic":
                     return callback
         elif logging_integration == "logfire":
             if "LOGFIRE_TOKEN" not in os.environ:

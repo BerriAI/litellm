@@ -2484,6 +2484,14 @@ export interface paths {
         /**
          * Get Credentials
          * @description [BETA] endpoint. This might change unexpectedly.
+         *
+         *     Proxy admins see every credential (values masked). A non-proxy-admin sees
+         *     only the logging destinations actually visible to a scope they administer:
+         *     the same ``is_destination_visible`` predicate the assignment validator and
+         *     the request-time resolver use, so the list can never show a destination a
+         *     caller could neither assign nor route to. Provider credentials, and logging
+         *     destinations scoped to other tenants, stay invisible. A caller who
+         *     administers nothing gets 403 (Veria F2).
          */
         get: operations["get_credentials_credentials_get"];
         put?: never;
@@ -2606,6 +2614,11 @@ export interface paths {
         /**
          * Update Credential
          * @description [BETA] endpoint. This might change unexpectedly.
+         *
+         *     Both ``credential_values`` and ``credential_info`` are optional; a team-admin
+         *     typically patches only ``credential_info.access`` to grant or revoke their
+         *     own team. A proxy admin may patch either or both. See
+         *     ``decide_credential_patch`` for the exact contract.
          */
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
@@ -6562,6 +6575,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
@@ -6968,6 +6982,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -9025,6 +9040,7 @@ export interface paths {
          *
          *     - organization_alias: *str* - The name of the organization.
          *     - models: *List* - The models the organization has access to.
+         *     - logging_exporters: *Optional[List[str]]* - Names of admin-owned logging destinations (credential names) this organization exports its traces to.
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
@@ -13623,6 +13639,7 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -13800,6 +13817,7 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -23946,6 +23964,8 @@ export interface components {
              * @default default
              */
             key_type: components["schemas"]["LiteLLMKeyType"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -24103,6 +24123,8 @@ export interface components {
             key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -24957,6 +24979,8 @@ export interface components {
             /** Litellm Changed By */
             litellm_changed_by?: string | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -25113,6 +25137,8 @@ export interface components {
             } | null;
             /** Litellm Changed By */
             litellm_changed_by?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -25589,6 +25615,8 @@ export interface components {
             /** Created By */
             created_by: string;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /**
              * Members
              * @default []
@@ -26140,6 +26168,8 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -26505,6 +26535,8 @@ export interface components {
             litellm_budget_table?: {
                 [key: string]: unknown;
             } | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -27925,6 +27957,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -27974,6 +28008,8 @@ export interface components {
             /** Created By */
             created_by: string;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -28176,6 +28212,8 @@ export interface components {
             } | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Mcp Rpm Limit */
@@ -28463,6 +28501,8 @@ export interface components {
             key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30219,6 +30259,8 @@ export interface components {
              * @default default
              */
             key_type: components["schemas"]["LiteLLMKeyType"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31291,6 +31333,8 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31406,6 +31450,8 @@ export interface components {
              */
             keys_count: number;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32107,6 +32153,27 @@ export interface components {
             blocked_users: string[];
         };
         /**
+         * UpdateCredentialItem
+         * @description PATCH body for ``/credentials/{name}``.
+         *
+         *     Both ``credential_values`` and ``credential_info`` are optional so a caller
+         *     can patch one without sending the other (team-admins patching access without
+         *     knowing the upstream secrets; proxy admins rotating values without touching
+         *     access). ``credential_name`` is optional because most patches don't rename.
+         */
+        UpdateCredentialItem: {
+            /** Credential Info */
+            credential_info?: {
+                [key: string]: unknown;
+            } | null;
+            /** Credential Name */
+            credential_name?: string | null;
+            /** Credential Values */
+            credential_values?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
          */
@@ -32205,6 +32272,8 @@ export interface components {
             key: string;
             /** Key Alias */
             key_alias?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32562,6 +32631,8 @@ export interface components {
             } | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Mcp Rpm Limit */
@@ -33064,6 +33135,8 @@ export interface components {
             litellm_budget_table?: {
                 [key: string]: unknown;
             } | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -38029,7 +38102,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
         responses: {

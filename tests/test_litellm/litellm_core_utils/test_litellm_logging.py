@@ -3761,9 +3761,9 @@ async def test_streaming_anthropic_messages_openai_bridge_fires_success_logging(
     await _drain_until_logged(logger)
 
     assert chunks, "stream yielded no chunks"
-    assert any("content_block_delta" in _chunk_text(c) for c in chunks), (
-        "no delta chunks surfaced; the streaming text deltas were not forwarded"
-    )
+    assert any(
+        "content_block_delta" in _chunk_text(c) for c in chunks
+    ), "no delta chunks surfaced; the streaming text deltas were not forwarded"
     assert logger.success_payload is not None, (
         "async_log_success_event never fired for streaming /v1/messages -> openai "
         "Responses bridge; the no-op stream path dropped the spend row"
@@ -3816,6 +3816,124 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["total_tokens"] == 0
 
 
+def test_admin_owned_destination_uses_otel_v2_without_global_flag(monkeypatch):
+    # An admin-owned logging destination (a "logging" credential, created from the
+    # UI) must make the backend resolve to the OTEL v2 logger even when
+    # LITELLM_OTEL_V2 is off, so the per-destination credentials drive the export.
+    # Otherwise activation falls back to the legacy global logger, which ignores
+    # the destination's credentials and exports with absent global env creds.
+    from types import SimpleNamespace
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    assert is_otel_v2_enabled() is False
+
+    # No logging credential for the backend -> legacy fallback (None).
+    monkeypatch.setattr(litellm, "credential_list", [])
+    assert _maybe_construct_otel_v2("arize", []) is None
+
+    # A logging destination registered for the backend -> v2 owns it.
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            SimpleNamespace(
+                credential_name="arize-poc",
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "arize",
+                },
+            )
+        ],
+    )
+    logger = _maybe_construct_otel_v2("arize", [])
+    is_otel_v2_enabled.cache_clear()
+    assert isinstance(logger, OpenTelemetryV2)
+    assert logger.callback_name == "arize"
+
+
+def test_credential_mandatory_backend_global_misconfig_stays_loud(monkeypatch):
+    # Regression: weave/langfuse/levo are credential-mandatory; before V2 a global
+    # callback (e.g. ``callbacks: ["weave_otel"]``) with no credentials failed loud at
+    # startup. _maybe_construct_otel_v2 must preserve that: with V2 on but no admin-owned
+    # destination and no creds, the preset raises, _maybe_construct returns None, and the
+    # caller falls through to the legacy path that re-raises. An admin-owned destination,
+    # by contrast, carries its own per-tenant creds, so the same missing-global-creds
+    # state must degrade to a working v2 logger instead of silently producing nothing.
+    from types import SimpleNamespace
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+    for var in ("WANDB_API_KEY", "WANDB_PROJECT_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+
+    # Global callback, no destination, no creds -> None so the caller fails loud.
+    monkeypatch.setattr(litellm, "credential_list", [])
+    assert _maybe_construct_otel_v2("weave_otel", []) is None
+
+    # Admin-owned weave destination present -> degrade to a working v2 logger.
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            SimpleNamespace(
+                credential_name="wb-poc",
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "weave_otel",
+                },
+            )
+        ],
+    )
+    logger = _maybe_construct_otel_v2("weave_otel", [])
+    is_otel_v2_enabled.cache_clear()
+    assert isinstance(logger, OpenTelemetryV2)
+    assert logger.callback_name == "weave_otel"
+
+
+def test_generic_admin_destination_builds_otel_v2_logger(monkeypatch):
+    # The Generic OTLP passthrough ('generic') must build an OpenTelemetryV2 logger when
+    # an admin-owned generic destination is registered (even with LITELLM_OTEL_V2 off),
+    # so the gen-AI span routes to the destination's otel_endpoint. Without a generic
+    # destination and without the global flag, it stays None (no generic logger).
+    from types import SimpleNamespace
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    assert _maybe_construct_otel_v2("generic", []) is None
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            SimpleNamespace(
+                credential_name="ui-generic",
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "generic",
+                },
+            )
+        ],
+    )
+    logger = _maybe_construct_otel_v2("generic", [])
+    is_otel_v2_enabled.cache_clear()
+    assert isinstance(logger, OpenTelemetryV2)
+    assert logger.callback_name == "generic"
 def test_set_cost_breakdown_stores_reasoning_cost():
     """reasoning_cost is stored only when positive, mirroring the cache-cost fields."""
     from datetime import datetime
