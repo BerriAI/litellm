@@ -37,16 +37,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/agents/_components/AgentsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/agents/_components/AgentsTable.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/agents/_components/add_agent_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -71,9 +61,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/refs": {
       "count": 3
     },
@@ -84,9 +71,6 @@
   "src/app/(dashboard)/agents/_components/agent_cost_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/agents/_components/agent_form_fields.tsx": {
@@ -122,9 +106,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1141,14 +1122,6 @@
   "src/app/(dashboard)/memory/_components/MemoryView.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView.tsx": {
-    "no-restricted-imports": {
-      "count": 3
-    },
-    "react-hooks/preserve-manual-memoization": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.test.tsx": {
