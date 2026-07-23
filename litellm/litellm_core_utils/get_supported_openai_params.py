@@ -53,6 +53,16 @@ def get_supported_openai_params(
 
     if provider_config and request_type == "chat_completion":
         supported_params = provider_config.get_supported_openai_params(model=model)
+        allowed_openai_params = getattr(provider_config, "allowed_openai_params", None)
+        supported_params = supported_params or []
+        allowed_openai_params = allowed_openai_params or []
+        supported_params.extend(allowed_openai_params)
+        # ``max_retries`` is supported for providers with actual retry wiring
+        # (OpenAI/Azure retry at the SDK layer; anthropic retries at LiteLLM's
+        # httpx transport layer when ``max_retries`` is set).
+        providers_with_retry_support = {"openai", "azure", "anthropic"}
+        if custom_llm_provider in providers_with_retry_support and "max_retries" not in supported_params:
+            supported_params.append("max_retries")
         if base_model and base_model != model:
             base_model_params = provider_config.get_supported_openai_params(model=base_model)
             supported_params = list(dict.fromkeys([*supported_params, *base_model_params]))

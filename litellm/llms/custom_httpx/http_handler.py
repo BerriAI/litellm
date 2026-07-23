@@ -515,14 +515,17 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        max_retries: Optional[int] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
+        self.max_retries = max_retries
         self.client = self.create_client(
             timeout=timeout,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
             shared_session=shared_session,
+            max_retries=max_retries,
         )
         self.client_alias = client_alias
 
@@ -532,6 +535,7 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        max_retries: Optional[int] = None,
     ) -> httpx.AsyncClient:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
@@ -548,6 +552,7 @@ class AsyncHTTPHandler:
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
+            max_retries=max_retries,
         )
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
@@ -890,12 +895,20 @@ class AsyncHTTPHandler:
         ssl_context: Optional[ssl.SSLContext] = None,
         ssl_verify: Optional[bool] = None,
         shared_session: Optional["ClientSession"] = None,
+        max_retries: Optional[int] = None,
     ) -> Optional[Union[LiteLLMAiohttpTransport, AsyncHTTPTransport]]:
         """
         - Creates a transport for httpx.AsyncClient
             - if litellm.force_ipv4 is True, it will return AsyncHTTPTransport with local_address="0.0.0.0"
             - [Default] It will return AiohttpTransport
             - Users can opt out of using AiohttpTransport by setting litellm.use_aiohttp_transport to False
+
+        - When ``max_retries`` is requested we use the httpx transport with a
+          built-in ``httpx.Retry`` policy (aiohttp has no native retry support in
+          LiteLLM's transport). This is an opt-in that only affects clients created
+          with ``max_retries`` set, so the default high-throughput aiohttp path is
+          unchanged.
+
 
 
         Notes on this handler:
@@ -905,6 +918,12 @@ class AsyncHTTPHandler:
         - Why force ipv4?
             - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
+        #########################################################
+        # Retry transport (opt-in via max_retries)
+        #########################################################
+        if max_retries is not None and max_retries > 0:
+            return AsyncHTTPHandler._create_httpx_transport(max_retries=max_retries)
+
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
@@ -1050,13 +1069,23 @@ class AsyncHTTPHandler:
         )
 
     @staticmethod
-    def _create_httpx_transport() -> Optional[AsyncHTTPTransport]:
+    def _create_httpx_transport(
+        max_retries: Optional[int] = None,
+    ) -> Optional[AsyncHTTPTransport]:
         """
         Creates an AsyncHTTPTransport
 
         - If force_ipv4 is True, it will create an AsyncHTTPTransport with local_address set to "0.0.0.0"
-        - [Default] If force_ipv4 is False, it will return None
+        - If ``max_retries`` is provided, the transport retries transient
+          connection errors using httpx's built-in ``retries`` policy before
+          surfacing the failure to the caller.
+        - [Default] If force_ipv4 is False and max_retries is None, it will return None
         """
+        if max_retries is not None and max_retries > 0:
+            if litellm.force_ipv4:
+                return AsyncHTTPTransport(retries=max_retries, local_address="0.0.0.0")
+            return AsyncHTTPTransport(retries=max_retries)
+
         if litellm.force_ipv4:
             return AsyncHTTPTransport(local_address="0.0.0.0")
         else:
@@ -1073,6 +1102,7 @@ class HTTPHandler:
         disable_default_headers: Optional[
             bool
         ] = False,  # arize phoenix returns different API responses when user agent header in request
+        max_retries: Optional[int] = None,
     ):
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
@@ -1088,7 +1118,7 @@ class HTTPHandler:
         default_headers = get_default_headers() if not disable_default_headers else None
 
         if client is None:
-            transport = self._create_sync_transport()
+            transport = self._create_sync_transport(max_retries=max_retries)
 
             # Create a client with a connection pool
             self.client = httpx.Client(
@@ -1351,13 +1381,21 @@ class HTTPHandler:
         except Exception:
             pass
 
-    def _create_sync_transport(self) -> Optional[HTTPTransport]:
+    def _create_sync_transport(self, max_retries: Optional[int] = None) -> Optional[HTTPTransport]:
         """
         Create an HTTP transport with IPv4 only if litellm.force_ipv4 is True.
         Otherwise, return None.
 
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
+
+        When ``max_retries`` is provided, the transport retries transient
+        connection errors via httpx's built-in ``retries`` policy.
         """
+        if max_retries is not None and max_retries > 0:
+            if litellm.force_ipv4:
+                return HTTPTransport(retries=max_retries, local_address="0.0.0.0")
+            return HTTPTransport(retries=max_retries)
+
         if litellm.force_ipv4:
             return HTTPTransport(local_address="0.0.0.0")
         else:
