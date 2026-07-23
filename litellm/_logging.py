@@ -90,6 +90,30 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter = SecretRedactionFilter()
 
 
+class CorrelationContextFilter(logging.Filter):
+    """Stamps each log record with the current request's trace_id and session_id from contextvars.
+
+    Works in tandem with JsonFormatter: the formatter's record.__dict__ loop picks up these
+    attributes as first-class JSON fields without any formatter-level code.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        import litellm
+
+        if not litellm.request_correlation_in_logs:
+            return True
+        trace_id = trace_id_var.get()
+        if trace_id:
+            record.trace_id = trace_id
+        session_id = session_id_var.get()
+        if session_id:
+            record.session_id = session_id
+        return True
+
+
+_correlation_filter = CorrelationContextFilter()
+
+
 json_logs = bool(os.getenv("JSON_LOGS", False))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level = os.getenv("LITELLM_LOG", "DEBUG")
@@ -97,6 +121,7 @@ numeric_level: str = getattr(logging, log_level.upper())
 handler = logging.StreamHandler()
 handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
+handler.addFilter(_correlation_filter)
 
 
 def _try_parse_json_message(message: str) -> Optional[Dict[str, Any]]:
@@ -197,16 +222,6 @@ class JsonFormatter(Formatter):
         if "logger" not in json_record:
             json_record["logger"] = f"{record.filename}:{record.lineno}"
 
-        import litellm
-
-        if litellm.request_correlation_in_logs:
-            session_id = session_id_var.get()
-            if session_id and "session_id" not in json_record:
-                json_record["session_id"] = session_id
-            trace_id = trace_id_var.get()
-            if trace_id and "trace_id" not in json_record:
-                json_record["trace_id"] = trace_id
-
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
@@ -219,6 +234,7 @@ def _setup_json_exception_handlers(formatter):
     error_handler = logging.StreamHandler()
     error_handler.setFormatter(formatter)
     error_handler.addFilter(_secret_filter)
+    error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
@@ -335,6 +351,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
     handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
