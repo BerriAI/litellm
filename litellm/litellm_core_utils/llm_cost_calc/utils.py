@@ -1137,6 +1137,15 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
+        elif custom_llm_provider == litellm.LlmProviders.TOGETHER_AI.value:
+            from litellm.llms.together_ai.image_generation.cost_calculator import (
+                cost_calculator as together_ai_image_cost_calculator,
+            )
+
+            return together_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
         elif custom_llm_provider == litellm.LlmProviders.COMETAPI.value:
             from litellm.llms.cometapi.image_generation.cost_calculator import (
                 cost_calculator as cometapi_image_cost_calculator,
