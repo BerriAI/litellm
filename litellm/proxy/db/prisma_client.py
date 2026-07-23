@@ -169,7 +169,7 @@ class PrismaWrapper:
         stuck on TCP close.
 
         Sends SIGTERM for graceful shutdown, waits briefly, then SIGKILL as
-        a backstop.
+        a backstop, then reaps the corpse so it does not linger as a zombie.
         """
         if pid <= 0:
             return
@@ -191,6 +191,47 @@ class PrismaWrapper:
             )
         except (ProcessLookupError, PermissionError, OSError):
             pass  # Exited after SIGTERM — expected
+        await PrismaWrapper._reap_engine_process(pid)
+
+    @staticmethod
+    async def _reap_engine_process(pid: int) -> None:
+        """Reap the killed engine so it doesn't linger as a zombie.
+
+        A signalled child stays in the process table as ``<defunct>`` until its
+        parent wait()s on it. We retire the engine by signalling its PID rather
+        than calling prisma-client-py's ``disconnect()``, so nothing else ever
+        wait()s on that Popen — leaving exactly one zombie per reconnect, which
+        accumulates for the life of the container (#33414, #14739, #10216).
+
+        Note this does NOT reintroduce the blocking `disconnect()` problem this
+        class exists to avoid: that call blocks for 30-120s because it waits on
+        a *live* engine stuck on TCP close. By this point the engine has already
+        been SIGKILLed, so it is dead and WNOHANG collects it on the first poll.
+        The bounded retry only covers the brief window between the signal being
+        delivered and the kernel finishing the exit.
+        """
+        wnohang = getattr(os, "WNOHANG", None)
+        if wnohang is None:
+            return  # Windows: no POSIX zombies, nothing to reap.
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                reaped, _status = os.waitpid(pid, wnohang)
+            except ChildProcessError:
+                return  # Not our child, or already reaped — nothing to do.
+            except OSError:
+                return
+            if reaped == pid:
+                return  # Collected.
+            # reaped == 0: still exiting. Yield rather than spin.
+            if time.monotonic() >= deadline:
+                verbose_proxy_logger.warning(
+                    "prisma-query-engine PID %s did not exit after SIGKILL; "
+                    "leaving it unreaped rather than blocking the event loop.",
+                    pid,
+                )
+                return
+            await asyncio.sleep(0.05)
 
     def _extract_token_from_db_url(self, db_url: str | None) -> str | None:
         """
