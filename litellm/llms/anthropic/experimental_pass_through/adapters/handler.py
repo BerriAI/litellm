@@ -196,7 +196,9 @@ def _spec_has_non_compact_edits(
     )
 
 
-def _context_management_explicitly_dropped(additional_drop_params: Optional[list[str]]) -> bool:
+def _context_management_explicitly_dropped(
+    additional_drop_params: Optional[list[str]],
+) -> bool:
     """True when the caller opted out of context_management via ``additional_drop_params``.
 
     ``drop_params`` deliberately does NOT gate the polyfill: ``context_management``
@@ -303,6 +305,11 @@ ANTHROPIC_ADAPTER = AnthropicAdapter()
 
 
 class LiteLLMMessagesToCompletionTransformationHandler:
+    @staticmethod
+    def _is_thinking_disabled(thinking: Optional[Dict]) -> bool:
+        """Return True when the client's thinking param is absent or explicitly disabled."""
+        return thinking is None or (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+
     @staticmethod
     def _route_openai_thinking_to_responses_api_if_needed(
         completion_kwargs: Dict[str, Any],
@@ -599,6 +606,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         completion_response = await litellm.acompletion(**completion_kwargs)
 
+        thinking_disabled = LiteLLMMessagesToCompletionTransformationHandler._is_thinking_disabled(thinking)
+
         if stream:
             transformed_stream = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
@@ -606,6 +615,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
+                thinking_disabled=thinking_disabled,
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -615,6 +625,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
+                thinking_disabled=thinking_disabled,
             )
             if anthropic_response is not None:
                 return anthropic_response
@@ -740,6 +751,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         completion_response = litellm.completion(**completion_kwargs)
 
+        thinking_disabled = LiteLLMMessagesToCompletionTransformationHandler._is_thinking_disabled(thinking)
+
         if stream:
             transformed_stream = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
@@ -747,6 +760,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
+                thinking_disabled=thinking_disabled,
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -756,6 +770,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
+                thinking_disabled=thinking_disabled,
             )
             if anthropic_response is not None:
                 return anthropic_response
