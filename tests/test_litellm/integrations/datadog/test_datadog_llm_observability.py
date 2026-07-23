@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest.mock import MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
@@ -1193,3 +1194,236 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     now = datetime.now(timezone.utc)
     time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
     assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days
+
+
+# -------------------------------------------------------------------
+# LIT-4358: async_send_batch splits oversized payloads
+# -------------------------------------------------------------------
+
+class TestDataDogLLMObsBatchSplit:
+    """Verify that ``async_send_batch`` proactively splits batches that
+    exceed the intake byte / event-count limits, and handles 413 retries."""
+
+    @staticmethod
+    def _make_logger() -> DataDogLLMObsLogger:
+        """Create a logger instance in mock mode so no real HTTP is used."""
+        with patch.dict(
+            os.environ,
+            {"DD_API_KEY": "fake", "DD_SITE": "us5.datadoghq.com"},
+        ):
+            return DataDogLLMObsLogger()
+
+    @staticmethod
+    def _make_span(**overrides) -> dict:
+        """Return a minimal LLMObsPayload-like dict for queue testing."""
+        base = {
+            "trace_id": "t1",
+            "span_id": "s1",
+            "parent_id": "undefined",
+            "name": "test",
+            "start_ns": 0,
+            "duration": 1_000_000,
+            "status": "ok",
+            "meta": {"kind": "llm", "input": {}, "output": {}},
+            "metrics": {},
+            "tags": [],
+        }
+        base.update(overrides)
+        return base
+
+    @pytest.mark.asyncio
+    async def test_proactive_split_on_oversized_batch(self):
+        """When the batch exceeds DD_MAX_BATCH_SIZE, it should be split
+        and posted in multiple smaller requests."""
+        logger = self._make_logger()
+
+        from litellm.types.integrations.datadog import DD_MAX_BATCH_SIZE
+
+        # Queue more than DD_MAX_BATCH_SIZE spans
+        num_spans = DD_MAX_BATCH_SIZE + 10
+        logger.log_queue = [self._make_span(span_id=str(i)) for i in range(num_spans)]
+
+        post_call_count = 0
+        posted_span_counts: list = []
+
+        async def _mock_post_spans(spans):
+            nonlocal post_call_count
+            post_call_count += 1
+            posted_span_counts.append(len(spans))
+            resp = MagicMock()
+            resp.status_code = 202
+            resp.text = "OK"
+            return resp
+
+        with patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.async_send_batch()
+
+        # Should have split into >1 POST
+        assert post_call_count >= 2, f"Expected multiple POSTs, got {post_call_count}"
+        assert all(count <= DD_MAX_BATCH_SIZE for count in posted_span_counts)
+        # Total delivered should equal the original batch
+        assert sum(posted_span_counts) == num_spans
+        # Queue should be empty after successful delivery
+        assert len(logger.log_queue) == 0
+
+    @pytest.mark.asyncio
+    async def test_413_retries_with_smaller_chunks(self):
+        """On a 413 response, the chunk should be halved and retried."""
+        logger = self._make_logger()
+
+        logger.log_queue = [self._make_span(span_id=str(i)) for i in range(4)]
+
+        call_sizes: list = []
+
+        async def _mock_post_spans(spans):
+            call_sizes.append(len(spans))
+            resp = MagicMock()
+            if len(spans) > 2:
+                # Simulate 413 for large batches
+                resp.status_code = 413
+                resp.text = "Payload Too Large"
+                err = httpx.HTTPStatusError(
+                    "413", request=MagicMock(), response=resp
+                )
+                raise err
+            resp.status_code = 202
+            resp.text = "OK"
+            return resp
+
+        with patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.async_send_batch()
+
+        # First attempt with 4 -> 413 -> split to 2+2 -> both succeed
+        assert 4 in call_sizes, f"Expected initial attempt of 4, got {call_sizes}"
+        assert call_sizes.count(2) >= 2, f"Expected two chunks of 2, got {call_sizes}"
+        assert len(logger.log_queue) == 0
+
+    @pytest.mark.asyncio
+    async def test_single_oversized_span_dropped(self):
+        """A single span that 413s should be dropped, not wedge the queue."""
+        logger = self._make_logger()
+        logger.log_queue = [self._make_span(span_id="big")]
+
+        async def _mock_post_spans(spans):
+            resp = MagicMock()
+            resp.status_code = 413
+            resp.text = "Payload Too Large"
+            err = httpx.HTTPStatusError(
+                "413", request=MagicMock(), response=resp
+            )
+            raise err
+
+        with patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.async_send_batch()
+
+        assert len(logger.log_queue) == 0
+
+    @pytest.mark.asyncio
+    async def test_transient_error_requeues(self):
+        """A non-413 error should re-queue undelivered spans."""
+        logger = self._make_logger()
+        logger.log_queue = [self._make_span(span_id=str(i)) for i in range(3)]
+
+        async def _mock_post_spans(spans):
+            raise Exception("Connection refused")
+
+        with patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.async_send_batch()
+
+        # All 3 spans should be back in the queue for retry
+        assert len(logger.log_queue) == 3
+
+    @pytest.mark.asyncio
+    async def test_periodic_flush_preserves_requeued_spans(self):
+        """The flush_queue path must not clear spans that async_send_batch
+        re-queued after a transient error."""
+        logger = self._make_logger()
+        logger.log_queue = [self._make_span(span_id=str(i)) for i in range(3)]
+
+        async def _mock_post_spans(spans):
+            raise Exception("Connection refused")
+
+        with patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.flush_queue()
+
+        assert len(logger.log_queue) == 3
+
+    @pytest.mark.asyncio
+    async def test_proactive_split_on_oversized_bytes(self):
+        """A batch over DD_MAX_PAYLOAD_SIZE_BYTES is split before any POST,
+        so every posted chunk serializes under the byte limit."""
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        from litellm.types.integrations.datadog import DD_MAX_PAYLOAD_SIZE_BYTES
+
+        logger = self._make_logger()
+        logger.log_queue = [
+            self._make_span(
+                span_id=str(i),
+                meta={"kind": "llm", "input": "x" * 3_000_000, "output": {}},
+            )
+            for i in range(3)
+        ]
+
+        posted_chunks: list = []
+
+        async def _mock_post_spans(spans):
+            posted_chunks.append(list(spans))
+            resp = MagicMock()
+            resp.status_code = 202
+            resp.text = "OK"
+            return resp
+
+        with patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.async_send_batch()
+
+        assert len(posted_chunks) == 3
+        assert all(
+            len(safe_dumps(chunk).encode("utf-8")) <= DD_MAX_PAYLOAD_SIZE_BYTES
+            for chunk in posted_chunks
+        )
+        assert [s["span_id"] for chunk in posted_chunks for s in chunk] == ["0", "1", "2"]
+        assert len(logger.log_queue) == 0
+
+    @pytest.mark.asyncio
+    async def test_http_500_requeues_all_spans(self):
+        """A non-413 HTTP error is transient: every undelivered span is
+        re-queued in order for the next flush."""
+        logger = self._make_logger()
+        logger.log_queue = [self._make_span(span_id=str(i)) for i in range(4)]
+
+        async def _mock_post_spans(spans):
+            resp = MagicMock()
+            resp.status_code = 500
+            resp.text = "Internal Server Error"
+            raise httpx.HTTPStatusError("500", request=MagicMock(), response=resp)
+
+        with patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.async_send_batch()
+
+        assert [s["span_id"] for s in logger.log_queue] == ["0", "1", "2", "3"]
+
+    @pytest.mark.asyncio
+    async def test_size_check_failure_requeues_only_undelivered(self):
+        """If the size check itself raises mid-loop, chunks already delivered
+        must not be re-queued as duplicates."""
+        logger = self._make_logger()
+        logger.log_queue = [self._make_span(span_id=str(i)) for i in range(4)]
+
+        delivered: list = []
+
+        async def _mock_post_spans(spans):
+            delivered.extend(s["span_id"] for s in spans)
+            resp = MagicMock()
+            resp.status_code = 202
+            resp.text = "OK"
+            return resp
+
+        with patch.object(
+            logger,
+            "_exceeds_intake_limits",
+            side_effect=[True, False, Exception("serialization failed")],
+        ), patch.object(logger, "_post_spans", side_effect=_mock_post_spans):
+            await logger.async_send_batch()
+
+        assert delivered == ["0", "1"]
+        assert [s["span_id"] for s in logger.log_queue] == ["2", "3"]
