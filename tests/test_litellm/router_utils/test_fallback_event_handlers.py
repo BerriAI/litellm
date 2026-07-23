@@ -219,14 +219,17 @@ def test_trigger_cooldown_silently_catches_exceptions():
         )
 
 
-def test_trigger_cooldown_uses_litellm_metadata_only_not_metadata():
+def test_trigger_cooldown_uses_metadata_when_litellm_metadata_absent():
+    """Router._update_kwargs_with_deployment() overwrites "model_info" on whichever of
+    "metadata"/"litellm_metadata" the current call uses (regular completions use plain
+    "metadata"; batch/thread/file endpoints use "litellm_metadata"), so both are
+    equally authoritative and neither is caller-controlled at this point."""
     router = MagicMock()
     router.cooldown_time = 60
     router.get_model_info.return_value = None
 
     exc = RuntimeError("err")
-    # metadata (user-supplied) should be ignored; litellm_metadata is absent -> no cooldown
-    kwargs = {"metadata": {"model_info": {"id": "injected-id"}}}
+    kwargs = {"metadata": {"model_info": {"id": "deployment-abc"}}}
 
     with patch(
         "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
@@ -235,7 +238,31 @@ def test_trigger_cooldown_uses_litellm_metadata_only_not_metadata():
             litellm_router=router, kwargs=kwargs, exception=exc
         )
 
-    mock_set.assert_not_called()
+    mock_set.assert_called_once()
+    _, call_kwargs = mock_set.call_args
+    assert call_kwargs["deployment"] == "deployment-abc"
+
+
+def test_trigger_cooldown_prefers_litellm_metadata_when_both_present():
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("err")
+    kwargs = {
+        "litellm_metadata": {"model_info": {"id": "litellm-metadata-id"}},
+        "metadata": {"model_info": {"id": "metadata-id"}},
+    }
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
+    ) as mock_set:
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+    _, call_kwargs = mock_set.call_args
+    assert call_kwargs["deployment"] == "litellm-metadata-id"
 
 
 @pytest.mark.asyncio
@@ -253,7 +280,7 @@ async def test_run_async_fallback_triggers_cooldown_when_logging_obj_has_logged(
     router.async_function_with_fallbacks = _always_fail
 
     logging_obj = MagicMock()
-    logging_obj.has_logged_async_failure = True
+    logging_obj.model_call_details = {"has_logged_async_failure": True}
 
     kwargs = {
         "litellm_metadata": {"model_info": {"id": "dep-xyz"}},
@@ -290,7 +317,7 @@ async def test_run_async_fallback_skips_cooldown_when_logging_obj_not_logged():
     router.async_function_with_fallbacks = _always_fail
 
     logging_obj = MagicMock()
-    logging_obj.has_logged_async_failure = False
+    logging_obj.model_call_details = {"has_logged_async_failure": False}
 
     kwargs = {
         "litellm_metadata": {"model_info": {"id": "dep-xyz"}},
