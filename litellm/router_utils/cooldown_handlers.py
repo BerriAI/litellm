@@ -475,7 +475,11 @@ def should_cooldown_based_on_allowed_fails_policy(
             )
             or litellm_router_instance.allowed_fails
         )
-    cooldown_time = cooldown_time_override or litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
+    cooldown_time = (
+        cooldown_time_override
+        if cooldown_time_override is not None
+        else (litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS)
+    )
 
     cache_key = f"{deployment}:{cache_key_suffix}" if cache_key_suffix else deployment
     current_fails = litellm_router_instance.failed_calls.get_cache(key=cache_key) or 0
