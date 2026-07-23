@@ -4110,7 +4110,7 @@ export const enrichPolicyTemplateStream = async (
     guardrailDefinitions: any[];
   }) => void,
   onError?: (error: string) => void,
-  options?: { instruction?: string; existingCompetitors?: string[] },
+  options?: { instruction?: string; existingCompetitors?: string[]; signal?: AbortSignal },
   onStatus?: (message: string) => void,
 ) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/templates/enrich/stream` : `/policy/templates/enrich/stream`;
@@ -4125,6 +4125,7 @@ export const enrichPolicyTemplateStream = async (
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+    signal: options?.signal,
   });
 
   if (!response.ok) {
