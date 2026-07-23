@@ -18,6 +18,7 @@ but refuses a ``gateway_credential``.
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 
 import jwt
@@ -62,6 +63,20 @@ def _master_key() -> str | None:
     from litellm.proxy.proxy_server import master_key
 
     return master_key
+
+
+def _equals_master_key(token: str, master_key: str) -> bool:
+    """Constant-time equality with the master key, TOTAL over any input string.
+
+    ``secrets.compare_digest`` raises ``TypeError`` on a ``str`` carrying non-ASCII characters, and
+    recognition must never raise into egress (an inbound bearer is fully attacker-controlled). Both
+    sides are hashed to fixed-length digests first, so any string compares without raising and the
+    master key's length is not leaked; a non-ASCII bearer reads "not the master key" rather than
+    500-ing the request.
+    """
+    token_digest = hashlib.sha256(token.encode("utf-8", "surrogatepass")).digest()
+    master_key_digest = hashlib.sha256(master_key.encode("utf-8", "surrogatepass")).digest()
+    return secrets.compare_digest(token_digest, master_key_digest)
 
 
 def _verifies_under_master_key(token: str, master_key: str) -> bool:
@@ -127,7 +142,7 @@ def is_gateway_issued_credential(token: str) -> bool:
     encrypted with the master key matches without a change here.
     """
     master_key = _master_key()
-    if master_key and secrets.compare_digest(token, master_key):
+    if master_key and _equals_master_key(token, master_key):
         return True
     if token.startswith(_GATEWAY_MINT_PREFIXES):
         return True

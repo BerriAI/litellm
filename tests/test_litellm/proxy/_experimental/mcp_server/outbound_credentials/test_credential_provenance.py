@@ -144,3 +144,32 @@ def test_recognizer_does_not_crash_without_a_master_key(monkeypatch):
     assert is_gateway_issued_credential("some.external.jwt") is False
     # A prefix-bearing gateway credential is still caught with no master key.
     assert is_gateway_issued_credential("sk-still-caught-by-prefix") is True
+
+
+@pytest.mark.parametrize(
+    "adversarial",
+    [
+        "café-tökèn-with-non-ascii",  # the reported crash: non-ASCII bytes hit the master-key compare
+        "bearer-\U0001f600-emoji",  # supplementary-plane characters
+        "\x00\x01control-bytes",  # control characters
+        "aaa.é.ccc",  # non-ASCII inside a jwt-shaped value
+    ],
+)
+def test_non_ascii_inbound_bearer_never_raises_into_egress(adversarial):
+    """The inbound bearer is fully attacker-controlled, so recognition must be TOTAL: a non-ASCII
+    bearer used to reach ``secrets.compare_digest(token, master_key)`` and raise ``TypeError``,
+    500-ing every egress. It must now classify as a non-gateway external token without raising.
+    Reverting the digest-based master-key compare makes this test raise."""
+    assert is_gateway_issued_credential(adversarial) is False
+    assert classify_inbound_provenance(adversarial) in ("external_jwt", "external_opaque")
+
+
+def test_master_key_compare_matches_only_the_exact_key(monkeypatch):
+    """The digest-based compare must still be exact equality, not a length match or near miss. A
+    master key with no gateway prefix isolates the compare from the other checks: the exact key is
+    recognized, a value that only shares its length or a prefix of it is not."""
+    plain_master = "plain-master-key-no-gateway-prefix"
+    monkeypatch.setattr(proxy_server, "master_key", plain_master)
+    assert is_gateway_issued_credential(plain_master) is True
+    assert is_gateway_issued_credential(plain_master + "x") is False
+    assert is_gateway_issued_credential(plain_master[:-1] + "Z") is False

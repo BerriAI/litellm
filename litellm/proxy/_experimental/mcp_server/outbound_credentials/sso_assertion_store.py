@@ -292,6 +292,17 @@ class _SsoRefreshClient(BaseModel):
     token_endpoint: str
 
 
+def generic_sso_scopes(getenv: Callable[[str], str | None] = os.getenv) -> list[str]:
+    """The scopes the generic SSO client requests, shared by the login authorize request and the
+    EMA assertion refresh so the two can never diverge. ``openid`` must be among them or the IdP
+    returns no ``id_token`` on refresh, which would strand a renewable assertion as expired and
+    force a needless re-login; requesting exactly what login was granted keeps the refresh within
+    RFC 6749 scope while guaranteeing the id_token comes back. The refresh passes the source's
+    injected ``getenv`` so it reads the same environment as the rest of its client config."""
+    raw = getenv("GENERIC_SCOPE")
+    return (raw if raw is not None else "openid email profile").split(" ")
+
+
 def _sso_refresh_client_from_env(getenv: Callable[[str], str | None]) -> _SsoRefreshClient | None:
     client_id = getenv("GENERIC_CLIENT_ID")
     token_endpoint = getenv("GENERIC_TOKEN_ENDPOINT")
@@ -498,11 +509,13 @@ class LiveSsoAssertionSource:
                 user_id,
             )
             return UnavailableSsoAssertion()
+        scope = " ".join(generic_sso_scopes(self._getenv))
         form = {
             "grant_type": "refresh_token",
             "refresh_token": stored.refresh_token.get_secret_value(),
             "client_id": client.client_id,
             **({"client_secret": client.client_secret.get_secret_value()} if client.client_secret else {}),
+            **({"scope": scope} if scope else {}),
         }
         outcome = await self._post(client.token_endpoint, form)
         match outcome:

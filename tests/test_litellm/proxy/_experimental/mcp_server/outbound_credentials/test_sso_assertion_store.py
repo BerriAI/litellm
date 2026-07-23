@@ -49,9 +49,7 @@ def _make_prisma(stored: dict, db_has_id_jag_server: bool = False):
     ``db_has_id_jag_server`` drives the retention gate's authoritative DB fallback;
     it is wired explicitly so the gate never reads a truthy bare MagicMock."""
     prisma = MagicMock()
-    prisma.db.litellm_mcpservertable.find_first = AsyncMock(
-        return_value=MagicMock() if db_has_id_jag_server else None
-    )
+    prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=MagicMock() if db_has_id_jag_server else None)
 
     async def _upsert(where, data):
         stored[where["user_id"]] = data["update"]["assertion_b64"]
@@ -457,6 +455,31 @@ async def test_source_expired_with_refresh_renews_persists_and_returns_usable():
 
 
 @pytest.mark.asyncio
+async def test_source_refresh_requests_openid_scope_so_the_idp_returns_an_id_token():
+    """The refresh grant must carry a scope containing ``openid`` or the IdP returns no id_token,
+    stranding a renewable assertion as expired and forcing a needless re-login (the round-9
+    finding). With no GENERIC_SCOPE configured it falls to the same default the login uses, which
+    contains ``openid``. Dropping the scope from the refresh form makes this fail."""
+    source, _, _, posts = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}])
+    await source.fetch_usable("alice")
+    _, form = posts[0]
+    assert "openid" in form["scope"].split(" ")
+
+
+@pytest.mark.asyncio
+async def test_source_refresh_scope_matches_the_configured_login_scope():
+    """Refresh requests exactly the scopes the login was granted, read through the same shared
+    owner off the injected env, so the two can never diverge and the refresh stays within RFC 6749
+    granted scope. Sourcing the scope from the global environment instead of the injected getenv
+    makes this fail."""
+    env = {**_SSO_ENV, "GENERIC_SCOPE": "openid email offline_access"}
+    source, _, _, posts = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}], env=env)
+    await source.fetch_usable("alice")
+    _, form = posts[0]
+    assert form["scope"] == "openid email offline_access"
+
+
+@pytest.mark.asyncio
 async def test_source_refresh_without_rotated_token_carries_the_stored_one_forward():
     source, _, _, _ = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}])
     lookup = await source.fetch_usable("alice")
@@ -533,7 +556,9 @@ async def test_source_dead_grant_is_negative_cached_one_post_per_window():
         posts.append(dict(form))
         return SsoRefreshRejected(status_code=400)
 
-    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"])
+    source = LiveSsoAssertionSource(
+        fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"]
+    )
     assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
     assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
     assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
@@ -707,7 +732,12 @@ async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
 
     clock = {"now": datetime.now(timezone.utc)}
     source = LiveSsoAssertionSource(
-        fetch=flaky_fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"], memo_ttl_seconds=60.0
+        fetch=flaky_fetch,
+        persist=persist,
+        post=post,
+        getenv=_SSO_ENV.get,
+        now=lambda: clock["now"],
+        memo_ttl_seconds=60.0,
     )
     assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
     assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
@@ -822,14 +852,10 @@ async def test_post_helper_rejection_requires_a_proven_oauth_verdict(status_code
         response.json.side_effect = _json.JSONDecodeError("x", "y", 0)
     else:
         response.json.return_value = body
-    response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "err", request=MagicMock(), response=response
-    )
+    response.raise_for_status.side_effect = httpx.HTTPStatusError("err", request=MagicMock(), response=response)
     client = MagicMock()
     client.post = AsyncMock(return_value=response)
-    monkeypatch.setattr(
-        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client
-    )
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
     outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
     assert isinstance(outcome, expected_type)
 
@@ -846,9 +872,7 @@ async def test_post_helper_2xx_non_object_body_is_unreachable_not_a_crash(body, 
     response.raise_for_status = MagicMock()
     response.json.return_value = body
     client.post = AsyncMock(return_value=response)
-    monkeypatch.setattr(
-        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client
-    )
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
     from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
 
     outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
@@ -859,9 +883,7 @@ async def test_post_helper_2xx_non_object_body_is_unreachable_not_a_crash(body, 
 async def test_post_helper_transport_failure_is_unreachable(monkeypatch):
     client = MagicMock()
     client.post = AsyncMock(side_effect=ConnectionError("down"))
-    monkeypatch.setattr(
-        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client
-    )
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
     from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
 
     outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
