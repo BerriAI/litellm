@@ -314,6 +314,8 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     check_file_size_under_limit,
     get_form_data,
+    get_streaming_audio_upload,
+    resolve_max_file_bytes,
 )
 from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
@@ -9609,7 +9611,6 @@ async def audio_speech(
 async def audio_transcriptions(
     request: Request,
     fastapi_response: Response,
-    file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -9620,9 +9621,19 @@ async def audio_transcriptions(
     global proxy_logging_obj
     data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        form_data = await get_form_data(request)
-        data = {key: value for key, value in form_data.items() if key != "file"}
+        # The multipart body is parsed incrementally (not via File(...), which fully buffers) so the
+        # file part streams straight to the provider. The auth-time body pre-read (_read_request_body,
+        # always run by user_api_key_auth) is the first consumer of request.stream(), so it does the
+        # parse and stashes the upload on request.scope; by here the stream is already consumed.
+        upload = get_streaming_audio_upload(request)
+        if upload is None:
+            raise ProxyException(
+                message="Transcription upload was not parsed by the auth pre-read",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                type="internal_server_error",
+                param="file",
+            )
+        data = {key: value for key, value in upload.fields.items()}
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -9647,7 +9658,7 @@ async def audio_transcriptions(
 
         router_model_names = llm_router.model_names if llm_router is not None else []
 
-        if file.filename is None:
+        if upload.filename is None:
             raise ProxyException(
                 message="File name is None. Please check your file name",
                 code=status.HTTP_400_BAD_REQUEST,
@@ -9655,38 +9666,26 @@ async def audio_transcriptions(
                 param="file",
             )
 
-        # Check if File can be read in memory before reading
-        check_file_size_under_limit(
-            request_data=data,
-            file=file,
-            router_model_names=router_model_names,
+        # The file size can't be checked up front (it's still streaming); resolve the configured
+        # limit now and enforce it incrementally as bytes arrive.
+        upload.max_file_bytes = resolve_max_file_bytes(request_data=data, router_model_names=router_model_names)
+        data["file"] = upload
+
+        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="transcription",
         )
 
-        file_content = await file.read()
-        file_object = io.BytesIO(file_content)
-        file_object.name = file.filename
-        data["file"] = file_object
-
-        try:
-            ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-            data = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                call_type="transcription",
-            )
-
-            ## ROUTE TO CORRECT ENDPOINT ##
-            llm_call = await route_request(
-                data=data,
-                route_type="atranscription",
-                llm_router=llm_router,
-                user_model=user_model,
-            )
-            response = await llm_call
-        except Exception as e:
-            raise e
-        finally:
-            file_object.close()  # close the file read in by io library
+        ## ROUTE TO CORRECT ENDPOINT ##
+        llm_call = await route_request(
+            data=data,
+            route_type="atranscription",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        response = await llm_call
 
         ### ALERTING ###
         asyncio.create_task(
