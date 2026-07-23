@@ -765,6 +765,7 @@ if MCP_AVAILABLE:
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
         host_token = getattr(host_ctx.meta, "progressToken", None)
+
         if host_token is None or not (hasattr(host_ctx, "session") and host_ctx.session):
             return None
         host_session = host_ctx.session
