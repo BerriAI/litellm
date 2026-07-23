@@ -53,6 +53,12 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     return CustomerResponse.model_validate(record.model_dump())
 
 
+def _customer_update_values(data: UpdateCustomerRequest) -> dict:
+    """Return the scalar values explicitly supplied by the caller."""
+    data_json: Final[dict] = data.json(exclude_unset=True)
+    return {key: value for key, value in data_json.items() if value not in ([], {})}
+
+
 @router.post(
     "/end_user/block",
     tags=["Customer Management"],
@@ -210,6 +216,11 @@ async def _handle_customer_object_permission_update(
         prisma_client: Prisma database client
     """
     if "object_permission" in non_default_values:
+        if non_default_values["object_permission"] is None:
+            non_default_values.pop("object_permission")
+            update_end_user_table_data["object_permission_id"] = None
+            return
+
         existing_object_permission_id: Final = (
             end_user_table_data_typed.object_permission_id if end_user_table_data_typed is not None else None
         )
@@ -533,20 +544,12 @@ async def update_end_user(
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
-        data_json: Final[dict] = data.json()
         # get the row from db
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        # get non default values for key
-        non_default_values: Final = {}
-        for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
-                non_default_values[k] = v
+        # Build the update from fields present in the request.
+        non_default_values: Final = _customer_update_values(data)
 
         ## Get end user table data ##
         end_user_table_data: Final = await EndUserRepository(prisma_client).table.find_first(
@@ -590,17 +593,18 @@ async def update_end_user(
         ## Check if we need to create a new budget (only if budget fields are provided, not just budget_id) ##
         if budget_table_data:
             if end_user_budget_table is None:
-                ## Create new budget ##
-                budget_table_data_record = await BudgetRepository(prisma_client).table.create(
-                    data={
-                        **budget_table_data,
-                        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                    },
-                    include={"end_users": True},
-                )
+                if any(value is not None for value in budget_table_data.values()):
+                    ## Create new budget ##
+                    budget_table_data_record = await BudgetRepository(prisma_client).table.create(
+                        data={
+                            **budget_table_data,
+                            "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                        },
+                        include={"end_users": True},
+                    )
 
-                update_end_user_table_data["budget_id"] = budget_table_data_record.budget_id
+                    update_end_user_table_data["budget_id"] = budget_table_data_record.budget_id
             else:
                 ## Update existing budget ##
                 budget_table_data_record = await BudgetRepository(prisma_client).table.update(
