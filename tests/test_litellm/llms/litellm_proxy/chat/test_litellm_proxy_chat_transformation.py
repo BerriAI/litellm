@@ -77,14 +77,16 @@ def test_litellm_gateway_from_sdk_with_user_param():
 # --- tags forwarding from requester_metadata ---
 
 
-def test_tags_forwarded_from_requester_metadata():
+def test_tags_forwarded_from_requester_metadata(monkeypatch):
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", True)
     config = LiteLLMProxyChatConfig()
     litellm_params = {"metadata": {"requester_metadata": {"tags": ["project-x", "cost-center-42"]}}}
     body = _sync_transform(config, litellm_params=litellm_params)
     assert body["metadata"] == {"tags": ["project-x", "cost-center-42"]}
 
 
-def test_non_allowlisted_fields_not_forwarded():
+def test_non_allowlisted_fields_not_forwarded(monkeypatch):
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", True)
     config = LiteLLMProxyChatConfig()
     litellm_params = {
         "metadata": {
@@ -126,14 +128,16 @@ def test_no_metadata_key_when_metadata_absent():
 # --- litellm_session_id forwarding ---
 
 
-def test_session_id_injected_into_extra_body():
+def test_session_id_injected_into_extra_body(monkeypatch):
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", True)
     config = LiteLLMProxyChatConfig()
     litellm_params = {"litellm_session_id": "session-abc-123"}
     body = _sync_transform(config, litellm_params=litellm_params)
     assert body["extra_body"]["litellm_session_id"] == "session-abc-123"
 
 
-def test_session_id_does_not_overwrite_existing_extra_body_value():
+def test_session_id_does_not_overwrite_existing_extra_body_value(monkeypatch):
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", True)
     config = LiteLLMProxyChatConfig()
     litellm_params = {"litellm_session_id": "upstream-session"}
     optional_params = {"extra_body": {"litellm_session_id": "caller-set-session"}}
@@ -150,7 +154,8 @@ def test_session_id_absent_when_not_in_litellm_params():
 # --- combined tags + session_id ---
 
 
-def test_tags_and_session_id_both_forwarded():
+def test_tags_and_session_id_both_forwarded(monkeypatch):
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", True)
     config = LiteLLMProxyChatConfig()
     litellm_params = {
         "metadata": {"requester_metadata": {"tags": ["sprint-3"]}},
@@ -171,8 +176,9 @@ def test_optional_params_passed_through():
     assert body["max_tokens"] == 100
 
 
-def test_forwarded_metadata_merges_with_existing_optional_params_metadata():
+def test_forwarded_metadata_merges_with_existing_optional_params_metadata(monkeypatch):
     """Forwarded tags must be merged with any metadata already in optional_params, not overwrite it."""
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", True)
     config = LiteLLMProxyChatConfig()
     body = _sync_transform(
         config,
@@ -189,7 +195,8 @@ def test_forwarded_metadata_merges_with_existing_optional_params_metadata():
 
 
 @pytest.mark.asyncio
-async def test_async_matches_sync_for_tags_and_session():
+async def test_async_matches_sync_for_tags_and_session(monkeypatch):
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", True)
     config = LiteLLMProxyChatConfig()
     litellm_params = {
         "metadata": {"requester_metadata": {"tags": ["async-test"]}},
@@ -206,3 +213,24 @@ async def test_async_no_metadata_when_empty():
     async_body = await _async_transform(config, litellm_params={})
     assert "metadata" not in async_body
     assert "extra_body" not in async_body
+
+
+# --- gate-off regression guard ---
+
+
+def test_tags_not_forwarded_when_flag_disabled(monkeypatch):
+    """When forward_proxy_metadata is False (default), tags in requester_metadata must not appear in the request body."""
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", False)
+    config = LiteLLMProxyChatConfig()
+    litellm_params = {"metadata": {"requester_metadata": {"tags": ["project-x"]}}}
+    body = _sync_transform(config, litellm_params=litellm_params)
+    assert "metadata" not in body or "tags" not in body.get("metadata", {})
+
+
+def test_session_id_not_forwarded_when_flag_disabled(monkeypatch):
+    """When forward_proxy_metadata is False (default), litellm_session_id must not appear in extra_body."""
+    monkeypatch.setattr(litellm, "forward_proxy_metadata", False)
+    config = LiteLLMProxyChatConfig()
+    litellm_params = {"litellm_session_id": "session-abc-123"}
+    body = _sync_transform(config, litellm_params=litellm_params)
+    assert "extra_body" not in body or "litellm_session_id" not in body.get("extra_body", {})

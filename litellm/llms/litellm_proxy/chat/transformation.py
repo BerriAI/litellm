@@ -129,6 +129,11 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
             **optional_params,
         }
 
+        import litellm
+
+        if not litellm.forward_proxy_metadata:
+            return request_body
+
         metadata = litellm_params.get("metadata")
         if metadata is not None:
             requester_metadata = metadata.get("requester_metadata")
