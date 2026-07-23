@@ -4,7 +4,10 @@ import pytest
 
 import litellm
 from litellm.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -1490,3 +1493,109 @@ class TestStreamingTransform:
 
         # None holdback treated as 0: full text emitted, no crash.
         assert "".join(_delta_text(i) for i in out) == "ABCDEF"
+
+
+def _applied_guardrails(data: dict) -> list:
+    for key in ("metadata", "litellm_metadata"):
+        meta = data.get(key)
+        if isinstance(meta, dict) and isinstance(meta.get("applied_guardrails"), list):
+            return meta["applied_guardrails"]
+    return []
+
+
+class _TextsOnlyTranslation(BaseTranslation):
+    """Mimics a passthrough handler: hands the guardrail only `texts`, never
+    structured_messages, so a structured_messages-based guardrail no-ops."""
+
+    async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
+        await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": ["payload"]},
+            request_data=data,
+            input_type="request",
+            logging_obj=litellm_logging_obj,
+        )
+        return data
+
+    async def process_output_response(  # type: ignore[override]
+        self,
+        response,
+        guardrail_to_apply,
+        litellm_logging_obj=None,
+        user_api_key_dict=None,
+        request_data=None,
+    ):
+        return response
+
+
+class _SelfLoggingGuardrail(CustomGuardrail):
+    records_own_guardrail_information = True
+
+    def __init__(self, *, self_add: bool):
+        super().__init__(guardrail_name="self-logging")
+        self._self_add = self_add
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        if self._self_add:
+            from litellm.proxy.common_utils.callback_utils import (
+                add_guardrail_to_applied_guardrails_header,
+            )
+
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+        return inputs
+
+
+class _AutoLoggingGuardrail(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="auto-logging")
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return inputs
+
+
+class TestAppliedGuardrailsReflectsExecution:
+    """The unified hook must not auto-mark a self-logging guardrail
+    (records_own_guardrail_information) as applied; such a guardrail owns that
+    decision and marks itself only when it actually ran (LIT-4650). Ordinary
+    guardrails are still auto-marked by the hook after dispatch."""
+
+    @staticmethod
+    def _data(guardrail):
+        return {
+            "guardrail_to_apply": guardrail,
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello world"}],
+        }
+
+    async def _run(self, guardrail):
+        unified_module.endpoint_guardrail_translation_mappings = {CallTypes.pass_through: _TextsOnlyTranslation}
+        data = self._data(guardrail)
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=None,
+            cache=DualCache(),
+            data=data,
+            call_type=CallTypes.pass_through.value,
+        )
+        return data
+
+    @pytest.mark.asyncio
+    async def test_self_logging_guardrail_is_not_auto_marked_applied(self):
+        data = await self._run(_SelfLoggingGuardrail(self_add=False))
+        assert "self-logging" not in _applied_guardrails(data)
+
+    @pytest.mark.asyncio
+    async def test_self_logging_guardrail_that_self_marks_is_applied(self):
+        data = await self._run(_SelfLoggingGuardrail(self_add=True))
+        assert "self-logging" in _applied_guardrails(data)
+
+    @pytest.mark.asyncio
+    async def test_ordinary_guardrail_is_auto_marked_applied(self):
+        data = await self._run(_AutoLoggingGuardrail())
+        assert "auto-logging" in _applied_guardrails(data)
