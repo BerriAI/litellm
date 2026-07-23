@@ -10712,6 +10712,10 @@ def _get_provider_token_counter(
     if deployment is None:
         return None
 
+    model_info = deployment.get("model_info") or {}
+    if model_info.get("use_local_token_counter"):
+        return None, None, None
+
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     full_model = deployment.get("litellm_params", {}).get("model", "")
