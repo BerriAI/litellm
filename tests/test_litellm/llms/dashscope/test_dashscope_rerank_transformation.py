@@ -314,6 +314,72 @@ class TestDashScopeRerankResponse:
         assert err.status_code == 500
 
 
+class TestDashScopeRerankCost:
+    def setup_method(self):
+        self.config = DashScopeRerankConfig()
+
+    def test_cost_with_total_tokens(self):
+        from litellm.types.rerank import RerankBilledUnits
+
+        model_info = {"input_cost_per_token": 1e-6, "output_cost_per_token": 0.0}
+        billed = RerankBilledUnits(total_tokens=100)
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=billed,
+            model_info=model_info,
+        )
+        assert prompt_cost == pytest.approx(1e-4)
+        assert completion_cost == 0.0
+
+    def test_cost_zero_tokens(self):
+        from litellm.types.rerank import RerankBilledUnits
+
+        model_info = {"input_cost_per_token": 1e-6, "output_cost_per_token": 0.0}
+        billed = RerankBilledUnits(total_tokens=0)
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=billed,
+            model_info=model_info,
+        )
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.0
+
+    def test_cost_no_model_info(self):
+        from litellm.types.rerank import RerankBilledUnits
+
+        billed = RerankBilledUnits(total_tokens=100)
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=billed,
+            model_info=None,
+        )
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.0
+
+    def test_cost_no_billed_units(self):
+        model_info = {"input_cost_per_token": 1e-6, "output_cost_per_token": 0.0}
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=None,
+            model_info=model_info,
+        )
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.0
+
+    def test_cost_missing_input_cost_per_token(self):
+        from litellm.types.rerank import RerankBilledUnits
+
+        model_info = {"output_cost_per_token": 0.0}
+        billed = RerankBilledUnits(total_tokens=100)
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=billed,
+            model_info=model_info,
+        )
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.0
+
+
 class TestProviderConfigManagerDispatch:
     def test_dashscope_returns_rerank_config(self):
         import litellm

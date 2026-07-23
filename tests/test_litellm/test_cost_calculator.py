@@ -3479,3 +3479,46 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_rerank_response_usage_computed_field_from_tokens():
+    from litellm.types.rerank import RerankBilledUnits, RerankResponse, RerankResponseMeta, RerankTokens
+
+    r = RerankResponse(
+        meta=RerankResponseMeta(
+            billed_units=RerankBilledUnits(total_tokens=24),
+            tokens=RerankTokens(input_tokens=24),
+        )
+    )
+    assert r.usage == {"prompt_tokens": 24, "completion_tokens": 0, "total_tokens": 24}
+
+
+def test_rerank_response_usage_billed_units_fallback():
+    from litellm.types.rerank import RerankBilledUnits, RerankResponse, RerankResponseMeta
+
+    r = RerankResponse(meta=RerankResponseMeta(billed_units=RerankBilledUnits(total_tokens=30)))
+    assert r.usage == {"prompt_tokens": 30, "completion_tokens": 0, "total_tokens": 30}
+
+
+def test_rerank_response_usage_none_when_no_tokens():
+    from litellm.types.rerank import RerankResponse, RerankResponseMeta
+
+    assert RerankResponse().usage is None
+    assert RerankResponse(meta=RerankResponseMeta()).usage is None
+
+
+def test_rerank_response_usage_in_model_dump():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.rerank import RerankBilledUnits, RerankResponse, RerankResponseMeta, RerankTokens
+
+    r = RerankResponse(
+        id="abc",
+        meta=RerankResponseMeta(
+            billed_units=RerankBilledUnits(total_tokens=24),
+            tokens=RerankTokens(input_tokens=24),
+        ),
+    )
+    usage = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=r.model_dump())
+    assert usage["prompt_tokens"] == 24
+    assert usage["completion_tokens"] == 0
+    assert usage["total_tokens"] == 24
