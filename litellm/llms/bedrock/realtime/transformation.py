@@ -623,35 +623,42 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             verbose_logger.warning(f"Unknown message type: {message_type}")
             return []
 
-    def transform_session_start_event(
+    def _session_object(
         self,
-        event: dict,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-    ) -> OpenAIRealtimeStreamSessionEvents:
-        """
-        Transform Bedrock sessionStart event to OpenAI session.created.
-
-        Args:
-            event: Bedrock sessionStart event
-            model: Model ID
-            logging_obj: Logging object
-
-        Returns:
-            OpenAI session.created event
-        """
-        verbose_logger.debug("Handling sessionStart")
-
+        modalities: list[str] | None = None,
+    ) -> OpenAIRealtimeStreamSession:
         session = OpenAIRealtimeStreamSession(
             id=logging_obj.litellm_trace_id,
-            modalities=["text", "audio"],
+            modalities=modalities if modalities is not None else ["text", "audio"],
         )
         if model is not None and isinstance(model, str):
             session["model"] = model
+        return session
 
+    def session_created_event(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> OpenAIRealtimeStreamSessionEvents:
+        """Build the OpenAI session.created event for this realtime session."""
         return OpenAIRealtimeStreamSessionEvents(
             type="session.created",
-            session=session,
+            session=self._session_object(model, logging_obj),
+            event_id=str(uuid.uuid4()),
+        )
+
+    def session_updated_event(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        modalities: list[str] | None = None,
+    ) -> OpenAIRealtimeStreamSessionEvents:
+        """Build the OpenAI session.updated ack reflecting the client's requested modalities."""
+        return OpenAIRealtimeStreamSessionEvents(
+            type="session.updated",
+            session=self._session_object(model, logging_obj, modalities),
             event_id=str(uuid.uuid4()),
         )
 
@@ -1169,8 +1176,6 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Route to appropriate transformation method
         if "sessionStart" in event:
-            session_created = self.transform_session_start_event(event, model, logging_obj)
-            returned_messages.append(session_created)
             session_configuration_request = json.dumps({"configured": True})
 
         elif "contentStart" in event:

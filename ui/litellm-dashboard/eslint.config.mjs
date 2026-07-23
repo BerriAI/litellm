@@ -19,12 +19,13 @@ const eslintConfig = [
       "unused-imports/no-unused-imports": "error",
       "local/no-large-inline-object-arg": "warn",
       "local/no-long-condition-chain": "warn",
+      "local/no-complex-jsx-arrow": ["error", { maxStatements: 2 }],
       "@typescript-eslint/no-explicit-any": "warn",
       "no-console": ["warn", { allow: ["warn", "error"] }],
       "@typescript-eslint/no-unused-vars": "off",
       "@typescript-eslint/no-unused-expressions": "off",
       "@typescript-eslint/ban-ts-comment": "off",
-      "prefer-const": "off",
+      "prefer-const": "error",
       "no-empty": "off",
       "no-prototype-builtins": "off",
       "no-useless-catch": "off",
@@ -51,11 +52,30 @@ const eslintConfig = [
           patterns: [
             {
               group: ["@tremor/react", "@tremor/react/*"],
-              message: "@tremor/react is being phased out; build new UI with antd instead of adding tremor imports.",
+              message:
+                "@tremor/react is being phased out; build new UI with shadcn/ui primitives instead of adding tremor imports.",
+            },
+            {
+              group: ["antd", "antd/*"],
+              message:
+                "antd is being phased out; build new UI with shadcn/ui primitives instead of adding antd imports.",
             },
           ],
         },
       ],
+    },
+  },
+  {
+    files: ["src/**/*.tsx"],
+    rules: {
+      "local/filename-pascal-case": "error",
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}", "src/**/*.spec.{ts,tsx}", "src/data/**"],
+    rules: {
+      "max-lines": ["error", { max: 800, skipBlankLines: true, skipComments: true }],
     },
   },
   {

@@ -10,9 +10,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../"))  # Adds the parent directory to the system path
 
 
 @pytest.mark.asyncio
@@ -58,16 +56,12 @@ async def test_organization_update_object_permissions_existing_permission(monkey
         "vector_stores": ["old_store_1", "old_store_2"],
     }
 
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=existing_object_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_object_permission)
 
     # Mock upsert operation
     updated_permission = MagicMock()
     updated_permission.object_permission_id = "existing_perm_id_123"
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
-        return_value=updated_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(return_value=updated_permission)
 
     # Test data with new object permission
     data_json = {
@@ -107,9 +101,7 @@ async def test_get_organization_daily_activity_admin_param_passing(monkeypatch):
 
     # Mock prisma client
     mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Admin view -> skip membership restriction
@@ -121,9 +113,7 @@ async def test_get_organization_daily_activity_admin_param_passing(monkeypatch):
     # Patch downstream common function and verify call args
     mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
     get_daily_activity_mock = AsyncMock(return_value=mocked_response)
-    monkeypatch.setattr(
-        organization_endpoints, "get_daily_activity", get_daily_activity_mock
-    )
+    monkeypatch.setattr(organization_endpoints, "get_daily_activity", get_daily_activity_mock)
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1")
     result = await get_organization_daily_activity(
@@ -172,17 +162,11 @@ async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
 
     # Mock prisma client and memberships
     mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
         return_value=[
-            SimpleNamespace(
-                organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value
-            ),
-            SimpleNamespace(
-                organization_id="orgB", user_role=LitellmUserRoles.ORG_ADMIN.value
-            ),
+            SimpleNamespace(organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value),
+            SimpleNamespace(organization_id="orgB", user_role=LitellmUserRoles.ORG_ADMIN.value),
         ]
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -196,13 +180,9 @@ async def test_get_organization_daily_activity_non_admin_defaults_to_admin_orgs(
     # Patch downstream aggregator
     mocked_response = MagicMock(name="SpendAnalyticsPaginatedResponse")
     get_daily_activity_mock = AsyncMock(return_value=mocked_response)
-    monkeypatch.setattr(
-        organization_endpoints, "get_daily_activity", get_daily_activity_mock
-    )
+    monkeypatch.setattr(organization_endpoints, "get_daily_activity", get_daily_activity_mock)
 
-    auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"
-    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user")
     await get_organization_daily_activity(
         organization_ids=None,
         start_date="2024-02-01",
@@ -238,15 +218,9 @@ async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises
     # Mock prisma client and memberships (only orgA is admin)
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(
-        return_value=[
-            SimpleNamespace(
-                organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value
-            )
-        ]
+        return_value=[SimpleNamespace(organization_id="orgA", user_role=LitellmUserRoles.ORG_ADMIN.value)]
     )
-    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Non-admin view
@@ -255,9 +229,7 @@ async def test_get_organization_daily_activity_non_admin_unauthorized_org_raises
         lambda _: False,
     )
 
-    auth = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user"
-    )
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="regular-user")
 
     with pytest.raises(HTTPException) as exc:
         await get_organization_daily_activity(
@@ -312,21 +284,17 @@ async def test_organization_update_object_permissions_no_existing_permission(
     )
 
     # Mock find_unique to return None (no existing permission)
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
 
     # Mock upsert to create new record
     new_permission = MagicMock()
     new_permission.object_permission_id = "new_perm_id_456"
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
-        return_value=new_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(return_value=new_permission)
 
     data_json = {
-        "object_permission": LiteLLM_ObjectPermissionBase(
-            vector_stores=["brand_new_store"]
-        ).model_dump(exclude_unset=True, exclude_none=True),
+        "object_permission": LiteLLM_ObjectPermissionBase(vector_stores=["brand_new_store"]).model_dump(
+            exclude_unset=True, exclude_none=True
+        ),
         "organization_alias": "updated_org_2",
     }
 
@@ -381,21 +349,17 @@ async def test_organization_update_object_permissions_missing_permission_record(
     )
 
     # Mock find_unique to return None (permission record not found)
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
 
     # Mock upsert to create new record
     new_permission = MagicMock()
     new_permission.object_permission_id = "recreated_perm_id_789"
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
-        return_value=new_permission
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(return_value=new_permission)
 
     data_json = {
-        "object_permission": LiteLLM_ObjectPermissionBase(
-            vector_stores=["recreated_store"]
-        ).model_dump(exclude_unset=True, exclude_none=True),
+        "object_permission": LiteLLM_ObjectPermissionBase(vector_stores=["recreated_store"]).model_dump(
+            exclude_unset=True, exclude_none=True
+        ),
         "organization_alias": "updated_org_3",
     }
 
@@ -446,18 +410,14 @@ async def test_list_organization_filter_by_org_id(monkeypatch):
     )
 
     # Mock find_many to return filtered results
-    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
-        return_value=[mock_org1]
-    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[mock_org1])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Test as proxy admin
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
 
-    result = await list_organization(
-        org_id="org-123", org_alias=None, user_api_key_dict=auth
-    )
+    result = await list_organization(org_id="org-123", org_alias=None, user_api_key_dict=auth)
 
     # Verify the correct organization was returned
     assert len(result) == 1
@@ -512,18 +472,14 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
     )
 
     # Mock find_many to return filtered results
-    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
-        return_value=[mock_org1, mock_org2]
-    )
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(return_value=[mock_org1, mock_org2])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     # Test as proxy admin with org_alias filter
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
 
-    result = await list_organization(
-        org_id=None, org_alias="test", user_api_key_dict=auth
-    )
+    result = await list_organization(org_id=None, org_alias="test", user_api_key_dict=auth)
 
     # Verify organizations with "test" in alias were returned
     assert len(result) == 2
@@ -532,9 +488,7 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
     # Verify find_many was called with correct where conditions (case-insensitive contains)
     mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
     call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
-    assert call_args.kwargs["where"] == {
-        "organization_alias": {"contains": "test", "mode": "insensitive"}
-    }
+    assert call_args.kwargs["where"] == {"organization_alias": {"contains": "test", "mode": "insensitive"}}
     assert call_args.kwargs["include"] == {
         "litellm_budget_table": True,
         "members": True,
@@ -612,16 +566,12 @@ def patched_org_prisma():
         ),
         patch("litellm.proxy.proxy_server.proxy_logging_obj"),
     ):
-        mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
-            return_value=victim_row
-        )
+        mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(return_value=victim_row)
         yield mock_prisma
 
 
 @pytest.mark.asyncio
-async def test_organization_member_add_rejects_unauthorized_caller(
-    patched_org_prisma, unauthorized_caller
-):
+async def test_organization_member_add_rejects_unauthorized_caller(patched_org_prisma, unauthorized_caller):
     # ``organization_member_add`` catches HTTPException in its
     # catch-all and re-wraps as ProxyException with the original status
     # code preserved.
@@ -653,9 +603,7 @@ async def test_organization_member_add_rejects_unauthorized_caller(
 
 
 @pytest.mark.asyncio
-async def test_organization_member_update_rejects_unauthorized_caller(
-    patched_org_prisma, unauthorized_caller
-):
+async def test_organization_member_update_rejects_unauthorized_caller(patched_org_prisma, unauthorized_caller):
     from litellm.proxy._types import OrganizationMemberUpdateRequest
     from litellm.proxy.management_endpoints.organization_endpoints import (
         organization_member_update,
@@ -676,9 +624,7 @@ async def test_organization_member_update_rejects_unauthorized_caller(
 
 
 @pytest.mark.asyncio
-async def test_organization_member_delete_rejects_unauthorized_caller(
-    patched_org_prisma, unauthorized_caller
-):
+async def test_organization_member_delete_rejects_unauthorized_caller(patched_org_prisma, unauthorized_caller):
     from litellm.proxy._types import OrganizationMemberDeleteRequest
     from litellm.proxy.management_endpoints.organization_endpoints import (
         organization_member_delete,
@@ -695,3 +641,354 @@ async def test_organization_member_delete_rejects_unauthorized_caller(
             user_api_key_dict=unauthorized_caller,
         )
     assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"tpm_limit": ""}, {"tmp_limit": None}],
+    ids=["non-numeric-limit", "unknown-key"],
+)
+def test_v2_model_rejects_invalid_body(body):
+    """A non-numeric limit and an unknown/misspelled key are both rejected at model validation (422 at the route)."""
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import OrganizationUpdateRequestV2
+
+    with pytest.raises(ValidationError):
+        OrganizationUpdateRequestV2.model_validate(body)
+
+
+class _FakeTxContext:
+    def __init__(self, tx):
+        self._tx = tx
+
+    async def __aenter__(self):
+        return self._tx
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+async def _run_update_organization_v2(
+    monkeypatch,
+    *,
+    body: dict,
+    existing_budget_id,
+    existing_metadata,
+    existing_object_permission_id=None,
+    existing_object_permission_row=None,
+):
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        OrganizationUpdateRequestV2,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        update_organization_v2,
+    )
+    from litellm.proxy.utils import jsonify_object
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = jsonify_object
+
+    existing_org = MagicMock()
+    existing_org.budget_id = existing_budget_id
+    existing_org.object_permission_id = existing_object_permission_id
+    existing_org.metadata = existing_metadata
+
+    mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=existing_org)
+    mock_prisma_client.db.litellm_organizationtable.update = AsyncMock(return_value=MagicMock())
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=existing_object_permission_row
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock()
+
+    tx = MagicMock()
+    tx.litellm_organizationtable = mock_prisma_client.db.litellm_organizationtable
+    tx.litellm_budgettable = mock_prisma_client.db.litellm_budgettable
+    tx.litellm_objectpermissiontable.upsert = AsyncMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_FakeTxContext(tx))
+    mock_prisma_client.tx = tx
+
+    call_order = MagicMock()
+    call_order.attach_mock(tx.litellm_objectpermissiontable.upsert, "permission_upsert")
+    call_order.attach_mock(mock_prisma_client.db.litellm_organizationtable.update, "org_update")
+    mock_prisma_client.call_order = call_order
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(organization_endpoints, "_verify_org_access", AsyncMock())
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    await update_organization_v2(
+        organization_id="org-1",
+        data=OrganizationUpdateRequestV2.model_validate(body),
+        user_api_key_dict=auth,
+    )
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_v2_update_clears_tpm_limit_and_metadata(monkeypatch):
+    """A cleared tpm_limit is written to the budget row as None; a cleared metadata is written as {}."""
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"tpm_limit": None, "metadata": None},
+        existing_budget_id="budget-1",
+        existing_metadata={"stale": "value"},
+    )
+
+    budget_write = prisma.db.litellm_budgettable.update.await_args
+    assert budget_write.kwargs["where"] == {"budget_id": "budget-1"}
+    assert budget_write.kwargs["data"]["tpm_limit"] is None
+    assert "soft_budget" not in budget_write.kwargs["data"]
+
+    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert json.loads(write_data["metadata"]) == {}
+    assert "budget_id" not in write_data
+
+
+@pytest.mark.asyncio
+async def test_v2_update_untouched_fields_not_written(monkeypatch):
+    """Omitted fields are left untouched: only organization_alias is written, no budget-row write."""
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"organization_alias": "renamed"},
+        existing_budget_id="budget-1",
+        existing_metadata={"keep": "me"},
+    )
+
+    prisma.db.litellm_budgettable.update.assert_not_awaited()
+    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert write_data["organization_alias"] == "renamed"
+    assert "metadata" not in write_data
+    assert "tpm_limit" not in write_data
+
+
+@pytest.mark.asyncio
+async def test_v2_update_metadata_replaces_not_merges(monkeypatch):
+    """Sending metadata replaces the stored blob wholesale; a previously-present key is gone."""
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"metadata": {"a": 1}},
+        existing_budget_id="budget-1",
+        existing_metadata={"stale": "value"},
+    )
+    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert json.loads(write_data["metadata"]) == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_v2_rejects_null_clear_of_non_nullable_fields(monkeypatch):
+    """organization_alias and models are non-nullable columns, so a null clear is a 422, not a 500."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+
+    for body in ({"organization_alias": None}, {"models": None}):
+        with pytest.raises(HTTPException) as exc:
+            await update_organization_v2(
+                organization_id="org-1",
+                data=OrganizationUpdateRequestV2.model_validate(body),
+                user_api_key_dict=auth,
+            )
+        assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_v2_rejects_negative_max_budget(monkeypatch):
+    """v2 rejects a negative max_budget with a 422 before touching the DB."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    with pytest.raises(HTTPException) as exc:
+        await update_organization_v2(
+            organization_id="org-1",
+            data=OrganizationUpdateRequestV2.model_validate({"max_budget": -5}),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 422
+    assert "max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_v2_rejects_caller_without_org_access(monkeypatch):
+    """v2 runs the real _verify_org_access guard: a non-admin without ORG_ADMIN on the org gets 403 and no write."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(organization_endpoints, "_user_has_admin_view", lambda _: False)
+
+    caller = MagicMock()
+    caller.organization_memberships = []
+    monkeypatch.setattr(organization_endpoints, "get_user_object", AsyncMock(return_value=caller))
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1")
+    with pytest.raises(HTTPException) as exc:
+        await update_organization_v2(
+            organization_id="org-1",
+            data=OrganizationUpdateRequestV2.model_validate({"tpm_limit": 5}),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 403
+    mock_prisma_client.db.litellm_organizationtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_wires_object_permission_onto_org_write(monkeypatch):
+    """A sent object_permission merges over the existing permission row and its id is linked onto the org write."""
+    existing_row = MagicMock()
+    existing_row.model_dump.return_value = {
+        "object_permission_id": "op-123",
+        "mcp_servers": ["server-1"],
+    }
+
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"object_permission": {"vector_stores": ["vs-1"]}},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+        existing_object_permission_id="op-123",
+        existing_object_permission_row=existing_row,
+    )
+
+    upsert = prisma.tx.litellm_objectpermissiontable.upsert.await_args.kwargs
+    assert upsert["where"] == {"object_permission_id": "op-123"}
+    assert upsert["data"]["update"]["mcp_servers"] == ["server-1"]
+    assert upsert["data"]["update"]["vector_stores"] == ["vs-1"]
+    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert write_data["object_permission_id"] == "op-123"
+
+
+@pytest.mark.asyncio
+async def test_v2_object_permission_upsert_runs_inside_transaction(monkeypatch):
+    """The permission upsert runs on the tx client, before the org write that links it, so a rollback cannot
+    leave merged grants live on a row the org still points at."""
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"object_permission": {"vector_stores": ["vs-1"]}},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+    )
+
+    prisma.tx.litellm_objectpermissiontable.upsert.assert_awaited_once()
+    prisma.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+
+    upsert = prisma.tx.litellm_objectpermissiontable.upsert.await_args.kwargs
+    linked_id = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]["object_permission_id"]
+    assert upsert["where"] == {"object_permission_id": linked_id}
+    assert upsert["data"]["create"]["object_permission_id"] == linked_id
+
+    ordered = [name for name, _, _ in prisma.call_order.mock_calls if name in ("permission_upsert", "org_update")]
+    assert ordered == ["permission_upsert", "org_update"]
+
+
+@pytest.mark.asyncio
+async def test_v2_clears_object_permission_when_sent_null(monkeypatch):
+    """object_permission: null detaches the org's permission row (object_permission_id -> None), no merge."""
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"object_permission": None},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+    )
+
+    prisma.tx.litellm_objectpermissiontable.upsert.assert_not_awaited()
+    prisma.db.litellm_objectpermissiontable.find_unique.assert_not_awaited()
+    write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
+    assert write_data["object_permission_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_v2_rejects_empty_object_permission(monkeypatch):
+    """object_permission: {} merges nothing, so it is rejected (send null to clear) rather than silently leaving grants."""
+    from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(organization_endpoints, "_verify_org_access", AsyncMock())
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+    with pytest.raises(HTTPException) as exc:
+        await update_organization_v2(
+            organization_id="org-1",
+            data=OrganizationUpdateRequestV2.model_validate({"object_permission": {}}),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 422
+    assert "object_permission" in str(exc.value.detail)
+    mock_prisma_client.db.litellm_organizationtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_writes_budget_and_org_in_one_transaction(monkeypatch):
+    """A change touching both the budget row and the org row runs both writes inside one prisma transaction."""
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"tpm_limit": 500, "metadata": {"a": 1}},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+    )
+
+    prisma.db.tx.assert_called_once()
+    prisma.db.litellm_budgettable.update.assert_awaited_once()
+    prisma.db.litellm_organizationtable.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_v2_serializes_model_max_budget_on_budget_write(monkeypatch):
+    """model_max_budget is a Json column, so it is JSON-serialized on the budget-row write like new_budget/metadata."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.validate_model_max_budget",
+        lambda _: None,
+    )
+
+    prisma = await _run_update_organization_v2(
+        monkeypatch,
+        body={"model_max_budget": {"gpt-4o": {"max_budget": 10}}},
+        existing_budget_id="budget-1",
+        existing_metadata={},
+    )
+
+    written = prisma.db.litellm_budgettable.update.await_args.kwargs["data"]["model_max_budget"]
+    assert isinstance(written, str)
+    assert json.loads(written) == {"gpt-4o": {"max_budget": 10}}
+
+
+def test_build_budget_write_data_recomputes_reset_at_on_duration():
+    """A sent budget_duration recomputes budget_reset_at so the reset window follows the new duration."""
+    from litellm.proxy.management_endpoints.organization_endpoints import build_budget_write_data
+
+    data = build_budget_write_data({"budget_duration": "30d"}, "admin-1")
+    assert data["budget_duration"] == "30d"
+    assert "budget_reset_at" in data
+    assert data["updated_by"] == "admin-1"
+
+
+def test_build_budget_write_data_no_reset_at_without_duration():
+    """Clearing a limit writes it through untouched and does not recompute budget_reset_at."""
+    from litellm.proxy.management_endpoints.organization_endpoints import build_budget_write_data
+
+    data = build_budget_write_data({"tpm_limit": None}, "admin-1")
+    assert data["tpm_limit"] is None
+    assert "budget_reset_at" not in data
+
+
+def test_build_budget_write_data_clears_reset_at_with_null_duration():
+    """Clearing budget_duration also nulls budget_reset_at so no stale reset timestamp survives."""
+    from litellm.proxy.management_endpoints.organization_endpoints import build_budget_write_data
+
+    data = build_budget_write_data({"budget_duration": None}, "admin-1")
+    assert data["budget_duration"] is None
+    assert data["budget_reset_at"] is None

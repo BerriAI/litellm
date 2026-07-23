@@ -172,6 +172,7 @@ from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -2921,6 +2922,14 @@ class PrismaClient:
         if isinstance(self.db, RoutingPrismaWrapper):
             return self.db.writer
         return self.db
+
+    def tx(self) -> "TransactionManager":
+        """Open an interactive transaction on the writer.
+
+        Callers go through this instead of reaching into ``self.db`` so writer
+        selection and read-replica routing stay encapsulated in the wrapper.
+        """
+        return cast("TransactionManager", self.db.tx())  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
 
     def get_request_status(self, payload: Union[dict, SpendLogsPayload]) -> Literal["success", "failure"]:
         """
@@ -6159,6 +6168,9 @@ def create_model_info_response(
     if model_cost_info is not None:
         max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
         max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
+        mode = model_cost_info.get("mode")
+        if isinstance(mode, str):
+            base["mode"] = mode
 
     if llm_router is not None:
         configured_input, configured_output = llm_router.get_configured_token_limits(model_id)

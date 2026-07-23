@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   ui-unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-16-cores
     timeout-minutes: 20
     defaults:
       run:
@@ -50,8 +50,8 @@ jobs:
           if [ -n "$BASE_SHA" ]; then
             echo "Pull request: running only tests related to changes since $BASE_SHA"
             npm run test -- --run --changed "$BASE_SHA" --passWithNoTests \
-              --pool forks --poolOptions.forks.maxForks=4
+              --pool forks --poolOptions.forks.maxForks=14
           else
             echo "Push to $GITHUB_REF_NAME: running the full suite"
-            npm run test -- --run --pool forks --poolOptions.forks.maxForks=4
+            npm run test -- --run --pool forks --poolOptions.forks.maxForks=14
           fi
