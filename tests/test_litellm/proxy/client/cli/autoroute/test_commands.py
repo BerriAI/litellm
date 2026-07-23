@@ -71,24 +71,80 @@ class TestUpCommand:
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "lite autoroute configure" in result.output
 
-    def test_refuses_with_actionable_error_when_proxy_runtime_missing(self, monkeypatch, tmp_path):
+    def test_installs_the_proxy_runtime_on_demand_then_launches(self, monkeypatch, tmp_path):
         """`up` launches a real litellm proxy, which the thin `litellm[cli]` install cannot run.
-        It must fail fast with an actionable message pointing at the proxy install, before it ever
-        tries to launch the doomed subprocess (which would otherwise die with a bare ImportError)."""
+        Rather than refusing, it provisions the proxy runtime on demand and then proceeds to launch
+        -- so a thin install ends up working without the user re-running a different installer."""
+        config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        claude_settings_path.write_text(json.dumps({"theme": "dark"}))
+        _silence_signal_handling(monkeypatch)
+
+        check_count = {"n": 0}
+
+        def _missing():
+            check_count["n"] += 1
+            return ("fastapi", "websockets") if check_count["n"] == 1 else ()
+
+        install_calls = []
+        launched = []
+        monkeypatch.setattr(commands_module, "missing_proxy_runtime_modules", _missing)
+        monkeypatch.setattr(commands_module, "install_proxy_runtime", lambda: install_calls.append(True))
+        monkeypatch.setattr(commands_module, "launch_proxy", lambda *a, **k: launched.append(True) or FakeProcess(88))
+        monkeypatch.setattr(commands_module, "poll_liveliness", lambda *a, **k: None)
+        monkeypatch.setattr(commands_module, "is_port_available", lambda port: True)
+        monkeypatch.setattr(commands_module, "terminate", lambda pid, **k: None)
+        monkeypatch.setattr(commands_module.secrets, "token_urlsafe", lambda n: "fixed-master-key")
+        monkeypatch.setattr("threading.Event.wait", lambda self, timeout=None: True)
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code == 0, result.output
+        assert install_calls == [True]
+        assert launched == [True]
+        assert "fastapi, websockets" in result.output
+
+    def test_surfaces_error_and_does_not_launch_when_runtime_install_fails(self, monkeypatch, tmp_path):
+        """If provisioning the proxy runtime fails, `up` must surface the reason and never launch the
+        doomed proxy subprocess (which would otherwise die with a bare ImportError)."""
         config_path, _log_path, _settings_path, _backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
         config_path.write_text(yaml.safe_dump({"model_list": []}))
-        monkeypatch.setattr(commands_module, "missing_proxy_runtime_modules", lambda: ("fastapi", "websockets"))
+        monkeypatch.setattr(commands_module, "missing_proxy_runtime_modules", lambda: ("fastapi",))
+
+        def _boom():
+            raise commands_module.ProxyRuntimeInstallError("uv could not reach the index: network is down")
 
         def _fail_if_launched(*args, **kwargs):
-            raise AssertionError("launch_proxy must not run when the proxy runtime is missing")
+            raise AssertionError("launch_proxy must not run when the runtime install failed")
+
+        monkeypatch.setattr(commands_module, "install_proxy_runtime", _boom)
+        monkeypatch.setattr(commands_module, "launch_proxy", _fail_if_launched)
+
+        result = self.runner.invoke(up)
+
+        assert result.exit_code != 0
+        assert "network is down" in result.output
+
+    def test_errors_when_runtime_is_still_missing_after_install(self, monkeypatch, tmp_path):
+        """A `install_proxy_runtime` that reports success but leaves modules still unimportable must
+        not fall through to launching the proxy; `up` reports the still-missing modules instead."""
+        config_path, _log_path, _settings_path, _backup_path, _pid_record_path = _patch_paths(monkeypatch, tmp_path)
+        config_path.write_text(yaml.safe_dump({"model_list": []}))
+        monkeypatch.setattr(commands_module, "missing_proxy_runtime_modules", lambda: ("fastapi",))
+        monkeypatch.setattr(commands_module, "install_proxy_runtime", lambda: None)
+
+        def _fail_if_launched(*args, **kwargs):
+            raise AssertionError("launch_proxy must not run while the runtime is still missing")
 
         monkeypatch.setattr(commands_module, "launch_proxy", _fail_if_launched)
 
         result = self.runner.invoke(up)
 
         assert result.exit_code != 0
-        assert "fastapi, websockets" in result.output
-        assert "litellm[proxy]" in result.output
+        assert "still missing" in result.output
+        assert "fastapi" in result.output
 
     def test_refuses_when_pid_record_exists_and_process_still_running(self, monkeypatch, tmp_path):
         config_path, _log_path, _settings_path, _backup_path, pid_record_path = _patch_paths(monkeypatch, tmp_path)
