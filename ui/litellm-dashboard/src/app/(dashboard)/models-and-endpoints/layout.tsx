@@ -31,8 +31,8 @@ const TAB_LABELS: Record<ModelTabSlug, string> = {
 
 export default function ModelsAndEndpointsLayout({ children }: { children: ReactNode }) {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
-  const { data: teams } = useTeams();
-  const { data: uiSettings } = useUISettings();
+  const { data: teams, isLoading: teamsLoading } = useTeams();
+  const { data: uiSettings, isLoading: uiSettingsLoading } = useUISettings();
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -65,10 +65,16 @@ export default function ModelsAndEndpointsLayout({ children }: { children: React
   const activeKey = isKnownSlug ? activeSlug || BASE_TAB_KEY : BASE_TAB_KEY;
 
   useEffect(() => {
+    // Wait until the async inputs to tab visibility (teams, ui settings) have
+    // loaded; otherwise a team admin hard-loading /add is redirected to the base
+    // before their team membership resolves.
+    if (teamsLoading || uiSettingsLoading) {
+      return;
+    }
     if (activeSlug !== "" && !isKnownSlug) {
       router.replace(modelTabHref(""));
     }
-  }, [activeSlug, isKnownSlug, router]);
+  }, [activeSlug, isKnownSlug, teamsLoading, uiSettingsLoading, router]);
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
   const tabItems = visibleSlugs.map((slug) => {

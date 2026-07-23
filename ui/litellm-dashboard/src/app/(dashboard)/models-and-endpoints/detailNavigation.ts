@@ -1,4 +1,4 @@
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useCallback } from "react";
 
 export interface ModelDetailRouting {
@@ -9,38 +9,42 @@ export interface ModelDetailRouting {
   close: () => void;
 }
 
+/**
+ * The dashboard is a static export served under /ui by the proxy, a prefix the
+ * Next router (basePath "") does not know about. A router.push to the current
+ * pathname with only the query changed is deduped and never re-renders, so the
+ * detail overlay is driven by real browser navigation instead.
+ */
+function navigateWithParams(mutate: (params: URLSearchParams) => void): void {
+  const params = new URLSearchParams(window.location.search);
+  mutate(params);
+  const qs = params.toString();
+  window.location.assign(qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+}
+
 export function useModelDetailRouting(): ModelDetailRouting {
-  const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const openModel = useCallback(
-    (id: string) => {
-      const params = new URLSearchParams(searchParams?.toString());
+  const openModel = useCallback((id: string) => {
+    navigateWithParams((params) => {
       params.delete("team");
       params.set("model", id);
-      router.push(`${pathname}?${params.toString()}`);
-    },
-    [router, pathname, searchParams],
-  );
+    });
+  }, []);
 
-  const openTeam = useCallback(
-    (id: string) => {
-      const params = new URLSearchParams(searchParams?.toString());
+  const openTeam = useCallback((id: string) => {
+    navigateWithParams((params) => {
       params.delete("model");
       params.set("team", id);
-      router.push(`${pathname}?${params.toString()}`);
-    },
-    [router, pathname, searchParams],
-  );
+    });
+  }, []);
 
   const close = useCallback(() => {
-    const params = new URLSearchParams(searchParams?.toString());
-    params.delete("model");
-    params.delete("team");
-    const qs = params.toString();
-    router.push(qs ? `${pathname}?${qs}` : pathname);
-  }, [router, pathname, searchParams]);
+    navigateWithParams((params) => {
+      params.delete("model");
+      params.delete("team");
+    });
+  }, []);
 
   return {
     modelId: searchParams?.get("model") ?? null,

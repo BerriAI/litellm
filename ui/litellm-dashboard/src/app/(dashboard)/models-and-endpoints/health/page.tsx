@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { PaginationState } from "@tanstack/react-table";
 import HealthCheckComponent from "@/components/model_dashboard/HealthCheckComponent";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
@@ -21,19 +21,22 @@ export default function HealthStatusPage() {
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: HEALTH_PAGE_SIZE });
   const { data: healthModelDataResponse, isLoading } = useModelsInfo(pagination.pageIndex + 1, pagination.pageSize);
 
-  const getProviderFromModel = (model: string) => {
-    if (modelCostMapData && typeof modelCostMapData === "object" && model in modelCostMapData) {
-      return modelCostMapData[model]["litellm_provider"];
-    }
-    return "openai";
-  };
+  const getProviderFromModel = useCallback(
+    (model: string) => {
+      if (modelCostMapData && typeof modelCostMapData === "object" && model in modelCostMapData) {
+        return modelCostMapData[model]["litellm_provider"];
+      }
+      return "openai";
+    },
+    [modelCostMapData],
+  );
 
   const processedHealthModelData = useMemo(() => {
     if (!healthModelDataResponse?.data) {
       return { data: [] };
     }
     return transformModelData(healthModelDataResponse, getProviderFromModel);
-  }, [healthModelDataResponse?.data]);
+  }, [healthModelDataResponse, getProviderFromModel]);
 
   const healthModelIdsOnProxy = useMemo<string[]>(
     () =>
