@@ -1497,6 +1497,13 @@ async def _user_api_key_auth_builder(
                             check_cache_only=True,
                         ).resolve(hashed_token=hash_token(api_key))
                     )
+                # Key-cache entries are written only after the proxy validated a
+                # virtual key or the master key, but via_virtual_key is exclude=True
+                # so serialization drops it; restore it at this trusted boundary.
+                # The UI-login JWT fallback below constructs its token from a
+                # decrypted blob, not this cache, and stays unmarked.
+                if isinstance(valid_token, UserAPIKeyAuth):
+                    valid_token.via_virtual_key = True
             except Exception:
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
