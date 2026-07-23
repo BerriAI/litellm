@@ -3610,9 +3610,6 @@
     },
     "no-restricted-imports": {
       "count": 3
-    },
-    "unused-imports/no-unused-imports": {
-      "count": 1
     }
   },
   "src/components/page_utils.test.ts": {
