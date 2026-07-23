@@ -59,6 +59,9 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.autorouter_savings import (
+    compute_autorouter_savings,
+)
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
@@ -1570,6 +1573,16 @@ class DBSpendUpdateWriter:
                                         common_data["prompt_caching_savings_spend"] = transaction.get(
                                             "prompt_caching_savings_spend", 0
                                         )
+                                    if "autorouter_savings_spend" in transaction:
+                                        common_data["autorouter_savings_spend"] = transaction.get(
+                                            "autorouter_savings_spend", 0
+                                        )
+                                    if "autorouter_requests" in transaction:
+                                        common_data["autorouter_requests"] = transaction.get("autorouter_requests", 0)
+                                    if "autorouter_escalated_requests" in transaction:
+                                        common_data["autorouter_escalated_requests"] = transaction.get(
+                                            "autorouter_escalated_requests", 0
+                                        )
 
                                     if entity_type == "tag" and "request_id" in transaction:
                                         common_data["request_id"] = transaction.get("request_id")
@@ -1604,6 +1617,18 @@ class DBSpendUpdateWriter:
                                     if "prompt_caching_savings_spend" in transaction:
                                         update_data["prompt_caching_savings_spend"] = {
                                             "increment": transaction.get("prompt_caching_savings_spend", 0)
+                                        }
+                                    if "autorouter_savings_spend" in transaction:
+                                        update_data["autorouter_savings_spend"] = {
+                                            "increment": transaction.get("autorouter_savings_spend", 0)
+                                        }
+                                    if "autorouter_requests" in transaction:
+                                        update_data["autorouter_requests"] = {
+                                            "increment": transaction.get("autorouter_requests", 0)
+                                        }
+                                    if "autorouter_escalated_requests" in transaction:
+                                        update_data["autorouter_escalated_requests"] = {
+                                            "increment": transaction.get("autorouter_escalated_requests", 0)
                                         }
 
                                     if entity_type == "tag" and "request_id" in transaction:
@@ -1862,6 +1887,12 @@ class DBSpendUpdateWriter:
                 compression_saved_tokens=compression_saved_tokens,
                 cache_read_input_tokens=cache_read_input_tokens,
             )
+            autorouter_savings = compute_autorouter_savings(
+                metadata=_metadata,
+                prompt_tokens=payload["prompt_tokens"],
+                completion_tokens=payload["completion_tokens"],
+                actual_spend=payload["spend"],
+            )
 
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
@@ -1882,6 +1913,9 @@ class DBSpendUpdateWriter:
                 compression_saved_tokens=compression_saved_tokens,
                 compression_savings_spend=savings_spend.compression,
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
+                autorouter_savings_spend=autorouter_savings.savings_spend,
+                autorouter_requests=autorouter_savings.requests,
+                autorouter_escalated_requests=autorouter_savings.escalated_requests,
             )
             return daily_transaction
         except Exception as e:

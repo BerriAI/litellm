@@ -209,6 +209,9 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0,
         "prompt_caching_savings_spend": 0,
+        "autorouter_savings_spend": 0,
+        "autorouter_requests": 0,
+        "autorouter_escalated_requests": 0,
     }
 
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
@@ -259,6 +262,9 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0,
         "prompt_caching_savings_spend": 0,
+        "autorouter_savings_spend": 0,
+        "autorouter_requests": 0,
+        "autorouter_escalated_requests": 0,
     }
 
     # Add updates to queue

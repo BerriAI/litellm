@@ -153,6 +153,9 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "autorouter_requests": 0,
+        "autorouter_escalated_requests": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -498,6 +501,9 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.compression_saved_tokens = 0
     mock_record_1.compression_savings_spend = 0.0
     mock_record_1.prompt_caching_savings_spend = 0.0
+    mock_record_1.autorouter_savings_spend = 0.0
+    mock_record_1.autorouter_requests = 0
+    mock_record_1.autorouter_escalated_requests = 0
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
     mock_record_1.failed_requests = 1
@@ -520,6 +526,9 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.compression_saved_tokens = 0
     mock_record_2.compression_savings_spend = 0.0
     mock_record_2.prompt_caching_savings_spend = 0.0
+    mock_record_2.autorouter_savings_spend = 0.0
+    mock_record_2.autorouter_requests = 0
+    mock_record_2.autorouter_escalated_requests = 0
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
     mock_record_2.failed_requests = 0
@@ -582,6 +591,9 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "autorouter_requests": 0,
+        "autorouter_escalated_requests": 0,
         "failed_requests": 0,
     }
     mock_rows = [
@@ -669,6 +681,9 @@ def _daily_user_spend_record(*, user_id, api_key, spend):
         compression_saved_tokens=0,
         compression_savings_spend=0.0,
         prompt_caching_savings_spend=0.0,
+        autorouter_savings_spend=0.0,
+        autorouter_requests=0,
+        autorouter_escalated_requests=0,
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
@@ -883,6 +898,9 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "compression_saved_tokens": None,
             "compression_savings_spend": None,
             "prompt_caching_savings_spend": None,
+            "autorouter_savings_spend": None,
+            "autorouter_requests": None,
+            "autorouter_escalated_requests": None,
             "api_requests": None,
             "successful_requests": None,
             "failed_requests": None,
@@ -926,6 +944,9 @@ def _no_spend_record():
         compression_saved_tokens=None,
         compression_savings_spend=None,
         prompt_caching_savings_spend=None,
+        autorouter_savings_spend=None,
+        autorouter_requests=None,
+        autorouter_escalated_requests=None,
         api_requests=None,
         successful_requests=None,
         failed_requests=None,

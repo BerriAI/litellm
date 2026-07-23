@@ -52,6 +52,9 @@ def update_metrics(existing_metrics: SpendMetrics, record: Any) -> SpendMetrics:
     existing_metrics.compression_saved_tokens += record.compression_saved_tokens or 0
     existing_metrics.compression_savings_spend += record.compression_savings_spend or 0
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
+    existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
+    existing_metrics.autorouter_requests += record.autorouter_requests or 0
+    existing_metrics.autorouter_escalated_requests += record.autorouter_escalated_requests or 0
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
@@ -479,6 +482,9 @@ def _build_aggregated_sql_query(
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
+            SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
+            SUM(autorouter_requests)::bigint AS autorouter_requests,
+            SUM(autorouter_escalated_requests)::bigint AS autorouter_escalated_requests,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests
@@ -621,6 +627,9 @@ def _record_to_spend_metrics(record: Any) -> SpendMetrics:
         compression_saved_tokens=record.compression_saved_tokens or 0,
         compression_savings_spend=record.compression_savings_spend or 0,
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
+        autorouter_savings_spend=record.autorouter_savings_spend or 0,
+        autorouter_requests=record.autorouter_requests or 0,
+        autorouter_escalated_requests=record.autorouter_escalated_requests or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
@@ -874,6 +883,9 @@ async def get_daily_activity(
                 total_compression_saved_tokens=metadata_metrics.compression_saved_tokens,
                 total_compression_savings_spend=metadata_metrics.compression_savings_spend,
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
+                total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
+                total_autorouter_requests=metadata_metrics.autorouter_requests,
+                total_autorouter_escalated_requests=metadata_metrics.autorouter_escalated_requests,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
@@ -963,6 +975,9 @@ async def get_daily_activity_aggregated(
                 total_compression_saved_tokens=aggregated["totals"].compression_saved_tokens,
                 total_compression_savings_spend=aggregated["totals"].compression_savings_spend,
                 total_prompt_caching_savings_spend=aggregated["totals"].prompt_caching_savings_spend,
+                total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
+                total_autorouter_requests=aggregated["totals"].autorouter_requests,
+                total_autorouter_escalated_requests=aggregated["totals"].autorouter_escalated_requests,
                 page=1,
                 total_pages=1,
                 has_more=False,

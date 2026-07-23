@@ -33,6 +33,11 @@ const shortDate = (iso: string): string =>
 const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
 const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
 const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
+const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
+const autorouterRequestsOf = (m: SpendMetrics): number => m.autorouter_requests ?? 0;
+const autorouterEscalatedOf = (m: SpendMetrics): number => m.autorouter_escalated_requests ?? 0;
+
+const pct = (value: number): string => `${formatNumberWithCommas(value * 100, 1)}%`;
 
 const MethodologyNote = () => (
   <Collapse
@@ -59,7 +64,14 @@ const MethodologyNote = () => (
               <code>cache_read_input_tokens * max(input_cost_per_token - cache_read_input_token_cost, 0)</code>
             </p>
             <p>
-              Total saved is the sum of both drivers. Models without a separate cache-read price in the pricing map
+              Autorouter savings are an estimate: for each request the complexity router handled, the same token usage
+              is repriced against the most expensive model it could have routed to, and the difference from the actual
+              spend is credited as saved (clamped at zero). The baseline model is not called, so this is a
+              counterfactual rather than a realized discount. Escalation rate is the share of routed requests that asked
+              to escalate to a stronger model, a quality signal alongside the savings.
+            </p>
+            <p>
+              Total saved is the sum of the drivers. Models without a separate cache-read price in the pricing map
               contribute zero caching savings rather than erroring.
             </p>
           </div>
@@ -102,7 +114,17 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) =>
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal;
+  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
+  const autorouterRequestsTotal = useMemo(
+    () => results.reduce((sum, d) => sum + autorouterRequestsOf(d.metrics), 0),
+    [results],
+  );
+  const autorouterEscalatedTotal = useMemo(
+    () => results.reduce((sum, d) => sum + autorouterEscalatedOf(d.metrics), 0),
+    [results],
+  );
+  const escalationRate = autorouterRequestsTotal > 0 ? autorouterEscalatedTotal / autorouterRequestsTotal : 0;
+  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
 
   const overTime = useMemo(
     () =>
@@ -117,10 +139,11 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) =>
   const byDriver = useMemo(
     () =>
       [
+        { driver: "Autorouter (est.)", usd: autorouterTotal },
         { driver: "Compression", usd: compressionTotal },
         { driver: "Prompt caching", usd: cachingTotal },
       ].filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal],
+    [autorouterTotal, compressionTotal, cachingTotal],
   );
 
   return (
@@ -134,7 +157,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) =>
         <SummaryCard
           label="Total saved"
           value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching"}
+          hint={loading || isFetchingMore ? "Loading..." : "Autorouter (est.) + compression + prompt caching"}
         />
         <SummaryCard
           label="Compression savings"
@@ -142,6 +165,25 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) =>
           hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
         />
         <SummaryCard label="Prompt caching savings" value={usd(cachingTotal)} hint="Cache read discount" />
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <SummaryCard
+          label="Autorouter saved"
+          value={usd(autorouterTotal)}
+          hint="Estimated vs the most expensive configured model"
+        />
+        <SummaryCard
+          label="Escalation rate"
+          value={autorouterRequestsTotal > 0 ? pct(escalationRate) : "\u2014"}
+          hint={
+            autorouterRequestsTotal > 0
+              ? `${formatNumberWithCommas(autorouterEscalatedTotal)} of ${formatNumberWithCommas(
+                  autorouterRequestsTotal,
+                )} routed requests asked to escalate`
+              : "No autorouter requests yet"
+          }
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -169,7 +211,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) =>
               data={byDriver}
               index="driver"
               category="usd"
-              colors={["emerald", "blue"]}
+              colors={["amber", "emerald", "blue"]}
               valueFormatter={usd}
               showLabel
               label={usd(totalSaved)}
