@@ -89,11 +89,11 @@ export const SearchToolTester: React.FC<SearchToolTesterProps> = ({ searchToolNa
 
   return (
     <Card className={`mt-6 ${className}`}>
-      <div className="mb-6 px-6 pt-6">
+      <div className="px-6">
         <h2 className="text-lg font-semibold text-foreground">Test Search Tool</h2>
       </div>
 
-      <div className="flex min-h-[600px] flex-col px-6 pb-6">
+      <div className="flex min-h-[600px] flex-col px-6">
         <div className="mb-6">
           <div className="flex items-stretch gap-3">
             <div className="relative flex-1">
