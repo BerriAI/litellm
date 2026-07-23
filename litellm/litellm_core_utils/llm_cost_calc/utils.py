@@ -457,7 +457,8 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_creation_tokens = (
         cast(
             Optional[int],
-            getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
+            getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0)
+            or getattr(usage.prompt_tokens_details, "cache_write_tokens", 0),
         )
         or 0
     )

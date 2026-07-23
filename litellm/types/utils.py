@@ -198,7 +198,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
     input_cost_per_token_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost: Optional[float]
+    cache_creation_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
+    cache_creation_input_token_cost_priority: Optional[float]  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_above_200k_tokens: Optional[float]
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float]
     cache_creation_input_token_cost_above_1hr: Optional[float]
     cache_read_input_token_cost: Optional[float]
     cache_read_input_token_cost_flex: Optional[float]  # OpenAI flex service tier pricing
@@ -3072,8 +3075,11 @@ class CustomPricingLiteLLMParams(BaseModel):
     input_cost_per_token_flex: Optional[float] = None
     input_cost_per_token_priority: Optional[float] = None
     cache_creation_input_token_cost: Optional[float] = None
+    cache_creation_input_token_cost_flex: Optional[float] = None
+    cache_creation_input_token_cost_priority: Optional[float] = None
     cache_creation_input_token_cost_above_1hr: Optional[float] = None
     cache_creation_input_token_cost_above_200k_tokens: Optional[float] = None
+    cache_creation_input_token_cost_above_272k_tokens: Optional[float] = None
     cache_creation_input_audio_token_cost: Optional[float] = None
     cache_read_input_token_cost: Optional[float] = None
     cache_read_input_token_cost_flex: Optional[float] = None

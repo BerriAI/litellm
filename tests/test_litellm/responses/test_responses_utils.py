@@ -461,6 +461,59 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.text_tokens == 20
         assert result.completion_tokens_details.audio_tokens is None
 
+    def test_transform_response_api_usage_maps_cache_write_tokens_dict(self):
+        """Regression for LIT-4725 / #33772: the Responses API reports cache writes under
+        input_tokens_details.cache_write_tokens. The chat-shaped usage must carry them on
+        cache_creation_tokens so cost is computed identically to /chat/completions."""
+        usage = {
+            "input_tokens": 10_000,
+            "output_tokens": 20,
+            "total_tokens": 10_020,
+            "input_tokens_details": {"cached_tokens": 2_000, "cache_write_tokens": 8_000},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 2_000
+        assert result.prompt_tokens_details.cache_creation_tokens == 8_000
+        assert getattr(result.prompt_tokens_details, "cache_write_tokens", None) is None
+
+    def test_transform_response_api_usage_cache_creation_tokens_precedence_dict(self):
+        """When both cache_creation_tokens and cache_write_tokens are present, the explicit
+        cache_creation_tokens wins (they describe the same tokens under different names)."""
+        usage = {
+            "input_tokens": 10_000,
+            "output_tokens": 20,
+            "total_tokens": 10_020,
+            "input_tokens_details": {"cache_creation_tokens": 5_000, "cache_write_tokens": 8_000},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cache_creation_tokens == 5_000
+
+    def test_transform_response_api_usage_maps_cache_write_tokens_object(self):
+        """Object-path counterpart: a ResponseAPIUsage whose input_tokens_details object
+        carries cache_write_tokens must still land on cache_creation_tokens."""
+        from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage
+
+        input_tokens_details = InputTokensDetails(cached_tokens=2_000)
+        input_tokens_details.cache_write_tokens = 8_000
+        usage = ResponseAPIUsage(
+            input_tokens=10_000,
+            output_tokens=20,
+            total_tokens=10_020,
+            input_tokens_details=input_tokens_details,
+        )
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 2_000
+        assert result.prompt_tokens_details.cache_creation_tokens == 8_000
+
 
 class TestResponsesAPIProviderSpecificParams:
     """
