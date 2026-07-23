@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.llms.sagemaker.common_utils import SagemakerError
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
 
 
@@ -125,6 +126,21 @@ def test_sync_native_streaming_forwards_each_frame_incrementally():
 
     assert texts == [f"token{i} " for i in range(len(frames))]
     assert consumed_at_token == list(range(1, len(frames) + 1))
+
+
+def test_sync_native_streaming_raises_sagemaker_error_on_non_200():
+    response = httpx.Response(500, text="boom")
+
+    with pytest.raises(SagemakerError) as exc_info:
+        SagemakerLLM().make_sync_call(
+            api_base="https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/phi-4/invocations-response-stream",
+            headers={},
+            data="",
+            logging_obj=MagicMock(),
+            client=_FakeSyncClient(response),
+        )
+
+    assert exc_info.value.status_code == 500
 
 
 @pytest.mark.asyncio
