@@ -3035,6 +3035,7 @@ export interface paths {
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+         *     - budget_duration: Optional[str] = None  # Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
          *     )
@@ -3568,6 +3569,7 @@ export interface paths {
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+         *     - budget_duration: Optional[str] = None  # Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
          *     )
@@ -31907,6 +31909,8 @@ export interface components {
              * @default false
              */
             blocked: boolean;
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Default Model */
