@@ -617,6 +617,75 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
+    def test_update_sso_settings_maps_saml_fields_to_env_vars(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """SAML settings entered in the admin UI must be applied as the SAML_* env
+        vars the SAML handler reads, and the allow-unsolicited toggle must map to
+        the 'true'/'false' string the handler expects."""
+        import json
+        import os
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        for var in (
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+            "SAML_SP_ENTITY_ID",
+            "SAML_ALLOW_UNSOLICITED",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        new_sso_settings = {
+            "saml_idp_metadata_url": "https://idp.example.com/metadata",
+            "saml_sp_entity_id": "https://proxy.example.com/sso/saml/metadata",
+            "saml_allow_unsolicited": "true",
+            "proxy_base_url": "https://proxy.example.com",
+            "user_email": "admin@example.com",
+        }
+
+        try:
+            response = client.patch("/update/sso_settings", json=new_sso_settings)
+
+            assert response.status_code == 200
+
+            assert os.environ.get("SAML_IDP_METADATA_URL") == "https://idp.example.com/metadata"
+            assert os.environ.get("SAML_SP_ENTITY_ID") == "https://proxy.example.com/sso/saml/metadata"
+            assert os.environ.get("SAML_ALLOW_UNSOLICITED") == "true"
+            assert "SAML_IDP_METADATA_XML" not in os.environ
+
+            stored = json.loads(
+                mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["create"]["sso_settings"]
+            )
+            assert stored["saml_idp_metadata_url"] == "https://idp.example.com/metadata"
+            assert stored["saml_allow_unsolicited"] == "true"
+        finally:
+            for var in (
+                "SAML_IDP_METADATA_URL",
+                "SAML_IDP_METADATA_XML",
+                "SAML_SP_ENTITY_ID",
+                "SAML_ALLOW_UNSOLICITED",
+            ):
+                os.environ.pop(var, None)
+
     def test_update_sso_settings_audits_when_env_cleanup_fails(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

@@ -153,6 +153,24 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         description="Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'",
     )
 
+    # SAML SSO
+    saml_idp_metadata_url: Optional[str] = Field(
+        default=None,
+        description="URL of the SAML IdP metadata to fetch and parse for SSO authentication",
+    )
+    saml_idp_metadata_xml: Optional[str] = Field(
+        default=None,
+        description="Inline SAML IdP metadata XML, used when a metadata URL is not available",
+    )
+    saml_sp_entity_id: Optional[str] = Field(
+        default=None,
+        description="SAML Service Provider entityID; defaults to the proxy's /sso/saml/metadata URL",
+    )
+    saml_allow_unsolicited: Optional[str] = Field(
+        default=None,
+        description="'true' to accept IdP-initiated (unsolicited) SAML responses, which cannot be browser-bound against login CSRF",
+    )
+
     # Common settings
     proxy_base_url: Optional[str] = Field(
         default=None,
