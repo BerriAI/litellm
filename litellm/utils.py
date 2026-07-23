@@ -4340,6 +4340,12 @@ def get_optional_params(
         openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
         additional_drop_params=additional_drop_params,
     )
+    if custom_llm_provider == "custom_openai":
+        optional_params = _drop_unsupported_openai_sdk_params(
+            optional_params=optional_params,
+            supported_params=supported_params,
+            drop_params=drop_params if drop_params is not None and isinstance(drop_params, bool) else None,
+        )
     print_verbose(f"Final returned optional params: {optional_params}")
     optional_params = _apply_openai_param_overrides(
         optional_params=optional_params,
@@ -4397,6 +4403,25 @@ def add_provider_specific_params_to_optional_params(
                     continue
                 optional_params[k] = passed_params[k]
     return optional_params
+
+
+def _drop_unsupported_openai_sdk_params(
+    optional_params: dict,
+    supported_params: List[str],
+    drop_params: Optional[bool],
+) -> dict:
+    if litellm.drop_params is not True and drop_params is not True:
+        return optional_params
+
+    extra_body = optional_params.get("extra_body")
+    filtered_params = {
+        param: value
+        for param, value in optional_params.items()
+        if param == "extra_body" or param in supported_params
+    }
+    if extra_body is not None:
+        filtered_params["extra_body"] = extra_body
+    return filtered_params
 
 
 def _apply_openai_param_overrides(optional_params: dict, non_default_params: dict, allowed_openai_params: list):
