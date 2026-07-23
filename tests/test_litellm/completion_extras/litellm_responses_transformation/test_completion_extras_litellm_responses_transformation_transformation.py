@@ -1288,6 +1288,59 @@ def test_response_incomplete_content_filter_finish_reason():
     assert result.choices[0].finish_reason == "content_filter"
 
 
+def test_finish_reason_for_incomplete_response_object_attr():
+    """Cover getattr path when incomplete_details is not a dict."""
+    from types import SimpleNamespace
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    finish = LiteLLMResponsesTransformationHandler._finish_reason_for_incomplete_response
+    assert (
+        finish(SimpleNamespace(reason="content_filter")) == "content_filter"
+    )
+    assert finish(SimpleNamespace(reason="max_output_tokens")) == "length"
+    assert finish(SimpleNamespace(reason=None)) == "length"
+    assert finish(SimpleNamespace()) == "length"
+    assert finish(None) == "length"
+
+
+def test_response_failed_preserves_usage():
+    """response.failed must still forward upstream usage like completed."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.failed",
+        "response": {
+            "id": "resp_failed",
+            "status": "failed",
+            "output": [],
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 3,
+                "total_tokens": 23,
+                "output_tokens_details": {"reasoning_tokens": 1},
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 20
+    assert result.usage.completion_tokens == 3
+    assert result.usage.completion_tokens_details is not None
+    assert result.usage.completion_tokens_details.reasoning_tokens == 1
+    assert result.choices[0].finish_reason == "stop"
+
+
 def test_function_call_done_emits_is_finished():
     """
     Test that OUTPUT_ITEM_DONE for a function_call does NOT emit finish_reason.
