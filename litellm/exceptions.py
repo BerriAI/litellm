@@ -425,9 +425,9 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: str,
+        llm_provider: str,
+        model: Optional[str],
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
@@ -435,7 +435,7 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         category: Union[str, RateLimitErrorCategory] = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         headers: Optional[Dict[str, str]] = None,
-        detail: Any = None,
+        detail: object = None,
     ):
         self.status_code = 429
         self.message = "litellm.RateLimitError: {}".format(message)
@@ -498,6 +498,52 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+
+# sub class of rate limit error - a provider signalled quota exhaustion (a billing
+# state), NOT a transient rate limit. Subclassing RateLimitError keeps it
+# backwards-compatible: existing `except RateLimitError` handlers still catch it,
+# while retry policies that key on RateLimitError can exclude this subtype, since
+# retrying a billing-state error cannot succeed. See
+# https://github.com/BerriAI/litellm/issues/32785
+class InsufficientQuotaError(RateLimitError):
+    def __init__(
+        self,
+        message: str,
+        llm_provider: str,
+        model: Optional[str],
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+        category: Union[str, RateLimitErrorCategory] = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
+        rate_limit_type: Optional[Union[str, RateLimitType]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        detail: object = None,
+    ):
+        super().__init__(
+            message=message,
+            llm_provider=llm_provider,
+            model=model,
+            response=response,
+            litellm_debug_info=litellm_debug_info,
+            max_retries=max_retries,
+            num_retries=num_retries,
+            category=category,
+            rate_limit_type=rate_limit_type,
+            headers=headers,
+            detail=detail,
+        )  # Call the base class constructor with the parameters it needs
+        # Overwrite the generic throttling code/type the parent hardcodes so callers
+        # inspecting `.code` can distinguish quota exhaustion from a transient 429.
+        self.code = "insufficient_quota"
+        self.type = "insufficient_quota"
+        # Replace (not re-wrap) the parent's "litellm.RateLimitError: " prefix so
+        # str(exc) carries a single accurate class prefix. Built from the raw
+        # `message` argument, not self.message, which the parent already prefixed.
+        self.message = "litellm.InsufficientQuotaError: {}".format(message)
+        if detail is None:
+            self.detail = self.message
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
@@ -944,6 +990,7 @@ LITELLM_EXCEPTION_TYPES = [
     Timeout,
     PermissionDeniedError,
     RateLimitError,
+    InsufficientQuotaError,
     ContextWindowExceededError,
     RejectedRequestError,
     ContentPolicyViolationError,

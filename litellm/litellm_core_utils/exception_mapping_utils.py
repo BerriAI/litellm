@@ -4,6 +4,7 @@ import traceback
 from typing import Any, Optional, Protocol, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string, verbose_logger
@@ -18,6 +19,7 @@ from ..exceptions import (
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    InsufficientQuotaError,
     InternalServerError,
     NotFoundError,
     PermissionDeniedError,
@@ -64,6 +66,26 @@ class ExceptionCheckers:
             return True
 
         return False
+
+    @staticmethod
+    def is_error_str_insufficient_quota(error_str: str) -> bool:
+        """
+        Check if an error string indicates quota exhaustion (a billing state)
+        rather than a transient rate limit.
+
+        OpenAI signals this with ``"type": "insufficient_quota"`` /
+        ``"code": "insufficient_quota"`` on a 429 response. This is NOT
+        retryable — retrying a billing error cannot succeed — so it must be
+        distinguished from a transient rate-limit 429. See
+        https://github.com/BerriAI/litellm/issues/32785
+
+        Args:
+            error_str: The error string to check
+
+        Returns:
+            True if the error indicates insufficient quota, False otherwise
+        """
+        return "insufficient_quota" in error_str.lower()
 
     @staticmethod
     def is_error_str_context_window_exceeded(error_str: str) -> bool:
@@ -177,6 +199,40 @@ def _get_body_error_code(error_str: str) -> int | None:
         return None
 
 
+_ERROR_BODY_ADAPTER: TypeAdapter[dict[object, object]] = TypeAdapter(dict[object, object])
+
+
+def _body_has_insufficient_quota_code(error_obj: object) -> bool:
+    """True only when the provider's STRUCTURED error body carries
+    code or type == "insufficient_quota".
+
+    Reads the same sources ``get_error_message`` does: the openai SDK exposes
+    ``.code`` / ``.type`` parsed from the error response, plus ``.body`` as the
+    parsed dict (OpenAI-style flat or Azure-style nested under "error"). A
+    missing or unparseable body returns False, so callers degrade to the plain
+    retryable RateLimitError rather than promoting on a free-text match.
+    """
+    if error_obj is None:
+        return False
+    if getattr(error_obj, "code", None) == "insufficient_quota":
+        return True
+    if getattr(error_obj, "type", None) == "insufficient_quota":
+        return True
+    raw_body = getattr(error_obj, "body", None)
+    if not isinstance(raw_body, dict):
+        return False
+    body = _ERROR_BODY_ADAPTER.validate_python(raw_body)
+    raw_nested = body.get("error")
+    nested = _ERROR_BODY_ADAPTER.validate_python(raw_nested) if isinstance(raw_nested, dict) else None
+    candidates = (
+        body.get("code"),
+        body.get("type"),
+        nested.get("code") if nested is not None else None,
+        nested.get("type") if nested is not None else None,
+    )
+    return "insufficient_quota" in candidates
+
+
 def _get_response_headers(original_exception: Exception) -> Optional[httpx.Headers]:
     """
     Extract and return the response headers from an exception, if present.
@@ -280,6 +336,31 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
+    if (
+        custom_llm_provider == "openai"
+        and ExceptionCheckers.is_error_str_insufficient_quota(error_str)
+        and getattr(original_exception, "status_code", None) == 429
+        and _body_has_insufficient_quota_code(original_exception)
+    ):
+        # Quota exhaustion (a non-retryable billing state) must be caught BEFORE
+        # the generic 429 rate-limit branch, which would otherwise bucket it as a
+        # transient RateLimitError. Gated to the openai provider: this function
+        # also serves ~30 openai-compatible providers (groq, deepseek, together_ai,
+        # ...) and only OpenAI is known to reserve "insufficient_quota" for a
+        # non-retryable billing state; a compatible provider using the same wording
+        # for a refilling quota would silently lose retries. Promotion further
+        # requires a real 429 plus the structured body code/type, never the
+        # substring alone: error messages echo request-controlled text (e.g. a
+        # schema named "insufficient_quota"), which must not be able to steer
+        # retry classification (see the PR discussion on spoofability). The
+        # substring check stays as a cheap pre-filter only. See
+        # https://github.com/BerriAI/litellm/issues/32785
+        raise InsufficientQuotaError(
+            message=f"{exception_provider} - {message}",
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=getattr(original_exception, "response", None),
+        )
     if ExceptionCheckers.is_error_str_rate_limit(error_str):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",

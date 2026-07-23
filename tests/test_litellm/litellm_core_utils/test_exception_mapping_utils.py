@@ -680,3 +680,252 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
 
     assert excinfo.value.status_code == 404
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+# https://github.com/BerriAI/litellm/issues/32785
+# An OpenAI 429 carrying `code: "insufficient_quota"` is a non-retryable billing
+# state, not a transient rate limit. It must map to InsufficientQuotaError (a
+# RateLimitError subclass) so retry policies can exclude it, while transient 429s
+# still map to a plain RateLimitError.
+OPENAI_INSUFFICIENT_QUOTA_ERROR_STR = (
+    "Error code: 429 - {'error': {'message': 'You exceeded your current quota, "
+    "please check your plan and billing details.', 'type': 'insufficient_quota', "
+    "'param': None, 'code': 'insufficient_quota'}}"
+)
+OPENAI_TRANSIENT_RATE_LIMIT_ERROR_STR = (
+    "Error code: 429 - {'error': {'message': 'Rate limit reached for gpt-4 in "
+    "organization org-abc on requests per min.', 'type': 'requests', "
+    "'param': None, 'code': 'rate_limit_exceeded'}}"
+)
+
+
+class _FakeOpenAIError(Exception):
+    """Mirrors the shape of openai SDK errors: a message string plus the
+    structured status_code / code / type / body parsed from the error
+    response (see the get_error_message docstring for a real example)."""
+
+    def __init__(self, message, status_code=None, code=None, error_type=None, body=None):
+        self.message = message
+        if status_code is not None:
+            self.status_code = status_code
+        self.code = code
+        self.type = error_type
+        self.body = body
+        super().__init__(message)
+
+
+def _openai_quota_exhausted_exception(**overrides):
+    defaults = dict(
+        message=OPENAI_INSUFFICIENT_QUOTA_ERROR_STR,
+        status_code=429,
+        code="insufficient_quota",
+        error_type="insufficient_quota",
+        body={
+            "message": "You exceeded your current quota, please check your plan and billing details.",
+            "type": "insufficient_quota",
+            "param": None,
+            "code": "insufficient_quota",
+        },
+    )
+    return _FakeOpenAIError(**{**defaults, **overrides})
+
+
+class TestIsErrorStrInsufficientQuota:
+    """Unit tests for ExceptionCheckers.is_error_str_insufficient_quota."""
+
+    def test_detects_insufficient_quota(self):
+        assert (
+            ExceptionCheckers.is_error_str_insufficient_quota(
+                OPENAI_INSUFFICIENT_QUOTA_ERROR_STR
+            )
+            is True
+        )
+
+    def test_transient_rate_limit_is_not_insufficient_quota(self):
+        assert (
+            ExceptionCheckers.is_error_str_insufficient_quota(
+                OPENAI_TRANSIENT_RATE_LIMIT_ERROR_STR
+            )
+            is False
+        )
+
+
+def test_openai_insufficient_quota_maps_to_insufficient_quota_error():
+    """
+    An OpenAI insufficient_quota 429 maps to litellm.InsufficientQuotaError,
+    which is a subclass of RateLimitError (backwards compatible), with
+    code/type set to "insufficient_quota".
+    """
+    original_exception = _openai_quota_exhausted_exception()
+
+    with pytest.raises(litellm.InsufficientQuotaError) as excinfo:
+        exception_type(
+            model="gpt-4",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    # (b) backwards compatibility: `except RateLimitError` still catches it.
+    assert isinstance(excinfo.value, litellm.RateLimitError)
+    # (d) attributes set as claimed.
+    assert excinfo.value.code == "insufficient_quota"
+    assert excinfo.value.type == "insufficient_quota"
+    assert excinfo.value.status_code == 429
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param(dict(error_type=None, body=None), id="code-attr-only"),
+        pytest.param(dict(code=None, body=None), id="type-attr-only"),
+        pytest.param(
+            dict(code=None, error_type=None, body={"code": "insufficient_quota"}),
+            id="flat-body-code",
+        ),
+        pytest.param(
+            dict(code=None, error_type=None, body={"error": {"type": "insufficient_quota"}}),
+            id="nested-body-type",
+        ),
+    ],
+)
+def test_each_structured_quota_signal_promotes(overrides):
+    """
+    Any one structured source (.code, .type, flat body, nested body) carrying
+    insufficient_quota is enough to promote a real 429.
+    """
+    original_exception = _openai_quota_exhausted_exception(**overrides)
+
+    with pytest.raises(litellm.InsufficientQuotaError):
+        exception_type(
+            model="gpt-4",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+
+def test_spoofed_insufficient_quota_in_400_stays_bad_request_error():
+    """
+    Spoofing regression: request-controlled text echoed into a 400 validation
+    error (e.g. a structured-output schema literally named
+    "insufficient_quota") must NOT be promoted to InsufficientQuotaError,
+    which would make router retry policies treat an invalid request as a
+    billing failure. It stays a BadRequestError.
+    """
+    original_exception = _FakeOpenAIError(
+        message=(
+            "Error code: 400 - {'error': {'message': \"Invalid schema for "
+            "response_format 'insufficient_quota': schema must be a JSON Schema "
+            "of 'type: object', got 'type: string'.\", "
+            "'type': 'invalid_request_error', 'param': 'response_format', "
+            "'code': None}}"
+        ),
+        status_code=400,
+        error_type="invalid_request_error",
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gpt-4",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert not isinstance(excinfo.value, litellm.InsufficientQuotaError)
+    assert not isinstance(excinfo.value, litellm.RateLimitError)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param(
+            dict(
+                code="rate_limit_exceeded",
+                error_type="requests",
+                body={"code": "rate_limit_exceeded", "type": "requests"},
+            ),
+            id="structured-code-is-something-else",
+        ),
+        pytest.param(
+            dict(code=None, error_type=None, body=None),
+            id="body-unparseable",
+        ),
+    ],
+)
+def test_429_with_quota_phrase_but_no_structured_code_stays_plain_rate_limit(overrides):
+    """
+    A real 429 whose message contains the insufficient_quota phrase but whose
+    structured body says otherwise (or is missing) must degrade to the plain
+    retryable RateLimitError; promotion happens only on the high-confidence
+    structured signal.
+    """
+    original_exception = _openai_quota_exhausted_exception(**overrides)
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gpt-4",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert not isinstance(excinfo.value, litellm.InsufficientQuotaError)
+    assert excinfo.value.status_code == 429
+
+
+def test_openai_transient_429_still_maps_to_plain_rate_limit_error():
+    """
+    A transient OpenAI 429 (no insufficient_quota) must remain a plain
+    RateLimitError and must NOT be promoted to InsufficientQuotaError.
+    """
+    original_exception = Exception(OPENAI_TRANSIENT_RATE_LIMIT_ERROR_STR)
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gpt-4",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert not isinstance(excinfo.value, litellm.InsufficientQuotaError)
+    assert excinfo.value.status_code == 429
+
+
+def test_non_openai_provider_insufficient_quota_stays_plain_rate_limit_error():
+    """
+    The insufficient_quota promotion is scoped to the openai provider. An
+    openai-compatible provider (e.g. groq) using the same wording may mean a
+    refilling quota, so it must keep mapping to a plain (retryable)
+    RateLimitError.
+    """
+    original_exception = Exception(OPENAI_INSUFFICIENT_QUOTA_ERROR_STR)
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="llama-3.3-70b-versatile",
+            original_exception=original_exception,
+            custom_llm_provider="groq",
+        )
+
+    assert not isinstance(excinfo.value, litellm.InsufficientQuotaError)
+    assert excinfo.value.status_code == 429
+
+
+def test_insufficient_quota_error_message_has_single_class_prefix():
+    """
+    str(exc) must carry exactly one "litellm.InsufficientQuotaError: " prefix,
+    not the parent's "litellm.RateLimitError: " prefix re-wrapped (the original
+    implementation produced "litellm.InsufficientQuotaError: litellm.RateLimitError:
+    RateLimitError: ...").
+    """
+    original_exception = _openai_quota_exhausted_exception()
+
+    with pytest.raises(litellm.InsufficientQuotaError) as excinfo:
+        exception_type(
+            model="gpt-4",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    message = str(excinfo.value)
+    assert message.startswith("litellm.InsufficientQuotaError: OpenAIException - ")
+    assert "litellm.RateLimitError" not in message
+    assert message.count("InsufficientQuotaError") == 1
