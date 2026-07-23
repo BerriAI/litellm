@@ -148,6 +148,15 @@ def _parse_url_destination_allowlist_entry(
     return _normalize_host(parsed.hostname), scheme, port
 
 
+def provider_url_destination_candidates(value: str) -> Tuple[str, ...]:
+    return tuple(
+        candidate
+        for part in value.split(",")
+        for candidate in (part.strip(), part.strip().split("/", 1)[1] if "/" in part.strip() else "")
+        if candidate
+    )
+
+
 def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bool:
     """Return True when a credential-bearing provider URL is admin-allowlisted.
 

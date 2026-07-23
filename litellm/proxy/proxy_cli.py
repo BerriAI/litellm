@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
@@ -495,6 +496,7 @@ class ProxyInitializationHelpers:
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
 
+        start_query_engine_reaper()
         StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
     @staticmethod
@@ -801,6 +803,19 @@ class ProxyInitializationHelpers:
     envvar="MAX_REQUESTS_BEFORE_RESTART_JITTER",
 )
 @click.option(
+    "--limit_concurrency",
+    default=None,
+    type=click.IntRange(min=1),
+    help=(
+        "Set uvicorn's concurrency limit. Uvicorn counts both active tasks and "
+        "accepted connections and returns HTTP 503 after the limit is reached. "
+        "Idle connections can consume capacity, so use upstream connection/header "
+        "timeouts and per-client connection limits. Only applies to uvicorn "
+        "(ignored under --run_gunicorn / --run_hypercorn / --run_granian)."
+    ),
+    envvar="LIMIT_CONCURRENCY",
+)
+@click.option(
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
@@ -868,6 +883,7 @@ def run_server(
     timeout_worker_healthcheck,
     max_requests_before_restart,
     max_requests_before_restart_jitter: Optional[int],
+    limit_concurrency: Optional[int],
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,
@@ -1241,6 +1257,8 @@ def run_server(
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
+            if limit_concurrency is not None:
+                uvicorn_args["limit_concurrency"] = limit_concurrency
             if max_requests_before_restart_jitter is not None:
                 ProxyInitializationHelpers._apply_uvicorn_max_requests_jitter(
                     uvicorn_args=uvicorn_args,
@@ -1261,6 +1279,8 @@ def run_server(
             if reload:
                 ProxyInitializationHelpers._configure_dev_reload(uvicorn_args, config)
 
+            if num_workers > 1:
+                start_query_engine_reaper()
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,
