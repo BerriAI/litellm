@@ -18,8 +18,9 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, Iterator
 
 import pytest
 
@@ -40,6 +41,7 @@ from capabilities import (
     CAPABILITIES,
     FILE_ID_SHAPE,
     OPENAI_BATCH_MODEL,
+    VERTEX_BATCH_MODEL,
     Capability,
     batch_model_name,
     coverage_cells_for_lifecycle,
@@ -845,3 +847,150 @@ class TestHostedVllmBatch:
             f"hosted_vllm batch has non-transitional status {batch.status!r}"
         )
         assert_batch_object(batch)
+
+
+BATCH_PAGE_COUNT = 5
+BATCH_PAGE_SIZE = 1
+# Newest-first, one batch per page: N data pages + one empty terminating page.
+# The cap is generous headroom; only a non-advancing cursor (a loop) hits it.
+BATCH_PAGE_FETCH_CAP = 2 * BATCH_PAGE_COUNT + 3
+
+
+@dataclass(frozen=True, slots=True)
+class PaginationCase:
+    provider: str
+    deployment: str
+    jsonl_model: str
+    required_env: tuple[str, ...]
+    cell: str
+
+
+PAGINATION_CASES: tuple[PaginationCase, ...] = (
+    PaginationCase(
+        provider="openai",
+        deployment=OPENAI_BATCH_MODEL,
+        jsonl_model="gpt-4o-mini",
+        required_env=("OPENAI_API_KEY",),
+        cell="llm.batches.openai.list_pagination.nonstream.works",
+    ),
+    PaginationCase(
+        provider="vertex_ai",
+        deployment=VERTEX_BATCH_MODEL,
+        jsonl_model="gemini-2.5-flash",
+        required_env=("VERTEXAI_PROJECT", "VERTEXAI_CREDENTIALS", "GCS_BUCKET_NAME"),
+        cell="llm.batches.vertex.list_pagination.nonstream.works",
+    ),
+)
+
+
+def create_batch_resilient_unified(
+    client: BatchClient, file_id: str, key: str
+) -> StreamingResponse:
+    last = client.create_batch(body=BatchCreateBody(input_file_id=file_id), key=key)
+    for attempt in range(BATCH_OP_RETRIES - 1):
+        if last.ok or not _transient_status(last.status_code):
+            return last
+        time.sleep(_backoff_seconds(attempt))
+        last = client.create_batch(body=BatchCreateBody(input_file_id=file_id), key=key)
+    return last
+
+
+def paginate_batch_ids(
+    client: BatchClient, key: str, page_size: int, cap: int
+) -> Iterator[str]:
+    """Walk GET /v1/batches the way a client does: read a page, follow its last id
+    as the `after` cursor, repeat until the proxy reports no more. Yields the batch
+    ids in the order the proxy paged them. Raises if the cursor never advances past
+    `cap` pages, which is what a pagination loop looks like from the client side."""
+    after: str | None = None
+    for _ in range(cap):
+        page = unwrap(client.list_batches(key=key, limit=page_size, after=after))
+        if not page.data:
+            return
+        yield from (batch.id for batch in page.data)
+        if not page.has_more:
+            return
+        after = page.data[-1].id
+    raise AssertionError(
+        f"GET /v1/batches never terminated within {cap} pages (page_size={page_size}); "
+        "the `after` cursor is not advancing, so the client loops forever"
+    )
+
+
+class TestBatchListPagination:
+    """GET /v1/batches paginates the caller's batches newest-first without loss.
+
+    A client that lists batches and walks the `after` cursor to find a known set
+    of batch ids must see every id exactly once, in reverse-chronological order,
+    and the walk must terminate. This mirrors a customer workflow that polls batch
+    status by paginating GET /v1/batches until every expected id is found.
+
+    Isolation: batches are created under a key with a unique user_id, so the
+    owner-scoped managed-batch listing returns exactly this test's batches and the
+    expected page order is deterministic (the reverse of creation order).
+    """
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            pytest.param(case, id=case.provider, marks=pytest.mark.covers(case.cell))
+            for case in PAGINATION_CASES
+        ],
+    )
+    def test_pagination_finds_every_batch_in_reverse_order(
+        self,
+        case: PaginationCase,
+        client: BatchClient,
+        resources: ResourceManager,
+        batch_deployments: None,
+    ) -> None:
+        require_env(*case.required_env)
+
+        user_id = f"e2e-batch-page-{case.provider}-{unique_marker()}"
+        key = client.proxy.generate_key(KeyGenerateBody(models=[], user_id=user_id))
+        resources.defer(lambda: client.proxy.delete_key(key))
+
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(case.jsonl_model),
+                form=FileUploadForm(purpose="batch", target_model_names=case.deployment),
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+
+        def create_managed_batch() -> str:
+            created = create_batch_resilient_unified(client, file.id, key)
+            require_successful_call(created)
+            batch = BatchObject.model_validate_json(created.body)
+            resources.defer(quietly(lambda: client.cancel_batch(batch.id, key=key)))
+            assert is_managed_id(batch.id), (
+                f"{case.provider}: unified create must return a managed batch id so the "
+                f"managed listing indexes it, got {batch.id!r}"
+            )
+            return batch.id
+
+        created_ids = tuple(create_managed_batch() for _ in range(BATCH_PAGE_COUNT))
+        assert len(set(created_ids)) == BATCH_PAGE_COUNT, (
+            f"{case.provider}: create returned duplicate batch ids {created_ids}"
+        )
+        expected = tuple(reversed(created_ids))
+
+        collected = tuple(
+            paginate_batch_ids(client, key, BATCH_PAGE_SIZE, BATCH_PAGE_FETCH_CAP)
+        )
+
+        missing = tuple(bid for bid in created_ids if bid not in collected)
+        assert not missing, (
+            f"{case.provider}: paginating GET /v1/batches never returned "
+            f"{len(missing)} of the {BATCH_PAGE_COUNT} created batches: {missing}. "
+            f"pages yielded {collected}"
+        )
+        assert len(collected) == len(set(collected)), (
+            f"{case.provider}: pagination returned the same batch id on more than one "
+            f"page (a cursor loop): {collected}"
+        )
+        assert collected == expected, (
+            f"{case.provider}: GET /v1/batches must page newest-first. "
+            f"expected reverse-creation order {expected}, got {collected}"
+        )
