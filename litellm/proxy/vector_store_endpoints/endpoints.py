@@ -88,6 +88,31 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     return data
 
 
+def _update_request_data_with_model_from_request(
+    data: Dict,
+    request: Request,
+) -> Dict:
+    """
+    Add model routing from request query/header when no body or registry model exists.
+
+    The vector store retrieve/delete endpoints do not have request bodies, but
+    clients can still pass the proxy model through query params or
+    x-litellm-model. Preserve registry-derived routing first.
+    """
+    if (
+        data.get("model")
+        or data.get("custom_llm_provider")
+        or data.get("litellm_credential_name")
+    ):
+        return data
+
+    model = request.query_params.get("model") or request.headers.get("x-litellm-model")
+    if model:
+        data["model"] = model
+
+    return data
+
+
 @router.post(
     "/v1/vector_stores/{vector_store_id:path}/search",
     dependencies=[Depends(user_api_key_auth)],
@@ -306,6 +331,7 @@ async def vector_store_retrieve(
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
+    data = _update_request_data_with_model_from_request(data=data, request=request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -505,6 +531,7 @@ async def vector_store_delete(
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
+    data = _update_request_data_with_model_from_request(data=data, request=request)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:

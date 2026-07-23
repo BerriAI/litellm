@@ -1324,6 +1324,7 @@ _MODEL_ROUTING_ROUTE_MARKERS = (
 _MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS = (
     "/files",
     "/batches",
+    "/vector_stores",
     "/skills",
     "/evals",
 )
