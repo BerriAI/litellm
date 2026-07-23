@@ -65,6 +65,15 @@ export const gatewayMintsClientFor = (server: { auth_type?: string | null; dcr_b
   server.auth_type === AUTH_TYPE.TRUE_PASSTHROUGH ||
   (server.auth_type === AUTH_TYPE.OAUTH_DELEGATE && !server.dcr_bridge);
 
+// Auth modes that cannot be used through the gateway aggregate connect flow, where the client holds
+// only an identity-only session bearer and upstream credentials are resolved server-side from the
+// per-user vault. The vault is only populated by interactive authorization_code (oauth2). The
+// client-forwarded modes need the caller to present the upstream Authorization per call, and
+// oauth2_token_exchange (OBO) needs the caller's own IdP token as the subject to exchange; the
+// session bearer is neither, so none of these can complete a tool call on this connection.
+export const isUnsupportedOnGatewayConnect = (authType?: string | null): boolean =>
+  isClientForwardedTokenMode(authType) || authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
+
 export const OAUTH_FLOW = {
   INTERACTIVE: "interactive",
   M2M: "m2m",

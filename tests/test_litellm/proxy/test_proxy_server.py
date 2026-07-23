@@ -127,11 +127,15 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         general_settings={},
         premium_user=False,
     )
-    mock_jwt_encode.assert_called_once_with(
-        {"user_id": "test-user"},
-        "test-master-key",
-        algorithm="HS256",
-    )
+    mock_jwt_encode.assert_called_once()
+    payload, secret = mock_jwt_encode.call_args.args
+    # The UI session token carries a bounded-lifetime `exp` claim (dynamic timestamp), alongside
+    # the user_id; assert its presence rather than an exact expiry value.
+    assert payload["user_id"] == "test-user"
+    assert isinstance(payload.get("exp"), int) and payload["exp"] > 0
+    assert set(payload.keys()) == {"user_id", "exp"}
+    assert secret == "test-master-key"
+    assert mock_jwt_encode.call_args.kwargs == {"algorithm": "HS256"}
 
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
