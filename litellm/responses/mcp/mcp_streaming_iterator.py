@@ -271,6 +271,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # Streaming state management
         self.phase = "initial_response"  # initial_response -> mcp_discovery -> (continue_initial_response <-> tool_execution) -> finished
         self.finished = False
+        self._streamed_output_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}
+        self._streamed_text_only_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}
 
         # Event queues and generation flags
         self.mcp_discovery_events: List[ResponsesAPIStreamingResponse] = (

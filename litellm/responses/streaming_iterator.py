@@ -13,6 +13,7 @@ import httpx
 from openai._streaming import SSEDecoder
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
@@ -27,7 +28,9 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.sse_output_recovery import _MAX_CONTENT_INDEX
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
@@ -110,6 +113,10 @@ class BaseResponsesAPIStreamingIterator:
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[Any] = None
+        # mutable-ok: accumulated across _process_chunk calls; reset per stream instance
+        self._streamed_output_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}
+        # mutable-ok: OUTPUT_TEXT_DONE fallback for providers that emit no OUTPUT_ITEM_DONE
+        self._streamed_text_only_items: dict[int, BaseLiteLLMOpenAIResponseObject] = {}
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -274,6 +281,29 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
+                    if _chunk_type in (
+                        openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                        openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    ):
+                        _response_obj = getattr(openai_responses_api_chunk, "response", None)
+                        if (
+                            _response_obj is not None
+                            and not getattr(_response_obj, "output", None)
+                            and (self._streamed_output_items or self._streamed_text_only_items)
+                        ):
+                            try:
+                                _merged_items = {**self._streamed_text_only_items, **self._streamed_output_items}
+                                _backfill = [
+                                    item.model_dump() if hasattr(item, "model_dump") else item
+                                    for _, item in sorted(_merged_items.items())
+                                ]
+                                _response_obj.output = _backfill  # mutable-ok
+                            except Exception:
+                                verbose_logger.warning(
+                                    "streaming_iterator: failed to backfill %s output",
+                                    _chunk_type,
+                                    exc_info=True,
+                                )
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
@@ -508,6 +538,59 @@ class BaseResponsesAPIStreamingIterator:
 
         self._completed_response_cached = True
 
+    def _accumulate_streamed_output_item(self, chunk: Any) -> None:
+        """
+        Accumulate OUTPUT_ITEM_DONE / OUTPUT_TEXT_DONE payloads from a post-hook chunk
+        so they can backfill response.completed.output when the provider sends it empty.
+        Called after async_post_call_streaming_deployment_hook so only the final,
+        hook-transformed item is retained (not the raw pre-hook version).
+        """
+        _chunk_type = getattr(chunk, "type", None)
+        if _chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            _item = getattr(chunk, "item", None)
+            _output_index = getattr(
+                chunk,
+                "output_index",
+                max(self._streamed_output_items, default=-1) + 1,
+            )
+            if _item is not None and isinstance(_output_index, int):
+                self._streamed_output_items[_output_index] = _item  # mutable-ok
+
+        elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            _text = getattr(chunk, "text", None)
+            _output_index = getattr(chunk, "output_index", None)
+            if (
+                isinstance(_text, str)
+                and isinstance(_output_index, int)
+                and _output_index not in self._streamed_output_items
+            ):
+                _content_index = getattr(chunk, "content_index", 0) or 0
+                if 0 <= _content_index <= _MAX_CONTENT_INDEX:
+                    _item_id = getattr(chunk, "item_id", None) or f"msg_{_output_index}"
+                    _existing = self._streamed_text_only_items.get(_output_index)
+                    _existing_content = list(getattr(_existing, "content", None) or [])
+                    _annotations = getattr(chunk, "annotations", None)
+                    _slot = {"type": "output_text", "text": _text, "annotations": _annotations or []}
+                    if _content_index < len(_existing_content):
+                        _content = (
+                            _existing_content[:_content_index]
+                            + [_slot]
+                            + _existing_content[_content_index + 1:]
+                        )
+                    else:
+                        _content = (
+                            _existing_content
+                            + [{"type": "output_text", "text": "", "annotations": []} for _ in range(_content_index - len(_existing_content))]
+                            + [_slot]
+                        )
+                    self._streamed_text_only_items[_output_index] = BaseLiteLLMOpenAIResponseObject(  # mutable-ok
+                        type="message",
+                        id=getattr(_existing, "id", _item_id),
+                        role="assistant",
+                        status="completed",
+                        content=_content,
+                    )
+
     async def _call_post_streaming_deployment_hook(self, chunk):
         """
         Allow callbacks to modify streaming chunks before returning (parity with chat).
@@ -712,6 +795,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         chunk=result,
                     )
                     self._yielded_first_chunk = True
+                    self._accumulate_streamed_output_item(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -794,6 +878,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         chunk=result,
                     )
                     self._yielded_first_chunk = True
+                    self._accumulate_streamed_output_item(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -870,6 +955,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             chunk_size=self.CHUNK_SIZE,
         )
         self._idx = 0
+        # completed_response is set directly here and in __anext__/__next__ because
+        # these iterators replay pre-built events from _build_synthetic_response_events,
+        # which always populates output. They bypass _process_chunk intentionally, so the
+        # output backfill logic there does not apply.
         self.completed_response = self._events[-1]
 
     def __aiter__(self):
@@ -937,6 +1026,8 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             chunk_size=MockResponsesAPIStreamingIterator.CHUNK_SIZE,
         )
         self._idx = 0
+        # See MockResponsesAPIStreamingIterator._set_events_from_response for why
+        # completed_response is set directly rather than via _process_chunk.
         self.completed_response = self._events[-1]
 
     def __aiter__(self):
@@ -1244,8 +1335,6 @@ def _build_synthetic_response_events(
 # ---------------------------------------------------------------------------
 # WebSocket mode streaming (bidirectional forwarding)
 # ---------------------------------------------------------------------------
-
-from litellm._logging import verbose_logger
 
 RESPONSES_WS_LOGGED_EVENT_TYPES = [
     "response.created",
