@@ -584,9 +584,14 @@ class ModelResponseIterator:
         Check if the tool call block so far has been an empty string
         """
         args = ""
-        # if text content block -> skip
         if len(self.content_blocks) == 0:
-            return False
+            # Zero-argument tool call: Anthropic emits content_block_start
+            # followed directly by content_block_stop, with no
+            # input_json_delta events in between. The only caller guards on
+            # current_content_block_type in ("tool_use", "server_tool_use"),
+            # so an empty delta list here means the tool's arguments are
+            # empty and the "{}" repair chunk must be emitted.
+            return True
 
         if (
             self.content_blocks[0]["delta"]["type"] == "text_delta"
