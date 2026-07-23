@@ -19,9 +19,12 @@ overwrite each other within the same day, producing incomplete data.
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, List, Optional
+
+import polars as pl
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -33,6 +36,63 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
+
+# FOCUS v1.2 has no standard column for token counts; core's transformer
+# drops prompt_tokens/completion_tokens/cache_creation_input_tokens/
+# cache_read_input_tokens even though the source query selects them. Mavvrik
+# carries them through as extra keys in the existing Tags JSON column (the
+# spec's own escape hatch for non-standard fields), rather than changing the
+# shared transformer used by every FOCUS destination. total_tokens isn't a
+# stored column at all -- it's derived here as the sum of prompt and
+# completion tokens.
+_TOKEN_TAG_KEYS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _with_token_tags(data: pl.DataFrame, normalized: pl.DataFrame) -> pl.DataFrame:
+    """Merge token counts (and their sum, total_tokens) from the pre-transform
+    frame into ``normalized``'s Tags column. Rows correspond 1:1 and in the
+    same order across both frames -- transform() only adds/renames columns,
+    it never filters or reorders rows.
+    """
+    available = [k for k in _TOKEN_TAG_KEYS if k in data.columns]
+    if not available or len(data) != len(normalized) or "Tags" not in normalized.columns:
+        return normalized
+
+    token_rows = data.select(available).to_dicts()
+    has_both = "prompt_tokens" in available and "completion_tokens" in available
+
+    def _merge(tags_json: str, row: dict) -> str:
+        try:
+            tags = json.loads(tags_json) if tags_json else {}
+        except (TypeError, ValueError):
+            tags = {}
+        if not isinstance(tags, dict):
+            tags = {}
+        for key in available:
+            value = row.get(key)
+            if value is not None:
+                tags[key] = str(value)
+        if has_both:
+            prompt = row.get("prompt_tokens")
+            completion = row.get("completion_tokens")
+            if prompt is not None and completion is not None:
+                tags["total_tokens"] = str(prompt + completion)
+        return json.dumps(tags)
+
+    verbose_proxy_logger.debug(
+        "Mavvrik FOCUS export: merging token tags for %d row(s) (keys=%s)",
+        len(token_rows),
+        available,
+    )
+    merged_tags = pl.Series(
+        [_merge(tags_json, row) for tags_json, row in zip(normalized["Tags"].to_list(), token_rows)]
+    )
+    return normalized.with_columns(merged_tags.alias("Tags"))
 
 
 def _parse_metrics_marker(
@@ -136,6 +196,7 @@ class MavvrikFocusLogger(FocusLogger):
         else:
             normalized = engine._transformer.transform(data)
             if not normalized.is_empty():
+                normalized = _with_token_tags(data, normalized)
                 payload = engine._serializer.serialize(normalized)
         await engine._destination.deliver(
             content=payload or b"",
