@@ -1039,6 +1039,66 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["good-tool"]
         assert result["error"] is None
 
+    async def test_aggregate_list_fetches_servers_concurrently(self, monkeypatch):
+        class StubServer:
+            def __init__(self, name):
+                self.alias = name
+                self.server_name = name
+                self.name = name
+                self.allowed_tools = None
+                self.mcp_info = {"server_name": name}
+                self.available_on_public_internet = True
+
+        first = StubServer("first")
+        second = StubServer("second")
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+        started = 0
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["first", "second"]
+
+        async def fake_get_tools(server, *args, **kwargs):
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await release.wait()
+            return [f"{server.name}-tool"]
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: {"first": first, "second": second}.get(server_id),
+            raising=False,
+        )
+        monkeypatch.setattr(rest_endpoints, "_get_tools_for_single_server", fake_get_tools, raising=False)
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        listing_task = asyncio.create_task(
+            rest_endpoints.list_tool_rest_api(
+                request,
+                server_id=None,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        )
+
+        await asyncio.wait_for(both_started.wait(), timeout=0.1)
+        release.set()
+        result = await listing_task
+
+        assert set(result["tools"]) == {"first-tool", "second-tool"}
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""
