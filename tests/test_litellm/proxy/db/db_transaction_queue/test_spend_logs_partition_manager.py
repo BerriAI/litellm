@@ -53,7 +53,7 @@ def test_upcoming_partitions_count_and_contiguous_ranges():
 
 def test_parse_partition_upper_bound_extracts_to_value():
     bound = "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')"
-    assert parse_partition_upper_bound(bound) == datetime(2026, 6, 2, 0, 0, 0)
+    assert parse_partition_upper_bound(bound) == datetime(2026, 6, 2, 0, 0, 0, tzinfo=timezone.utc)
 
 
 def test_parse_partition_upper_bound_default_is_none():
@@ -62,11 +62,11 @@ def test_parse_partition_upper_bound_default_is_none():
 
 
 def test_select_partitions_to_drop_only_fully_expired():
-    cutoff = datetime(2026, 6, 10, 0, 0, 0)
+    cutoff = datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)
     partitions = [
-        ("p_old", datetime(2026, 6, 9, 0, 0, 0)),  # upper < cutoff -> drop
-        ("p_boundary", datetime(2026, 6, 10, 0, 0, 0)),  # upper == cutoff -> drop
-        ("p_partial", datetime(2026, 6, 11, 0, 0, 0)),  # straddles cutoff -> keep
+        ("p_old", datetime(2026, 6, 9, 0, 0, 0, tzinfo=timezone.utc)),  # upper < cutoff -> drop
+        ("p_boundary", datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)),  # upper == cutoff -> drop
+        ("p_partial", datetime(2026, 6, 11, 0, 0, 0, tzinfo=timezone.utc)),  # straddles cutoff -> keep
         ("p_default", None),  # DEFAULT -> keep
     ]
     assert select_partitions_to_drop(partitions, cutoff) == ["p_old", "p_boundary"]

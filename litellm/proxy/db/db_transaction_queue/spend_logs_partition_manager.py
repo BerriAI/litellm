@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.constants import (
     SPEND_LOG_PARTITION_INTERVAL,
     SPEND_LOG_PARTITION_PRECREATE_AHEAD,
@@ -86,7 +87,7 @@ def parse_partition_upper_bound(bound_expr: str) -> Optional[datetime]:
     if match is None:
         return None
     try:
-        return datetime.fromisoformat(match.group(1))
+        return parse_utc_datetime(match.group(1))
     except ValueError:
         return None
 
@@ -94,10 +95,12 @@ def parse_partition_upper_bound(bound_expr: str) -> Optional[datetime]:
 def select_partitions_to_drop(partitions: List[Tuple[str, Optional[datetime]]], cutoff: datetime) -> List[str]:
     """
     Names of partitions whose entire range is older than `cutoff` (upper bound
-    <= cutoff). `cutoff` and the bounds are UTC-naive. Partitions without a
-    parseable upper bound (e.g. DEFAULT) are kept.
+    <= cutoff). `cutoff` and the bounds are normalized to tz-aware UTC before
+    comparing (naive values are assumed UTC). Partitions without a parseable
+    upper bound (e.g. DEFAULT) are kept.
     """
-    return [name for name, upper in partitions if upper is not None and upper <= cutoff]
+    aware_cutoff = parse_utc_datetime(cutoff)
+    return [name for name, upper in partitions if upper is not None and upper <= aware_cutoff]
 
 
 class SpendLogsPartitionManager:
@@ -179,9 +182,8 @@ class SpendLogsPartitionManager:
 
     async def drop_partitions_older_than(self, prisma_client, cutoff: datetime) -> List[str]:
         """DROP every partition whose whole range is older than `cutoff`."""
-        cutoff_naive = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
         partitions = await self._list_partitions(prisma_client)
-        to_drop = select_partitions_to_drop(partitions, cutoff_naive)
+        to_drop = select_partitions_to_drop(partitions, cutoff)
         dropped: List[str] = []
         for name in to_drop:
             try:

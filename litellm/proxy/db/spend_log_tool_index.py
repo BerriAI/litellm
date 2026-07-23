@@ -4,10 +4,10 @@ are written, so "last N requests for tool X" and "how is this tool called in pro
 queries are fast.
 """
 
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Set
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import SpendLogToolIndexRepository
@@ -92,13 +92,10 @@ async def process_spend_logs_tool_usage(
         start_time = payload.get("startTime")
         if not request_id or not start_time:
             continue
-        if isinstance(start_time, str):
-            try:
-                start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                continue
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
+        try:
+            start_time = parse_utc_datetime(start_time)
+        except (ValueError, TypeError):
+            continue
 
         tool_names = _parse_tool_names_from_payload(payload)
         for tool_name in tool_names:
@@ -114,23 +111,14 @@ async def process_spend_logs_tool_usage(
         return
 
     try:
-        index_data = []
-        for r in index_rows:
-            st = r["start_time"]
-            if isinstance(st, str):
-                try:
-                    st = datetime.fromisoformat(st.replace("Z", "+00:00"))
-                except (ValueError, TypeError):
-                    continue
-            if st.tzinfo is None:
-                st = st.replace(tzinfo=timezone.utc)
-            index_data.append(
-                {
-                    "request_id": r["request_id"],
-                    "tool_name": r["tool_name"],
-                    "start_time": st,
-                }
-            )
+        index_data = [
+            {
+                "request_id": r["request_id"],
+                "tool_name": r["tool_name"],
+                "start_time": parse_utc_datetime(r["start_time"]),
+            }
+            for r in index_rows
+        ]
         if index_data:
             await SpendLogToolIndexRepository(prisma_client).table.create_many(
                 data=index_data,

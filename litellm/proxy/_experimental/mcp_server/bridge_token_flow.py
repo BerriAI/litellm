@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -62,7 +63,7 @@ def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
     store) derive it separately via :func:`_active_key_user_id`.
 
     Total by design: ``expires`` is typed ``str | datetime``, and an unparseable string would make
-    ``datetime.fromisoformat`` raise. Since the callers run this outside their key-resolution
+    ``parse_utc_datetime`` raise. Since the callers run this outside their key-resolution
     ``try``, an uncaught parse error would surface as a 500 instead of the endpoint's fail-closed
     behavior, so a malformed expiry is treated as inactive (return ``False``) rather than raising.
     """
@@ -70,15 +71,10 @@ def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:
         return False
     expires = key_obj.expires
     if expires is not None:
-        if isinstance(expires, datetime):
-            expiry = expires
-        else:
-            try:
-                expiry = datetime.fromisoformat(expires)
-            except (ValueError, TypeError):
-                return False
-        if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
+        try:
+            expiry = parse_utc_datetime(expires)
+        except (ValueError, TypeError):
+            return False
         if expiry < datetime.now(timezone.utc):
             return False
     return True

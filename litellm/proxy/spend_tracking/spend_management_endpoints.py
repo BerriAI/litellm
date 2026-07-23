@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -370,7 +371,7 @@ async def get_global_activity(
         daily_data = []
         for row in db_response:
             # cast date to datetime
-            _date_obj = datetime.fromisoformat(row["date"])
+            _date_obj = parse_utc_datetime(row["date"])
             row["date"] = _date_obj.strftime("%b %d")
 
             daily_data.append(row)
@@ -537,7 +538,7 @@ async def get_global_activity_model(
                     "sum_api_requests": 0,
                     "sum_total_tokens": 0,
                 }
-            _date_obj = datetime.fromisoformat(row["date"])
+            _date_obj = parse_utc_datetime(row["date"])
             row["date"] = _date_obj.strftime("%b %d")
 
             model_ui_data[_model]["daily_data"].append(row)
@@ -684,7 +685,7 @@ async def get_global_activity_exceptions_per_deployment(
                     "daily_data": [],
                     "sum_num_rate_limit_exceptions": 0,
                 }
-            _date_obj = datetime.fromisoformat(row["date"])
+            _date_obj = parse_utc_datetime(row["date"])
             row["date"] = _date_obj.strftime("%b %d")
 
             model_ui_data[_model]["daily_data"].append(row)
@@ -803,7 +804,7 @@ async def get_global_activity_exceptions(
         daily_data = []
         for row in db_response:
             # cast date to datetime
-            _date_obj = datetime.fromisoformat(row["date"])
+            _date_obj = parse_utc_datetime(row["date"])
             row["date"] = _date_obj.strftime("%b %d")
 
             daily_data.append(row)
