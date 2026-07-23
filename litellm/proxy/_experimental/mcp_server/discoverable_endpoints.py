@@ -560,7 +560,7 @@ async def _store_per_user_token_server_side(
         )
         return  # Don't warm Redis if DB write failed
 
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # local import to break mcp_server_manager <-> discoverable_endpoints cycle
         global_mcp_server_manager,
     )
 

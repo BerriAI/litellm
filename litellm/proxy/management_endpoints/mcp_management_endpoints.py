@@ -1955,7 +1955,7 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # local import to break mcp_server_manager <-> management endpoints cycle
             global_mcp_server_manager,
         )
 
@@ -2000,7 +2000,7 @@ if MCP_AVAILABLE:
                 await delete_user_credential(prisma_client, user_id, server_id)
             except RecordNotFoundError:
                 pass  # Already gone — treat as a successful delete
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # local import to break mcp_server_manager <-> management endpoints cycle
                 global_mcp_server_manager,
             )
 
