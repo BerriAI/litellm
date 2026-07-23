@@ -33,30 +33,24 @@ describe("CachingLayout", () => {
     };
   });
 
-  it("renders the tab bar and the active tab's page content", () => {
+  it("renders the four tabs and the active tab's page content", () => {
     const { getByRole, getByTestId } = renderLayout();
-    expect(getByRole("tab", { name: "Cache Analytics" })).toBeInTheDocument();
-    expect(getByRole("tab", { name: "Cache Health" })).toBeInTheDocument();
-    expect(getByRole("tab", { name: "Cache Settings" })).toBeInTheDocument();
-    expect(getByRole("tab", { name: "Coordination Redis" })).toBeInTheDocument();
+    for (const name of ["Cache Analytics", "Cache Health", "Cache Settings", "Coordination Redis"]) {
+      expect(getByRole("tab", { name })).toBeInTheDocument();
+    }
     expect(getByTestId("tab-content")).toHaveTextContent("CHILD");
   });
 
-  it("navigates to a tab's path when its tab is clicked", async () => {
+  it("marks the base route's Cache Analytics tab active", () => {
     const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Cache Health" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/caching\/health\/$/));
+    expect(getByRole("tab", { name: "Cache Analytics" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("routes the base tab back to the caching root (no slug)", async () => {
-    navState.pathname = "/caching/health";
+  it("derives the active tab from a nested pathname", () => {
+    navState.pathname = "/ui/caching/settings";
     const { getByRole } = renderLayout();
-    await act(async () => {
-      getByRole("tab", { name: "Cache Analytics" }).click();
-    });
-    expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/\/caching\/$/));
+    expect(getByRole("tab", { name: "Cache Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(getByRole("tab", { name: "Cache Analytics" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("redirects to the base caching path when the tab slug is unknown", async () => {
