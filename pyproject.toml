@@ -153,6 +153,7 @@ proxy-runtime = [
 litellm = "litellm:run_server"
 lite = "litellm.proxy.client.cli:cli"
 litellm-proxy = "litellm.proxy.client.cli:cli"
+litellm-mcp-server = "litellm.litellm_mcp_server.cli:main"
 
 [dependency-groups]
 dev = [
