@@ -2505,6 +2505,15 @@ def _complete_mistral(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     api_key = api_key or litellm.api_key or get_secret("MISTRAL_API_KEY")
     api_base = api_base or litellm.api_base or get_secret("MISTRAL_API_BASE") or "https://api.mistral.ai/v1"
 
+    from litellm.llms.mistral.common_utils import is_web_search_request
+
+    if provider_config is not None and is_web_search_request(optional_params):
+        from litellm.llms.mistral.conversations.transformation import (
+            MistralConversationsConfig,
+        )
+
+        provider_config = MistralConversationsConfig()
+
     return base_llm_http_handler.completion(
         model=model,
         messages=messages,

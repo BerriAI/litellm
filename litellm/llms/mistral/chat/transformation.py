@@ -108,6 +108,7 @@ class MistralConfig(OpenAIGPTConfig):
             "stop",
             "response_format",
             "parallel_tool_calls",
+            "web_search_options",
         ]
 
         # Add reasoning support for magistral models
@@ -158,7 +159,12 @@ class MistralConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        direct_passthrough = frozenset(
+            {"temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "web_search_options"}
+        )
         for param, value in non_default_params.items():
+            if param in direct_passthrough:
+                optional_params[param] = value
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
             if param == "max_completion_tokens":  # max_completion_tokens should take priority
@@ -168,26 +174,16 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["tools"] = self._clean_tool_schema_for_mistral(value)
             if param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "stop":
-                optional_params["stop"] = value
             if param == "tool_choice" and isinstance(value, str):
                 optional_params["tool_choice"] = self._map_tool_choice(tool_choice=value)
             if param == "seed":
-                optional_params["extra_body"] = {"random_seed": value}
-            if param == "response_format":
-                optional_params["response_format"] = value
+                optional_params["random_seed"] = value
             if param == "reasoning_effort" and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
             if param == "thinking" and "magistral" in model.lower():
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
-            if param == "parallel_tool_calls":
-                optional_params["parallel_tool_calls"] = value
         return optional_params
 
     def _get_openai_compatible_provider_info(
