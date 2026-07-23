@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import (
     ALL_LOGGERS,
     CorrelationContextFilter,
+    CorrelationPlainFormatter,
     JsonFormatter,
     _initialize_loggers_with_handler,
     _turn_on_json,
@@ -493,4 +494,64 @@ def test_session_id_not_in_log_when_flag_disabled(monkeypatch):
         lg.info("message")
         assert "session_id" not in cap.records[0]
     finally:
+        session_id_var.set("")
+
+
+class _PlainCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = CorrelationPlainFormatter("%(message)s")
+        self.records: list[str] = []
+        self.addFilter(CorrelationContextFilter())
+
+    def emit(self, record):
+        self.records.append(self.formatter.format(record))
+
+
+def _make_plain_capture_logger(name: str) -> tuple[logging.Logger, _PlainCapture]:
+    lg = logging.getLogger(name)
+    cap = _PlainCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+def test_plain_formatter_appends_trace_id_and_session_id(monkeypatch):
+    """CorrelationPlainFormatter must append trace_id/session_id to non-JSON log lines too."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_plain_capture_logger("test.plain_trace_session")
+    set_trace_id("plain-trace-1")
+    set_session_id("plain-session-1")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message [trace_id=plain-trace-1 session_id=plain-session-1]"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_plain_formatter_appends_only_trace_id_when_session_id_absent(monkeypatch):
+    """Only trace_id is appended when session_id was never set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_plain_capture_logger("test.plain_trace_only")
+    set_trace_id("plain-trace-2")
+    session_id_var.set("")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message [trace_id=plain-trace-2]"
+    finally:
+        trace_id_var.set("")
+
+
+def test_plain_formatter_unchanged_when_flag_disabled(monkeypatch):
+    """When request_correlation_in_logs is False, plain log lines are unmodified even if the contextvars are set."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    lg, cap = _make_plain_capture_logger("test.plain_flag_off")
+    set_trace_id("should-not-appear")
+    set_session_id("should-not-appear")
+    try:
+        lg.info("plaintext message")
+        assert cap.records[0] == "plaintext message"
+    finally:
+        trace_id_var.set("")
         session_id_var.set("")

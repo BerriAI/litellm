@@ -228,6 +228,23 @@ class JsonFormatter(Formatter):
         return safe_dumps(json_record)
 
 
+class CorrelationPlainFormatter(logging.Formatter):
+    """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
+
+    Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
+    behaves the same whether or not json_logs is enabled.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        trace_id = getattr(record, "trace_id", None)
+        session_id = getattr(record, "session_id", None)
+        if not trace_id and not session_id:
+            return formatted
+        parts = [f"trace_id={trace_id}" if trace_id else None, f"session_id={session_id}" if session_id else None]
+        return f"{formatted} [{' '.join(p for p in parts if p)}]"
+
+
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
@@ -282,7 +299,7 @@ if json_logs:
     handler.setFormatter(JsonFormatter())
     _setup_json_exception_handlers(JsonFormatter())
 else:
-    formatter = logging.Formatter(
+    formatter = CorrelationPlainFormatter(
         "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
         datefmt="%H:%M:%S",
     )

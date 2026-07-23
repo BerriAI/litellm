@@ -356,7 +356,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         set_trace_id(self.litellm_trace_id)
         _sid = (kwargs or {}).get("litellm_session_id")
-        set_session_id(str(_sid) if _sid else "")
+        self.litellm_session_id: str = str(_sid) if _sid else ""
+        set_session_id(self.litellm_session_id)
 
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
@@ -5045,25 +5046,62 @@ class StandardLoggingPayloadSetup:
         Returns the `litellm_trace_id` for this request
 
         This helps link sessions when multiple requests are made in a single session
+
+        Gated behind `litellm.request_correlation_in_logs`:
+        - Off (default): legacy behavior, preserved for backward compatibility -
+          `litellm_session_id` takes priority over `litellm_trace_id` since historically
+          this field doubled as the session-grouping field.
+        - On: `litellm_trace_id` takes priority - trace_id and session_id are independent,
+          see `_get_standard_logging_payload_session_id` for session tracking.
         """
         dynamic_litellm_session_id = litellm_params.get("litellm_session_id")
         dynamic_litellm_trace_id = litellm_params.get("litellm_trace_id")
-
-        # Note: we recommend using `litellm_session_id` for session tracking
-        # `litellm_trace_id` is an internal litellm param
-        if dynamic_litellm_session_id:
-            return str(dynamic_litellm_session_id)
-        elif dynamic_litellm_trace_id:
-            return str(dynamic_litellm_trace_id)
-        # Fallback: use metadata.session_id or metadata.trace_id for call chaining
         metadata = litellm_params.get("metadata") or {}
         metadata_session_id = metadata.get("session_id")
         metadata_trace_id = metadata.get("trace_id")
+
+        if litellm.request_correlation_in_logs:
+            ordered_candidates = [
+                dynamic_litellm_trace_id,
+                dynamic_litellm_session_id,
+                metadata_trace_id,
+                metadata_session_id,
+            ]
+        else:
+            ordered_candidates = [
+                dynamic_litellm_session_id,
+                dynamic_litellm_trace_id,
+                metadata_session_id,
+                metadata_trace_id,
+            ]
+        for candidate in ordered_candidates:
+            if candidate:
+                return str(candidate)
+        return logging_obj.litellm_trace_id
+
+    @staticmethod
+    def _get_standard_logging_payload_session_id(
+        logging_obj: Logging,
+        litellm_params: dict,
+    ) -> str:
+        """
+        Returns the end-user/conversation `litellm_session_id` for this request, independent of trace_id.
+
+        Only populated when `litellm.request_correlation_in_logs` is enabled - off by default
+        to avoid changing existing StandardLoggingPayload shape for callers who haven't opted in.
+        Unlike `_get_standard_logging_payload_trace_id`, this never falls back to a generated
+        per-call trace id: it's empty when the caller never supplied a session id.
+        """
+        if not litellm.request_correlation_in_logs:
+            return ""
+        dynamic_litellm_session_id = litellm_params.get("litellm_session_id")
+        if dynamic_litellm_session_id:
+            return str(dynamic_litellm_session_id)
+        metadata = litellm_params.get("metadata") or {}
+        metadata_session_id = metadata.get("session_id")
         if metadata_session_id:
             return str(metadata_session_id)
-        if metadata_trace_id:
-            return str(metadata_trace_id)
-        return logging_obj.litellm_trace_id
+        return logging_obj.litellm_session_id
 
     @staticmethod
     def _get_user_agent_tags(proxy_server_request: dict) -> Optional[List[str]]:
@@ -5369,6 +5407,10 @@ def get_standard_logging_object_payload(
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
             trace_id=StandardLoggingPayloadSetup._get_standard_logging_payload_trace_id(
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+            ),
+            session_id=StandardLoggingPayloadSetup._get_standard_logging_payload_session_id(
                 logging_obj=logging_obj,
                 litellm_params=litellm_params,
             ),
