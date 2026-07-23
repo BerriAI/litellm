@@ -489,6 +489,36 @@ def test_virtual_key_llm_api_routes_denies_spend_logs_v2():
 @pytest.mark.parametrize(
     "route",
     [
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    ],
+)
+def test_virtual_key_llm_api_routes_allows_model_discovery(route):
+    """Regression test for #32443: virtual keys with allowed_routes=["llm_api_routes"]
+    (the default the Create Key UI applies to LLM API keys) must be able to reach the
+    read-only model-discovery endpoints. These back OpenAI-compatible model listing and
+    the LiteLLM VS Code extension; the GET handlers already scope results to the models
+    the caller can access."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request("GET"),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
         "/mcp/tools/call",
         "/mcp-rest/tools/call",
         "/mcp/tools/list",
