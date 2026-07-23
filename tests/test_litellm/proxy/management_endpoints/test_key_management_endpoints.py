@@ -9743,6 +9743,8 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     mock_existing_key.key_alias = None
     mock_existing_key.models = []
     mock_existing_key.metadata = {}
+    mock_existing_key.allowed_routes = []
+    mock_existing_key.permissions = {}
     mock_existing_key.model_dump.return_value = {
         "token": test_hashed_token,
         "user_id": "internal_user",
@@ -9804,7 +9806,12 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     # Updating key_alias (non-budget field) should succeed
     result = await update_key_fn(
         request=mock_request,
-        data=UpdateKeyRequest(key=test_hashed_token, key_alias="my-alias"),
+        data=UpdateKeyRequest(
+            key=test_hashed_token,
+            key_alias="my-alias",
+            allowed_routes=[],
+            permissions={},
+        ),
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=None,
     )
@@ -11561,46 +11568,6 @@ class TestAllowedRoutesCallerPermission:
         )
 
         data = UpdateKeyRequest(key="sk-test", allowed_routes=["/*"])
-        user_api_key_dict = UserAPIKeyAuth(
-            user_id="internal-user-123",
-            user_role=LitellmUserRoles.INTERNAL_USER,
-        )
-        mock_prisma_client = AsyncMock()
-
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_custom_key_update", None),
-            patch("litellm.proxy.proxy_server.llm_router", None),
-            patch("litellm.proxy.proxy_server.premium_user", True),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
-            patch(
-                "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
-                new_callable=AsyncMock,
-                return_value=MagicMock(),
-            ),
-        ):
-            with pytest.raises(ProxyException) as exc_info:
-                await update_key_fn(
-                    request=MagicMock(),
-                    data=data,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_changed_by=None,
-                )
-        assert str(exc_info.value.code) == "403"
-        assert "allowed_routes" in str(exc_info.value.message)
-
-    @pytest.mark.asyncio
-    async def test_non_admin_update_key_explicit_empty_allowed_routes_rejected(self):
-        """`update_key_fn` rejects a non-admin when `allowed_routes` is
-        present as `[]` in the request body. The value matches the model
-        default but `model_fields_set` distinguishes the two."""
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            update_key_fn,
-        )
-
-        data = UpdateKeyRequest(key="sk-test", allowed_routes=[])
-        assert "allowed_routes" in data.model_fields_set
         user_api_key_dict = UserAPIKeyAuth(
             user_id="internal-user-123",
             user_role=LitellmUserRoles.INTERNAL_USER,
@@ -14486,6 +14453,8 @@ def _make_personal_key_row_for_alice():
         max_budget=None,
         organization_id=None,
         project_id=None,
+        allowed_routes=[],
+        permissions={},
     )
 
 
@@ -14524,33 +14493,79 @@ async def test_update_key_non_admin_permissions_non_empty_rejected(monkeypatch):
     assert "permissions" in str(exc.value.detail)
 
 
+@pytest.mark.parametrize(
+    ("data", "existing_allowed_routes", "existing_permissions"),
+    [
+        (
+            UpdateKeyRequest(
+                key="sk-alice-personal",
+                tpm_limit=42,
+                allowed_routes=[],
+            ),
+            [],
+            {},
+        ),
+        (
+            UpdateKeyRequest(
+                key="sk-alice-personal",
+                tpm_limit=42,
+                allowed_routes=["management_routes", "llm_api_routes"],
+            ),
+            ["llm_api_routes", "management_routes"],
+            {},
+        ),
+        (
+            UpdateKeyRequest(
+                key="sk-alice-personal",
+                tpm_limit=42,
+                permissions={},
+            ),
+            [],
+            {},
+        ),
+        (
+            UpdateKeyRequest(
+                key="sk-alice-personal",
+                tpm_limit=42,
+                permissions={"get_spend_routes": False},
+            ),
+            [],
+            {"get_spend_routes": False},
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_update_key_non_admin_permissions_explicit_empty_rejected(monkeypatch):
-    """`_validate_update_key_data` rejects a non-admin when `permissions`
-    is present as `{}` in the request body. The value matches the model
-    default but `model_fields_set` distinguishes the two."""
+async def test_update_key_non_admin_can_resubmit_unchanged_privileged_fields(
+    data,
+    existing_allowed_routes,
+    existing_permissions,
+    monkeypatch,
+):
     mock_prisma_client = AsyncMock()
     mock_prisma_client.jsonify_object = lambda data: data
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    data = UpdateKeyRequest(
-        key="sk-alice-personal",
-        permissions={},
+    existing_key_row = MagicMock(
+        token="hashed_alice_personal_key",
+        user_id="alice",
+        team_id=None,
+        created_by="alice",
+        max_budget=None,
+        organization_id=None,
+        project_id=None,
+        allowed_routes=existing_allowed_routes,
+        permissions=existing_permissions,
     )
-    assert "permissions" in data.model_fields_set
 
-    with pytest.raises(HTTPException) as exc:
-        await _validate_update_key_data(
-            data=data,
-            existing_key_row=_make_personal_key_row_for_alice(),
-            user_api_key_dict=_make_alice_internal_user(),
-            llm_router=None,
-            premium_user=True,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=MagicMock(),
-        )
-    assert exc.value.status_code == 403
-    assert "permissions" in str(exc.value.detail)
+    await _validate_update_key_data(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=_make_alice_internal_user(),
+        llm_router=None,
+        premium_user=True,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=MagicMock(),
+    )
 
 
 @pytest.mark.asyncio
