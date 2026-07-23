@@ -506,3 +506,79 @@ def test_empty_content_chunk_mid_text_block_is_suppressed_sync():
 
     assert _text_deltas(events) == ["Hi", " there"]
     _assert_deltas_match_their_block_type(events)
+
+
+def _thinking_first_chunks() -> List[MagicMock]:
+    return [
+        _thinking_chunk("Let me think"),
+        _thinking_chunk("about it."),
+        _make_chunk(Delta(content="42")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+
+
+def _assert_thinking_first_block_opens_at_index_zero(events: List[dict]) -> None:
+    starts = [
+        (e["index"], e["content_block"]["type"])
+        for e in events
+        if e.get("type") == "content_block_start"
+    ]
+    assert starts == [(0, "thinking"), (1, "text")], starts
+    assert "" not in _text_deltas(events)
+    assert _thinking_deltas(events) == ["Let me think", "about it."]
+    assert _text_deltas(events) == ["42"]
+    _assert_deltas_match_their_block_type(events)
+
+
+def test_thinking_first_stream_opens_thinking_block_at_index_zero_sync():
+    """Bug A regression: when the model's first output is reasoning the adapter
+    must open the first content block as ``thinking`` at index 0. The previous
+    code pre-emitted a hardcoded empty ``text`` block at index 0 before
+    inspecting any upstream chunk, then opened ``thinking`` at index 1; strict
+    Anthropic SDK clients with thinking enabled reject that stream with
+    "Content block is not a thinking block".
+    """
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_thinking_first_chunks()),
+        model="claude-x",
+    )
+    _assert_thinking_first_block_opens_at_index_zero(_drain_sync(wrapper))
+
+
+@pytest.mark.asyncio
+async def test_thinking_first_stream_opens_thinking_block_at_index_zero_async():
+    """Async twin of the Bug A regression; the proxy serves the async iterator,
+    so the first block must be ``thinking`` at index 0 on this path too.
+    """
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(_thinking_first_chunks()),
+        model="claude-x",
+    )
+    _assert_thinking_first_block_opens_at_index_zero(await _drain_async(wrapper))
+
+
+def _reasoning_content_chunk(reasoning: str) -> MagicMock:
+    return _make_chunk(Delta(content=None, reasoning_content=reasoning))
+
+
+def _reasoning_first_chunks() -> List[MagicMock]:
+    return [
+        _reasoning_content_chunk("Let me think"),
+        _reasoning_content_chunk("about it."),
+        _make_chunk(Delta(content="42")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+
+
+def test_reasoning_content_first_stream_opens_thinking_block_at_index_zero_sync():
+    """The reported backend (hosted_vllm; vLLM and SGLang reasoning parsers)
+    surfaces reasoning as OpenAI ``reasoning_content`` with no
+    ``thinking_blocks``. Such a stream must also open the first content block as
+    ``thinking`` at index 0, exercising the reasoning_content branch of the
+    chunk translator rather than the thinking_blocks branch the other twins use.
+    """
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_reasoning_first_chunks()),
+        model="claude-x",
+    )
+    _assert_thinking_first_block_opens_at_index_zero(_drain_sync(wrapper))
