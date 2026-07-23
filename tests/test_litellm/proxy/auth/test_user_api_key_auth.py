@@ -88,6 +88,7 @@ def test_public_ai_hub_routes_remain_public():
         "/public/agent_hub",
         "/public/mcp_hub",
         "/public/skill_hub",
+        "/version",
     ):
         assert route in LiteLLMRoutes.public_routes.value
         assert _route_requires_auth_despite_public(route, {}) is False
