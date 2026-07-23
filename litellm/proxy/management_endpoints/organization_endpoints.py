@@ -13,16 +13,18 @@ Endpoints for /organization operations
 
 #### ORGANIZATION MANAGEMENT ####
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
@@ -34,6 +36,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
+    prepare_object_permission_upsert,
 )
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
@@ -99,6 +102,30 @@ async def _verify_org_access(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="You do not have access to this organization",
     )
+
+
+_STR_OBJECT_DICT_ADAPTER = TypeAdapter(dict[str, object])
+_BUDGET_SETTABLE_FIELDS = frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
+_ORG_COLUMN_FIELDS = frozenset({"organization_alias", "models"})
+
+
+def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: str) -> Mapping[str, object]:
+    """
+    Budget-row columns to write. ``budget_reset_at`` tracks any sent ``budget_duration``:
+    recomputed for a new duration, cleared alongside a ``None`` duration so no stale reset
+    timestamp survives. Other sent fields (including a ``None`` clear) are written as-is.
+    """
+    budget_duration = budget_updates.get("budget_duration")
+    recomputed_reset_at: Mapping[str, object] = (
+        {
+            "budget_reset_at": (
+                get_budget_reset_time(budget_duration=budget_duration) if isinstance(budget_duration, str) else None
+            )
+        }
+        if "budget_duration" in budget_updates
+        else {}
+    )
+    return {**budget_updates, **recomputed_reset_at, "updated_by": updated_by}
 
 
 def handle_nested_budget_structure_in_organization_update_request(
@@ -554,6 +581,154 @@ async def handle_update_object_permission(
         data_json["object_permission_id"] = object_permission_id
 
     return data_json
+
+
+@router.patch(
+    "/v2/organization/{organization_id}",
+    tags=["organization management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_OrganizationTableWithMembers,
+    include_in_schema=False,
+)
+async def update_organization_v2(
+    organization_id: str,
+    data: OrganizationUpdateRequestV2,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
+
+    A sent field is written and an omitted one is left untouched (presence is read from
+    ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+    ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+    so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+    Validation failures return 422; the object-permission upsert, budget-row write, and
+    org-row write are one transaction.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Cannot associate a user_id to this action. Check `/key/info` to validate if 'user_id' is set."
+            },
+        )
+
+    if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
+        )
+    if data.soft_budget is not None and (not math.isfinite(data.soft_budget) or data.soft_budget < 0):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
+        )
+    if data.model_max_budget:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            validate_model_max_budget,
+        )
+
+        try:
+            validate_model_max_budget(data.model_max_budget)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail={"error": str(e)})
+
+    if "organization_alias" in data.model_fields_set and data.organization_alias is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "organization_alias cannot be cleared; it is required"},
+        )
+    if "models" in data.model_fields_set and data.models is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "models cannot be set to null; send [] to clear it"},
+        )
+    if data.object_permission is not None and not data.object_permission.model_dump(exclude_none=True):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "object_permission cannot be an empty object; send null to clear it, or a non-empty object to set grants"
+            },
+        )
+
+    await _verify_org_access(
+        organization_id=organization_id,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+
+    existing_organization_row = await OrganizationRepository(prisma_client).table.find_unique(
+        where={"organization_id": organization_id},
+    )
+    if existing_organization_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Organization not found for organization_id={organization_id}"},
+        )
+
+    field_values = _STR_OBJECT_DICT_ADAPTER.validate_python(data.model_dump())
+    present_fields = data.model_fields_set
+    budget_updates = {field: field_values[field] for field in present_fields if field in _BUDGET_SETTABLE_FIELDS}
+    org_column_updates: Mapping[str, object] = {
+        **{field: field_values[field] for field in present_fields if field in _ORG_COLUMN_FIELDS},
+        **({"metadata": data.metadata or {}} if "metadata" in present_fields else {}),
+    }
+
+    object_permission_cleared = "object_permission" in present_fields and data.object_permission is None
+    object_permission_upsert = (
+        await prepare_object_permission_upsert(
+            new_object_permission=data.object_permission.model_dump(exclude_none=True),
+            existing_object_permission_id=existing_organization_row.object_permission_id,
+            prisma_client=prisma_client,
+        )
+        if data.object_permission is not None
+        else None
+    )
+    object_permission_write: Mapping[str, object] = (
+        {"object_permission_id": object_permission_upsert.object_permission_id}
+        if object_permission_upsert is not None
+        else ({"object_permission_id": None} if object_permission_cleared else {})
+    )
+
+    organization_write_data = prisma_client.jsonify_object(
+        {
+            **org_column_updates,
+            **object_permission_write,
+            "updated_by": user_api_key_dict.user_id,
+        }
+    )
+
+    async with prisma_client.db.tx() as tx:
+        if object_permission_upsert is not None:
+            await tx.litellm_objectpermissiontable.upsert(
+                where={"object_permission_id": object_permission_upsert.object_permission_id},
+                data={
+                    "create": object_permission_upsert.record,
+                    "update": object_permission_upsert.record,
+                },
+            )
+        if budget_updates:
+            await tx.litellm_budgettable.update(
+                where={"budget_id": existing_organization_row.budget_id},
+                data=prisma_client.jsonify_object(
+                    dict(build_budget_write_data(budget_updates, user_api_key_dict.user_id))
+                ),
+            )
+        response = await tx.litellm_organizationtable.update(
+            where={"organization_id": organization_id},
+            data=organization_write_data,
+            include={"members": True, "teams": True, "litellm_budget_table": True},
+        )
+
+    return response
 
 
 @router.delete(
