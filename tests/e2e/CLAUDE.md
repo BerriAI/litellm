@@ -13,13 +13,16 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `realtime/` - realtime websocket sessions, including the pipecat audio path
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials (API surface; not Playwright)
+- `a2a/` - the A2A (agent-to-agent) surface: admin registration via `/v1/agents`, proxy-fronted card discovery at `/.well-known/agent-card.json`, and JSON-RPC `message/send` invocation, driving agents backed by the litellm completion bridge (a real provider) and asserting protocol-version normalization (0.3 vs 1.0)
 - `mcp/` - the MCP server surface over api_key auth against the real Datadog remote MCP server only (see "MCP suite: real Datadog only" below)
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns)
-- `load/` - throughput/performance under concurrency: drives real concurrent traffic through the whole stack with Locust and asserts a throughput SLO; marked `load` so the parent conftest collects it last and it never perturbs latency-sensitive suites
+- `load/` - throughput/performance under concurrency: drives real concurrent traffic through the whole stack with Locust and asserts a throughput SLO; marked `load` so the parent conftest collects it last and it never perturbs latency-sensitive suites. Also home of the weekly session-anomaly test (`test_weekly_session_anomaly_e2e.py`): Claude Code-shaped multi-turn sessions against real providers with ceilings on error rate, cache read/write, turn time, and spend; additionally marked `weekly` and deselected unless `E2E_WEEKLY_ANOMALY` is set, because it spends real provider money (driven by `.github/workflows/weekly_load_anomaly.yml`)
+- `other/` - the holding-pen suite for the `other.*` registry cluster with no home of its own yet: the master-key auth gate and the process-lifecycle health probes (liveness, public readiness, authenticated readiness diagnostics). Promote a cluster out once it is large/stable enough for its own suite
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
 - `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees. The HTTP probes ride the shared transport (`ProxyClient.count_tokens` / `ProxyClient.messages`); the CLI-driving path stays bespoke
+- `ui/` - the Admin UI browser suite: Playwright in TypeScript, driving the dashboard served by a live proxy on port 4000 (seeded postgres + mock LLM upstream; see its `run_e2e.sh`). It is a self-contained npm package with its own lockfile and does not use the Python harness, pytest markers, or the shared transport; the Python rules in this file (typed models, `Result` unions, basedpyright zero-error gate) do not apply inside it. Its only Python file, `fixtures/mock_llm_server/server.py`, is excluded from the e2e basedpyright gate via the root `pyrightconfig.json`
 
 ## MCP suite: real Datadog only
 
@@ -130,7 +133,7 @@ reliability.<behavior>.<variant>.<assertion>
   behavior  : fallback | retry | cooldown | timeout | routing | cache | circuit_breaker | perf
   variant   : <trigger>   5xx | context_window | content_policy | 429 | timeout
               <strategy>  simple_shuffle | usage_based | latency_based | cost_based | least_busy
-              <dimension> latency | throughput   (perf only; SLO/threshold assertion, not binary)
+              <dimension> latency | throughput | session_anomaly   (perf only; SLO/threshold assertion, not binary)
   assertion : routes_to_fallback | succeeds_within_retries | picks_under_tpm | returns_cached
               | trips_then_recovers | under_slo
   e.g.  reliability.fallback.context_window.routes_to_fallback     exercised_on=[chat_completions]

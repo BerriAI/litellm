@@ -13,6 +13,11 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
 )
+from litellm.proxy.common_utils.timezone_utils import (
+    BudgetResetSettings,
+    compute_budget_reset_at,
+    get_budget_reset_settings,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
@@ -32,9 +37,15 @@ class ResetBudgetJob:
     Resets the budget for all the keys, users, and teams that need it
     """
 
-    def __init__(self, proxy_logging_obj: ProxyLogging, prisma_client: PrismaClient):
+    def __init__(
+        self,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+        reset_settings: BudgetResetSettings | None = None,
+    ):
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
+        self.reset_settings: BudgetResetSettings = reset_settings or get_budget_reset_settings()
 
     async def reset_budget(
         self,
@@ -237,7 +248,7 @@ class ResetBudgetJob:
 
             if budgets_to_reset is not None and len(budgets_to_reset) > 0:
                 for budget in budgets_to_reset:
-                    budget = await ResetBudgetJob._reset_budget_reset_at_date(budget, now)
+                    budget = await ResetBudgetJob._reset_budget_reset_at_date(budget, now, self.reset_settings)
 
                 await self.prisma_client.update_data(
                     query_type="update_many",
@@ -442,7 +453,11 @@ class ResetBudgetJob:
             if keys_to_reset is not None and len(keys_to_reset) > 0:
                 for key in keys_to_reset:
                     try:
-                        updated_key = await ResetBudgetJob._reset_budget_for_key(key=key, current_time=now)
+                        updated_key = await ResetBudgetJob._reset_budget_for_key(
+                            key=key,
+                            current_time=now,
+                            reset_settings=self.reset_settings,
+                        )
                         if updated_key is not None:
                             updated_keys.append(updated_key)
                         else:
@@ -513,7 +528,11 @@ class ResetBudgetJob:
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
-                        updated_user = await ResetBudgetJob._reset_budget_for_user(user=user, current_time=now)
+                        updated_user = await ResetBudgetJob._reset_budget_for_user(
+                            user=user,
+                            current_time=now,
+                            reset_settings=self.reset_settings,
+                        )
                         if updated_user is not None:
                             updated_users.append(updated_user)
                         else:
@@ -588,7 +607,11 @@ class ResetBudgetJob:
             if teams_to_reset is not None and len(teams_to_reset) > 0:
                 for team in teams_to_reset:
                     try:
-                        updated_team = await ResetBudgetJob._reset_budget_for_team(team=team, current_time=now)
+                        updated_team = await ResetBudgetJob._reset_budget_for_team(
+                            team=team,
+                            current_time=now,
+                            reset_settings=self.reset_settings,
+                        )
                         if updated_team is not None:
                             updated_teams.append(updated_team)
                         else:
@@ -655,10 +678,9 @@ class ResetBudgetJob:
         counter_key: str,
         spend_counter_cache: Any,
         now: datetime,
+        reset_settings: BudgetResetSettings,
     ) -> bool:
         """Reset a single budget window if expired. Returns True if the window was reset."""
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
         reset_at_str = window.get("reset_at")
         if not reset_at_str:
             return False
@@ -671,7 +693,9 @@ class ResetBudgetJob:
                 await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=0.0)
             except Exception as redis_err:
                 verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
-        window["reset_at"] = get_budget_reset_time(budget_duration=window["budget_duration"]).isoformat()
+        window["reset_at"] = compute_budget_reset_at(
+            budget_duration=window["budget_duration"], settings=reset_settings
+        ).isoformat()
         return True
 
     async def reset_budget_windows(self) -> None:
@@ -703,7 +727,13 @@ class ResetBudgetJob:
                 changed = False
                 for window in windows:
                     counter_key = f"spend:key:{row['token']}:window:{window['budget_duration']}"
-                    if await ResetBudgetJob._reset_expired_window(window, counter_key, spend_counter_cache, now):
+                    if await ResetBudgetJob._reset_expired_window(
+                        window,
+                        counter_key,
+                        spend_counter_cache,
+                        now,
+                        self.reset_settings,
+                    ):
                         changed = True
                 if changed:
                     await VerificationTokenRepository(self.prisma_client).table.update(
@@ -726,7 +756,13 @@ class ResetBudgetJob:
                 changed = False
                 for window in windows:
                     counter_key = f"spend:team:{row['team_id']}:window:{window['budget_duration']}"
-                    if await ResetBudgetJob._reset_expired_window(window, counter_key, spend_counter_cache, now):
+                    if await ResetBudgetJob._reset_expired_window(
+                        window,
+                        counter_key,
+                        spend_counter_cache,
+                        now,
+                        self.reset_settings,
+                    ):
                         changed = True
                 if changed:
                     await TeamRepository(self.prisma_client).table.update(
@@ -741,6 +777,7 @@ class ResetBudgetJob:
         item: Union[LiteLLM_TeamTable, LiteLLM_UserTable, LiteLLM_VerificationToken],
         current_time: datetime,
         item_type: Literal["key", "team", "user"],
+        reset_settings: BudgetResetSettings,
     ):
         """
         In-place, updates spend=0, and sets budget_reset_at to current_time + budget_duration
@@ -755,24 +792,40 @@ class ResetBudgetJob:
         try:
             item.spend = 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
-                from litellm.proxy.common_utils.timezone_utils import (
-                    get_budget_reset_time,
+                item.budget_reset_at = compute_budget_reset_at(
+                    budget_duration=item.budget_duration, settings=reset_settings
                 )
-
-                item.budget_reset_at = get_budget_reset_time(budget_duration=item.budget_duration)
             return item
         except Exception as e:
             verbose_proxy_logger.exception("Error resetting budget for %s: %s. Item: %s", item_type, e, item)
             raise e
 
     @staticmethod
-    async def _reset_budget_for_team(team: LiteLLM_TeamTable, current_time: datetime) -> Optional[LiteLLM_TeamTable]:
-        await ResetBudgetJob._reset_budget_common(item=team, current_time=current_time, item_type="team")
+    async def _reset_budget_for_team(
+        team: LiteLLM_TeamTable,
+        current_time: datetime,
+        reset_settings: BudgetResetSettings,
+    ) -> LiteLLM_TeamTable | None:
+        await ResetBudgetJob._reset_budget_common(
+            item=team,
+            current_time=current_time,
+            item_type="team",
+            reset_settings=reset_settings,
+        )
         return team
 
     @staticmethod
-    async def _reset_budget_for_user(user: LiteLLM_UserTable, current_time: datetime) -> Optional[LiteLLM_UserTable]:
-        await ResetBudgetJob._reset_budget_common(item=user, current_time=current_time, item_type="user")
+    async def _reset_budget_for_user(
+        user: LiteLLM_UserTable,
+        current_time: datetime,
+        reset_settings: BudgetResetSettings,
+    ) -> LiteLLM_UserTable | None:
+        await ResetBudgetJob._reset_budget_common(
+            item=user,
+            current_time=current_time,
+            item_type="user",
+            reset_settings=reset_settings,
+        )
         return user
 
     @staticmethod
@@ -788,15 +841,15 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _reset_budget_reset_at_date(
-        budget: LiteLLM_BudgetTableFull, current_time: datetime
+        budget: LiteLLM_BudgetTableFull,
+        current_time: datetime,
+        reset_settings: BudgetResetSettings,
     ) -> LiteLLM_BudgetTableFull:
         try:
             if budget.budget_duration is not None:
-                from litellm.proxy.common_utils.timezone_utils import (
-                    get_budget_reset_time,
+                budget.budget_reset_at = compute_budget_reset_at(
+                    budget_duration=budget.budget_duration, settings=reset_settings
                 )
-
-                budget.budget_reset_at = get_budget_reset_time(budget_duration=budget.budget_duration)
         except Exception as e:
             verbose_proxy_logger.exception("Error resetting budget_reset_at for budget: %s. Item: %s", e, budget)
             raise e
@@ -804,7 +857,14 @@ class ResetBudgetJob:
 
     @staticmethod
     async def _reset_budget_for_key(
-        key: LiteLLM_VerificationToken, current_time: datetime
-    ) -> Optional[LiteLLM_VerificationToken]:
-        await ResetBudgetJob._reset_budget_common(item=key, current_time=current_time, item_type="key")
+        key: LiteLLM_VerificationToken,
+        current_time: datetime,
+        reset_settings: BudgetResetSettings,
+    ) -> LiteLLM_VerificationToken | None:
+        await ResetBudgetJob._reset_budget_common(
+            item=key,
+            current_time=current_time,
+            item_type="key",
+            reset_settings=reset_settings,
+        )
         return key

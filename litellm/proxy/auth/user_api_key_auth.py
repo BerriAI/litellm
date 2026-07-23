@@ -14,7 +14,7 @@ import secrets
 
 import orjson
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, NamedTuple, List, Optional, Protocol, Tuple, Union, cast
+from typing import Any, Dict, NamedTuple, List, Optional, Protocol, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -58,6 +58,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
@@ -1012,7 +1013,7 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
         return
     if getattr(request.state, "parent_otel_span", None) is not None:
         return
-    start_time = datetime.now()
+    start_time = datetime.now(timezone.utc)
     try:
         request.state.litellm_received_at = start_time
     except Exception:
@@ -1062,7 +1063,7 @@ async def _user_api_key_auth_builder(
     # Prefer the receive-instant stamped by the early helper in
     # user_api_key_auth (before body parse) — overwriting it would shorten
     # the preprocessing-duration measurement by the body-parse window.
-    start_time = getattr(request.state, "litellm_received_at", None) or datetime.now()
+    start_time = getattr(request.state, "litellm_received_at", None) or datetime.now(timezone.utc)
     try:
         request.state.litellm_received_at = start_time
     except Exception:
@@ -1256,6 +1257,7 @@ async def _user_api_key_auth_builder(
                     team_id = result["team_id"]
                     team_object = result["team_object"]
                     user_id = result["user_id"]
+                    user_email = result["user_email"]
                     user_object = result["user_object"]
                     end_user_id = result["end_user_id"]
                     org_id = result["org_id"]
@@ -1280,7 +1282,7 @@ async def _user_api_key_auth_builder(
                             api_key=None,
                             user_role=LitellmUserRoles.PROXY_ADMIN,
                             user_id=user_id,
-                            user_email=(user_object.user_email if user_object is not None else None),
+                            user_email=user_email,
                             team_id=team_id,
                             team_alias=(team_object.team_alias if team_object is not None else None),
                             team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
@@ -1306,7 +1308,7 @@ async def _user_api_key_auth_builder(
                             else LitellmUserRoles.INTERNAL_USER
                         ),
                         user_id=user_id,
-                        user_email=(user_object.user_email if user_object is not None else None),
+                        user_email=user_email,
                         org_id=org_id,
                         parent_otel_span=parent_otel_span,
                         end_user_id=end_user_id,
@@ -1348,8 +1350,7 @@ async def _user_api_key_auth_builder(
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims
-                            if auto_registered.user_email is None and user_object is not None:
-                                auto_registered.user_email = user_object.user_email
+                            auto_registered.user_email = user_email
                             valid_token = auto_registered
                             api_key = valid_token.token or ""
 
@@ -1678,10 +1679,9 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
-            # update key budget with temp budget increase
-            valid_token = _update_key_budget_with_temp_budget_increase(
-                valid_token
-            )  # updating it here, allows all downstream reporting / checks to use the updated budget
+
+        if valid_token is not None:
+            valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
@@ -2613,7 +2613,7 @@ async def _return_user_api_key_auth_obj(
     start_time: datetime,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
-    end_time = datetime.now()
+    end_time = datetime.now(timezone.utc)
 
     asyncio.create_task(
         user_api_key_service_logger_obj.async_service_success_hook(
@@ -2690,7 +2690,9 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
     valid_token_metadata = valid_token.metadata
     if "temp_budget_increase" in valid_token_metadata and "temp_budget_expiry" in valid_token_metadata:
         expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
-        if expiry > datetime.now():
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry > datetime.now(timezone.utc):
             return valid_token_metadata["temp_budget_increase"]
     return None
 
@@ -2700,9 +2702,10 @@ def _update_key_budget_with_temp_budget_increase(
 ) -> UserAPIKeyAuth:
     if valid_token.max_budget is None:
         return valid_token
-    temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
-    valid_token.max_budget = valid_token.max_budget + temp_budget_increase
-    return valid_token
+    temp_budget_increase = _get_temp_budget_increase(valid_token)
+    if not temp_budget_increase:
+        return valid_token
+    return valid_token.model_copy(update={"max_budget": valid_token.max_budget + temp_budget_increase})
 
 
 async def _lookup_end_user_and_apply_budget(
@@ -2800,19 +2803,11 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        # Validate every fallback model name reachable by this request.
-        # All three fields (``fallbacks``, ``context_window_fallbacks``,
-        # ``content_policy_fallbacks``) are forwarded to the router as
-        # per-request kwargs whether they appear at the top level of
-        # ``request_data`` or nested under ``router_settings_override``.
-        # Both surfaces must be validated against the API key's model
-        # allowlist or a caller can smuggle a restricted model. VERIA-44.
-        fallback_names: List[str] = []
-        override_settings = request_data.get("router_settings_override")
-        for _fb_key in ROUTER_FALLBACK_FIELDS:
-            fallback_names.extend(iter_router_fallback_model_names(request_data.get(_fb_key)))
-            if isinstance(override_settings, dict):
-                fallback_names.extend(iter_router_fallback_model_names(override_settings.get(_fb_key)))
+        fallback_names = tuple(
+            name
+            for target in iter_request_fallback_targets(request_data)
+            if (name := _fallback_target_model_name(target)) is not None
+        )
 
         for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
             await can_key_call_model(
@@ -2828,36 +2823,14 @@ async def _enforce_key_and_fallback_model_access(
             )
 
 
-ROUTER_FALLBACK_FIELDS: Tuple[str, ...] = (
-    "fallbacks",
-    "context_window_fallbacks",
-    "content_policy_fallbacks",
-)
-
-
-def iter_router_fallback_model_names(fallbacks: Any) -> Iterator[str]:
-    """Yield leaf model names from any of the supported fallbacks shapes.
-
-    Handles the simple top-level shape (``str`` or ``{"model": str}``) and
-    the nested router-config shape (``[{primary: [fallback_list]}]``).
-    """
-    if not isinstance(fallbacks, list):
-        return
-    for entry in fallbacks:
-        if isinstance(entry, str):
-            yield entry
-        elif isinstance(entry, dict):
-            if isinstance(entry.get("model"), str):
-                yield entry["model"]
-                continue
-            for fallback_list in entry.values():
-                if not isinstance(fallback_list, list):
-                    continue
-                for m in fallback_list:
-                    if isinstance(m, str):
-                        yield m
-                    elif isinstance(m, dict) and isinstance(m.get("model"), str):
-                        yield m["model"]
+def _fallback_target_model_name(target: object) -> str | None:
+    if isinstance(target, str):
+        return target
+    if isinstance(target, dict):
+        model = target.get("model")
+        if isinstance(model, str):
+            return model
+    return None
 
 
 async def _run_post_custom_auth_checks(

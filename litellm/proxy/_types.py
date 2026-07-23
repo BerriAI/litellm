@@ -1856,6 +1856,17 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
 
 
+class PatchTeamRequest(UpdateTeamRequest):
+    """
+    Body of PATCH /team/{team_id}.
+
+    Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+    from the path. A team_id in the body is still accepted when it matches the path.
+    """
+
+    team_id: str | None = None
+
+
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
     """
     internal type used to reset the budget on a team
@@ -2296,6 +2307,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_response_size_mb: Optional[int] = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
+    )
+    proxy_config_reload_interval_seconds: int = Field(
+        30,
+        gt=0,
+        description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
     )
     cancel_on_disconnect: Optional[bool] = Field(
         None,
@@ -4047,6 +4063,7 @@ class JWTAuthBuilderResult(TypedDict):
     token: str
     team_id: Optional[str]
     user_id: Optional[str]
+    user_email: str | None
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]

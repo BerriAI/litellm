@@ -60,22 +60,16 @@ describe("KeyInfoHeader", () => {
   });
 
   describe("action buttons", () => {
-    it("should show Regenerate and Delete buttons by default", () => {
+    it("should show Regenerate button and actions dropdown by default", () => {
       render(<KeyInfoHeader data={MOCK_DATA} />);
       expect(screen.getByRole("button", { name: /regenerate key/i })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /delete key/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /more key actions/i })).toBeInTheDocument();
     });
 
-    it("should show Regenerate and Delete buttons when canModifyKey is true", () => {
-      render(<KeyInfoHeader data={MOCK_DATA} canModifyKey={true} />);
-      expect(screen.getByRole("button", { name: /regenerate key/i })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /delete key/i })).toBeInTheDocument();
-    });
-
-    it("should hide Regenerate and Delete buttons when canModifyKey is false", () => {
+    it("should hide Regenerate button and actions dropdown when canModifyKey is false", () => {
       render(<KeyInfoHeader data={MOCK_DATA} canModifyKey={false} />);
       expect(screen.queryByRole("button", { name: /regenerate key/i })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /delete key/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
 
     it("should call onRegenerate when Regenerate Key is clicked", async () => {
@@ -83,13 +77,6 @@ describe("KeyInfoHeader", () => {
       render(<KeyInfoHeader data={MOCK_DATA} onRegenerate={onRegenerate} />);
       await userEvent.click(screen.getByRole("button", { name: /regenerate key/i }));
       expect(onRegenerate).toHaveBeenCalledTimes(1);
-    });
-
-    it("should call onDelete when Delete Key is clicked", async () => {
-      const onDelete = vi.fn();
-      render(<KeyInfoHeader data={MOCK_DATA} onDelete={onDelete} />);
-      await userEvent.click(screen.getByRole("button", { name: /delete key/i }));
-      expect(onDelete).toHaveBeenCalledTimes(1);
     });
 
     it("should disable Regenerate button when regenerateDisabled is true", () => {
@@ -100,6 +87,79 @@ describe("KeyInfoHeader", () => {
     it("should not disable Regenerate button by default", () => {
       render(<KeyInfoHeader data={MOCK_DATA} />);
       expect(screen.getByRole("button", { name: /regenerate key/i })).not.toBeDisabled();
+    });
+  });
+
+  describe("destructive actions dropdown", () => {
+    const openDropdown = async () => {
+      await userEvent.click(screen.getByRole("button", { name: /more key actions/i }));
+    };
+
+    it("should list Block Key, Reset Spend, and Delete Key when all handlers are provided", async () => {
+      render(<KeyInfoHeader data={MOCK_DATA} onToggleBlocked={vi.fn()} onResetSpend={vi.fn()} onDelete={vi.fn()} />);
+      await openDropdown();
+      expect(await screen.findByRole("menuitem", { name: /block key/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /reset spend/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
+    });
+
+    it("should omit Block Key and Reset Spend when their handlers are not provided", async () => {
+      render(<KeyInfoHeader data={MOCK_DATA} onDelete={vi.fn()} />);
+      await openDropdown();
+      expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /block key/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /reset spend/i })).not.toBeInTheDocument();
+    });
+
+    it("should show Unblock Key instead of Block Key when the key is blocked", async () => {
+      render(<KeyInfoHeader data={MOCK_DATA} onToggleBlocked={vi.fn()} isBlocked />);
+      await openDropdown();
+      expect(await screen.findByRole("menuitem", { name: /unblock key/i })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /^block key/i })).not.toBeInTheDocument();
+    });
+
+    it("should call onToggleBlocked when Block Key is clicked", async () => {
+      const onToggleBlocked = vi.fn();
+      render(<KeyInfoHeader data={MOCK_DATA} onToggleBlocked={onToggleBlocked} />);
+      await openDropdown();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /block key/i }));
+      expect(onToggleBlocked).toHaveBeenCalledTimes(1);
+    });
+
+    it("should call onToggleBlocked when Unblock Key is clicked", async () => {
+      const onToggleBlocked = vi.fn();
+      render(<KeyInfoHeader data={MOCK_DATA} onToggleBlocked={onToggleBlocked} isBlocked />);
+      await openDropdown();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /unblock key/i }));
+      expect(onToggleBlocked).toHaveBeenCalledTimes(1);
+    });
+
+    it("should call onResetSpend when Reset Spend is clicked", async () => {
+      const onResetSpend = vi.fn();
+      render(<KeyInfoHeader data={MOCK_DATA} onResetSpend={onResetSpend} />);
+      await openDropdown();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /reset spend/i }));
+      expect(onResetSpend).toHaveBeenCalledTimes(1);
+    });
+
+    it("should call onDelete when Delete Key is clicked", async () => {
+      const onDelete = vi.fn();
+      render(<KeyInfoHeader data={MOCK_DATA} onDelete={onDelete} />);
+      await openDropdown();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /delete key/i }));
+      expect(onDelete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("blocked tag", () => {
+    it("should show a Blocked tag when isBlocked is true", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} isBlocked />);
+      expect(screen.getByText("Blocked")).toBeInTheDocument();
+    });
+
+    it("should not show a Blocked tag by default", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} />);
+      expect(screen.queryByText("Blocked")).not.toBeInTheDocument();
     });
   });
 

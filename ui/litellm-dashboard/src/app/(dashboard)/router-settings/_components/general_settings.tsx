@@ -33,7 +33,7 @@ interface GeneralSettingsPageProps {
   userID: string | null;
 }
 
-interface generalSettingsItem {
+export interface generalSettingsItem {
   field_name: string;
   field_type: string;
   field_value: any;
@@ -41,6 +41,7 @@ interface generalSettingsItem {
   stored_in_db: boolean | null;
   field_options?: string[] | null;
   field_tab?: string | null;
+  field_default_value?: any;
 }
 
 const SettingValueEditor: React.FC<{
@@ -75,6 +76,17 @@ const SettingValueEditor: React.FC<{
       />
     );
   }
+  if (setting.field_type === "Dollar") {
+    return (
+      <InputNumber
+        min={0.01}
+        step={0.25}
+        prefix="$"
+        value={setting.field_value}
+        onChange={(newValue) => onChange(setting.field_name, newValue)}
+      />
+    );
+  }
   if (setting.field_type === "Select") {
     return (
       <AntdSelect
@@ -90,7 +102,7 @@ const SettingValueEditor: React.FC<{
   return null;
 };
 
-const PromptCachingPanel: React.FC<{
+export const PromptCachingPanel: React.FC<{
   accessToken: string;
   settings: generalSettingsItem[];
   onChange: (fieldName: string, newValue: any) => void;
@@ -171,12 +183,12 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = (fieldName: string, idx: number) => {
+  const handleUpdateField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
 
-    let fieldValue = generalSettings[idx].field_value;
+    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
 
     if (fieldValue == null || fieldValue == undefined) {
       return;
@@ -194,7 +206,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     }
   };
 
-  const handleResetField = (fieldName: string, idx: number) => {
+  const handleResetField = (fieldName: string) => {
     if (!accessToken) {
       return;
     }
@@ -204,7 +216,9 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName ? { ...setting, stored_in_db: null, field_value: null } : setting,
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: null, field_value: setting.field_default_value ?? null }
+          : setting,
       );
       setGeneralSettings(updatedSettings);
     } catch (error) {
@@ -281,8 +295,8 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name, index)}>Update</Button>
-                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
+                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
+                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name)}>
                             Reset
                           </Icon>
                         </TableCell>

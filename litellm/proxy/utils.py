@@ -104,6 +104,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -171,6 +172,7 @@ from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
@@ -2921,6 +2923,14 @@ class PrismaClient:
             return self.db.writer
         return self.db
 
+    def tx(self) -> "TransactionManager":
+        """Open an interactive transaction on the writer.
+
+        Callers go through this instead of reaching into ``self.db`` so writer
+        selection and read-replica routing stay encapsulated in the wrapper.
+        """
+        return cast("TransactionManager", self.db.tx())  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
+
     def get_request_status(self, payload: Union[dict, SpendLogsPayload]) -> Literal["success", "failure"]:
         """
         Determine if a request was successful or failed based on payload metadata.
@@ -3319,7 +3329,24 @@ class PrismaClient:
                 elif query_type == "find_all" and reset_at is not None:
                     response = await UserRepository(self).table.find_many(
                         where={  # type: ignore
-                            "budget_reset_at": {"lt": reset_at},
+                            # A user seeded from default_internal_user_params
+                            # (or created via /user/new without an explicit
+                            # budget_reset_at) has budget_duration set but
+                            # budget_reset_at = NULL. `{"lt": reset_at}` never
+                            # matches NULL, so such users would never be reset
+                            # and their spend would accumulate for the lifetime
+                            # of the row, silently exceeding max_budget. Treat a
+                            # NULL budget_reset_at with a non-NULL budget_duration
+                            # as due, matching the budget-table query below.
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ],
                         }
                     )
                 elif query_type == "find_all" and user_id_list is not None:
@@ -3405,7 +3432,18 @@ class PrismaClient:
                 elif query_type == "find_all" and reset_at is not None:
                     response = await TeamRepository(self).table.find_many(
                         where={  # type: ignore
-                            "budget_reset_at": {"lt": reset_at},
+                            # Same NULL budget_reset_at gap as the user query
+                            # above: a team with a budget_duration but no
+                            # initialized budget_reset_at would never be reset.
+                            "OR": [
+                                {
+                                    "AND": [
+                                        {"budget_reset_at": None},
+                                        {"NOT": {"budget_duration": None}},
+                                    ]
+                                },
+                                {"budget_reset_at": {"lt": reset_at}},
+                            ],
                         }
                     )
                 elif query_type == "find_all" and user_id is not None:
@@ -6128,12 +6166,8 @@ def create_model_info_response(
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     if model_cost_info is not None:
-        cost_map_input = model_cost_info.get("max_input_tokens")
-        if cost_map_input is not None:
-            max_input_tokens = int(cost_map_input)
-        cost_map_output = model_cost_info.get("max_output_tokens")
-        if cost_map_output is not None:
-            max_output_tokens = int(cost_map_output)
+        max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
+        max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
 
     if llm_router is not None:
         configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
