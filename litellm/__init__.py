@@ -639,6 +639,7 @@ darkbloom_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
+neuralwatt_models: Set = set()
 inception_models: Set = set()
 hyperbolic_models: Set = set()
 black_forest_labs_models: Set = set()
@@ -896,6 +897,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
+        elif value.get("litellm_provider") == "neuralwatt":
+            neuralwatt_models.add(key)
         elif value.get("litellm_provider") == "inception":
             inception_models.add(key)
         elif value.get("litellm_provider") == "hyperbolic":
@@ -1042,6 +1045,7 @@ model_list = list(
     | v0_models
     | morph_models
     | lambda_ai_models
+    | neuralwatt_models
     | inception_models
     | black_forest_labs_models
     | recraft_models
@@ -1148,6 +1152,7 @@ models_by_provider: dict = {
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
+    "neuralwatt": neuralwatt_models,
     "inception": inception_models,
     "hyperbolic": hyperbolic_models,
     "black_forest_labs": black_forest_labs_models,
@@ -1984,6 +1989,9 @@ if TYPE_CHECKING:
     from .llms.ragflow.chat.transformation import RAGFlowConfig as RAGFlowConfig
     from .llms.lambda_ai.chat.transformation import (
         LambdaAIChatConfig as LambdaAIChatConfig,
+    )
+    from .llms.neuralwatt.chat.transformation import (
+        NeuralwattChatConfig as NeuralwattChatConfig,
     )
     from .llms.inception.chat.transformation import (
         InceptionChatConfig as InceptionChatConfig,

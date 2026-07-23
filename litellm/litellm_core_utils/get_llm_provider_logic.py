@@ -331,6 +331,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
+                    elif endpoint == "https://api.neuralwatt.com/v1":
+                        custom_llm_provider = "neuralwatt"
+                        dynamic_api_key = get_secret_str("NEURALWATT_API_KEY")
                     elif endpoint == "https://api.inceptionlabs.ai/v1":
                         custom_llm_provider = "inception"
                         dynamic_api_key = get_secret_str("INCEPTION_API_KEY")
@@ -797,6 +800,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "neuralwatt":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.NeuralwattChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "inception":
         (
             api_base,
