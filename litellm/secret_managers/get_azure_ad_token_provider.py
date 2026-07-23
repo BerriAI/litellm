@@ -1,10 +1,62 @@
 import os
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Protocol, Union
 
 from litellm._logging import verbose_logger
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
+
+
+class AzureAccessToken(Protocol):
+    @property
+    def token(self) -> str: ...
+
+    @property
+    def expires_on(self) -> int: ...
+
+
+class AzureTokenCredential(Protocol):
+    def get_token(self, *scopes: str) -> AzureAccessToken: ...
+
+
+def build_azure_identity_credential(
+    azure_client_id: str | None = None,
+    azure_tenant_id: str | None = None,
+    azure_client_secret: str | None = None,
+) -> AzureTokenCredential:
+    try:
+        from azure.identity import (
+            ClientSecretCredential,
+            DefaultAzureCredential,
+            ManagedIdentityCredential,
+            WorkloadIdentityCredential,
+        )
+    except ImportError as exc:
+        raise ImportError(
+            "azure-identity is required for Azure passwordless authentication. "
+            "Install it with: pip install azure-identity"
+        ) from exc
+
+    client_id = azure_client_id or os.getenv("AZURE_CLIENT_ID")
+    tenant_id = azure_tenant_id or os.getenv("AZURE_TENANT_ID")
+    client_secret = azure_client_secret or os.getenv("AZURE_CLIENT_SECRET")
+    federated_token_file = os.getenv("AZURE_FEDERATED_TOKEN_FILE")
+
+    if client_id and tenant_id and client_secret:
+        return ClientSecretCredential(
+            client_id=client_id,
+            tenant_id=tenant_id,
+            client_secret=client_secret,
+        )
+    if client_id and tenant_id and federated_token_file:
+        return WorkloadIdentityCredential(
+            client_id=client_id,
+            tenant_id=tenant_id,
+            token_file_path=federated_token_file,
+        )
+    if client_id:
+        return ManagedIdentityCredential(client_id=client_id)
+    return DefaultAzureCredential()
 
 
 def infer_credential_type_from_environment() -> AzureCredentialType:

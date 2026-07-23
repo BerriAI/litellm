@@ -129,10 +129,16 @@ from litellm.proxy.db.exception_handler import (
 )
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import (
+    DatabaseTokenAuth,
     PrismaWrapper,
+    build_database_token_auth_url,
     parse_iam_endpoint_from_url,
+    resolve_database_token_auth,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    build_azure_identity_credential,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -2788,6 +2794,7 @@ class PrismaClient:
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
         self.iam_token_db_auth: Optional[bool] = str_to_bool(os.getenv("IAM_TOKEN_DB_AUTH"))
+        azure_postgresql_auth = str_to_bool(os.getenv("AZURE_POSTGRESQL_AUTH")) is True
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
@@ -2797,6 +2804,14 @@ class PrismaClient:
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         iam_flag = self.iam_token_db_auth if self.iam_token_db_auth is not None else False
+        database_token_auth = resolve_database_token_auth(
+            iam_token_db_auth=iam_flag,
+            azure_postgresql_auth=azure_postgresql_auth,
+        )
+        azure_credential = (
+            build_azure_identity_credential() if database_token_auth == DatabaseTokenAuth.AZURE_ENTRA else None
+        )
+        token_auth_enabled = database_token_auth is not None
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved IAM refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
@@ -2805,14 +2820,18 @@ class PrismaClient:
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=iam_flag,
+                iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
+                database_token_auth=database_token_auth,
+                azure_credential=azure_credential,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=iam_flag,
+                iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
+                database_token_auth=database_token_auth,
+                azure_credential=azure_credential,
             )
 
         # Optional read-replica routing. When DATABASE_URL_READ_REPLICA is set,
@@ -2827,7 +2846,7 @@ class PrismaClient:
                 # the same cadence as the writer. We parse the static endpoint
                 # pieces (host/port/user/db) once from the reader URL — only
                 # the IAM token rotates after that.
-                reader_iam_endpoint = parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
+                reader_iam_endpoint = parse_iam_endpoint_from_url(read_replica_url) if token_auth_enabled else None
                 # Mint a fresh IAM token for the reader BEFORE constructing the
                 # Prisma client. Mirrors what `proxy_cli.py` already does for
                 # the writer (proxy_cli.py:812-832) — without this, the reader
@@ -2836,17 +2855,12 @@ class PrismaClient:
                 # to the synchronous fallback path in
                 # `PrismaWrapper.__getattr__`, which deadlocks the event loop
                 # and times out after 30s.
-                if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
-                        generate_iam_auth_token,
+                if database_token_auth is not None and reader_iam_endpoint is not None:
+                    read_replica_url = build_database_token_auth_url(
+                        reader_iam_endpoint,
+                        database_token_auth,
+                        azure_credential=azure_credential,
                     )
-
-                    reader_token = generate_iam_auth_token(
-                        db_host=reader_iam_endpoint.host,
-                        db_port=reader_iam_endpoint.port,
-                        db_user=reader_iam_endpoint.user,
-                    )
-                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Dict[str, Any] = {"datasource": {"url": read_replica_url}}
                 if http_client is not None:
@@ -2855,16 +2869,18 @@ class PrismaClient:
                     reader_prisma = Prisma(**reader_kwargs)
                 reader_wrapper = PrismaWrapper(
                     original_prisma=reader_prisma,
-                    iam_token_db_auth=iam_flag,
+                    iam_token_db_auth=token_auth_enabled,
                     db_url_env_var="DATABASE_URL_READ_REPLICA",
                     iam_endpoint=reader_iam_endpoint,
                     recreate_uses_datasource=True,
                     log_prefix="[reader]",
+                    database_token_auth=database_token_auth,
+                    azure_credential=azure_credential,
                 )
                 self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(
                     "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
-                    + (" (with IAM token auto-refresh)" if iam_flag else "")
+                    + (" (with database token auto-refresh)" if token_auth_enabled else "")
                 )
             except Exception as e:
                 # Reader is opt-in; never let its construction fail proxy

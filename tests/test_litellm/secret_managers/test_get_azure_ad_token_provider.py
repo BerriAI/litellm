@@ -1,20 +1,40 @@
-import json
 import os
 import sys
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
 
-import pytest
-
 from litellm.secret_managers.get_azure_ad_token_provider import (
+    build_azure_identity_credential,
     get_azure_ad_token_provider,
 )
 
 
 class TestGetAzureAdTokenProvider:
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "test-client-id",
+            "AZURE_TENANT_ID": "test-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+        },
+        clear=True,
+    )
+    @patch("azure.identity.WorkloadIdentityCredential")
+    def test_build_azure_identity_credential_uses_workload_identity(
+        self,
+        mock_workload_identity_credential,
+    ):
+        credential = build_azure_identity_credential()
+
+        assert credential is mock_workload_identity_credential.return_value
+        mock_workload_identity_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            token_file_path="/var/run/secrets/azure/tokens/azure-identity-token",
+        )
+
     @patch.dict(
         os.environ,
         {
@@ -84,9 +104,7 @@ class TestGetAzureAdTokenProvider:
 
         # Assertions
         assert callable(result)
-        mock_managed_identity_credential.assert_called_once_with(
-            client_id="test-client-id"
-        )
+        mock_managed_identity_credential.assert_called_once_with(client_id="test-client-id")
         mock_get_bearer_token_provider.assert_called_once_with(
             mock_credential_instance, "https://cognitiveservices.azure.com/.default"
         )
