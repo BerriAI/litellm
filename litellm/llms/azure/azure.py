@@ -1103,6 +1103,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_version=api_version,
             )
 
+        if api_version in {"v1", "preview"}:
+            return f"{api_base}/openai/v1/images/generations?api-version=preview"
+
         if "/openai/deployments/" in api_base:
             base_url_with_deployment = api_base
         else:
@@ -1112,6 +1115,24 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         base_url_with_deployment += "?api-version=" + api_version
 
         return base_url_with_deployment
+
+    @staticmethod
+    def _prepare_image_generation_data_for_url(
+        data: dict,
+        model: str | None,
+        api_base: str,
+    ) -> dict:
+        """Return the payload expected by the selected Azure image endpoint.
+
+        The integrated Azure OpenAI v1 image endpoint routes by ``model`` in
+        the JSON body. Keep the caller's deployment name there even when
+        ``base_model`` is configured for capability and pricing metadata.
+        """
+        if "/openai/v1/images/generations" not in api_base or not model:
+            return data
+        updated_data = data.copy()
+        updated_data["model"] = model
+        return updated_data
 
     async def aimage_generation(
         self,
@@ -1137,6 +1158,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 azure_client_params=azure_client_params,
                 model=model or data.get("model", ""),
                 base_model=data.get("model", ""),
+            )
+            data = self._prepare_image_generation_data_for_url(
+                data=data,
+                model=model,
+                api_base=img_gen_api_base,
             )
 
             ## LOGGING
@@ -1272,6 +1298,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 azure_client_params=azure_client_params,
                 model=model,
                 base_model=base_model,
+            )
+            data = self._prepare_image_generation_data_for_url(
+                data=data,
+                model=model,
+                api_base=img_gen_api_base,
             )
 
             ## LOGGING
