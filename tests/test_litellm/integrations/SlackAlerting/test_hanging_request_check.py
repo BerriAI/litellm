@@ -83,6 +83,41 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.api_base == "https://api.openai.com/v1"
 
     @pytest.mark.asyncio
+    async def test_add_request_to_hanging_request_check_reads_top_level_metadata_aliases(
+        self, hanging_request_checker
+    ):
+        """
+        Regression test for: https://github.com/BerriAI/litellm/issues/34271
+
+        At pre-call time, request_data["litellm_params"]["metadata"] doesn't
+        exist yet -- the key/team alias set by the proxy lives at the
+        top-level request_data["metadata"]. key_alias/team_alias must resolve
+        from there instead of silently falling back to "".
+        """
+        request_data = {
+            "litellm_call_id": "test_request_456",
+            "model": "gpt-4",
+            "metadata": {
+                "user_api_key_alias": "my-app-key",
+                "user_api_key_team_alias": "my-team",
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(
+            request_data
+        )
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="test_request_456"
+            )
+        )
+
+        assert cached_data is not None
+        assert cached_data.key_alias == "my-app-key"
+        assert cached_data.team_alias == "my-team"
+
+    @pytest.mark.asyncio
     async def test_add_request_to_hanging_request_check_none_request_data(
         self, hanging_request_checker
     ):

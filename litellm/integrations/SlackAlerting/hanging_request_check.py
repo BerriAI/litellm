@@ -58,6 +58,14 @@ class AlertingHangingRequestCheck:
             return
 
         request_metadata = get_litellm_metadata_from_kwargs(kwargs=request_data)
+        # At pre-call time, request_data["litellm_params"]["metadata"] doesn't
+        # exist yet (it's populated later inside the SDK completion call), so
+        # get_litellm_metadata_from_kwargs returns {} and both aliases resolve
+        # to "". The key/team alias set by the proxy actually lives at the
+        # top-level request_data["metadata"] at this point.
+        # See: https://github.com/BerriAI/litellm/issues/34271
+        if not request_metadata.get("user_api_key_alias"):
+            request_metadata = request_data.get("metadata", {}) or {}
         model = request_data.get("model", "")
         api_base: Optional[str] = None
 
