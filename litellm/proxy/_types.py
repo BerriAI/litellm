@@ -2605,6 +2605,17 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     is_session_token: bool = False
+    # Server-only marker set exclusively by the MCP gateway admission path
+    # (_reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
+    # bearer or bridge envelope. Not a DB column and never populated from caller-controlled key
+    # metadata or JWT claims, so it cannot be forged to gain the team-inherited MCP grant union
+    # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
+    mcp_admitted_user_subject: bool = Field(default=False, exclude=True)
+    # team_id -> that team's mcp_rpm_limit map, for a keyless admitted subject that reaches MCP
+    # servers through several teams at once and therefore has no single team_id for the limiter to
+    # key off. Server-only and stripped from validated input for the same reason as the marker
+    # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
+    mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     budget_throttle_pct: Optional[float] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
@@ -2625,6 +2636,11 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # If values is already an instance (not a dict), return it as-is
         if not isinstance(values, dict):
             return values
+        # mcp_admitted_user_subject is a server-only marker, set ONLY by the MCP gateway admission
+        # path via post-construction assignment. Strip it from any validated input (constructor
+        # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
+        values.pop("mcp_admitted_user_subject", None)
+        values.pop("mcp_source_team_rpm_limits", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):

@@ -25,11 +25,12 @@ The chat backend is a gemini deployment created for the test.
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
 
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, require_env, unique_marker
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import NoBody, require_successful_call, unwrap
 from guardrails_client import GuardrailMode, GuardrailsClient, PresidioParamsBody
 from lifecycle import ResourceManager
@@ -88,9 +89,8 @@ def _poll_logged_prompt(reader: OtelReader, *, call_id: str, genai_span: str) ->
 def _presidio_params(
     mode: GuardrailMode, *, apply_to_output: bool = False, logging_only: bool = False
 ) -> PresidioParamsBody:
-    analyzer, anonymizer = require_env(
-        "PRESIDIO_ANALYZER_API_BASE", "PRESIDIO_ANONYMIZER_API_BASE"
-    )
+    analyzer = os.environ["PRESIDIO_ANALYZER_API_BASE"]
+    anonymizer = os.environ["PRESIDIO_ANONYMIZER_API_BASE"]
     return PresidioParamsBody(
         mode=mode,
         default_on=False,
@@ -124,7 +124,6 @@ class TestPresidioGuardrail:
     def test_pre_call_masks_pii_before_the_model_sees_it(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        require_env("GEMINI_API_KEY")
         model = client.create_backend_model(resources, prefix="e2e-presidio-pre")
         name = f"e2e-presidio-pre-{unique_marker()}"
         guardrail_id = client.register(name, _presidio_params("pre_call"))
@@ -149,7 +148,6 @@ class TestPresidioGuardrail:
     def test_post_call_masks_pii_in_model_output(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        require_env("GEMINI_API_KEY")
         model = client.create_backend_model(resources, prefix="e2e-presidio-post")
         name = f"e2e-presidio-post-{unique_marker()}"
         guardrail_id = client.register(name, _presidio_params("post_call", apply_to_output=True))
@@ -173,7 +171,6 @@ class TestPresidioGuardrail:
     def test_logging_only_masks_the_logged_prompt(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        require_env("GEMINI_API_KEY")
         _require_otel_v2_active(client)
         reader = build_otel_reader()
 
