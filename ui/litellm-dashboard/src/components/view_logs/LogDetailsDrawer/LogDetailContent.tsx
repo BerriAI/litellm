@@ -34,6 +34,7 @@ import {
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
+import { getProviderCacheReadTokens, splitPromptTokens } from "../cacheCostBreakdown";
 
 const { Text } = Typography;
 
@@ -150,6 +151,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
         rawInputTokens={metadata?.additional_usage_values?.prompt_tokens_details?.text_tokens}
         cacheReadTokens={metadata?.additional_usage_values?.cache_read_input_tokens}
         cacheCreationTokens={metadata?.additional_usage_values?.cache_creation_input_tokens}
+        providerCacheReadTokens={getProviderCacheReadTokens(metadata)}
       />
 
       {/* Tools */}
@@ -326,30 +328,53 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
   const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;
   const promptCacheCreationTokens = Number(metadata?.additional_usage_values?.cache_creation_input_tokens) || 0;
 
+  const providerCacheReadTokens = getProviderCacheReadTokens(metadata);
+  const hasProviderPromptCacheHit = providerCacheReadTokens > 0;
+
+  const tokenSplit = splitPromptTokens(logEntry.prompt_tokens ?? 0, providerCacheReadTokens);
+
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
+
+  const renderTokensSummary = () => {
+    if (showAnthropicMessagesInputOutput) {
+      return (
+        <>
+          <Descriptions.Item label="Input Tokens">{formatNumberWithCommas(uncachedInputTokens)}</Descriptions.Item>
+          <Descriptions.Item label="Output Tokens">
+            {formatNumberWithCommas(logEntry.completion_tokens)}
+          </Descriptions.Item>
+        </>
+      );
+    }
+    if (hasProviderPromptCacheHit) {
+      return (
+        <Descriptions.Item label="Tokens">
+          <Text>
+            {formatNumberWithCommas(logEntry.total_tokens)} [{formatNumberWithCommas(tokenSplit.cacheMissTokens)} cache
+            miss prompt tokens + {formatNumberWithCommas(tokenSplit.cacheHitTokens)} cache hit prompt tokens +{" "}
+            {formatNumberWithCommas(logEntry.completion_tokens)} completion tokens]
+          </Text>
+        </Descriptions.Item>
+      );
+    }
+    return (
+      <Descriptions.Item label="Tokens">
+        <TokenFlow
+          prompt={logEntry.prompt_tokens}
+          completion={logEntry.completion_tokens}
+          total={logEntry.total_tokens}
+        />
+      </Descriptions.Item>
+    );
+  };
 
   return (
     <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
-          {showAnthropicMessagesInputOutput ? (
-            <>
-              <Descriptions.Item label="Input Tokens">{formatNumberWithCommas(uncachedInputTokens)}</Descriptions.Item>
-              <Descriptions.Item label="Output Tokens">
-                {formatNumberWithCommas(logEntry.completion_tokens)}
-              </Descriptions.Item>
-            </>
-          ) : (
-            <Descriptions.Item label="Tokens">
-              <TokenFlow
-                prompt={logEntry.prompt_tokens}
-                completion={logEntry.completion_tokens}
-                total={logEntry.total_tokens}
-              />
-            </Descriptions.Item>
-          )}
+          {renderTokensSummary()}
           <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
           <Descriptions.Item label="Duration">
             {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s
