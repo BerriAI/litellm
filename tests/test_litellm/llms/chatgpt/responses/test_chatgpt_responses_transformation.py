@@ -248,6 +248,37 @@ class TestChatGPTResponsesAPITransformation:
 
         assert parsed.output_text == "Hello from stream!"
 
+    def test_chatgpt_non_stream_sse_response_recovers_output_text_deltas(self):
+        config = ChatGPTResponsesAPIConfig()
+        response_payload = {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.5",
+        }
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps({'type': 'response.output_text.delta', 'output_index': 0, 'content_index': 0, 'item_id': 'msg_0', 'delta': 'Hel'})}",
+                f"data: {json.dumps({'type': 'response.output_text.delta', 'output_index': 0, 'content_index': 0, 'item_id': 'msg_0', 'delta': 'lo'})}",
+                f"data: {json.dumps({'type': 'response.completed', 'response': response_payload})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        parsed = config.transform_response_api_response(
+            model="chatgpt/gpt-5.5",
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert parsed.output_text == "Hello"
+
     def test_chatgpt_non_stream_sse_recovers_whitespace_padded_chunks(self):
         """Chunks with leading whitespace before `data:` must still parse.
 

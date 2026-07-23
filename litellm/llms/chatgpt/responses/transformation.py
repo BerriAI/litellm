@@ -11,6 +11,7 @@ from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
     record_output_item_chunk,
     record_output_text_chunk,
+    record_output_text_delta_chunk,
 )
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
@@ -161,6 +162,14 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 record_output_item_chunk(
                     parsed_chunk=parsed_chunk,
                     output_items=streamed_output_items,
+                )
+                continue
+
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+                record_output_text_delta_chunk(
+                    parsed_chunk=parsed_chunk,
+                    output_items=streamed_output_items,
+                    text_only_items=text_only_output_items,
                 )
                 continue
 
