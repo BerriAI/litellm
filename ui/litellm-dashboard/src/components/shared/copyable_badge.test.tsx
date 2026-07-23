@@ -33,7 +33,7 @@ describe("CopyableBadge", () => {
     renderBadge("app-aigateway-inference-producttech-product-default");
     const label = screen.getByText("app-aigateway-inference-producttech-product-default");
     expect(label.className).toContain("truncate");
-    expect(label.className).toContain("max-w-[220px]");
+    expect(label.className).toContain("max-w-[130px]");
   });
 
   it("reveals the full value and copies it from the hover tooltip", async () => {

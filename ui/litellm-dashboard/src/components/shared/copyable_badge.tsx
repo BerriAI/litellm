@@ -16,7 +16,7 @@ interface CopyableBadgeProps {
 export function CopyableBadge({
   value,
   color = "red",
-  maxWidthClassName = "max-w-[220px]",
+  maxWidthClassName = "max-w-[130px]",
   dataTestId,
 }: CopyableBadgeProps) {
   return (
