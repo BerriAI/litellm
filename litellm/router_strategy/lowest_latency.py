@@ -79,7 +79,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     # only log ttft for streaming request
                     time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
 
-                final_value: Union[float, timedelta] = response_ms
+                response_seconds = (
+                    response_ms.total_seconds() if isinstance(response_ms, timedelta) else float(response_ms)
+                )
+                final_value = response_seconds
                 time_to_first_token: Optional[float] = None
                 total_tokens = 0
 
@@ -88,12 +91,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-
-                        # Handle both timedelta and float response times
-                        if isinstance(response_ms, timedelta):
-                            response_seconds = response_ms.total_seconds()
-                        else:
-                            response_seconds = response_ms
 
                         final_value = safe_divide_seconds(response_seconds, completion_tokens)
                         if final_value is not None:
@@ -267,7 +264,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     # only log ttft for streaming request
                     time_to_first_token_response_time = kwargs.get("completion_start_time", end_time) - start_time
 
-                final_value: Union[float, timedelta] = response_ms
+                response_seconds = (
+                    response_ms.total_seconds() if isinstance(response_ms, timedelta) else float(response_ms)
+                )
+                final_value = response_seconds
                 total_tokens = 0
                 time_to_first_token: Optional[float] = None
 
@@ -277,17 +277,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
 
-                        # Handle both timedelta and float response times
-                        if isinstance(response_ms, timedelta):
-                            response_seconds = response_ms.total_seconds()
-                        else:
-                            response_seconds = response_ms
-
                         final_value = safe_divide_seconds(response_seconds, completion_tokens)
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
-                            final_value = response_ms
+                            final_value = response_seconds
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
