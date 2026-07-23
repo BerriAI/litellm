@@ -464,13 +464,16 @@ class TestResponseAPILoggingUtils:
     def test_transform_response_api_usage_maps_cache_write_tokens_dict(self):
         """Regression for LIT-4725 / #33772: the Responses API reports cache writes under
         input_tokens_details.cache_write_tokens. The chat-shaped usage must carry them on
-        cache_creation_tokens so cost is computed identically to /chat/completions."""
-        usage = {
-            "input_tokens": 10_000,
-            "output_tokens": 20,
-            "total_tokens": 10_020,
-            "input_tokens_details": {"cached_tokens": 2_000, "cache_write_tokens": 8_000},
-        }
+        cache_creation_tokens so cost is computed identically to /chat/completions.
+        model_construct keeps input_tokens_details a raw dict so the dict branch runs."""
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage.model_construct(
+            input_tokens=10_000,
+            output_tokens=20,
+            total_tokens=10_020,
+            input_tokens_details={"cached_tokens": 2_000, "cache_write_tokens": 8_000},
+        )
 
         result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
 
@@ -482,12 +485,14 @@ class TestResponseAPILoggingUtils:
     def test_transform_response_api_usage_cache_creation_tokens_precedence_dict(self):
         """When both cache_creation_tokens and cache_write_tokens are present, the explicit
         cache_creation_tokens wins (they describe the same tokens under different names)."""
-        usage = {
-            "input_tokens": 10_000,
-            "output_tokens": 20,
-            "total_tokens": 10_020,
-            "input_tokens_details": {"cache_creation_tokens": 5_000, "cache_write_tokens": 8_000},
-        }
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage.model_construct(
+            input_tokens=10_000,
+            output_tokens=20,
+            total_tokens=10_020,
+            input_tokens_details={"cache_creation_tokens": 5_000, "cache_write_tokens": 8_000},
+        )
 
         result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
 

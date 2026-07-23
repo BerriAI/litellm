@@ -1016,6 +1016,50 @@ def test_generic_cost_per_token_prices_cache_write_at_above_272k_tier():
     assert prompt_cost == pytest.approx(expected_prompt_cost, rel=1e-9)
 
 
+def test_generic_cost_per_token_activates_cache_creation_tier_without_input_tier():
+    """Regression for LIT-4725 / #33772: a long-context cache-creation tier must
+    activate on its own. When only cache_creation_input_token_cost_above_272k_tokens
+    is configured (no matching input_cost_per_token_above_272k_tokens), threshold
+    discovery must still find the tier so cache-write tokens past 272k bill at the
+    tiered rate while plain input stays at the base rate."""
+    model = "litellm-test-cache-write-272k-cache-only"
+    custom_llm_provider = "openai"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 4e-6,
+                "cache_creation_input_token_cost": 1.25e-6,
+                "cache_creation_input_token_cost_above_272k_tokens": 2.5e-6,
+            }
+        }
+    )
+
+    plain_tokens, cache_write = 200_000, 100_000
+    prompt_tokens_details = PromptTokensDetailsWrapper()
+    prompt_tokens_details.cache_write_tokens = cache_write
+    usage = Usage(
+        prompt_tokens=plain_tokens + cache_write,
+        completion_tokens=100,
+        total_tokens=plain_tokens + cache_write + 100,
+        prompt_tokens_details=prompt_tokens_details,
+    )
+
+    try:
+        prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+    finally:
+        litellm.model_cost.pop(model, None)
+
+    expected_prompt_cost = plain_tokens * 1e-6 + cache_write * 2.5e-6
+    assert prompt_cost == pytest.approx(expected_prompt_cost, rel=1e-9)
+
+
 def test_string_cost_values():
     """Test that cost values defined as strings are properly converted to floats."""
     from unittest.mock import patch

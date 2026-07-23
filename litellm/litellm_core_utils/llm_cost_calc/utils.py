@@ -39,6 +39,13 @@ _VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
 # of being rebuilt for every model_info key on every call.
 _SERVICE_TIER_SUFFIXES: tuple[str, ...] = tuple(f"_{st.value}" for st in ServiceTier)
 
+_ABOVE_THRESHOLD_KEY_PREFIXES: tuple[str, ...] = (
+    "input_cost_per_token_above_",
+    "output_cost_per_token_above_",
+    "cache_creation_input_token_cost_above_",
+    "cache_read_input_token_cost_above_",
+)
+
 
 def _get_token_detail_value(details: object, key: str) -> Optional[int]:
     if isinstance(details, dict):
@@ -239,7 +246,12 @@ def _get_token_base_cost(
     # so that the threshold detection loop only processes standard keys.  The
     # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
     threshold_keys = [
-        k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
+        k
+        for k in model_info
+        if k.startswith(_ABOVE_THRESHOLD_KEY_PREFIXES)
+        and k.endswith("_tokens")
+        and "_above_1hr" not in k
+        and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
         return (
@@ -270,7 +282,7 @@ def _get_token_base_cost(
                             service_tier,
                         )
                         if service_tier
-                        else key
+                        else f"input_cost_per_token_above_{threshold_str}_tokens"
                     )
                     prompt_base_cost = cast(
                         float,
