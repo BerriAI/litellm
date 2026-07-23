@@ -749,7 +749,7 @@ class ResetBudgetJob:
             counter_prefix="spend:user",
             update_fn=lambda row_id, windows_json: UserRepository(self.prisma_client).table.update(
                 where={"user_id": row_id},
-                data={"budget_limits": windows_json},  # type: ignore[arg-type]
+                data={"budget_limits": windows_json},  # pyright: ignore[reportArgumentType]  # Prisma stubs type budget_limits as Json, but we pass a str
             ),
             entity_label="users",
             spend_counter_cache=spend_counter_cache,
