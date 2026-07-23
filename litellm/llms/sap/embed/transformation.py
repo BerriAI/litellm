@@ -18,6 +18,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..chat.handler import GenAIHubOrchestrationError
 from ..credentials import get_token_creator
+from ..headers import merge_sap_request_headers
 
 
 class Usage(BaseModel):
@@ -132,7 +133,9 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return optional_params
 
     def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
-        return self.headers
+        if headers is None:
+            headers = {}
+        return merge_sap_request_headers(self.headers, headers)
 
     def get_complete_url(
         self,
