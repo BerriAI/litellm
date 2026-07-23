@@ -35,10 +35,10 @@ The suites run against a live proxy, so bring one up first by running the litell
    curl -fs http://localhost:4000/health/liveliness
    ```
 
-4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
+4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`). The suites' client dependencies (the provider SDKs, websockets) live in the `e2e-dev` dependency group; `make bootstrap` installs it, and naming the group on the run keeps the command working from any environment state:
 
    ```bash
-   uv run pytest tests/e2e/llm_translation/ -v
+   uv run --group e2e-dev pytest tests/e2e/llm_translation/ -v
    ```
 
    The browser tests in the `management/` suite drive the dashboard the proxy serves at `/ui` through playwright, an optional dependency behind `importorskip` (the suite's API tests run without it). It lives in the `e2e-dev` dependency group; install it along with its browser:
@@ -148,7 +148,7 @@ Before you push
 
    ```bash
    litellm --config <your-e2e-config>.yml --port 4000
-   uv run pytest tests/e2e/<your_suite>/ -v
+   uv run --group e2e-dev pytest tests/e2e/<your_suite>/ -v
    ```
 
 4. Capture screenshots of the test run and attach them to the PR as proof
