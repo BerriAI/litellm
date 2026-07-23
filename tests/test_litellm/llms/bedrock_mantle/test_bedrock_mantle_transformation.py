@@ -17,6 +17,8 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
 from litellm.types.utils import LlmProviders
 
 
@@ -218,6 +220,30 @@ class TestBedrockMantleConfig:
         cfg = BedrockMantleChatConfig()
         _, api_key = cfg._get_openai_compatible_provider_info(None, "explicit-key")
         assert api_key == "explicit-key"
+
+    def test_anthropic_mantle_uses_project_id_header(self):
+        cfg = AmazonMantleConfig()
+        headers = cfg.validate_environment(
+            headers={},
+            model="mantle/anthropic.claude-fable-5",
+            messages=[],
+            optional_params={},
+            litellm_params={"aws_bedrock_project_id": "proj_abc123"},
+        )
+        assert headers["anthropic-workspace-id"] == "proj_abc123"
+        assert "anthropic-workspace" not in headers
+
+    def test_anthropic_messages_mantle_uses_project_id_header(self):
+        cfg = AmazonMantleMessagesConfig()
+        headers, _ = cfg.validate_anthropic_messages_environment(
+            headers={},
+            model="mantle/anthropic.claude-fable-5",
+            messages=[],
+            optional_params={},
+            litellm_params={"aws_bedrock_project_id": "proj_abc123"},
+        )
+        assert headers["anthropic-workspace-id"] == "proj_abc123"
+        assert "anthropic-workspace" not in headers
 
     def test_api_key_from_aws_bearer_token_bedrock_env(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)

@@ -72,7 +72,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         )
         project_id = litellm_params.get("aws_bedrock_project_id")
         if project_id:
-            headers["anthropic-workspace"] = project_id
+            headers["anthropic-workspace-id"] = project_id
         return headers, api_base
 
     def transform_anthropic_messages_request(
