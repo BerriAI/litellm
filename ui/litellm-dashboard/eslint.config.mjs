@@ -20,6 +20,7 @@ const eslintConfig = [
       "local/no-large-inline-object-arg": "warn",
       "local/no-long-condition-chain": "warn",
       "local/no-complex-jsx-arrow": ["error", { maxStatements: 2 }],
+      "local/no-antd-import": "warn",
       "@typescript-eslint/no-explicit-any": "warn",
       "no-console": ["warn", { allow: ["warn", "error"] }],
       "@typescript-eslint/no-unused-vars": "off",
@@ -54,11 +55,6 @@ const eslintConfig = [
               group: ["@tremor/react", "@tremor/react/*"],
               message:
                 "@tremor/react is being phased out; build new UI with shadcn/ui primitives instead of adding tremor imports.",
-            },
-            {
-              group: ["antd", "antd/*"],
-              message:
-                "antd is being phased out; build new UI with shadcn/ui primitives instead of adding antd imports.",
             },
           ],
         },
