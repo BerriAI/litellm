@@ -44,6 +44,23 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
+def _normalize_fallback_model_group(
+    fallback_model_group: str | List[str] | None,
+) -> List[str] | None:
+    """
+    Coerce a single string fallback target into a one-item list.
+
+    Accepted config shapes:
+      [{"primary": "backup"}]
+      [{"primary": ["backup"]}]
+    """
+    if fallback_model_group is None:
+        return None
+    if isinstance(fallback_model_group, str):
+        return [fallback_model_group]
+    return fallback_model_group
+
+
 def get_fallback_model_group(fallbacks: List[Any], model_group: str) -> Tuple[Optional[List[str]], Optional[int]]:
     """
     Returns:
@@ -56,8 +73,8 @@ def get_fallback_model_group(fallbacks: List[Any], model_group: str) -> Tuple[Op
     - generic fallback
     """
     generic_fallback_idx: Optional[int] = None
-    stripped_model_fallback: Optional[List[str]] = None
-    fallback_model_group: Optional[List[str]] = None
+    stripped_model_fallback: str | List[str] | None = None
+    fallback_model_group: str | List[str] | None = None
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
@@ -79,13 +96,13 @@ def get_fallback_model_group(fallbacks: List[Any], model_group: str) -> Tuple[Op
         elif generic_fallback_idx is not None:
             fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
-    return fallback_model_group, generic_fallback_idx
+    return _normalize_fallback_model_group(fallback_model_group), generic_fallback_idx
 
 
 async def run_async_fallback(
     *args: Tuple[Any],
     litellm_router: LitellmRouter,
-    fallback_model_group: List[str],
+    fallback_model_group: str | List[str],
     original_model_group: str,
     original_exception: Exception,
     max_fallbacks: int,
@@ -118,10 +135,14 @@ async def run_async_fallback(
     if fallback_depth >= max_fallbacks:
         raise original_exception
 
+    normalized_fallback_model_group = _normalize_fallback_model_group(fallback_model_group)
+    if normalized_fallback_model_group is None:
+        raise original_exception
+
     error_from_fallbacks = original_exception
     fallback_errors = (get_fallback_error_info(original_exception),)
 
-    for mg in fallback_model_group:
+    for mg in normalized_fallback_model_group:
         if mg == original_model_group:
             continue
         try:

@@ -129,6 +129,7 @@ from litellm.router_utils.cooldown_handlers import (
 )
 from litellm.router_utils.fallback_event_handlers import (
     _check_non_standard_fallback_format,
+    _normalize_fallback_model_group,
     get_fallback_model_group,
     run_async_fallback,
 )
@@ -6740,7 +6741,7 @@ class Router:
 
     def _get_fallback_model_group_from_fallbacks(
         self,
-        fallbacks: List[Dict[str, List[str]]],
+        fallbacks: List[Dict[str, str | List[str]]],
         model_group: Optional[str] = None,
     ) -> Optional[List[str]]:
         """
@@ -6756,12 +6757,12 @@ class Router:
         if model_group is None:
             return None
 
-        fallback_model_group: Optional[List[str]] = None
+        fallback_model_group: str | List[str] | None = None
         for item in fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
             if list(item.keys())[0] == model_group:
                 fallback_model_group = item[model_group]
                 break
-        return fallback_model_group
+        return _normalize_fallback_model_group(fallback_model_group)
 
     def _get_first_default_fallback(self) -> Optional[str]:
         """
