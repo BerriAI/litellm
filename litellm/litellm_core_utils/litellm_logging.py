@@ -39,10 +39,10 @@ from litellm import (
 from litellm._logging import (
     _is_debugging_on,
     _redact_string,
-    reset_session_id,
-    reset_trace_id,
+    session_id_var,
     set_session_id,
     set_trace_id,
+    trace_id_var,
     verbose_logger,
 )
 from litellm.exceptions import (
@@ -356,10 +356,16 @@ class Logging(LiteLLMLoggingBaseClass):
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
 
-        self._trace_id_token = set_trace_id(self.litellm_trace_id)
+        # Capture the pre-call *value* (not a contextvars.Token) so restoration works
+        # even if this attempt's own logging ends up dispatched onto a different
+        # asyncio Task/context (e.g. via asyncio.create_task or the logging worker) -
+        # a Token can only be reset in the exact Context where it was created.
+        self._pre_call_trace_id: str = trace_id_var.get()
+        self._pre_call_session_id: str = session_id_var.get()
+        set_trace_id(self.litellm_trace_id)
         _sid = (kwargs or {}).get("litellm_session_id")
         self.litellm_session_id: str = str(_sid) if _sid else ""
-        self._session_id_token = set_session_id(self.litellm_session_id)
+        set_session_id(self.litellm_session_id)
         self._correlation_context_restored = False
 
         self.function_id = function_id
@@ -1978,12 +1984,18 @@ class Logging(LiteLLMLoggingBaseClass):
         return
 
     def _restore_correlation_context(self) -> None:
-        """Reset trace_id/session_id contextvars to their pre-call value.
+        """Restore trace_id/session_id contextvars to their pre-call value.
 
         Without this, a nested LiteLLM call sharing the same asyncio Task as an
         outer request (e.g. a guardrail's own LLM-as-judge call, an MCP sampling
         call) would leave the outer request's subsequent log lines stamped with
         the nested call's trace_id/session_id instead of its own.
+
+        Uses a plain set() of the captured pre-call value rather than
+        contextvars.Token-based reset(), since this handler can end up running
+        in a different asyncio Task/context than __init__ did (e.g. dispatched
+        via asyncio.create_task or the logging worker) - reset() only works in
+        the exact Context a Token was created in and raises otherwise.
 
         Idempotent - safe to call from every terminal handler regardless of
         which one ends up firing for this attempt.
@@ -1991,8 +2003,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._correlation_context_restored:
             return
         self._correlation_context_restored = True
-        reset_trace_id(self._trace_id_token)
-        reset_session_id(self._session_id_token)
+        set_trace_id(self._pre_call_trace_id)
+        set_session_id(self._pre_call_session_id)
 
     def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         """Restores trace_id/session_id contextvars once this attempt's own success

@@ -3037,8 +3037,12 @@ async def test_async_failure_handler_runs_callbacks_and_restores_correlation_con
     dummy_logger = DummyLogger()
     dummy_logger.async_log_failure_event = AsyncMock()
 
-    trace_id_var.set("pre-existing-trace")
-    session_id_var.set("pre-existing-session")
+    # logging_obj is constructed by the fixture (before this line runs), so it
+    # already captured whatever was ambient at that point as its own pre-call
+    # value - assert restoration lands back on THAT captured value, not a
+    # value set here (which would be too late to affect __init__'s snapshot).
+    trace_id_var.set("mutated-during-call")
+    session_id_var.set("mutated-during-call")
     try:
         with patch.object(
             logging_obj,
@@ -3052,8 +3056,9 @@ async def test_async_failure_handler_runs_callbacks_and_restores_correlation_con
 
         dummy_logger.async_log_failure_event.assert_called_once()
         assert logging_obj._correlation_context_restored is True
-        assert trace_id_var.get() == "pre-existing-trace"
-        assert session_id_var.get() == "pre-existing-session"
+        assert trace_id_var.get() == logging_obj._pre_call_trace_id
+        assert session_id_var.get() == logging_obj._pre_call_session_id
+        assert trace_id_var.get() != "mutated-during-call"
     finally:
         trace_id_var.set("")
         session_id_var.set("")

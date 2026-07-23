@@ -40,30 +40,6 @@ def set_trace_id(trace_id: str) -> "contextvars.Token[str]":
     return trace_id_var.set(_sanitize_correlation_id(trace_id))
 
 
-def reset_session_id(token: "contextvars.Token[str]") -> None:
-    """Restore session_id_var to its pre-call value.
-
-    Best-effort: swallows errors since this is observability plumbing, not
-    call-correctness - a failed reset must never break the actual LLM call.
-    """
-    try:
-        session_id_var.reset(token)
-    except (ValueError, RuntimeError):
-        pass
-
-
-def reset_trace_id(token: "contextvars.Token[str]") -> None:
-    """Restore trace_id_var to its pre-call value.
-
-    Best-effort: swallows errors since this is observability plumbing, not
-    call-correctness - a failed reset must never break the actual LLM call.
-    """
-    try:
-        trace_id_var.reset(token)
-    except (ValueError, RuntimeError):
-        pass
-
-
 if set_verbose is True:
     logging.warning(
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."

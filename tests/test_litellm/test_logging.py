@@ -630,3 +630,53 @@ def test_set_session_id_bounds_length():
         assert len(session_id_var.get()) == 256
     finally:
         session_id_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_restore_correlation_context_works_across_asyncio_task_boundary():
+    """_restore_correlation_context() must succeed even when it's called from a
+    different asyncio Task than the one Logging.__init__() ran in - exactly what
+    happens on litellm's real async success path, where async_success_handler is
+    dispatched via asyncio.create_task / the global logging worker rather than
+    awaited directly in the request's own task.
+
+    A contextvars.Token can only be reset in the exact Context it was created in
+    and raises ValueError otherwise (verified separately against raw contextvars,
+    not just this codebase). The fix uses a plain set() of the captured pre-call
+    value instead, which works regardless of which Task calls it. This test
+    fails with a token-based implementation - the child task's reset() would
+    raise, get silently swallowed, and leave the child's view unrestored - and
+    passes with the value-based one.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-cross-task")
+    session_id_var.set("outer-session-cross-task")
+    try:
+        # __init__ runs in THIS (outer) task's context.
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=None,
+            litellm_call_id="cross-task-call",
+            function_id="fn-cross-task",
+            kwargs={"litellm_session_id": "cross-task-session"},
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "cross-task-session"
+
+        async def restore_in_new_task():
+            # Simulates async_success_handler running in a task spawned after
+            # __init__ already ran elsewhere - a different Context object.
+            log_obj._restore_correlation_context()
+            return trace_id_var.get(), session_id_var.get()
+
+        trace_in_child, session_in_child = await asyncio.create_task(restore_in_new_task())
+
+        assert trace_in_child == "outer-trace-cross-task"
+        assert session_in_child == "outer-session-cross-task"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
