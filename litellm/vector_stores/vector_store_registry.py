@@ -25,8 +25,8 @@ else:
 
 
 class VectorStoreIndexRegistry:
-    def __init__(self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = []):
-        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = vector_store_indexes
+    def __init__(self, vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] | None = None):
+        self.vector_store_indexes: List[LiteLLM_ManagedVectorStoreIndex] = list(vector_store_indexes or ())
 
     def get_vector_store_indexes(self) -> List[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -59,7 +59,9 @@ class VectorStoreIndexRegistry:
         """
         Deletes a vector store index from the registry
         """
-        self.vector_store_indexes = [index for index in self.vector_store_indexes if index != vector_store_index]
+        self.vector_store_indexes = [
+            index for index in self.vector_store_indexes if index.index_name != vector_store_index
+        ]
 
     def is_vector_store_index(self, vector_store_index_name: str) -> bool:
         """
@@ -94,8 +96,8 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] | None = None):
+        self.vector_stores: List[LiteLLM_ManagedVectorStore] = list(vector_stores or ())
         self.vector_store_ids_to_vector_store_map: Dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: Dict) -> VectorStoreToolParams:
@@ -376,16 +378,15 @@ class VectorStoreRegistry:
         return vector_stores_to_run
 
     def _get_vector_store_ids_from_tool_calls(
-        self, tools: Optional[List[Dict]] = None, vector_store_ids: List[str] = []
+        self, tools: List[Dict] | None = None, vector_store_ids: List[str] | None = None
     ) -> List[str]:
         """
         Returns the vector store ids from the tool calls
         """
-        if tools:
-            for tool in tools:
-                if "vector_store_ids" in tool:
-                    vector_store_ids.extend(tool["vector_store_ids"])
-        return vector_store_ids
+        return [
+            *(vector_store_ids or ()),
+            *(vs_id for tool in (tools or ()) if "vector_store_ids" in tool for vs_id in tool["vector_store_ids"]),
+        ]
 
     def load_vector_stores_from_config(self, vector_stores_config: List[Dict]):
         """
