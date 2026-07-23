@@ -898,6 +898,74 @@ def test_responses_api_bridge_check_gpt_5_tools_without_summary_stays_chat():
     assert model_info.get("mode") != "responses"
 
 
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_responses_api_bridge_check_gpt_5_6_tools_without_reasoning_routes_to_responses(
+    model, custom_llm_provider
+):
+    """gpt-5.6+ with tools but no reasoning_effort must bridge to Responses API.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/33221
+    OpenAI applies a default reasoning_effort server-side for the gpt-5.6 family,
+    so function tools on /v1/chat/completions are rejected with a 400.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, returned_model = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+        )
+
+    assert returned_model == model
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_6_tools_plus_reasoning_routes_to_responses():
+    """gpt-5.6 with tools and explicit reasoning_effort still bridges (explicit-effort path)."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6-sol",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="high",
+        )
+
+    assert model == "gpt-5.6-sol"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5", "gpt-5.5-pro"])
+def test_responses_api_bridge_check_gpt_5_4_and_5_5_tools_without_reasoning_stay_chat(model):
+    """gpt-5.4/5.5 tools-only (no reasoning_effort) must NOT bridge; only 5.6+ does.
+
+    Guards against widening the gpt-5.6 tools-only bridge back onto older families,
+    which is the behavior the maintainer regression tests above pin down.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, returned_model = responses_api_bridge_check(
+            model=model,
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+        )
+
+    assert returned_model == model
+    assert model_info.get("mode") != "responses"
+
+
 @patch("litellm.completion_extras.responses_api_bridge.completion")
 def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
     mock_responses_completion,
