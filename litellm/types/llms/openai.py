@@ -804,7 +804,8 @@ ValidUserMessageContentTypes = [
     "query",
     "video_url",
     "file",
-]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+    "tool_result",
+]  # used for validating user messages. Includes tool_result for Anthropic-format content blocks.
 
 ValidUserMessageContentTypesLiteral = Literal[
     "text",
@@ -817,6 +818,7 @@ ValidUserMessageContentTypesLiteral = Literal[
     "query",
     "video_url",
     "file",
+    "tool_result",
 ]
 
 ValidUserMessageContentTypes = [
@@ -830,7 +832,8 @@ ValidUserMessageContentTypes = [
     "query",
     "video_url",
     "file",
-]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
+    "tool_result",
+]  # used for validating user messages. Includes tool_result for Anthropic-format content blocks.
 
 # Assistant message content types (text, thinking, redacted_thinking, image_url)
 ValidAssistantMessageContentTypesLiteral = Literal[
