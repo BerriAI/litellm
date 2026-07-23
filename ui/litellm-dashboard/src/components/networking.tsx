@@ -6737,6 +6737,7 @@ interface RegisterMcpOAuthClientPayload {
   grant_types?: string[];
   response_types?: string[];
   token_endpoint_auth_method?: string;
+  redirect_uris?: string[];
 }
 
 export const registerMcpOAuthClient = async (
