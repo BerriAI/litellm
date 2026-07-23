@@ -30,9 +30,12 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             if max_budget is None or user_id is None:
                 return
 
-            # Personal budget applies only to non-team requests, matching
-            # the explicit team-key exemption in common_checks section 4.1.
-            if user_api_key_dict.team_id is not None:
+            # User budgets apply to team keys too, matching common_checks; the
+            # legacy team-key exemption only applies when general_settings
+            # skip_user_budget_on_team_key is explicitly enabled (see #12905).
+            from litellm.proxy.proxy_server import general_settings
+
+            if user_api_key_dict.team_id is not None and general_settings.get("skip_user_budget_on_team_key") is True:
                 return
 
             # The reservation path admits at the strict-`<` boundary and
@@ -74,6 +77,13 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
+            # An infra error (Redis/cache/DB) left spend unverifiable. Under
+            # fail_closed_budget_enforcement reject rather than silently drop
+            # this enforcement layer; otherwise keep the documented fail-open.
+            from litellm.proxy.proxy_server import _fail_closed_budget_enforcement
+
+            if _fail_closed_budget_enforcement():
+                raise
             verbose_logger.exception(
                 "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occured - {}".format(
                     str(e)

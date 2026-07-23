@@ -163,7 +163,10 @@ async def test_does_not_skip_when_reservation_covers_a_different_counter():
 
 
 @pytest.mark.asyncio
-async def test_team_keys_skip_personal_budget():
+async def test_team_keys_enforce_personal_budget_by_default():
+    """Regression for #33323: with the default policy, a user's personal budget
+    is enforced even when the key belongs to a team. The hook must read spend
+    and reject, matching common_checks._user_max_budget_check."""
     handler = _PROXY_MaxBudgetLimiter()
     user_api_key_dict = _make_user_api_key_auth(
         user_max_budget=10.0,
@@ -174,15 +177,95 @@ async def test_team_keys_skip_personal_budget():
         "litellm.proxy.proxy_server.get_current_spend",
         new=AsyncMock(return_value=999.0),
     ) as mock_get_spend:
-        result = await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=DualCache(),
-            data={},
-            call_type="completion",
-        )
+        with patch.dict("litellm.proxy.proxy_server.general_settings", {}, clear=True):
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=DualCache(),
+                    data={},
+                    call_type="completion",
+                )
+
+    assert exc_info.value.status_code == 429
+    mock_get_spend.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_keys_skip_personal_budget_when_opt_out_set():
+    """skip_user_budget_on_team_key=True restores the legacy behavior where a
+    team key's request bypasses the user's personal budget entirely."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(
+        user_max_budget=10.0,
+        team_id="team-1",
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=999.0),
+    ) as mock_get_spend:
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_user_budget_on_team_key": True},
+            clear=True,
+        ):
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+            )
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_spend_lookup_error_fails_open_by_default():
+    """Default policy: an infra error reading spend is swallowed so the hook
+    does not hard-fail requests."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        with patch.dict("litellm.proxy.proxy_server.general_settings", {}, clear=True):
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+            )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_spend_lookup_error_fails_closed_when_enabled():
+    """Regression for #33323: with fail_closed_budget_enforcement, an infra
+    error reading spend must not be silently swallowed; the request is rejected
+    rather than admitted on an unenforceable budget."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        with patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"fail_closed_budget_enforcement": True},
+            clear=True,
+        ):
+            with pytest.raises(RuntimeError):
+                await handler.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=DualCache(),
+                    data={},
+                    call_type="completion",
+                )
 
 
 @pytest.mark.asyncio
