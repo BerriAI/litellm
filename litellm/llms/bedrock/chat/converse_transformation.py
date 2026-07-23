@@ -1211,7 +1211,11 @@ class AmazonConverseConfig(BaseConfig):
     def _merge_parallel_tool_use_config(additional_request_params: dict, parallel_tool_use_config: dict) -> dict:
         merged_entries = {
             key: (
-                {**value, **additional_request_params[key]}
+                {
+                    **value,
+                    **additional_request_params[key],
+                    **{k: v for k, v in value.items() if k != "type"},
+                }
                 if isinstance(additional_request_params.get(key), dict) and isinstance(value, dict)
                 else value
             )

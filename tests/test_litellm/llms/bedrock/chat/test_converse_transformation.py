@@ -4284,7 +4284,7 @@ def test_parallel_tool_calls_emits_typed_auto_tool_choice(parallel_tool_calls, e
 
 def test_parallel_tool_use_merge_preserves_user_tool_choice_type():
     merged = AmazonConverseConfig._merge_parallel_tool_use_config(
-        {"tool_choice": {"type": "tool", "name": "get_weather"}},
+        {"tool_choice": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": False}},
         {"tool_choice": {"type": "auto", "disable_parallel_tool_use": True}},
     )
 
