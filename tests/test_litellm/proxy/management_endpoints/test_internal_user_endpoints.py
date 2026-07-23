@@ -1979,6 +1979,38 @@ def test_update_internal_user_params_reset_max_budget_with_none():
     assert non_default_values["user_id"] == "test_user"
 
 
+def test_update_internal_user_params_blank_budget_duration_clears_reset():
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/32474
+
+    A blank budget_duration (empty or whitespace-only string) means "no reset"
+    (unlimited). It must be persisted as NULL with budget_reset_at cleared,
+    instead of an unparseable empty string that later crashes duration parsing
+    with "Invalid duration format".
+    """
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+    for blank in ("", "   "):
+        data = UpdateUserRequest(user_id="test_user", max_budget=None, budget_duration=blank)
+        non_default_values = _update_internal_user_params(
+            data_json=data.model_dump(exclude_unset=True), data=data
+        )
+
+        assert non_default_values["budget_duration"] is None
+        assert non_default_values["budget_reset_at"] is None
+        assert non_default_values["max_budget"] is None
+
+    # A real duration is still honored and produces a reset time
+    data = UpdateUserRequest(user_id="test_user", budget_duration="30d")
+    non_default_values = _update_internal_user_params(data_json=data.model_dump(exclude_unset=True), data=data)
+    assert non_default_values["budget_duration"] == "30d"
+    assert non_default_values["budget_reset_at"] is not None
+
+    # Guard the regression: an empty duration must never reach duration_in_seconds
+    with pytest.raises(ValueError):
+        duration_in_seconds("")
+
+
 def test_update_internal_user_params_ignores_other_nones():
     """
     Test that other fields are still filtered out if None

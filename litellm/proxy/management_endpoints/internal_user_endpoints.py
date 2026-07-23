@@ -1098,9 +1098,12 @@ def _update_internal_user_params(
     if "budget_duration" in non_default_values:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        non_default_values["budget_reset_at"] = get_budget_reset_time(
-            budget_duration=non_default_values["budget_duration"]
-        )
+        budget_duration = non_default_values["budget_duration"]
+        if isinstance(budget_duration, str) and not budget_duration.strip():
+            non_default_values["budget_duration"] = None
+            non_default_values["budget_reset_at"] = None
+        else:
+            non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
 
     if "max_budget" not in non_default_values:
         if (
