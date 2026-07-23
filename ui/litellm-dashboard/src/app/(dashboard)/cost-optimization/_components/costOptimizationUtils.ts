@@ -1,4 +1,4 @@
-import { DailyData } from "@/components/UsagePage/types";
+import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
@@ -9,15 +9,15 @@ export const usd = (value: number): string => {
 
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;
 
+export type CacheLeakageDimension = "key" | "model";
+
 export interface CacheLeakageRow {
-  apiKey: string;
-  keyAlias: string | null;
-  teamId: string | null;
+  id: string;
+  label: string;
+  sublabel: string | null;
   uncachedPromptTokens: number;
-  cacheReadTokens: number;
   cacheHitRatio: number;
-  realizedCachingSavings: number;
-  estSavingsLeft: number | null;
+  potentialSavings: number | null;
 }
 
 export interface CacheLeakageResult {
@@ -25,8 +25,10 @@ export interface CacheLeakageResult {
   discountPerToken: number | null;
 }
 
-interface KeyAccumulator {
-  keyAlias: string | null;
+export const isAnthropicModel = (model: string): boolean => /claude|anthropic/i.test(model);
+
+interface LeakageAccumulator {
+  alias: string | null;
   teamId: string | null;
   promptTokens: number;
   cacheReadTokens: number;
@@ -34,8 +36,8 @@ interface KeyAccumulator {
   realizedCachingSavings: number;
 }
 
-const emptyAccumulator = (): KeyAccumulator => ({
-  keyAlias: null,
+const emptyAccumulator = (): LeakageAccumulator => ({
+  alias: null,
   teamId: null,
   promptTokens: 0,
   cacheReadTokens: 0,
@@ -43,26 +45,54 @@ const emptyAccumulator = (): KeyAccumulator => ({
   realizedCachingSavings: 0,
 });
 
-export const computeCacheLeakage = (results: readonly DailyData[], limit = 10): CacheLeakageResult => {
-  const byKey = new Map<string, KeyAccumulator>();
+const addMetrics = (
+  acc: LeakageAccumulator,
+  m: SpendMetrics,
+  alias: string | null,
+  teamId: string | null,
+): LeakageAccumulator => ({
+  alias: acc.alias ?? alias,
+  teamId: acc.teamId ?? teamId,
+  promptTokens: acc.promptTokens + (m.prompt_tokens ?? 0),
+  cacheReadTokens: acc.cacheReadTokens + (m.cache_read_input_tokens ?? 0),
+  cacheCreationTokens: acc.cacheCreationTokens + (m.cache_creation_input_tokens ?? 0),
+  realizedCachingSavings: acc.realizedCachingSavings + (m.prompt_caching_savings_spend ?? 0),
+});
+
+const aggregateByKey = (results: readonly DailyData[]): Map<string, LeakageAccumulator> => {
+  const byKey = new Map<string, LeakageAccumulator>();
   for (const day of results) {
-    const apiKeys = day.breakdown?.api_keys ?? {};
-    for (const [apiKey, entry] of Object.entries(apiKeys)) {
+    for (const [apiKey, entry] of Object.entries(day.breakdown?.api_keys ?? {})) {
       const acc = byKey.get(apiKey) ?? emptyAccumulator();
-      const m = entry.metrics;
-      const next: KeyAccumulator = {
-        keyAlias: acc.keyAlias ?? entry.metadata?.key_alias ?? null,
-        teamId: acc.teamId ?? entry.metadata?.team_id ?? null,
-        promptTokens: acc.promptTokens + (m.prompt_tokens ?? 0),
-        cacheReadTokens: acc.cacheReadTokens + (m.cache_read_input_tokens ?? 0),
-        cacheCreationTokens: acc.cacheCreationTokens + (m.cache_creation_input_tokens ?? 0),
-        realizedCachingSavings: acc.realizedCachingSavings + (m.prompt_caching_savings_spend ?? 0),
-      };
-      byKey.set(apiKey, next);
+      byKey.set(
+        apiKey,
+        addMetrics(acc, entry.metrics, entry.metadata?.key_alias ?? null, entry.metadata?.team_id ?? null),
+      );
     }
   }
+  return byKey;
+};
 
-  const totals = [...byKey.values()].reduce(
+const aggregateByModel = (results: readonly DailyData[]): Map<string, LeakageAccumulator> => {
+  const byModel = new Map<string, LeakageAccumulator>();
+  for (const day of results) {
+    for (const [model, entry] of Object.entries(day.breakdown?.models ?? {})) {
+      if (!isAnthropicModel(model)) continue;
+      const acc = byModel.get(model) ?? emptyAccumulator();
+      byModel.set(model, addMetrics(acc, entry.metrics, null, null));
+    }
+  }
+  return byModel;
+};
+
+export const computeCacheLeakage = (
+  results: readonly DailyData[],
+  dimension: CacheLeakageDimension = "key",
+  limit = 10,
+): CacheLeakageResult => {
+  const byEntity = dimension === "model" ? aggregateByModel(results) : aggregateByKey(results);
+
+  const totals = [...byEntity.values()].reduce(
     (agg, a) => ({
       cacheReadTokens: agg.cacheReadTokens + a.cacheReadTokens,
       realizedCachingSavings: agg.realizedCachingSavings + a.realizedCachingSavings,
@@ -71,25 +101,23 @@ export const computeCacheLeakage = (results: readonly DailyData[], limit = 10): 
   );
   const discountPerToken = totals.cacheReadTokens > 0 ? totals.realizedCachingSavings / totals.cacheReadTokens : null;
 
-  const rows: CacheLeakageRow[] = [...byKey.entries()]
-    .map(([apiKey, a]) => {
+  const rows: CacheLeakageRow[] = [...byEntity.entries()]
+    .map(([id, a]) => {
       const uncachedPromptTokens = Math.max(0, a.promptTokens - a.cacheReadTokens - a.cacheCreationTokens);
       return {
-        apiKey,
-        keyAlias: a.keyAlias,
-        teamId: a.teamId,
+        id,
+        label: dimension === "model" ? id : a.alias ?? `${id.slice(0, 8)}...`,
+        sublabel: dimension === "model" ? null : a.teamId,
         uncachedPromptTokens,
-        cacheReadTokens: a.cacheReadTokens,
         cacheHitRatio: a.promptTokens > 0 ? a.cacheReadTokens / a.promptTokens : 0,
-        realizedCachingSavings: a.realizedCachingSavings,
-        estSavingsLeft: discountPerToken != null ? uncachedPromptTokens * discountPerToken : null,
+        potentialSavings: discountPerToken != null ? uncachedPromptTokens * discountPerToken : null,
       };
     })
     .filter((row) => row.uncachedPromptTokens > 0);
 
   const sorted = rows.sort((x, y) =>
     discountPerToken != null
-      ? (y.estSavingsLeft ?? 0) - (x.estSavingsLeft ?? 0)
+      ? (y.potentialSavings ?? 0) - (x.potentialSavings ?? 0)
       : y.uncachedPromptTokens - x.uncachedPromptTokens,
   );
 

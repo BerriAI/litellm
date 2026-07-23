@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DailyData, KeyMetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
@@ -41,6 +41,24 @@ const dayWithKeys = (date: string, apiKeys: Record<string, KeyMetricWithMetadata
   },
 });
 
+const dayWithModels = (date: string, models: Record<string, Partial<SpendMetrics>>): DailyData => ({
+  date,
+  metrics: baseMetrics({}),
+  breakdown: {
+    models: Object.fromEntries(
+      Object.entries(models).map(([name, m]) => [
+        name,
+        { metrics: baseMetrics(m), metadata: {}, api_key_breakdown: {} },
+      ]),
+    ),
+    model_groups: {},
+    mcp_servers: {},
+    providers: {},
+    api_keys: {},
+    entities: {},
+  },
+});
+
 const renderWith = (results: DailyData[]) =>
   render(
     <CacheLeakageCard
@@ -67,11 +85,25 @@ describe("CacheLeakageCard", () => {
     expect(getByText("0.0%")).toBeInTheDocument();
     expect(getByText("90.0%")).toBeInTheDocument();
     [
-      "Input tokens in the selected range that were neither read from nor written to the prompt cache",
-      "Share of this key's total input tokens that were served from the prompt cache",
-      "Dollars this key actually saved because cached input was billed at the discounted cache-read rate",
-      "Approximate dollars this key could still save if its uncached input had hit the cache at the portfolio's realized discount",
+      "Input tokens you sent in this range that weren't served from or written to the cache",
+      "Share of your input tokens that were served from the cache",
+      "About how much you'd save if this uncached input used prompt caching. Estimated as uncached input tokens times the per-token discount your cached traffic already gets (realized cache savings ÷ cache-read tokens).",
     ].forEach((info) => expect(getByLabelText(info)).toBeInTheDocument());
+  });
+
+  it("switches to the model view and lists only Anthropic models", () => {
+    const { getByText, queryByText } = renderWith([
+      dayWithModels("2026-07-12", {
+        "claude-sonnet-5": { prompt_tokens: 5000, cache_read_input_tokens: 0 },
+        "gpt-4o": { prompt_tokens: 8000, cache_read_input_tokens: 0 },
+      }),
+    ]);
+
+    fireEvent.click(getByText("By model"));
+
+    expect(getByText("Cache leakage by model")).toBeInTheDocument();
+    expect(getByText("claude-sonnet-5")).toBeInTheDocument();
+    expect(queryByText("gpt-4o")).not.toBeInTheDocument();
   });
 
   it("shows an empty state when no key used tokens in the range", () => {
