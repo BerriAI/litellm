@@ -184,7 +184,6 @@ async def test_async_first_event_emitted_after_a_single_frame():
         if chunk is not None and _content_of(chunk) is not None:
             consumed_at_delta.append(stream.consumed)
 
-    assert consumed_at_delta[0] == 1
     assert consumed_at_delta == list(range(1, len(frames) + 1))
 
 
