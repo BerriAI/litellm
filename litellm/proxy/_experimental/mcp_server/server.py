@@ -977,7 +977,17 @@ if MCP_AVAILABLE:
                     data = await add_litellm_data_to_request(
                         data=body_data,
                         request=request,
-                        user_api_key_dict=user_api_key_auth,
+                        # Bill a team-derived call to the team that granted it. A keyless admitted
+                        # subject carries no team_id, so spend skipped team updates entirely and
+                        # charged the user's PRIMARY org — the granting team's budget never
+                        # accumulated (so it could never begin to block) and, cross-org, the wrong
+                        # organization was charged. This is the ACCOUNTING half; the enforcement
+                        # half (an already-over-budget team stops granting) lives in the source gate.
+                        # Authorization is unaffected: it ran before this, and the union is resolved
+                        # from the untouched auth object passed to call_mcp_tool below.
+                        user_api_key_dict=await MCPRequestHandler.billing_auth_for_tool_call(
+                            user_api_key_auth, tool_name=name
+                        ),
                         proxy_config=proxy_config,
                     )
                 else:
