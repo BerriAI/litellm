@@ -1436,6 +1436,23 @@ def test_get_fallback_model_group_exact_match_beats_prefixed_match():
     assert fallback_model_group == ["gemini-1.5-flash"]
 
 
+@pytest.mark.parametrize("rule_key", ["gpt-5.4-mini", "openai/gpt-5.4-mini", "*"])
+def test_get_fallback_model_group_resolves_a_bare_string_rule_value_as_a_one_item_chain(rule_key: str):
+    """Router.__init__ documents fallbacks=[{"primary": "backup"}]; the value is the chain to try, so a
+    bare string is a chain of one and never iterated character by character."""
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=[{rule_key: "gpt-5.4-nano"}], model_group="gpt-5.4-mini")
+
+    assert fallback_model_group == ["gpt-5.4-nano"]
+
+
+def test_get_fallback_model_group_keeps_a_list_rule_value_as_is():
+    fallbacks: Final = [{"gpt-5.4-mini": ["gpt-5.4-nano", "gpt-5.4"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-5.4-mini")
+
+    assert fallback_model_group is fallbacks[0]["gpt-5.4-mini"]
+
+
 def test_get_fallback_model_group_prefixed_match_ignores_unknown_models():
     """Provider inference fails for unknown bare names - the lookup must not
     raise and must fall through to the generic fallback."""

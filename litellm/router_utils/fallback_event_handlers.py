@@ -528,6 +528,14 @@ def get_fallback_model_group_for_lookup_groups(
     return next((result for result in results if result[0] is not None), (None, None))
 
 
+def _as_fallback_chain(
+    rule_value: list[str] | str | None,  # mutable-ok: mirrors get_fallback_model_group's contract
+) -> list[str] | None:  # mutable-ok: mirrors get_fallback_model_group's contract
+    if isinstance(rule_value, str):
+        return [rule_value]
+    return rule_value
+
+
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
     """
     Returns:
@@ -567,7 +575,7 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
         elif generic_fallback_idx is not None:
             fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
-    return fallback_model_group, generic_fallback_idx
+    return _as_fallback_chain(fallback_model_group), generic_fallback_idx  # pyright: ignore[reportUnknownArgumentType]  # the chain is read from the untyped fallbacks list
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
