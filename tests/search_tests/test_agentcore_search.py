@@ -341,3 +341,58 @@ class TestAgentCoreSearch:
                 api_base=eu_url,
             )
             assert mock_base_sign.call_args.kwargs["optional_params"]["aws_region_name"] == "eu-central-1"
+
+
+class TestAgentCoreSearchEdgeCases:
+    """Branch coverage for response parsing and error mapping."""
+
+    def test_transform_search_response_skips_non_text_and_bad_json_blocks(self):
+        """Non-text blocks and unparseable text blocks are skipped, not fatal."""
+        config = AgentCoreSearchConfig()
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [
+                    {"type": "image", "data": "..."},
+                    {"type": "text", "text": "not-json"},
+                    {"type": "text", "text": json.dumps(["scalar", {"title": "T", "url": "u", "text": "s"}])},
+                ]
+            },
+        }
+        mock_response = _make_mock_response(body)
+
+        response = config.transform_search_response(raw_response=mock_response, logging_obj=MagicMock())
+        # only the one dict item survives; non-dict list entries are skipped
+        assert len(response.results) == 1
+        assert response.results[0].title == "T"
+
+    def test_parse_mcp_body_sse_without_json_frame_raises(self):
+        """An SSE stream carrying no parseable JSON object is a 502."""
+        config = AgentCoreSearchConfig()
+        mock_response = _make_mock_response(text="event: ping\ndata: not-json\n\n")
+        with pytest.raises(Exception, match="SSE without a JSON data frame"):
+            config._parse_mcp_body(mock_response)
+
+    def test_parse_mcp_body_returns_last_event_when_no_result_frame(self):
+        """A stream of only notifications returns the last parsed event."""
+        config = AgentCoreSearchConfig()
+        note = {"jsonrpc": "2.0", "method": "notifications/progress"}
+        mock_response = _make_mock_response(text=f"data: {json.dumps(note)}\n\n")
+        assert config._parse_mcp_body(mock_response) == note
+
+    def test_sign_request_rejects_list_request_body(self):
+        config = AgentCoreSearchConfig()
+        with pytest.raises(ValueError, match="single dict"):
+            config.sign_request(
+                headers={},
+                optional_params={},
+                request_data=[{"jsonrpc": "2.0"}],
+                api_base=GATEWAY_URL,
+            )
+
+    def test_get_error_class_maps_status_and_message(self):
+        config = AgentCoreSearchConfig()
+        err = config.get_error_class(error_message="boom", status_code=503, headers={})
+        assert getattr(err, "status_code", None) == 503
+        assert "boom" in str(err)
