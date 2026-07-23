@@ -96,7 +96,8 @@ async def test_daily_tag_spend_retries_then_succeeds():
     mock_batcher.litellm_dailytagspend = mock_table
 
     # Fail entering batch context 3 times with retryable DB errors, then succeed.
-    prisma_client.db.batch_.return_value.__aenter__ = AsyncMock(
+    mock_batch_context = MagicMock()
+    mock_batch_context.__aenter__ = AsyncMock(
         side_effect=[
             httpx.ConnectError("x"),
             httpx.ConnectError("x"),
@@ -104,6 +105,14 @@ async def test_daily_tag_spend_retries_then_succeeds():
             mock_batcher,
         ]
     )
+    mock_batch_context.__aexit__ = AsyncMock(return_value=False)
+
+    mock_transaction = MagicMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(return_value=mock_batch_context)
+
+    prisma_client.db.tx = MagicMock(return_value=mock_transaction)
 
     daily_spend_transactions: Dict[str, DailyTagSpendTransaction] = {
         "k": {
@@ -138,6 +147,7 @@ async def test_daily_tag_spend_retries_then_succeeds():
             daily_spend_transactions=daily_spend_transactions,
         )
 
-    assert prisma_client.db.batch_.return_value.__aenter__.await_count == 4
+    assert mock_batch_context.__aenter__.await_count == 4
+    assert prisma_client.db.tx.call_count == 4
     assert sleep_mock.await_count == 3
     mock_table.upsert.assert_called_once()
