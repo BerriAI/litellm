@@ -11,6 +11,9 @@ from typing import Optional
 import pytest
 
 from litellm import Router
+from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+    DeploymentAffinityCheck,
+)
 from litellm.utils import _get_order_filtered_deployments
 
 # ---------------------------------------------------------------------------
@@ -190,6 +193,56 @@ async def test_router_order_fallback_on_failure():
         messages=[{"role": "user", "content": "hi"}],
     )
     assert response._hidden_params["model_id"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_order_fallback_overrides_session_affinity():
+    """An order fallback must not reuse a deployment pinned at an earlier order."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key", "order": 1},
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key", "order": 2},
+                "model_info": {"id": "2"},
+            },
+        ],
+        optional_pre_call_checks=["session_affinity"],
+    )
+    callback = next(
+        callback
+        for callback in router.optional_callbacks
+        if isinstance(callback, DeploymentAffinityCheck)
+    )
+    session_id = "test-session"
+    await callback.cache.async_set_cache(
+        key=DeploymentAffinityCheck.get_session_affinity_cache_key(
+            "test-model", session_id
+        ),
+        value={"model_id": "1"},
+    )
+
+    try:
+        pinned = await router.async_get_healthy_deployments(
+            model="test-model",
+            request_kwargs={"metadata": {"session_id": session_id}},
+        )
+        fallback = await router.async_get_healthy_deployments(
+            model="test-model",
+            request_kwargs={
+                "_target_order": 2,
+                "metadata": {"session_id": session_id},
+            },
+        )
+
+        assert [deployment["model_info"]["id"] for deployment in pinned] == ["1"]
+        assert [deployment["model_info"]["id"] for deployment in fallback] == ["2"]
+    finally:
+        router.discard()
 
 
 @pytest.mark.asyncio
