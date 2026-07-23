@@ -76,6 +76,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     PrivateAttr,
+    SerializeAsAny,
     field_serializer,
     field_validator,
 )
@@ -1271,7 +1272,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     text: Optional[Union["ResponseText", Dict[str, Any]]] = None
     truncation: Optional[Literal["auto", "disabled"]] = None
-    usage: Optional[ResponseAPIUsage] = None
+    usage: Optional[SerializeAsAny[ResponseAPIUsage]] = None
     user: Optional[str] = None
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
