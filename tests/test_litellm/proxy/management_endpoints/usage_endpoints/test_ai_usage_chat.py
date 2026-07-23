@@ -466,3 +466,74 @@ class TestUsageAiChatServiceAccountGuard:
                 is_admin=False,
             )
         assert "Endpoint-level guard missing" in str(exc_info.value)
+
+
+class TestUsageAiChatRouterDispatch:
+    """
+    Regression: the AI chat endpoint must dispatch through the proxy's
+    llm_router when one is configured, so model aliases and credentials from
+    the proxy config (Bedrock, Azure, etc.) are honored. The previous code
+    called litellm.acompletion directly, which only worked when OPENAI_API_KEY
+    happened to be set on the proxy env.
+    """
+
+    @pytest.mark.asyncio
+    async def test_uses_llm_router_when_configured(self):
+        from litellm.proxy import proxy_server
+
+        mock_router = MagicMock()
+        mock_router.acompletion = AsyncMock()
+
+        mock_no_tools_response = MagicMock()
+        mock_no_tools_response.choices = [MagicMock()]
+        mock_no_tools_response.choices[0].message.tool_calls = None
+        mock_no_tools_response.choices[0].message.content = "Hello from router."
+        mock_router.acompletion.return_value = mock_no_tools_response
+
+        original_router = getattr(proxy_server, "llm_router", None)
+        try:
+            proxy_server.llm_router = mock_router
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="my-proxy-alias",
+                user_id="user-123",
+                is_admin=True,
+            ):
+                events.append(event)
+        finally:
+            proxy_server.llm_router = original_router
+
+        mock_router.acompletion.assert_awaited_once()
+        call_kwargs = mock_router.acompletion.await_args.kwargs
+        assert call_kwargs["model"] == "my-proxy-alias"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_litellm_when_no_router(self):
+        from litellm.proxy import proxy_server
+
+        mock_no_tools_response = MagicMock()
+        mock_no_tools_response.choices = [MagicMock()]
+        mock_no_tools_response.choices[0].message.tool_calls = None
+        mock_no_tools_response.choices[0].message.content = "Hello."
+
+        original_router = getattr(proxy_server, "llm_router", None)
+        try:
+            proxy_server.llm_router = None
+            with patch(
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
+            ) as mock_litellm:
+                mock_litellm.acompletion = AsyncMock(
+                    return_value=mock_no_tools_response
+                )
+                events = []
+                async for event in stream_usage_ai_chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="gpt-4o-mini",
+                    user_id="user-123",
+                    is_admin=True,
+                ):
+                    events.append(event)
+                mock_litellm.acompletion.assert_awaited_once()
+        finally:
+            proxy_server.llm_router = original_router
