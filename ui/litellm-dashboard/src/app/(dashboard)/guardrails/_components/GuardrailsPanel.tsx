@@ -233,7 +233,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
           {
             key: "submitted",
             label: "Submitted Guardrails",
-            children: <TeamGuardrailsTab accessToken={accessToken} />,
+            children: <TeamGuardrailsTab accessToken={accessToken} userRole={userRole} />,
           },
         ]}
       />
