@@ -50,11 +50,6 @@ _ASSERTION_EXPIRY_BUFFER_SECONDS = 30
 # declares an expiry is cached until that expiry (minus the buffer above) by the shared cache.
 _ASSERTION_CACHE_TTL_SECONDS = 60.0
 
-# How long a terminal renewal verdict is remembered, bounding a dead grant at one token-endpoint
-# POST per pod per window instead of one per egress call. It never delays a re-login: the shared
-# stack only consults the refresher while the STORED row is still expired.
-_REFRESH_BACKOFF_SECONDS = 30.0
-
 # The assertion is the user's SSO identity rather than a per-upstream credential, so it occupies a
 # single per-user slot in the shared (user_id, server_id) keyed stack.
 _ASSERTION_SERVER_KEY = ""
@@ -355,9 +350,11 @@ class _SsoAssertionRefresher:
     ``SsoAssertionUnrenewable`` (re-login) and anything proving nothing about the grant raises
     ``TokenStoreUnavailable`` (retry), so a down IdP never tells a user to sign in again.
 
-    A terminal verdict is remembered briefly so a dead grant costs one POST per window rather than
-    one per egress call. It cannot mask a re-login: the stack only calls a refresher while the
-    STORED row is expired, and a re-login replaces that row with one served without reaching here.
+    A PROVEN dead grant is recorded where the assertion lives, by persisting the row without the
+    refresh token the IdP rejected, never in a cache beside it. Later reads then answer from the
+    row with no token-endpoint call, on every pod and for as long as the row stands, and a re-login
+    lifts it by replacing that row. A verdict in a side cache guarantees neither: it is per-pod, it
+    expires on its own clock, and it can refuse a caller who has just signed in again.
     """
 
     def __init__(
@@ -366,35 +363,38 @@ class _SsoAssertionRefresher:
         post: SsoTokenEndpointPost,
         getenv: Callable[[str], str | None],
         now: Callable[[], float] = time.time,
-        backoff_seconds: float = _REFRESH_BACKOFF_SECONDS,
     ) -> None:
         self._persist = persist
         self._post = post
         self._getenv = getenv
         self._now = now
-        self._backoff_seconds = backoff_seconds
-        self._recent_verdicts: dict[str, tuple[Exception, float]] = {}
 
-    def _recent_verdict(self, user_id: str) -> Exception | None:
-        entry = self._recent_verdicts.get(user_id)
-        if entry is None:
-            return None
-        verdict, valid_until = entry
-        if self._now() >= valid_until:
-            self._recent_verdicts.pop(user_id, None)
-            return None
-        return verdict
-
-    def _remember(self, user_id: str, verdict: Exception) -> Exception:
-        self._recent_verdicts[user_id] = (verdict, self._now() + self._backoff_seconds)
-        return verdict
+    async def _record_dead_grant(self, user_id: str, token: OAuthToken) -> None:
+        """Persist the row without the rejected refresh token. Best effort: failing to record the
+        verdict costs one more POST next time, never a wrong answer."""
+        try:
+            await self._persist(
+                user_id,
+                SSOIdentityAssertion(
+                    id_token=SecretStr(token.access_token),
+                    refresh_token=None,
+                    expires_at=(
+                        datetime.fromtimestamp(token.expires_at, tz=timezone.utc)
+                        if token.expires_at is not None
+                        else None
+                    ),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001  # recording the verdict must not mask it
+            verbose_proxy_logger.warning(
+                "Could not record the rejected SSO refresh grant for user_id=%s: %s", user_id, exc
+            )
 
     async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
-        recent = self._recent_verdict(user_id)
-        if recent is not None:
-            raise recent
         if token.refresh_token is None:
-            raise self._remember(user_id, SsoAssertionUnrenewable("the stored assertion carries no refresh token"))
+            # No grant to spend, because the login never returned one or a proven rejection stripped
+            # it. Either way only a re-login helps, and answering costs no token-endpoint call.
+            raise SsoAssertionUnrenewable("the stored assertion carries no refresh token")
         client = _sso_refresh_client_from_env(self._getenv)
         if client is None:
             verbose_proxy_logger.warning(
@@ -403,7 +403,7 @@ class _SsoAssertionRefresher:
                 "until the deployment restores it.",
                 user_id,
             )
-            raise self._remember(user_id, TokenStoreUnavailable("the SSO client environment is not configured"))
+            raise TokenStoreUnavailable("the SSO client environment is not configured")
         scope = " ".join(generic_sso_scopes(self._getenv))
         form = {
             "grant_type": "refresh_token",
@@ -414,8 +414,9 @@ class _SsoAssertionRefresher:
         }
         try:
             body = await self._post(client.token_endpoint, form)
-        except (SsoAssertionUnrenewable, TokenStoreUnavailable) as verdict:
-            raise self._remember(user_id, verdict) from verdict
+        except SsoAssertionUnrenewable:
+            await self._record_dead_grant(user_id, token)
+            raise
         rotated = body.get("refresh_token")
         carried_refresh = rotated if isinstance(rotated, str) and rotated else token.refresh_token
         refreshed = assertion_from_sso_login(body.get("id_token"), carried_refresh)
@@ -423,7 +424,7 @@ class _SsoAssertionRefresher:
             verbose_proxy_logger.warning(
                 "SSO assertion refresh for user_id=%s returned no usable id_token; treating as expired.", user_id
             )
-            raise self._remember(user_id, SsoAssertionUnrenewable("the refresh response carried no usable id_token"))
+            raise SsoAssertionUnrenewable("the refresh response carried no usable id_token")
         try:
             await self._persist(user_id, refreshed)
         except Exception as exc:  # noqa: BLE001  # a write-back failure must not discard the in-hand token
@@ -445,8 +446,7 @@ class _SsoAssertionRefresher:
                 "SSO assertion refresh for user_id=%s returned an already-expired id_token; treating as expired.",
                 user_id,
             )
-            raise self._remember(user_id, SsoAssertionUnrenewable("the refreshed id_token was already expired"))
-        self._recent_verdicts.pop(user_id, None)
+            raise SsoAssertionUnrenewable("the refreshed id_token was already expired")
         return refreshed_token
 
 

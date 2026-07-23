@@ -544,9 +544,11 @@ async def test_source_missing_sso_env_is_unavailable_not_expired():
 
 
 @pytest.mark.asyncio
-async def test_source_dead_grant_is_negative_cached_one_post_per_window():
-    """A dead refresh grant costs one token-endpoint POST per negative-TTL window, not one per
-    egress call, and the negative entry expires so a re-login is honored within the window."""
+async def test_a_dead_grant_costs_one_post_because_the_verdict_lands_on_the_row():
+    """A dead refresh grant costs one token-endpoint POST, not one per egress call, because the
+    rejection strips the refresh token from the row itself; later reads answer from the row. The
+    bound therefore holds on every pod and for as long as the row stands, and a re-login lifts it
+    by replacing the row rather than by waiting out a timer."""
     clock = {"now": time.time()}
     posts: list[dict] = []
     state = {"stored": _stored(-100)}
@@ -696,6 +698,44 @@ async def test_source_memoizes_usable_lookups_within_ttl():
     third = await source.fetch_usable("alice")
     assert third is not None
     assert fetches == ["alice", "alice"]
+
+
+@pytest.mark.asyncio
+async def test_a_dead_grant_verdict_never_refuses_a_caller_who_signed_in_again():
+    """A rejected grant must not refuse the NEXT assertion, even one that is itself near expiry.
+
+    The verdict is recorded on the row (its refresh token is stripped), so replacing the row at
+    re-login clears it by construction. A verdict parked in a side cache keyed by user would still
+    be inside its window here and would raise a false 401 at the moment the fresh assertion first
+    needs renewing, despite a perfectly good refresh token.
+    """
+    state = {"stored": _stored(-100, refresh_token="rt_dead")}
+    outcomes = {"reject": True}
+
+    async def fetch(user_id: str):
+        return state["stored"]
+
+    async def persist(user_id, assertion):
+        state["stored"] = assertion
+
+    async def post(url, form):
+        if outcomes["reject"]:
+            raise SsoAssertionUnrenewable("grant is dead")
+        return {"id_token": _make_id_token(exp_offset=3600), "refresh_token": "rt_fresh"}
+
+    source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    # The verdict lives on the row now: the dead refresh token is gone, so a repeat costs no POST.
+    assert state["stored"].refresh_token is None
+
+    # The user signs in again. The new assertion is ALSO near expiry, so renewal runs immediately;
+    # it must use the new grant rather than a remembered verdict.
+    outcomes["reject"] = False
+    state["stored"] = _stored(-5, refresh_token="rt_after_relogin")
+    renewed = await source.fetch_usable("alice")
+    assert renewed is not None
+    assert renewed.refresh_token == "rt_fresh"
 
 
 @pytest.mark.asyncio
