@@ -8579,6 +8579,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.NOVITA == provider:
+            from litellm.llms.novita.image_generation import (
+                get_novita_image_generation_config,
+            )
+
+            return get_novita_image_generation_config(model)
         elif LlmProviders.AIML == provider:
             from litellm.llms.aiml.image_generation import (
                 get_aiml_image_generation_config,

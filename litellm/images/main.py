@@ -385,6 +385,7 @@ def image_generation(
         #########################################################
         elif custom_llm_provider in (
             litellm.LlmProviders.RECRAFT,
+            litellm.LlmProviders.NOVITA,
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
