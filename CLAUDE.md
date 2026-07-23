@@ -34,6 +34,13 @@ If you ever make public-facing PR descriptions, comments, issues, commit message
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 - don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: if you're adding new line(s) before the next sentence, don't add a "."
 - don't use →. Instead, prefer not to use arrows, and if need be, use -> instead
+- don't use filler words like delve, foster, leverage, utilize, facilitate, empower, streamline, robust, cutting-edge, paradigm shift, game changer, transformative, or empty phrases like "it's worth noting", "at the end of the day", "at its core", "in order to", "let's dive in"; also cut adverbs like just, simply, actually, truly, fundamentally when they add nothing
+- don't puff or hedge with "marks a pivotal moment", "stands as a testament", "plays a vital role", "experts agree", "studies show"; state the fact or name the source
+- don't open with throat-clearing or faux-insight ("Here's the thing", "Let me be clear", "what nobody tells you") or close with recaps ("In conclusion", "Overall") and mic-drop kickers; make the point and stop
+- don't use colon reveals ("The best part: it learns"), trailing -ing analysis ("highlighting the commitment to..."), or negative listing ("Not X. Not Y. A Z"); write plain sentences
+- prefer plain verbs ("is", "has", "decided") over "serves as" / "made a decision", active voice, and concrete numbers over abstractions ("cut deploy time from 40 minutes to 4", not "improved efficiency")
+
+(these last few condense the no-ai-slop skill: https://github.com/petergyang/no-ai-slop)
 
 Don't hesitate to use values in .env to get needed API keys and other secrets, as long as you never add them to conversation history, commit them, or include them in GitHub issues / PRs
 
