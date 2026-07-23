@@ -11211,6 +11211,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "prompt_cache_min_tokens": 4096
@@ -11233,6 +11234,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "prompt_cache_min_tokens": 4096
@@ -11450,6 +11452,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_native_structured_output": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -11835,6 +11838,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_native_structured_output": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
