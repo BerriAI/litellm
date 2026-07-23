@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy.proxy_server import app
 
 
@@ -711,3 +712,607 @@ class TestManagedResponsesSameProvider:
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs
+
+
+def _auth_override():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(api_key="sk-test-cursor", user_id="cursor-user")
+
+
+def test_cursor_chat_completions_messages_body_uses_chat_pipeline():
+    """A genuine chat-completions body (``messages`` present; what Cursor sends for
+    models whose BYOK it already fixed) must run through the standard chat pipeline
+    untouched: multi-turn tool history (assistant tool_calls + role="tool" results)
+    and nested chat-format tool defs are valid there, while blindly renaming
+    ``messages`` to ``input`` (the pre-fix behavior) produced items the Responses API
+    rejects. Asserts acompletion is called with the exact messages and aresponses is
+    never touched."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    import litellm.proxy.proxy_server as ps
+
+    messages = [
+        {"role": "user", "content": "read a file"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_hist1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_hist1", "content": "file contents"},
+        {"role": "user", "content": "now summarize"},
+    ]
+
+    mock_router = MagicMock()
+    mock_router.acompletion = AsyncMock(
+        return_value=litellm.ModelResponse(
+            id="chatcmpl-cursor-1",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "summary"},
+                    "finish_reason": "stop",
+                }
+            ],
+            model="gpt-4o",
+        )
+    )
+    mock_router.aresponses = AsyncMock()
+    mock_router.get_available_deployment = MagicMock(return_value=None)
+
+    app.dependency_overrides[user_api_key_auth] = _auth_override
+    try:
+        with patch.object(ps, "llm_router", mock_router):
+            client = TestClient(app)
+            response = client.post(
+                "/cursor/chat/completions",
+                json={
+                    "model": "gpt-4o",
+                    "messages": messages,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {"name": "read_file", "parameters": {"type": "object"}},
+                        }
+                    ],
+                },
+                headers={"Authorization": "Bearer sk-test-cursor"},
+            )
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["choices"][0]["message"]["content"] == "summary"
+    assert "output" not in body
+
+    mock_router.acompletion.assert_called_once()
+    called_kwargs = mock_router.acompletion.call_args.kwargs
+    assert called_kwargs["messages"] == messages
+    assert "input" not in called_kwargs
+    mock_router.aresponses.assert_not_called()
+
+
+def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_stream_options():
+    """A Responses-shaped body (``input``, no ``messages``; what Cursor agent mode
+    sends) must run through the Responses pipeline with chat-completions output, and
+    ``stream_options`` (chat-completions-only; Cursor sends include_usage) must be
+    stripped before the Responses call since OpenAI's Responses API rejects it.
+    Stripping must not mutate the dict _read_request_body returned: that can be the
+    request-scope cached parsed body itself, and removing a key from it corrupts the
+    cache's key snapshot so any later _read_request_body caller (spend tracking,
+    logging hooks) silently gets an empty body; a follow-up read must still see the
+    full original body."""
+    import asyncio
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _read_request_body as real_read_request_body,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    import litellm.proxy.proxy_server as ps
+
+    captured_requests = []
+
+    async def capturing_read_request_body(request):
+        captured_requests.append(request)
+        return await real_read_request_body(request=request)
+
+    mock_router = MagicMock()
+    mock_router.aresponses = AsyncMock(
+        return_value=ResponsesAPIResponse(
+            id="resp_cursor_agent1",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            output=[
+                ResponseOutputMessage(
+                    id="msg_agent1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[
+                        ResponseOutputText(type="output_text", text="agent reply", annotations=[])
+                    ],
+                )
+            ],
+        )
+    )
+    mock_router.acompletion = AsyncMock()
+
+    app.dependency_overrides[user_api_key_auth] = _auth_override
+    try:
+        with patch.object(ps, "llm_router", mock_router), patch.object(
+            ps, "_read_request_body", side_effect=capturing_read_request_body
+        ):
+            client = TestClient(app)
+            response = client.post(
+                "/cursor/chat/completions",
+                json={
+                    "model": "gpt-4o",
+                    "input": [{"role": "user", "content": "hello"}],
+                    "stream_options": {"include_usage": True},
+                },
+                headers={"Authorization": "Bearer sk-test-cursor"},
+            )
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["choices"][0]["message"]["content"] == "agent reply"
+    assert "output" not in body
+
+    mock_router.aresponses.assert_called_once()
+    called_kwargs = mock_router.aresponses.call_args.kwargs
+    assert "stream_options" not in called_kwargs
+    mock_router.acompletion.assert_not_called()
+
+    assert captured_requests
+    followup_body = asyncio.run(real_read_request_body(request=captured_requests[0]))
+    assert followup_body.get("stream_options") == {"include_usage": True}
+    assert followup_body.get("input") == [{"role": "user", "content": "hello"}]
+
+
+def test_cursor_models_route_delegates_to_model_list():
+    """Clients pointed at <proxy>/cursor as an OpenAI-compatible base URL resolve and
+    verify keys via GET {base}/models (the OpenAI SDK contract). Without a dedicated
+    route those requests fall through to the Cursor Cloud Agents passthrough and 401
+    for lack of a Cursor API key, so BYOK verification fails before any chat request
+    is sent. Both /cursor/models and /cursor/v1/models must serve the standard model
+    list instead."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    import litellm.proxy.proxy_server as ps
+
+    model_payload = {"data": [{"id": "gpt-5.6", "object": "model"}], "object": "list"}
+
+    app.dependency_overrides[user_api_key_auth] = _auth_override
+    try:
+        with patch.object(ps, "model_list", AsyncMock(return_value=model_payload)) as mock_model_list:
+            client = TestClient(app)
+            for path in ("/cursor/models", "/cursor/v1/models"):
+                response = client.get(path, headers={"Authorization": "Bearer sk-test-cursor"})
+                assert response.status_code == 200, f"{path}: {response.text}"
+                assert response.json() == model_payload
+            assert mock_model_list.call_count == 2
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+class TestNestFlatChatTools:
+    def test_flat_custom_tool_is_nested(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        result = _convert_tool_envelope(
+            {"type": "custom", "name": "ApplyPatch", "description": "V4A patch", "format": {"type": "text"}},
+            to_chat=True,
+        )
+        assert result == {
+            "type": "custom",
+            "custom": {"name": "ApplyPatch", "description": "V4A patch", "format": {"type": "text"}},
+        }
+
+    def test_flat_function_tool_is_nested(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        result = _convert_tool_envelope(
+            {"type": "function", "name": "read_file", "description": "d", "parameters": {"type": "object"}},
+            to_chat=True,
+        )
+        assert result == {
+            "type": "function",
+            "function": {"name": "read_file", "description": "d", "parameters": {"type": "object"}},
+        }
+
+    def test_already_nested_and_unrecognized_tools_pass_through_unchanged(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        tools = [
+            {"type": "custom", "custom": {"name": "already_nested"}},
+            {"type": "function", "function": {"name": "f", "parameters": {}}},
+            {"type": "web_search"},
+            {"type": "custom"},
+            {"name": "typeless"},
+            {},
+            "junk",
+            None,
+            42,
+        ]
+        assert [_convert_tool_envelope(tool, to_chat=True) for tool in tools] == tools
+
+
+class TestCursorMessagesArmToolNormalization:
+    @pytest.mark.asyncio
+    async def test_flat_custom_tool_nested_before_chat_completion_delegation(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        seen = {}
+
+        async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
+            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+            seen["body"] = await _read_request_body(request=request)
+            return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion):
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "gpt-5.6",
+                        "messages": [{"role": "user", "content": "use ApplyPatch"}],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {"name": "read_file", "parameters": {"type": "object"}},
+                            },
+                            {
+                                "type": "custom",
+                                "name": "ApplyPatch",
+                                "description": "V4A patch",
+                                "format": {
+                                    "type": "grammar",
+                                    "definition": "start: patch",
+                                    "syntax": "lark",
+                                },
+                            },
+                        ],
+                        "tool_choice": {"type": "custom", "name": "ApplyPatch"},
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert seen["body"]["tools"] == [
+            {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}},
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "ApplyPatch",
+                    "description": "V4A patch",
+                    "format": {
+                        "type": "grammar",
+                        "grammar": {"definition": "start: patch", "syntax": "lark"},
+                    },
+                },
+            },
+        ]
+        assert seen["body"]["tool_choice"] == {"type": "custom", "custom": {"name": "ApplyPatch"}}
+        assert seen["body"]["messages"] == [{"role": "user", "content": "use ApplyPatch"}]
+
+    @pytest.mark.asyncio
+    async def test_messages_body_without_flat_tools_leaves_parsed_body_cache_untouched(self):
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        seen = {}
+
+        async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
+            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+            seen["body"] = await _read_request_body(request=request)
+            return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
+
+        body = {
+            "model": "gpt-5.6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
+        }
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.chat_completion", new=fake_chat_completion):
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json=body,
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert seen["body"]["tools"] == body["tools"]
+        assert seen["body"]["messages"] == body["messages"]
+
+
+class TestToolEnvelopeConversionMatrix:
+    """
+    Cursor mixes Responses API shapes into chat bodies PER LEVEL, independently
+    (live-captured: a pre-nested custom envelope carrying a flat grammar format).
+    Tool definitions and tool_choice share one envelope rule, so every cell of
+    direction x envelope x format must land on that direction's canonical shape.
+    """
+
+    FLAT_GRAMMAR = {"type": "grammar", "definition": "start: patch", "syntax": "lark"}
+    NESTED_GRAMMAR = {"type": "grammar", "grammar": {"definition": "start: patch", "syntax": "lark"}}
+    TEXT = {"type": "text"}
+
+    @pytest.mark.parametrize("to_chat", [True, False])
+    @pytest.mark.parametrize("envelope", ["flat", "nested"])
+    @pytest.mark.parametrize("format_shape", ["absent", "text", "flat_grammar", "nested_grammar"])
+    def test_every_direction_envelope_and_format_lands_canonical(self, to_chat, envelope, format_shape):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        format_value = {
+            "absent": None,
+            "text": self.TEXT,
+            "flat_grammar": self.FLAT_GRAMMAR,
+            "nested_grammar": self.NESTED_GRAMMAR,
+        }[format_shape]
+        payload = {"name": "ApplyPatch", "description": "V4A patch"}
+        if format_value is not None:
+            payload["format"] = format_value
+        tool = {"type": "custom", "custom": payload} if envelope == "nested" else {"type": "custom", **payload}
+
+        canonical_payload = {"name": "ApplyPatch", "description": "V4A patch"}
+        if format_shape in ("flat_grammar", "nested_grammar"):
+            canonical_payload["format"] = self.NESTED_GRAMMAR if to_chat else self.FLAT_GRAMMAR
+        elif format_shape == "text":
+            canonical_payload["format"] = self.TEXT
+        expected = (
+            {"type": "custom", "custom": canonical_payload} if to_chat else {"type": "custom", **canonical_payload}
+        )
+
+        assert _convert_tool_envelope(tool, to_chat=to_chat) == expected
+
+    def test_nested_envelope_with_flat_grammar_matches_live_cursor_capture(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        cursor_tool = {"type": "custom", "custom": {"name": "ApplyPatch", "format": self.FLAT_GRAMMAR}}
+        assert _convert_tool_envelope(cursor_tool, to_chat=True) == {
+            "type": "custom",
+            "custom": {"name": "ApplyPatch", "format": self.NESTED_GRAMMAR},
+        }
+
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_conversion_is_idempotent(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        once = _convert_tool_envelope({"type": "custom", "name": "A", "format": self.FLAT_GRAMMAR}, to_chat=to_chat)
+        assert _convert_tool_envelope(once, to_chat=to_chat) == once
+
+    def test_nested_function_tool_flattens_and_flat_passes_through(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        nested = {"type": "function", "function": {"name": "read_file", "parameters": {"type": "object"}}}
+        flat = {"type": "function", "name": "read_file", "parameters": {"type": "object"}}
+        assert _convert_tool_envelope(nested, to_chat=False) == flat
+        assert _convert_tool_envelope(flat, to_chat=False) == flat
+
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_unrecognized_entries_pass_through(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        entries = [{"type": "web_search"}, {"type": "custom"}, "junk", None, {}, 42, {"type": "auto"}]
+        assert [_convert_tool_envelope(entry, to_chat=to_chat) for entry in entries] == entries
+
+
+class TestToolChoiceSharesTheToolEnvelopeRule:
+    """
+    tool_choice carries the same {"type": T, T: {...}} chat envelope as a tool
+    definition, so it converts through the same function in both directions.
+    OpenAI requires the nested key on chat (SDK ChatCompletionNamedToolChoiceParam
+    and ChatCompletionNamedToolChoiceCustomParam both mark it Required).
+    """
+
+    @pytest.mark.parametrize("choice_type", ["custom", "function"])
+    def test_flat_tool_choice_is_nested_for_chat(self, choice_type):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        assert _convert_tool_envelope({"type": choice_type, "name": "ApplyPatch"}, to_chat=True) == {
+            "type": choice_type,
+            choice_type: {"name": "ApplyPatch"},
+        }
+
+    @pytest.mark.parametrize("choice_type", ["custom", "function"])
+    def test_nested_tool_choice_is_flattened_for_responses(self, choice_type):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        assert _convert_tool_envelope({"type": choice_type, choice_type: {"name": "ApplyPatch"}}, to_chat=False) == {
+            "type": choice_type,
+            "name": "ApplyPatch",
+        }
+
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_sentinel_and_malformed_tool_choice_pass_through(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        for unchanged in ("auto", "required", "none", None, {"type": "auto"}, 42):
+            assert _convert_tool_envelope(unchanged, to_chat=to_chat) == unchanged
+
+
+class TestNormalizeToolDialectCoversBothFields:
+    """
+    The regression that motivated one normalizer: tools were converted while
+    tool_choice was left flat, so OpenAI rejected the request. Both fields move
+    together in a single call, on both arms.
+    """
+
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_tools_and_tool_choice_convert_together(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _normalize_tool_dialect
+
+        flat = {"type": "custom", "name": "ApplyPatch"}
+        nested = {"type": "custom", "custom": {"name": "ApplyPatch"}}
+        source = flat if to_chat else nested
+        expected = nested if to_chat else flat
+
+        out = _normalize_tool_dialect({"messages": [], "tools": [source], "tool_choice": source}, to_chat=to_chat)
+        assert out["tools"] == [expected]
+        assert out["tool_choice"] == expected
+
+    def test_body_needing_no_conversion_is_returned_by_identity(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _normalize_tool_dialect
+
+        data = {"messages": [], "tools": [{"type": "function", "function": {"name": "f"}}], "tool_choice": "auto"}
+        assert _normalize_tool_dialect(data, to_chat=True) is data
+
+    def test_absent_tool_fields_are_not_invented(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _normalize_tool_dialect
+
+        data = {"messages": [{"role": "user", "content": "hi"}]}
+        result = _normalize_tool_dialect(data, to_chat=True)
+        assert result == data
+        assert "tools" not in result and "tool_choice" not in result
+
+
+class TestCursorInputArmFlattening:
+    @pytest.mark.asyncio
+    async def test_nested_chat_shapes_in_input_body_reach_aresponses_flattened(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_flat123",
+            created_at=1234567890,
+            model="gpt-5.6",
+            object="response",
+            output=[
+                ResponseOutputMessage(
+                    id="msg_flat123",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(type="output_text", text="ok", annotations=[])],
+                )
+            ],
+        )
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                mock_router.aresponses = AsyncMock(return_value=mock_response)
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "gpt-5.6",
+                        "input": [{"role": "user", "content": "use ApplyPatch"}],
+                        "tools": [
+                            {
+                                "type": "custom",
+                                "custom": {
+                                    "name": "ApplyPatch",
+                                    "format": {
+                                        "type": "grammar",
+                                        "grammar": {"definition": "start: patch", "syntax": "lark"},
+                                    },
+                                },
+                            },
+                            {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+                        ],
+                        "tool_choice": {"type": "custom", "custom": {"name": "ApplyPatch"}},
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        call_kwargs = mock_router.aresponses.call_args.kwargs
+        assert call_kwargs["tools"] == [
+            {
+                "type": "custom",
+                "name": "ApplyPatch",
+                "format": {"type": "grammar", "definition": "start: patch", "syntax": "lark"},
+            },
+            {"type": "function", "name": "read_file", "parameters": {"type": "object"}},
+        ]
+        assert call_kwargs["tool_choice"] == {"type": "custom", "name": "ApplyPatch"}
+
+
+class TestChatCompletionsBodyDetection:
+    def test_routing_matrix(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _is_chat_completions_body
+
+        assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}]}) is True
+        assert _is_chat_completions_body({"messages": [{"role": "user", "content": "hi"}], "input": []}) is True
+        assert _is_chat_completions_body({"messages": None, "input": [{"role": "user", "content": "hi"}]}) is False
+        assert _is_chat_completions_body({"messages": [], "input": [{"role": "user", "content": "hi"}]}) is False
+        assert _is_chat_completions_body({"messages": None}) is True
+        assert _is_chat_completions_body({"messages": []}) is True
+        assert _is_chat_completions_body({"input": [{"role": "user", "content": "hi"}]}) is False
+        assert _is_chat_completions_body({}) is False
+
+    @pytest.mark.asyncio
+    async def test_null_messages_stub_with_input_reaches_responses_arm(self):
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_stub1",
+            created_at=1234567890,
+            model="gpt-5.6",
+            object="response",
+            output=[
+                ResponseOutputMessage(
+                    id="msg_stub1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(type="output_text", text="ok", annotations=[])],
+                )
+            ],
+        )
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-1234")
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+                mock_router.aresponses = AsyncMock(return_value=mock_response)
+                client = TestClient(app)
+                response = client.post(
+                    "/cursor/chat/completions",
+                    json={
+                        "model": "gpt-5.6",
+                        "messages": None,
+                        "input": [{"role": "user", "content": "hello"}],
+                    },
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200
+        assert mock_router.aresponses.call_args is not None
+        assert mock_router.aresponses.call_args.kwargs["input"] == [{"role": "user", "content": "hello"}]

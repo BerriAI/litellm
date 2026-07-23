@@ -626,3 +626,92 @@ def test_delattr_fast_path_missing_attribute_is_noop():
 
     del racy.x
     del racy.x
+def test_chat_completion_tool_call_from_dict_custom():
+    from litellm.types.utils import (
+        ChatCompletionMessageCustomToolCall,
+        ChatCompletionMessageToolCall,
+        chat_completion_tool_call_from_dict,
+    )
+
+    custom_tc = {
+        "id": "call_njxQ",
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch\n*** End Patch\n"},
+    }
+    parsed = chat_completion_tool_call_from_dict(custom_tc)
+    assert isinstance(parsed, ChatCompletionMessageCustomToolCall)
+    assert parsed.model_dump() == custom_tc
+
+    func_tc = {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    parsed_func = chat_completion_tool_call_from_dict(func_tc)
+    assert isinstance(parsed_func, ChatCompletionMessageToolCall)
+    assert "custom" not in parsed_func.model_dump()
+
+
+def test_chat_completion_tool_call_from_dict_custom_strips_null_function():
+    from litellm.types.utils import chat_completion_tool_call_from_dict
+
+    sdk_shaped = {
+        "id": "call_x",
+        "type": "custom",
+        "function": None,
+        "custom": {"name": "ApplyPatch", "input": ""},
+    }
+    parsed = chat_completion_tool_call_from_dict(sdk_shaped)
+    assert "function" not in parsed.model_dump()
+
+
+def test_message_with_mixed_function_and_custom_tool_calls():
+    from litellm.types.utils import (
+        ChatCompletionMessageCustomToolCall,
+        ChatCompletionMessageToolCall,
+        Message,
+    )
+
+    message = Message(
+        content=None,
+        role="assistant",
+        tool_calls=[
+            {"id": "call_c", "type": "custom", "custom": {"name": "ApplyPatch", "input": "patch"}},
+            {"id": "call_f", "type": "function", "function": {"name": "f", "arguments": "{}"}},
+        ],
+    )
+    assert isinstance(message.tool_calls[0], ChatCompletionMessageCustomToolCall)
+    assert isinstance(message.tool_calls[1], ChatCompletionMessageToolCall)
+    dumped = message.model_dump()["tool_calls"]
+    assert dumped[0] == {"id": "call_c", "type": "custom", "custom": {"name": "ApplyPatch", "input": "patch"}}
+    assert "custom" not in dumped[1]
+
+
+def test_delta_custom_tool_call_first_and_continuation_chunks():
+    from litellm.types.utils import ChatCompletionDeltaCustomToolCall, Delta
+
+    first_chunk_tc = {
+        "index": 0,
+        "id": "call_TBs",
+        "function": None,
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": ""},
+    }
+    continuation_tc = {"index": 0, "id": None, "function": None, "type": None, "custom": {"input": "***"}}
+
+    first_delta = Delta(role="assistant", tool_calls=[first_chunk_tc])
+    assert isinstance(first_delta.tool_calls[0], ChatCompletionDeltaCustomToolCall)
+    first_dump = first_delta.model_dump()["tool_calls"][0]
+    assert first_dump["type"] == "custom"
+    assert first_dump["custom"] == {"name": "ApplyPatch", "input": ""}
+    assert "function" not in first_dump
+
+    continuation_delta = Delta(tool_calls=[continuation_tc])
+    cont_dump = continuation_delta.model_dump()["tool_calls"][0]
+    assert cont_dump["type"] is None
+    assert cont_dump["custom"]["input"] == "***"
+    assert "function" not in cont_dump
+
+
+def test_delta_function_tool_call_unchanged_by_custom_support():
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta
+
+    delta = Delta(tool_calls=[{"index": 0, "id": "c2", "type": "function", "function": {"name": "g", "arguments": ""}}])
+    assert isinstance(delta.tool_calls[0], ChatCompletionDeltaToolCall)
+    assert "custom" not in delta.model_dump()["tool_calls"][0]

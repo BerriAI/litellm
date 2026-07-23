@@ -257,3 +257,4 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
 
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None
+

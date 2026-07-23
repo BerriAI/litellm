@@ -810,8 +810,12 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_gpt_5_4_tools_without_reasoning_stays_chat():
-    """Azure gpt-5.4 with tools only should not be force-routed to Responses API."""
+def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
+    """
+    Azure gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables
+    reasoning by default for gpt-5.4+, and Chat Completions rejects function tools
+    whenever reasoning is on.
+    """
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
@@ -824,11 +828,15 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_without_reasoning_stays_
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") != "responses"
+    assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_gpt_5_4_tools_without_reasoning_stays_chat():
-    """gpt-5.4 with tools only should not be force-routed to Responses API."""
+def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
+    """
+    gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables reasoning
+    by default for gpt-5.4+, and Chat Completions rejects function tools whenever
+    reasoning is on ("use /v1/responses or set reasoning_effort to 'none'").
+    """
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
@@ -841,6 +849,250 @@ def test_responses_api_bridge_check_gpt_5_4_tools_without_reasoning_stays_chat()
         )
 
     assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat():
+    """
+    Explicit reasoning_effort "none" is OpenAI's documented escape hatch that keeps
+    function tools servable on Chat Completions; the bridge must not fire.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="none",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_responses():
+    """A reasoning summary is Responses-only regardless of effort value."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            reasoning_effort="none",
+            reasoning_summary="detailed",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_custom_tools_only_stays_chat():
+    """
+    Chat Completions serves custom (grammar) tools natively with reasoning on; only
+    FUNCTION tools trigger the OpenAI rejection. Custom-only requests must stay on chat
+    so responses keep the native custom tool_call shape instead of the bridge's
+    function-shaped mapping.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "custom", "custom": {"name": "ApplyPatch", "description": "V4A patch"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_mixed_function_and_custom_tools_routes_to_responses():
+    """One function tool in the mix is enough to make chat unservable with reasoning on."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[
+                {"type": "custom", "custom": {"name": "ApplyPatch"}},
+                {"type": "function", "function": {"name": "shell"}},
+            ],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_flat_function_tool_routes_to_responses():
+    """Responses-style flat function tool defs still count as function tools."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "name": "shell", "parameters": {"type": "object"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_none_stays_chat():
+    """The escape hatch must honor litellm's dict form: {"effort": "none"} means reasoning off."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "none"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_active_routes_to_responses():
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "low"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_none_with_summary_routes_to_responses():
+    """A summary inside the dict form is Responses-only even when effort is none."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "none", "summary": "concise"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize("blank_api_base", [None, "", "   ", "\t"])
+def test_responses_api_bridge_check_blank_api_base_is_default_openai(blank_api_base):
+    """
+    A blank api_base (None, empty, or whitespace) resolves to the default OpenAI
+    endpoint downstream, which enforces the reasoning+tools constraint, so gpt-5.4+
+    function-tool requests with unset reasoning_effort must still auto-bridge.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base=blank_api_base,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat():
+    """
+    Chat-only OpenAI-compatible backends registered under the openai provider with a
+    custom api_base and gpt-5.4+ model names serve tools-without-reasoning fine and
+    have no /responses route; the unset-effort arm must not reroute them.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base="http://vllm.internal:8000/v1",
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_routes():
+    """Explicit reasoning_effort keeps its pre-existing bridging behavior on any api_base."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="high",
+            api_base="http://vllm.internal:8000/v1",
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes():
+    """Azure OpenAI always sets api_base and does enforce the constraint; keep bridging."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="azure",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base="https://myresource.openai.azure.com",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
+    """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.1",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.1"
     assert model_info.get("mode") != "responses"
 
 

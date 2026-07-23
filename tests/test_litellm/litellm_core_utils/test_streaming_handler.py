@@ -3355,3 +3355,102 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
         if chunk.choices and chunk.choices[0].finish_reason
     ]
     assert fabricated_finish_reasons == []
+
+
+def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: Logging):
+    """
+    Regression test: OpenAI chat completions custom tool calls stream as
+    delta.tool_calls entries with a `custom` payload and NO `function` key.
+    Delta() used to raise on those dicts and chunk_creator's except branch
+    replaced the choice with an empty Delta, silently dropping the entire
+    tool call from the client stream.
+    """
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+
+    from litellm.types.utils import ChatCompletionDeltaCustomToolCall
+
+    raw_chunks = [
+        {
+            "id": "chatcmpl-custom",
+            "object": "chat.completion.chunk",
+            "created": 1784657671,
+            "model": "gpt-5.6",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_TBs",
+                                "type": "custom",
+                                "custom": {"name": "ApplyPatch", "input": ""},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-custom",
+            "object": "chat.completion.chunk",
+            "created": 1784657671,
+            "model": "gpt-5.6",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "custom": {"input": "*** Begin Patch\n"}}]},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-custom",
+            "object": "chat.completion.chunk",
+            "created": 1784657671,
+            "model": "gpt-5.6",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "custom": {"input": "*** End Patch\n"}}]},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-custom",
+            "object": "chat.completion.chunk",
+            "created": 1784657671,
+            "model": "gpt-5.6",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
+    ]
+    sdk_chunks = [ChatCompletionChunk.construct(**raw) for raw in raw_chunks]
+    first_dumped = sdk_chunks[0].choices[0].model_dump()
+    assert first_dumped["delta"]["tool_calls"][0]["custom"] == {"name": "ApplyPatch", "input": ""}
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter(sdk_chunks),
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    emitted = list(wrapper)
+    tool_call_deltas = [
+        chunk.choices[0].delta.tool_calls[0]
+        for chunk in emitted
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.tool_calls
+    ]
+    assert len(tool_call_deltas) == 3
+    assert isinstance(tool_call_deltas[0], ChatCompletionDeltaCustomToolCall)
+    assert tool_call_deltas[0].id == "call_TBs"
+    assert tool_call_deltas[0].type == "custom"
+    assert tool_call_deltas[0].custom.name == "ApplyPatch"
+    combined_input = "".join(tc.custom.input or "" for tc in tool_call_deltas)
+    assert combined_input == "*** Begin Patch\n*** End Patch\n"
+    finish_reasons = [chunk.choices[0].finish_reason for chunk in emitted if chunk.choices]
+    assert "tool_calls" in finish_reasons

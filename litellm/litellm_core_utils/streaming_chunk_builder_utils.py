@@ -9,6 +9,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
+    ChatCompletionCustomToolCallPayload,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     CompletionTokensDetails,
@@ -202,8 +204,10 @@ class ChunkProcessor:
         response = self.update_model_response_with_hidden_params(model_response=response, chunk=chunk)
         return response
 
-    def get_combined_tool_content(self, tool_call_chunks: List[Dict[str, Any]]) -> List[ChatCompletionMessageToolCall]:
-        tool_calls_list: List[ChatCompletionMessageToolCall] = []
+    def get_combined_tool_content(
+        self, tool_call_chunks: List[Dict[str, Any]]
+    ) -> List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]:
+        tool_calls_list: List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]] = []
         tool_call_map: Dict[int, Dict[str, Any]] = {}  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
@@ -219,12 +223,15 @@ class ChunkProcessor:
 
                     # Check if tool_call has function (either as attribute or dict key)
                     has_function = False
+                    has_custom = False
                     if isinstance(tool_call, dict):
                         has_function = "function" in tool_call and tool_call["function"] is not None
+                        has_custom = "custom" in tool_call and tool_call["custom"] is not None
                     else:
                         has_function = hasattr(tool_call, "function") and tool_call.function is not None
+                        has_custom = getattr(tool_call, "custom", None) is not None
 
-                    if not has_function:
+                    if not has_function and not has_custom:
                         continue
 
                     # Get index (handle both dict and object)
@@ -239,6 +246,8 @@ class ChunkProcessor:
                             "name": None,
                             "type": None,
                             "arguments": [],
+                            "custom_name": None,
+                            "custom_input": [],
                             "provider_specific_fields": None,
                         }
 
@@ -261,6 +270,13 @@ class ChunkProcessor:
                                 tool_call_map[index]["name"] = function.name
                             if hasattr(function, "arguments") and function.arguments:
                                 tool_call_map[index]["arguments"].append(function.arguments)
+
+                        custom = tool_call.get("custom")
+                        if isinstance(custom, dict):
+                            if custom.get("name"):
+                                tool_call_map[index]["custom_name"] = custom["name"]
+                            if custom.get("input"):
+                                tool_call_map[index]["custom_input"].append(custom["input"])
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
@@ -272,6 +288,13 @@ class ChunkProcessor:
                                 tool_call_map[index]["name"] = tool_call.function.name
                             if hasattr(tool_call.function, "arguments") and tool_call.function.arguments:
                                 tool_call_map[index]["arguments"].append(tool_call.function.arguments)
+
+                        custom = getattr(tool_call, "custom", None)
+                        if custom is not None:
+                            if getattr(custom, "name", None):
+                                tool_call_map[index]["custom_name"] = custom.name
+                            if getattr(custom, "input", None):
+                                tool_call_map[index]["custom_input"].append(custom.input)
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields = None
@@ -299,7 +322,17 @@ class ChunkProcessor:
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
             tool_call_data = tool_call_map[index]
-            if tool_call_data["id"] and tool_call_data["name"]:
+            if tool_call_data["type"] == "custom" and tool_call_data["id"] and tool_call_data["custom_name"]:
+                tool_calls_list.append(
+                    ChatCompletionMessageCustomToolCall(
+                        id=tool_call_data["id"],
+                        custom=ChatCompletionCustomToolCallPayload(
+                            name=tool_call_data["custom_name"],
+                            input="".join(tool_call_data["custom_input"]),
+                        ),
+                    )
+                )
+            elif tool_call_data["id"] and tool_call_data["name"]:
                 combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
 
                 # Build function - provider_specific_fields should be on tool_call level, not function level

@@ -2621,10 +2621,20 @@ export interface paths {
         put?: never;
         /**
          * Cursor Chat Completions
-         * @description Cursor-specific endpoint that accepts Responses API input format but returns chat completions format.
+         * @description Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible
+         *     base URL and always answers in chat completions format.
          *
-         *     This endpoint handles requests from Cursor IDE which sends Responses API format (`input` field)
-         *     but expects chat completions format response (`choices`, `messages`, etc.).
+         *     Cursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,
+         *     custom tools) to the chat/completions path while expecting chat completions responses;
+         *     those are routed through the Responses API pipeline and converted back. Genuine chat
+         *     completions bodies (`messages` present) are routed through the standard chat completions
+         *     pipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat
+         *     completions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies
+         *     per level, independently: a flat tool def (`{"type": "custom", "name": "ApplyPatch", ...}`)
+         *     gets nested under `custom`, and a flat grammar format
+         *     (`{"type": "grammar", "definition", "syntax"}`) gets wrapped as
+         *     `{"type": "grammar", "grammar": {...}}` wherever it appears, including inside tool defs
+         *     Cursor already sent pre-nested.
          *
          *     ```bash
          *     curl -X POST http://localhost:4000/cursor/chat/completions     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
@@ -2635,6 +2645,58 @@ export interface paths {
          *     ```
          */
         post: operations["cursor_chat_completions_cursor_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cursor/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cursor Model List
+         * @description OpenAI-compatible model listing for the Cursor BYOK base URL.
+         *
+         *     Clients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and
+         *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
+         *     route those requests fall through to the Cursor Cloud Agents passthrough, which
+         *     demands a Cursor API key and 401s, so key verification silently fails before any
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         */
+        get: operations["cursor_model_list_cursor_v1_models_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -21909,6 +21971,15 @@ export interface components {
              */
             type: "ephemeral";
         };
+        /** ChatCompletionCustomToolCallPayload */
+        ChatCompletionCustomToolCallPayload: {
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** ChatCompletionDeveloperMessage */
         ChatCompletionDeveloperMessage: {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
@@ -21994,6 +22065,20 @@ export interface components {
             format?: string;
             /** Url */
             url: string;
+        };
+        /** ChatCompletionMessageCustomToolCall */
+        ChatCompletionMessageCustomToolCall: {
+            custom: components["schemas"]["ChatCompletionCustomToolCallPayload"];
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @default custom
+             * @constant
+             */
+            type: "custom";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionMessageToolCall */
         ChatCompletionMessageToolCall: {
@@ -27565,7 +27650,7 @@ export interface components {
             /** Thinking Blocks */
             thinking_blocks?: (components["schemas"]["ChatCompletionThinkingBlock"] | components["schemas"]["ChatCompletionRedactedThinkingBlock"])[] | null;
             /** Tool Calls */
-            tool_calls: components["schemas"]["ChatCompletionMessageToolCall"][] | null;
+            tool_calls: (components["schemas"]["ChatCompletionMessageToolCall"] | components["schemas"]["ChatCompletionMessageCustomToolCall"])[] | null;
         } & {
             [key: string]: unknown;
         };
@@ -38054,6 +38139,46 @@ export interface operations {
         };
     };
     cursor_chat_completions_cursor_chat_completions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cursor_model_list_cursor_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    cursor_model_list_cursor_v1_models_get: {
         parameters: {
             query?: never;
             header?: never;

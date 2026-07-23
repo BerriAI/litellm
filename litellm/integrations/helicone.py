@@ -59,14 +59,26 @@ class HeliconeLogger:
         content = []
         if "tool_calls" in message and message["tool_calls"]:
             for tool_call in message["tool_calls"]:
-                content.append(
-                    {
-                        "type": "tool_use",
-                        "id": tool_call["id"],
-                        "name": tool_call["function"]["name"],
-                        "input": tool_call["function"]["arguments"],
-                    }
-                )
+                function = tool_call.get("function")
+                custom = tool_call.get("custom")
+                if function:
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": tool_call["id"],
+                            "name": function["name"],
+                            "input": function["arguments"],
+                        }
+                    )
+                elif custom:
+                    content.append(
+                        {
+                            "type": "tool_use",
+                            "id": tool_call["id"],
+                            "name": custom["name"],
+                            "input": custom["input"],
+                        }
+                    )
         elif "content" in message and message["content"]:
             content = [{"type": "text", "text": message["content"]}]
 
