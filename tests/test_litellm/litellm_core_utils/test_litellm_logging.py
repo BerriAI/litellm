@@ -2478,6 +2478,50 @@ def test_get_assembled_streaming_response_returns_result_for_streaming():
     assert assembled is result
 
 
+def test_get_assembled_streaming_response_preserves_responses_usage():
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    logging_obj = _make_logging_obj(stream=True)
+    response = ResponsesAPIResponse(
+        id="resp-1",
+        created_at=1700000000,
+        output=[],
+        usage=ResponseAPIUsage(
+            input_tokens=4,
+            output_tokens=5,
+            total_tokens=9,
+        ),
+    )
+    event = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=response,
+    )
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert isinstance(assembled, ResponsesAPIResponse)
+    assembled.model_dump(warnings="error")
+    assert isinstance(assembled.usage, ResponseAPIUsage)
+    logging_usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(assembled.model_dump())
+    assert logging_usage.prompt_tokens == 4
+    assert logging_usage.completion_tokens == 5
+    assert logging_usage.total_tokens == 9
+
+
 def test_streaming_success_handler_includes_vertex_ai_metadata_in_standard_logging():
     """Assembled streaming responses should include Vertex AI metadata in logging payload."""
     import datetime
