@@ -8062,6 +8062,8 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+        else:
+            await proxy_config._init_non_llm_objects_in_db(prisma_client=prisma_client)
 
         if store_model_in_db is not True:
             await proxy_config.init_mcp_servers_from_db()
