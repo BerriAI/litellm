@@ -11,7 +11,7 @@ import { keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import type { LogEntry } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
-import { DEFAULT_LOGS_SORTING, useLogFilterLogic } from "./log_filter_logic";
+import { DEFAULT_LOGS_SORTING, LOG_FILTER_IDS, useLogFilterLogic } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
@@ -34,7 +34,6 @@ interface SessionComposition {
 }
 
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
-  const [searchTerm, setSearchTerm] = useState("");
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -93,14 +92,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const { data: selectedKeyInfo } = useQuery(keyInfoQueryOptions);
 
   const rows = useMemo<LogEntry[]>(() => {
-    const searchedLogs = filteredLogs.data.filter((log) => {
-      if (!searchTerm) return true;
-      return (
-        log.request_id.includes(searchTerm) ||
-        log.model.includes(searchTerm) ||
-        (log.user !== undefined && log.user.includes(searchTerm))
-      );
-    });
+    const searchedLogs = filteredLogs.data;
 
     const sessionCompositionById = searchedLogs.reduce<Record<string, SessionComposition>>((acc, log) => {
       if (!log.session_id) return acc;
@@ -141,7 +133,20 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
         return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
       });
-  }, [filteredLogs.data, searchTerm]);
+  }, [filteredLogs.data]);
+
+  const searchTerm = useMemo(() => {
+    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.REQUEST_ID);
+    return typeof entry?.value === "string" ? entry.value : "";
+  }, [columnFilters]);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setColumnFilters((previous) => {
+      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.REQUEST_ID);
+      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.REQUEST_ID, value }];
+    });
+    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
+  }, []);
 
   const handleSortingChange = useCallback<OnChangeFn<SortingState>>((updaterOrValue) => {
     setSorting(updaterOrValue);
@@ -159,7 +164,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const handleResetFilters = useCallback(() => {
     setColumnFilters([]);
-    setSearchTerm("");
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
     setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
@@ -221,7 +225,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         columnFilters={columnFilters}
         onColumnFiltersChange={handleColumnFiltersChange}
         searchValue={searchTerm}
-        onSearchChange={setSearchTerm}
+        onSearchChange={handleSearchChange}
         onRefresh={() => void logsQuery.refetch()}
         onRowClick={handleRowClick}
         onKeyHashClick={handleKeyHashClick}

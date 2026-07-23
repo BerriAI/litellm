@@ -1132,6 +1132,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/models-and-endpoints/layout.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer.ts": {
     "prefer-const": {
       "count": 6
