@@ -9393,6 +9393,25 @@
         "supports_tool_choice": true,
         "output_cost_per_token": 1.44e-06
     },
+    "openrouter/minimax/minimax-m3": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.5e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "source": "https://openrouter.ai/minimax/minimax-m3",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_computer_use": false
+    },
     "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 7.3e-07,
         "litellm_provider": "bedrock",
@@ -31279,6 +31298,24 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "openrouter/qwen/qwen3.7-plus": {
+        "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 1.6e-06,
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 0.0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://openrouter.ai/qwen/qwen3.7-plus",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": false
     },
     "openrouter/qwen/qwen3.5-35b-a3b": {
         "input_cost_per_token": 2.5e-07,
