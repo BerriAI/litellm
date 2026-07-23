@@ -1070,6 +1070,15 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
+# Real LiteLLM_UserTable columns whose empty value ([] / {}) is a deliberate
+# "clear it". The caller dumps with exclude_unset, so an empty value here always
+# means the field was sent on purpose and must reach the DB instead of being
+# dropped by the generic empty-collection filter below.
+USER_FIELDS_CLEARABLE_WHEN_SET = frozenset(
+    {"models", "allowed_cache_controls", "model_max_budget"}
+)
+
+
 def _update_internal_user_params(
     data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
 ) -> dict:
@@ -1080,6 +1089,9 @@ def _update_internal_user_params(
         if k == "max_budget":
             if "max_budget" in fields_set:
                 non_default_values[k] = v
+        elif k in USER_FIELDS_CLEARABLE_WHEN_SET:
+            if k in fields_set:
+                non_default_values[k] = v
         elif (
             v is not None
             and v
@@ -1088,7 +1100,7 @@ def _update_internal_user_params(
                 {},
             )
             and k not in LiteLLM_ManagementEndpoint_MetadataFields
-        ):  # models default to [], spend defaults to 0, we should not reset these values
+        ):  # drop [] / {} so list/dict fields left unset aren't reset to empty
             non_default_values[k] = v
 
     is_internal_user = False
