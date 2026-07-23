@@ -372,11 +372,13 @@ def should_cooldown_based_on_allowed_fails_policy(
     - True if fails exceed the allowed limit (should cooldown)
     - False if fails are within the allowed limit (should not cooldown)
     """
+    policy_allowed_fails = litellm_router_instance.get_allowed_fails_from_policy(
+        exception=original_exception,
+    )
     allowed_fails = (
-        litellm_router_instance.get_allowed_fails_from_policy(
-            exception=original_exception,
-        )
-        or litellm_router_instance.allowed_fails
+        policy_allowed_fails
+        if policy_allowed_fails is not None
+        else litellm_router_instance.allowed_fails
     )
     cooldown_time = litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
 
