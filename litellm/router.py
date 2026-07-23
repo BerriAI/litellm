@@ -326,6 +326,7 @@ class Router:
         tag_filtering_match_any: bool = True,
         plugins: list[RoutingPlugin] | None = None,
         retry_after: int = 0,  # min time to wait before retrying a failed request
+        respect_retry_after_with_multiple_deployments: bool = False,  # honor an explicit Retry-After header even when there are healthy sibling deployments (they often share the same throttled upstream)
         retry_policy: Optional[Union[RetryPolicy, dict]] = None,  # set custom retries for different exceptions
         model_group_retry_policy: Dict[str, RetryPolicy] = {},  # set custom retry policies based on model group
         allowed_fails: Optional[int] = None,  # Number of times a deployment can failbefore being added to cooldown
@@ -579,6 +580,7 @@ class Router:
         self.stream_timeout = stream_timeout
 
         self.retry_after = retry_after
+        self.respect_retry_after_with_multiple_deployments = respect_retry_after_with_multiple_deployments
         self.routing_strategy = self._normalize_strategy(routing_strategy)
         self._routing_groups_input: Optional[List[Union[RoutingGroup, dict]]] = routing_groups
 
@@ -6790,19 +6792,36 @@ class Router:
         It should instantly retry only when:
             1. there are healthy deployments in the same model group
             2. there are fallbacks for the completion call
-        """
 
-        ## base case - single deployment
-        if all_deployments is not None and len(all_deployments) == 1:
-            pass
-        elif healthy_deployments is not None and isinstance(healthy_deployments, list) and len(healthy_deployments) > 0:
-            return 0
+        Exception: if respect_retry_after_with_multiple_deployments is enabled
+        and the exception carries an explicit Retry-After header, that is
+        honored even with healthy sibling deployments present -- siblings
+        often share the same throttled upstream, so an instant failover just
+        hammers it and silently discards the provider's requested wait.
+        """
 
         response_headers: Optional[httpx.Headers] = None
         if hasattr(e, "response") and hasattr(e.response, "headers"):  # type: ignore
             response_headers = e.response.headers  # type: ignore
         if hasattr(e, "litellm_response_headers"):
             response_headers = e.litellm_response_headers  # type: ignore
+
+        has_explicit_retry_after = (
+            self.respect_retry_after_with_multiple_deployments
+            and response_headers is not None
+            and ("retry-after" in response_headers or "Retry-After" in response_headers)
+        )
+
+        ## base case - single deployment
+        if all_deployments is not None and len(all_deployments) == 1:
+            pass
+        elif (
+            not has_explicit_retry_after
+            and healthy_deployments is not None
+            and isinstance(healthy_deployments, list)
+            and len(healthy_deployments) > 0
+        ):
+            return 0
 
         if response_headers is not None:
             timeout = litellm._calculate_retry_after(
