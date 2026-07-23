@@ -435,3 +435,38 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         # relative Location headers keep the original hostname.
         url = _extract_redirect_url(response, url)
     raise SSRFError("Too many redirects")
+
+
+async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) -> Any:
+    """Method-generic version of ``async_safe_get`` with SSRF protection.
+
+    ``async_safe_get`` only covers GET; callers that need POST/PUT/DELETE/PATCH
+    (e.g. the custom-code guardrail HTTP primitive) must not fall back to a raw
+    client call that skips validation. This validates the initial URL and every
+    redirect hop, connecting to the validated IP with the original Host header
+    and never letting the client follow redirects on its own.
+
+    ``client`` must expose ``client.request(method, url, ...)`` (an
+    ``httpx.AsyncClient``); the SSRF-safe redirect loop needs per-hop control,
+    which the higher-level ``AsyncHTTPHandler`` non-GET methods don't offer.
+    """
+    if not getattr(litellm, "user_url_validation", True):
+        kwargs.setdefault("follow_redirects", True)
+        return await client.request(method, url, **kwargs)
+    kwargs.pop("follow_redirects", None)
+    caller_headers = kwargs.pop("headers", {}) or {}
+    for _ in range(_MAX_REDIRECTS):
+        validated_url, original_host = validate_url(url)
+        response = await client.request(
+            method,
+            validated_url,
+            headers={**caller_headers, "Host": original_host},
+            follow_redirects=False,
+            **kwargs,
+        )
+        if not response.is_redirect:
+            return response
+        # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so
+        # relative Location headers keep the original hostname.
+        url = _extract_redirect_url(response, url)
+    raise SSRFError("Too many redirects")
