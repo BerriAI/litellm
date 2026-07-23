@@ -1237,6 +1237,57 @@ def test_response_incomplete_preserves_usage_and_length_finish_reason():
     assert result.choices[0].finish_reason == "length"
 
 
+def test_response_incomplete_content_filter_finish_reason():
+    """
+    response.incomplete with reason=content_filter must map to chat
+    finish_reason=content_filter, not length.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_filtered",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "content_filter"},
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_filtered",
+                    "role": "assistant",
+                    "status": "incomplete",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "partial",
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "total_tokens": 14,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.usage is not None
+    assert result.usage.completion_tokens == 4
+    assert len(result.choices) > 0
+    assert result.choices[0].finish_reason == "content_filter"
+
+
 def test_function_call_done_emits_is_finished():
     """
     Test that OUTPUT_ITEM_DONE for a function_call does NOT emit finish_reason.

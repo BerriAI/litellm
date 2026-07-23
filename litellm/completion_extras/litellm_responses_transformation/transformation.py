@@ -1070,6 +1070,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return status_mapping.get(status, "stop")
 
+    @staticmethod
+    def _finish_reason_for_incomplete_response(
+        incomplete_details: Optional[object],
+    ) -> str:
+        reason: Optional[str] = None
+        if isinstance(incomplete_details, dict):
+            raw_reason = incomplete_details.get("reason")
+            if isinstance(raw_reason, str):
+                reason = raw_reason
+        elif incomplete_details is not None:
+            raw_reason = getattr(incomplete_details, "reason", None)
+            if isinstance(raw_reason, str):
+                reason = raw_reason
+        if reason == "content_filter":
+            return "content_filter"
+        return "length"
+
 
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
@@ -1318,7 +1335,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
             status = response_data.get("status")
             if event_type == "response.incomplete" or status == "incomplete":
-                finish_reason = "length"
+                finish_reason = LiteLLMResponsesTransformationHandler._finish_reason_for_incomplete_response(
+                    response_data.get("incomplete_details")
+                )
             elif event_type == "response.completed" and has_function_calls:
                 finish_reason = "tool_calls"
             else:
