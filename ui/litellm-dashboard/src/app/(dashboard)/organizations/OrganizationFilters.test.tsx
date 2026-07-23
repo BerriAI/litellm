@@ -7,8 +7,6 @@ describe("OrganizationFilters", () => {
   const defaultFilters: FilterState = {
     org_id: "",
     org_alias: "",
-    sort_by: "",
-    sort_order: "asc",
   };
 
   it("should render", () => {

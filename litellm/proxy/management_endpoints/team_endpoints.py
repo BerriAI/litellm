@@ -14,7 +14,7 @@ import json
 import math
 import traceback
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Annotated, Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -47,6 +47,7 @@ from litellm.proxy._types import (
     Member,
     NewTeamRequest,
     OrgMember,
+    PatchTeamRequest,
     ProxyErrorTypes,
     ProxyException,
     SpecialManagementEndpointEnums,
@@ -894,6 +895,17 @@ def _check_team_budget_update_authority(
         )
 
 
+def _should_auto_add_team_creator(
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> bool:
+    if user_api_key_dict.user_id is None:
+        return False
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        return True
+    return general_settings.get("disable_auto_add_proxy_admin_to_teams") is not True
+
+
 #### TEAM MANAGEMENT ####
 @router.post(
     "/team/new",
@@ -998,6 +1010,7 @@ async def new_team(
         from litellm.proxy.proxy_server import (
             _license_check,
             create_audit_log_for_update,
+            general_settings,
             litellm_proxy_admin_name,
             prisma_client,
             user_api_key_cache,
@@ -1124,13 +1137,11 @@ async def new_team(
                     user_api_key_cache=user_api_key_cache,
                 )
 
-        if user_api_key_dict.user_id is not None:
-            creating_user_in_list = False
-            for member in data.members_with_roles:
-                if member.user_id == user_api_key_dict.user_id:
-                    creating_user_in_list = True
-
-            if creating_user_in_list is False:
+        if _should_auto_add_team_creator(user_api_key_dict, general_settings):
+            creating_user_in_list = any(
+                member.user_id == user_api_key_dict.user_id for member in data.members_with_roles
+            )
+            if not creating_user_in_list:
                 data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
@@ -1622,6 +1633,7 @@ async def update_team(
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+    - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     Example - update team TPM Limit
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
@@ -1947,6 +1959,7 @@ async def update_team(
 )
 async def patch_team(
     team_id: str,
+    data: PatchTeamRequest,
     http_request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     litellm_changed_by: Annotated[
@@ -1959,11 +1972,12 @@ async def patch_team(
     """
     Partially update a team using RFC 7386 JSON Merge Patch semantics.
 
-    `team_id` is taken from the path. `metadata` is merged with the team's stored
-    metadata rather than replacing it: an omitted key is preserved, `key: null`
-    deletes it, and any other value overwrites (recursing into nested objects).
-    Every other field behaves exactly like `POST /team/update` (omitted preserves,
-    a value overwrites). Returns the full updated team.
+    `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+    matches. `metadata` is merged with the team's stored metadata rather than replacing
+    it: an omitted key is preserved, `key: null` deletes it, and any other value
+    overwrites (recursing into nested objects). Every other field behaves exactly like
+    `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+    updated team.
 
     ```
     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
@@ -1983,21 +1997,15 @@ async def patch_team(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        try:
-            body = await http_request.json()
-        except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail={"error": "Request body must be a JSON object"})
-
-        body_team_id = body.pop("team_id", None)
-        if body_team_id is not None and body_team_id != team_id:
+        if data.team_id is not None and data.team_id != team_id:
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"team_id in body ({body_team_id}) does not match team_id in path ({team_id})"},
+                detail={"error": f"team_id in body ({data.team_id}) does not match team_id in path ({team_id})"},
             )
 
-        if "metadata" in body:
+        patch_fields = data.model_dump(exclude_unset=True, exclude={"team_id"})
+
+        if "metadata" in patch_fields:
             existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if existing_team_row is None:
                 raise HTTPException(
@@ -2005,9 +2013,9 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            body["metadata"] = apply_json_merge_patch(existing_metadata, body["metadata"])
+            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
 
-        update_request = UpdateTeamRequest(team_id=team_id, **body)
+        update_request = UpdateTeamRequest(team_id=team_id, **patch_fields)
 
         result = await update_team(
             data=update_request,
@@ -2366,7 +2374,15 @@ async def _add_team_members_to_team(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> Tuple[LiteLLM_TeamTable, List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
-    """Add team members to the team."""
+    """Add team members to the team.
+
+    The members_with_roles reconciliation runs inside a transaction that locks
+    the team row with ``SELECT ... FOR UPDATE`` before reading the current
+    membership. Concurrent /team/member_add calls for the same team therefore
+    serialize on the row lock and each appends onto the other's committed
+    result, instead of both rewriting the whole JSON array from a stale
+    snapshot (which silently drops one member on the losing write).
+    """
     # Process and add new members
     updated_users, updated_team_memberships = await _process_team_members(
         data=data,
@@ -2376,19 +2392,22 @@ async def _add_team_members_to_team(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    # Update team members list
-    await _update_team_members_list(
-        data=data,
-        complete_team_data=complete_team_data,
-        updated_users=updated_users,
-    )
+    async with prisma_client.tx() as tx:
+        complete_team_data.members_with_roles = await TeamRepository(prisma_client).get_members_with_roles_locked(
+            tx, data.team_id
+        )
 
-    # ADD MEMBER TO TEAM
-    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
-    updated_team = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id},
-        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
-    )
+        await _update_team_members_list(
+            data=data,
+            complete_team_data=complete_team_data,
+            updated_users=updated_users,
+        )
+
+        _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
+        updated_team = await tx.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data={"members_with_roles": json.dumps(_db_team_members)},
+        )
 
     return updated_team, updated_users, updated_team_memberships
 
@@ -3552,7 +3571,7 @@ async def team_info(
         try:
             team_info: Optional[BaseModel] = await TeamRepository(prisma_client).table.find_unique(
                 where={"team_id": team_id},
-                include={"object_permission": True},
+                include={"litellm_model_table": True, "object_permission": True},
             )
             if team_info is None:
                 raise Exception

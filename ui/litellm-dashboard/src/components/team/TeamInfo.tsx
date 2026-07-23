@@ -14,7 +14,7 @@ import {
   teamMemberUpdateCall,
   teamUpdateCall,
 } from "@/components/networking";
-import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
+import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -34,6 +34,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
@@ -106,7 +107,7 @@ export interface TeamData {
     budget_reset_at: string | null;
     model_id: string | null;
     litellm_model_table: {
-      model_aliases: Record<string, string>;
+      model_aliases: Record<string, string> | null;
     } | null;
     created_at: string;
     access_group_ids?: string[];
@@ -206,6 +207,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
+  const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
@@ -627,6 +629,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.default_team_member_models = values.default_team_member_models;
       }
 
+      const previousModelAliases = info.litellm_model_table?.model_aliases ?? {};
+      if (Object.keys(teamModelAliases).length > 0 || Object.keys(previousModelAliases).length > 0) {
+        updateData.model_aliases = teamModelAliases;
+      }
+
       // Handle router_settings - read fresh values from DOM at save time.
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
@@ -679,6 +686,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
     : [...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)), ...nonGlobalOptIns];
+
+  const allGuardrails: GuardrailListItem[] = guardrailsData?.guardrails ?? [];
+  const globalGuardrails = allGuardrails.filter((g) => g.litellm_params?.default_on);
+  const otherGuardrails = allGuardrails.filter((g) => !g.litellm_params?.default_on);
+
+  const renderGuardrailOption = (g: GuardrailListItem, disabled: boolean) => (
+    <Select.Option key={g.guardrail_name} value={g.guardrail_name} label={g.guardrail_name} disabled={disabled}>
+      {g.guardrail_name}
+    </Select.Option>
+  );
 
   const preventTagMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -913,7 +930,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div className="flex justify-between items-center mb-4">
                   <Title>Team Settings</Title>
                   {canEditTeam && !isEditing && (
-                    <Button icon={<EditOutlined className="h-4 w-4" />} onClick={() => setIsEditing(true)}>
+                    <Button
+                      icon={<EditOutlined className="h-4 w-4" />}
+                      onClick={() => {
+                        setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
+                        setIsEditing(true);
+                      }}
+                    >
                       Edit Settings
                     </Button>
                   )}
@@ -1035,6 +1058,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         }}
                         context="team"
                         dataTestId="models-select"
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span>
+                          Model Aliases{" "}
+                          <Tooltip title="Map a custom alias to an underlying model. Team members can call the alias in API requests instead of the real model name.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                    >
+                      <ModelAliasManager
+                        accessToken={accessToken || ""}
+                        initialModelAliases={teamModelAliases}
+                        onAliasUpdate={setTeamModelAliases}
+                        showExampleConfig={false}
                       />
                     </Form.Item>
 
@@ -1253,36 +1294,28 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         optionLabelProp="label"
                         tagRender={renderGuardrailTag}
                       >
-                        <Select.OptGroup
-                          label={
-                            <>
-                              <GlobalOutlined style={{ marginInlineEnd: 4 }} />
-                              Global
-                            </>
-                          }
-                        >
-                          {(guardrailsData?.guardrails ?? [])
-                            .filter((g) => g.litellm_params?.default_on)
-                            .map((g) => (
-                              <Select.Option
-                                key={g.guardrail_name}
-                                value={g.guardrail_name}
-                                label={g.guardrail_name}
-                                disabled={killSwitchOn}
-                              >
-                                {g.guardrail_name}
-                              </Select.Option>
-                            ))}
-                        </Select.OptGroup>
-                        <Select.OptGroup label="Other">
-                          {(guardrailsData?.guardrails ?? [])
-                            .filter((g) => !g.litellm_params?.default_on)
-                            .map((g) => (
-                              <Select.Option key={g.guardrail_name} value={g.guardrail_name} label={g.guardrail_name}>
-                                {g.guardrail_name}
-                              </Select.Option>
-                            ))}
-                        </Select.OptGroup>
+                        {globalGuardrails.length > 0 && otherGuardrails.length > 0 ? (
+                          <>
+                            <Select.OptGroup
+                              label={
+                                <>
+                                  <GlobalOutlined style={{ marginInlineEnd: 4 }} />
+                                  Global
+                                </>
+                              }
+                            >
+                              {globalGuardrails.map((g) => renderGuardrailOption(g, Boolean(killSwitchOn)))}
+                            </Select.OptGroup>
+                            <Select.OptGroup label="Other">
+                              {otherGuardrails.map((g) => renderGuardrailOption(g, false))}
+                            </Select.OptGroup>
+                          </>
+                        ) : (
+                          [
+                            ...globalGuardrails.map((g) => renderGuardrailOption(g, Boolean(killSwitchOn))),
+                            ...otherGuardrails.map((g) => renderGuardrailOption(g, false)),
+                          ]
+                        )}
                       </Select>
                     </Form.Item>
 
@@ -1540,6 +1573,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </div>
                       </div>
                     )}
+                    <div>
+                      <Text className="font-medium">Model Aliases</Text>
+                      {(() => {
+                        const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
+                        if (aliasEntries.length === 0) {
+                          return <div className="text-gray-400">No model aliases configured</div>;
+                        }
+                        return (
+                          <div className="mt-1 space-y-1">
+                            {aliasEntries.map(([alias, target]) => (
+                              <div key={alias} className="text-sm">
+                                <span className="font-mono">{alias}</span>
+                                <span className="text-gray-400">{" -> "}</span>
+                                <span className="font-mono">{target}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
                     <div>
                       <Text className="font-medium">Rate Limits</Text>
                       <div>TPM: {info.tpm_limit || "Unlimited"}</div>

@@ -1,4 +1,5 @@
 import copy
+import os
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, Optional
 
 import litellm
@@ -564,11 +565,8 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
 
     env_vars_dict: dict[str, str | None] = {}
     for _var in env_vars:
-        env_variable = environment_variables.get(_var, None)
-        if env_variable is None:
-            env_vars_dict[_var] = None
-        else:
-            env_vars_dict[_var] = env_variable
+        stored_value = environment_variables.get(_var, None)
+        env_vars_dict[_var] = stored_value if stored_value is not None else os.getenv(_var)
 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 

@@ -8,6 +8,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import json
 import os
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -21,6 +22,8 @@ from litellm.proxy.proxy_server import (
     _is_remote_module_url,
     _scrub_db_overlay_remote_module_loads,
     _scrub_guardrail_inner,
+    resolve_complexity_router_plugins,
+    resolve_routing_plugins,
 )
 
 from .conftest import normalize
@@ -110,6 +113,147 @@ def test__scrub_db_overlay_remote_module_loads_strips_lists_and_strs():
 def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
     # Non-dict input bypasses scrubbing entirely.
     assert _scrub_db_overlay_remote_module_loads("litellm_settings", "raw") == "raw"
+
+
+# ---------------------------------------------------------------------------
+# resolve_complexity_router_plugins
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
+    config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+    resolve_complexity_router_plugins(
+        model_name="smart-router", complexity_router_config=config, config_file_path=None
+    )
+    assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+
+
+def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance(tmp_path):
+    plugin_file = tmp_path / "my_plugin.py"
+    plugin_file.write_text(
+        "class _Plugin:\n"
+        "    async def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "my_plugin_instance = _Plugin()\n"
+    )
+    config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
+
+    resolve_complexity_router_plugins(
+        model_name="smart-router",
+        complexity_router_config=config,
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    assert len(config["plugins"]) == 1
+    assert hasattr(config["plugins"][0], "run")
+    assert type(config["plugins"][0]).__name__ == "_Plugin"
+
+
+def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp_path):
+    plugin_file = tmp_path / "bad_plugin.py"
+    plugin_file.write_text("not_a_plugin = object()\n")
+    config: Dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
+def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_path):
+    """Regression: @runtime_checkable only checks that `run` exists as an attribute,
+    not that it's a coroutine function. A plugin with a synchronous `run` passes a bare
+    isinstance() check and would only fail at request time with a confusing
+    `TypeError: object RoutingContext can't be used in 'await' expression`. Reported
+    by Greptile on PR #33251."""
+    plugin_file = tmp_path / "sync_plugin.py"
+    plugin_file.write_text(
+        "class _SyncPlugin:\n"
+        "    def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "sync_plugin_instance = _SyncPlugin()\n"
+    )
+    config: Dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# resolve_routing_plugins
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_routing_plugins_resolves_dotted_paths(tmp_path):
+    plugin_file = tmp_path / "rs_plugin.py"
+    plugin_file.write_text(
+        "class _Plugin:\n"
+        "    async def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "rs_plugin_instance = _Plugin()\n"
+    )
+
+    resolved = resolve_routing_plugins(
+        plugin_paths=["rs_plugin.rs_plugin_instance"],
+        config_file_path=str(tmp_path / "config.yaml"),
+        source_label="router_settings.plugins",
+    )
+
+    assert len(resolved) == 1
+    assert type(resolved[0]).__name__ == "_Plugin"
+
+
+def test_resolve_routing_plugins_passes_through_instances(tmp_path):
+    class _Plugin:
+        async def run(self, context):
+            return context
+
+    instance = _Plugin()
+    resolved = resolve_routing_plugins(
+        plugin_paths=[instance],
+        config_file_path=None,
+        source_label="router_settings.plugins",
+    )
+    assert resolved == [instance]
+
+
+def test_resolve_routing_plugins_rejects_non_routing_plugin(tmp_path):
+    plugin_file = tmp_path / "bad_rs_plugin.py"
+    plugin_file.write_text("not_a_plugin = object()\n")
+
+    with pytest.raises(ValueError, match="router_settings.plugins"):
+        resolve_routing_plugins(
+            plugin_paths=["bad_rs_plugin.not_a_plugin"],
+            config_file_path=str(tmp_path / "config.yaml"),
+            source_label="router_settings.plugins",
+        )
+
+
+def test_resolve_routing_plugins_rejects_synchronous_run(tmp_path):
+    plugin_file = tmp_path / "sync_rs_plugin.py"
+    plugin_file.write_text(
+        "class _SyncPlugin:\n"
+        "    def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "sync_plugin_instance = _SyncPlugin()\n"
+    )
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        resolve_routing_plugins(
+            plugin_paths=["sync_rs_plugin.sync_plugin_instance"],
+            config_file_path=str(tmp_path / "config.yaml"),
+            source_label="router_settings.plugins",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +406,124 @@ async def test_ProxyConfig_save_config_invalid_path_raises(monkeypatch):
     pc = ProxyConfig()
     with pytest.raises(Exception):
         await pc.save_config({"x": 1})
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_db_omits_environment_variables_by_default(monkeypatch):
+    """A save_config after get_config() (which resolves os.environ/ placeholders
+    to plaintext and merges the environment_variables section) must not snapshot
+    those env vars into the DB config row. Persisting them would make a stale DB
+    row shadow YAML/container env on every subsequent restart."""
+    mock_prisma = MagicMock()
+    mock_prisma.insert_data = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    # a valid salt so the env-var encryption path (reached only if the pop
+    # regresses) runs cleanly, making this fail on the assertion below rather
+    # than on an incidental encryption crash
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    pc = ProxyConfig()
+    cfg = {
+        "model_list": [{"model_name": "gpt-4o"}],
+        "litellm_settings": {"success_callback": ["langfuse"]},
+        "environment_variables": {"OPENAI_API_KEY": "sk-from-yaml"},
+    }
+    await pc.save_config(cfg)
+
+    mock_prisma.insert_data.assert_awaited_once()
+    written = mock_prisma.insert_data.await_args.kwargs["data"]
+    assert "environment_variables" not in written
+    # unrelated sections are still persisted; model_list is stripped as before
+    assert written["litellm_settings"] == {"success_callback": ["langfuse"]}
+    assert "model_list" not in written
+    # the caller's dict is not mutated (save_config works on a copy)
+    assert cfg["environment_variables"] == {"OPENAI_API_KEY": "sk-from-yaml"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_db_persists_environment_variables_when_opted_in(monkeypatch):
+    """The explicit opt-in path (include_env_vars=True) still persists env vars,
+    encrypted, so the dedicated config-update flow can write them."""
+    mock_prisma = MagicMock()
+    mock_prisma.insert_data = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    pc = ProxyConfig()
+    cfg = {"litellm_settings": {}, "environment_variables": {"OPENAI_API_KEY": "sk-explicit"}}
+    await pc.save_config(cfg, include_env_vars=True)
+
+    mock_prisma.insert_data.assert_awaited_once()
+    written = mock_prisma.insert_data.await_args.kwargs["data"]
+    assert set(written["environment_variables"].keys()) == {"OPENAI_API_KEY"}
+    # value is encrypted at rest, not the plaintext it came in as
+    assert written["environment_variables"]["OPENAI_API_KEY"] != "sk-explicit"
+
+
+def _install_fake_config_repo(monkeypatch, existing_row):
+    """Route ProxyConfig's ConfigRepository through an in-memory fake that
+    records the value written to the environment_variables row."""
+    captured: dict = {}
+
+    class _FakeTable:
+        async def find_first(self, where):
+            return SimpleNamespace(param_value=existing_row) if existing_row is not None else None
+
+        async def upsert(self, where, data):
+            captured["value"] = json.loads(data["update"]["param_value"])
+
+    class _FakeRepo:
+        def __init__(self, client):
+            self.table = _FakeTable()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.ConfigRepository", _FakeRepo)
+    monkeypatch.setattr("litellm.proxy.proxy_server.invalidate_config_param", AsyncMock())
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_merges_sets_and_deletes(monkeypatch):
+    """The per-key env-var write updates/deletes only the named keys and leaves
+    every other stored key untouched, so an unrelated env var is never lost or
+    snapshotted."""
+    captured = _install_fake_config_repo(
+        monkeypatch,
+        existing_row={"EXISTING_KEY": "ciphertext-existing", "UI_LOGO_PATH": "old-logo", "LITELLM_FAVICON_URL": "old"},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    pc = ProxyConfig()
+    await pc.save_environment_variables({"UI_LOGO_PATH": "new-logo", "LITELLM_FAVICON_URL": None})
+
+    written = captured["value"]
+    # unrelated key preserved byte-for-byte
+    assert written["EXISTING_KEY"] == "ciphertext-existing"
+    # set key updated and encrypted (not the plaintext)
+    assert "UI_LOGO_PATH" in written and written["UI_LOGO_PATH"] != "new-logo"
+    # None-valued key deleted
+    assert "LITELLM_FAVICON_URL" not in written
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_noop_without_db(monkeypatch):
+    """With no DB configured the per-key write must do nothing (never touch the
+    config repository)."""
+    captured = _install_fake_config_repo(monkeypatch, existing_row={})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    pc = ProxyConfig()
+    await pc.save_environment_variables({"UI_LOGO_PATH": "x"})
+
+    assert "value" not in captured
 
 
 # ---------------------------------------------------------------------------
@@ -721,6 +983,62 @@ async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
+    """Regression: router_settings.plugins dotted-path strings must be resolved to
+    live RoutingPlugin instances on the created Router. Previously they were passed
+    through as raw strings and only blew up at request time when the pipeline tried
+    to `await "some.string".run(context)`."""
+    plugin_file = tmp_path / "rs_plugin.py"
+    plugin_file.write_text(
+        "class _Plugin:\n"
+        "    async def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "rs_plugin_instance = _Plugin()\n"
+    )
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "litellm_settings: {}\n"
+        "router_settings:\n"
+        "  plugins:\n"
+        "    - rs_plugin.rs_plugin_instance\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    router, _model_list, _general_settings = await ProxyConfig().load_config(
+        router=None, config_file_path=str(f)
+    )
+
+    assert len(router.routing_plugins) == 1
+    assert type(router.routing_plugins[0]).__name__ == "_Plugin"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_rejects_bad_router_settings_plugin(tmp_path, monkeypatch):
+    plugin_file = tmp_path / "bad_rs_plugin.py"
+    plugin_file.write_text("not_a_plugin = object()\n")
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "litellm_settings: {}\n"
+        "router_settings:\n"
+        "  plugins:\n"
+        "    - bad_rs_plugin.not_a_plugin\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp_path, monkeypatch):
     """Regression for #26599: SSRF settings in general_settings must reach litellm globals."""
     f = tmp_path / "c.yaml"
@@ -749,6 +1067,32 @@ async def test_ProxyConfig_load_config_wires_general_settings_url_validation(tmp
         litellm.user_url_validation = original_validation
         litellm.user_url_allowed_hosts = original_hosts
         litellm.provider_url_destination_allowed_hosts = original_provider_hosts
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, monkeypatch):
+    """general_settings.proxy_config_reload_interval_seconds must reach the proxy_server
+    module global that schedules the DB config-reload jobs, so operators can tune multi-pod
+    convergence from config.yaml."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  proxy_config_reload_interval_seconds: 47\n"
+        "litellm_settings: {}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    original = proxy_server.proxy_config_reload_interval_seconds
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        assert proxy_server.proxy_config_reload_interval_seconds == 47
+    finally:
+        proxy_server.proxy_config_reload_interval_seconds = original
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1389,8 @@ def test_ProxyConfig_get_model_info_with_id_returns_router_model_info():
     assert snapshot == {"id": "m-1", "db_model": True, "blocked": False}
 
 
-def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises():
+def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()
     # model with no model_id, no model_info — accessing .model_id will fail.
     bad = SimpleNamespace(model_info=None)

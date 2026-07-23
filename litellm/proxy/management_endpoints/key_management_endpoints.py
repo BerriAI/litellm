@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
+    MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -41,8 +42,11 @@ from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_user_credentials_master_key,
     rotate_mcp_user_env_vars_master_key,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    rotate_sso_identity_assertions_master_key,
+)
 from litellm.proxy._types import *
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
@@ -468,7 +472,10 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     Handle the key type.
     """
     key_type = data.key_type
-    data_json.pop("key_type", None)
+    if key_type is None:
+        data_json.pop("key_type", None)
+        return data_json
+    data_json["key_type"] = key_type.value
     if key_type == LiteLLMKeyType.LLM_API:
         data_json["allowed_routes"] = ["llm_api_routes"]
     elif key_type == LiteLLMKeyType.MANAGEMENT:
@@ -1019,6 +1026,14 @@ async def _common_key_generation_helper(
             detail={"error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {_masked}"},
         )
 
+    if data.key is not None and len(data.key) < MINIMUM_CUSTOM_KEY_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must be at least {MINIMUM_CUSTOM_KEY_LENGTH} characters long."
+            },
+        )
+
     # check org key limits - done here to handle inheriting org id from team
     if data.organization_id is not None:
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -1471,7 +1486,7 @@ async def generate_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
-    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
     - agent_id: Optional[str] - The agent id associated with the key.
@@ -1686,7 +1701,7 @@ async def generate_service_account_key_fn(
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - key_alias: Optional[str] - User defined key alias
-    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -3568,6 +3583,7 @@ async def generate_key_helper_fn(
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
+    key_type: str | None = None,
     sso_user_id: Optional[str] = None,
     object_permission_id: Optional[str] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
@@ -3708,6 +3724,7 @@ async def generate_key_helper_fn(
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "key_type": key_type,
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
@@ -3774,7 +3791,10 @@ async def generate_key_helper_fn(
                 return user_data
 
             ## CREATE KEY
-            verbose_proxy_logger.debug("prisma_client: Creating Key= %s", key_data)
+            verbose_proxy_logger.debug(
+                "prisma_client: Creating Key= %s",
+                {**key_data, "token": hash_token(token=token)},
+            )
             create_key_response = await prisma_client.insert_data(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
@@ -4227,6 +4247,15 @@ async def _rotate_master_key(
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP user env vars: %s", str(e))
 
+    # 4d. process SSO identity assertion table (EMA subject tokens)
+    try:
+        await rotate_sso_identity_assertions_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
+
     # 5. process credentials table
     try:
         credentials = await CredentialsRepository(prisma_client).table.find_many()
@@ -4350,7 +4379,6 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
         await _check_custom_key_allowed(data.new_key)
-        new_token = data.new_key
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -4358,6 +4386,12 @@ async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
                     "error": "New key must start with 'sk-'. This is to distinguish a key hash (used by litellm for logging / internal logic) from the actual key."
                 },
             )
+        if len(data.new_key) < MINIMUM_CUSTOM_KEY_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": f"New key must be at least {MINIMUM_CUSTOM_KEY_LENGTH} characters long."},
+            )
+        new_token = data.new_key
     else:
         new_token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
     return new_token
@@ -4464,7 +4498,7 @@ async def _execute_virtual_key_regeneration(
 
     new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
-    new_token_key_name = f"sk-...{new_token[-4:]}"
+    new_token_key_name = abbreviate_api_key(api_key=new_token)
     update_data = {"token": new_token_hash, "key_name": new_token_key_name}
 
     non_default_values = {}
@@ -4544,7 +4578,7 @@ async def regenerate_key_fn(
     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
         - key: Optional[str] - The key to regenerate.
         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-        - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+        - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
         - key_alias: Optional[str] - User-friendly key alias
         - user_id: Optional[str] - User ID associated with key
         - team_id: Optional[str] - Team ID associated with key

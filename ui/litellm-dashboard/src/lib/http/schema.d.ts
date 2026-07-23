@@ -6544,7 +6544,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - The user id of the key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -6766,7 +6766,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -6835,7 +6835,7 @@ export interface paths {
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - key_alias: Optional[str] - User defined key alias
-         *     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+         *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -7026,7 +7026,7 @@ export interface paths {
          *     - data: Optional[RegenerateKeyRequest] - Request body containing optional parameters to update
          *         - key: Optional[str] - The key to regenerate.
          *         - new_master_key: Optional[str] - The new master key to use, if key is the master key.
-         *         - new_key: Optional[str] - The new key to use, if key is not the master key. If both set, new_master_key will be used.
+         *         - new_key: Optional[str] - The new key to use, if key is not the master key. Must start with 'sk-' and be at least 16 characters long. If both set, new_master_key will be used.
          *         - key_alias: Optional[str] - User-friendly key alias
          *         - user_id: Optional[str] - User ID associated with key
          *         - team_id: Optional[str] - Team ID associated with key
@@ -13813,6 +13813,7 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+         *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
          *     Example - update team TPM Limit
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
@@ -13863,11 +13864,12 @@ export interface paths {
          * Patch Team
          * @description Partially update a team using RFC 7386 JSON Merge Patch semantics.
          *
-         *     `team_id` is taken from the path. `metadata` is merged with the team's stored
-         *     metadata rather than replacing it: an omitted key is preserved, `key: null`
-         *     deletes it, and any other value overwrites (recursing into nested objects).
-         *     Every other field behaves exactly like `POST /team/update` (omitted preserves,
-         *     a value overwrites). Returns the full updated team.
+         *     `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+         *     matches. `metadata` is merged with the team's stored metadata rather than replacing
+         *     it: an omitted key is preserved, `key: null` deletes it, and any other value
+         *     overwrites (recursing into nested objects). Every other field behaves exactly like
+         *     `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+         *     updated team.
          *
          *     ```
          *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
@@ -18891,6 +18893,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/organization/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization V2
+         * @description Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
+         *
+         *     A sent field is written and an omitted one is left untouched (presence is read from
+         *     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+         *     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+         *     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+         *     Validation failures return 422; the object-permission upsert, budget-row write, and
+         *     org-row write are one transaction.
+         */
+        patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
+        trace?: never;
+    };
     "/v2/rerank": {
         parameters: {
             query?: never;
@@ -20664,6 +20693,10 @@ export interface components {
             messages?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
             /** Text */
             text: string;
         };
@@ -21691,7 +21724,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -21871,6 +21904,11 @@ export interface components {
         };
         /** ChatCompletionCachedContent */
         ChatCompletionCachedContent: {
+            /**
+             * Ttl
+             * @enum {string}
+             */
+            ttl?: "5m" | "1h";
             /**
              * Type
              * @constant
@@ -22506,6 +22544,11 @@ export interface components {
              */
             database_url?: string | null;
             /**
+             * Disable Auto Add Proxy Admin To Teams
+             * @description By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.
+             */
+            disable_auto_add_proxy_admin_to_teams?: boolean | null;
+            /**
              * Disable Budget Reservation
              * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). A proxy-level WARNING is logged on every request while this flag is active as a reminder that hard enforcement is relaxed.
              */
@@ -22621,10 +22664,21 @@ export interface components {
              */
             provider_url_destination_allowed_hosts?: string[] | null;
             /**
+             * Proxy Config Reload Interval Seconds
+             * @description how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup
+             * @default 30
+             */
+            proxy_config_reload_interval_seconds: number;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Skip User Budget On Team Key
+             * @description If True, restores the legacy behavior where a user's personal max_budget is NOT enforced when their key belongs to a team; only the team (and team-member) budgets apply. Defaults to False, meaning the user's personal max_budget is always enforced regardless of whether the key belongs to a team (see GitHub issue #12905).
+             */
+            skip_user_budget_on_team_key?: boolean | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -22697,6 +22751,10 @@ export interface components {
             field_description: string;
             /** Field Name */
             field_name: string;
+            /** Field Options */
+            field_options?: string[] | null;
+            /** Field Tab */
+            field_tab?: string | null;
             /** Field Type */
             field_type: string;
             /** Field Value */
@@ -23226,6 +23284,16 @@ export interface components {
              */
             total_completion_tokens: number;
             /**
+             * Total Compression Saved Tokens
+             * @default 0
+             */
+            total_compression_saved_tokens: number;
+            /**
+             * Total Compression Savings Spend
+             * @default 0
+             */
+            total_compression_savings_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -23235,6 +23303,11 @@ export interface components {
              * @default 1
              */
             total_pages: number;
+            /**
+             * Total Prompt Caching Savings Spend
+             * @default 0
+             */
+            total_prompt_caching_savings_spend: number;
             /**
              * Total Prompt Tokens
              * @default 0
@@ -24042,6 +24115,8 @@ export interface components {
             key_alias?: string | null;
             /** Key Name */
             key_name?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
             /** Max Budget */
@@ -24316,7 +24391,7 @@ export interface components {
          */
         HTTPAuthSecurityScheme: {
             /** Bearerformat */
-            bearerFormat: string | null;
+            bearerFormat?: string | null;
             /** Description */
             description?: string | null;
             /** Scheme */
@@ -25042,6 +25117,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Rotation At */
@@ -25713,6 +25790,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -25794,6 +25873,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */
@@ -26430,6 +26511,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Rotation At */
@@ -27270,7 +27353,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "true_passthrough" | "oauth_delegate") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
@@ -28407,6 +28490,8 @@ export interface components {
             key_alias?: string | null;
             /** Key Name */
             key_name?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
             /** Max Budget */
@@ -28509,7 +28594,7 @@ export interface components {
             description?: string | null;
             flows: components["schemas"]["OAuthFlows"];
             /** Oauth2Metadataurl */
-            oauth2MetadataUrl: string | null;
+            oauth2MetadataUrl?: string | null;
             /**
              * Type
              * @constant
@@ -28614,6 +28699,41 @@ export interface components {
         OrganizationRequest: {
             /** Organizations */
             organizations: string[];
+        };
+        /**
+         * OrganizationUpdateRequestV2
+         * @description Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+         *
+         *     Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+         *     left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+         *     the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+         */
+        OrganizationUpdateRequestV2: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Alias */
+            organization_alias?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PaginatedAuditLogResponse
@@ -28780,6 +28900,102 @@ export interface components {
         PatchPromptRequest: {
             litellm_params?: components["schemas"]["PromptLiteLLMParams"] | null;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /**
+         * PatchTeamRequest
+         * @description Body of PATCH /team/{team_id}.
+         *
+         *     Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+         *     from the path. A team_id in the body is still accepted when it matches the path.
+         */
+        PatchTeamRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
+            /** Allowed Passthrough Routes */
+            allowed_passthrough_routes?: unknown[] | null;
+            /** Allowed Vector Store Indexes */
+            allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Team Member Models */
+            default_team_member_models?: string[] | null;
+            /** Disable Global Guardrails */
+            disable_global_guardrails?: boolean | null;
+            /** Enforced Batch Output Expires After */
+            enforced_batch_output_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enforced File Expires After */
+            enforced_file_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Aliases */
+            model_aliases?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Models */
+            models?: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Router Settings */
+            router_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Secret Manager Settings */
+            secret_manager_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tags */
+            tags?: unknown[] | null;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Member Budget */
+            team_member_budget?: number | null;
+            /** Team Member Budget Duration */
+            team_member_budget_duration?: string | null;
+            /** Team Member Key Duration */
+            team_member_key_duration?: string | null;
+            /** Team Member Rpm Limit */
+            team_member_rpm_limit?: number | null;
+            /** Team Member Tpm Limit */
+            team_member_tpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PerTestingCriteriaResult
@@ -30666,6 +30882,11 @@ export interface components {
              */
             generic_client_secret?: string | null;
             /**
+             * Generic Scope
+             * @description Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'
+             */
+            generic_scope?: string | null;
+            /**
              * Generic Token Endpoint
              * @description Token endpoint URL for generic OAuth provider
              */
@@ -30728,6 +30949,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Provenance */
+            provenance?: {
+                [key: string]: string;
             };
             /** Values */
             values: {
@@ -30869,10 +31094,25 @@ export interface components {
              */
             completion_tokens: number;
             /**
+             * Compression Saved Tokens
+             * @default 0
+             */
+            compression_saved_tokens: number;
+            /**
+             * Compression Savings Spend
+             * @default 0
+             */
+            compression_savings_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Prompt Caching Savings Spend
+             * @default 0
+             */
+            prompt_caching_savings_spend: number;
             /**
              * Prompt Tokens
              * @default 0
@@ -32264,6 +32504,8 @@ export interface components {
             }[] | null;
             /** Cooldown Time */
             cooldown_time?: number | null;
+            /** Enable Tag Filtering */
+            enable_tag_filtering?: boolean | null;
             /** Fallbacks */
             fallbacks?: {
                 [key: string]: unknown;
@@ -32866,6 +33108,8 @@ export interface components {
             key_name?: string | null;
             /** Key Rotation At */
             key_rotation_at?: string | null;
+            /** Key Type */
+            key_type?: string | null;
             /** Last Active */
             last_active?: string | null;
             /** Last Refreshed At */
@@ -33577,6 +33821,8 @@ export interface components {
             input_cost_per_video_per_second_above_15s_interval?: number | null;
             /** Input Cost Per Video Per Second Above 8S Interval */
             input_cost_per_video_per_second_above_8s_interval?: number | null;
+            /** Input Cost Per Video Token */
+            input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
             /** Litellm Credential Name */
@@ -33658,6 +33904,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Cost Per Video Token */
+            output_cost_per_video_token?: number | null;
             /** Output Vector Size */
             output_vector_size?: number | null;
             /** Quality Router Config */
@@ -50580,7 +50828,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchTeamRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -57497,6 +57749,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_v2_v2_organization__organization_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpdateRequestV2"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_OrganizationTableWithMembers"];
                 };
             };
             /** @description Validation Error */
