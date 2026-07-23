@@ -480,6 +480,24 @@ class ResponsesAPIRequestUtils:
         return _remove_thought_signature_from_id(call_id, THOUGHT_SIGNATURE_SEPARATOR)
 
     @staticmethod
+    def _provider_uses_openai_function_call_item_ids(
+        custom_llm_provider: str | None,
+        model: str | None = None,
+    ) -> bool:
+        """True when the target Responses adapter expects OpenAI fc_ item ids."""
+        if custom_llm_provider is None:
+            return False
+
+        from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            provider=custom_llm_provider,
+            model=model,
+        )
+        return isinstance(config, OpenAIResponsesAPIConfig)
+
+    @staticmethod
     def _normalize_function_call_item_id_for_provider(
         item_id: str,
         model: str | None,
@@ -492,7 +510,10 @@ class ResponsesAPIRequestUtils:
             custom_llm_provider=custom_llm_provider,
         )
 
-        if custom_llm_provider != "openai":
+        if not ResponsesAPIRequestUtils._provider_uses_openai_function_call_item_ids(
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+        ):
             return item_id
 
         if item_id.startswith("call_"):

@@ -271,6 +271,57 @@ class TestResponsesAPIRequestUtils:
         )
         assert result_tooluse == "fc_abc123"
 
+        result_vertex = (
+            ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+                item_id="toolu_vrtx_abc123",
+                model="gpt-4o",
+                custom_llm_provider="openai",
+            )
+        )
+        assert result_vertex == "fc_abc123"
+
+    def test_normalize_function_call_item_id_rewrites_for_azure(self):
+        result = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+            item_id="call_abc123",
+            model="gpt-4o",
+            custom_llm_provider="azure",
+        )
+        assert result == "fc_abc123"
+
+        result_tooluse = (
+            ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+                item_id="tooluse_abc123",
+                model="gpt-4o",
+                custom_llm_provider="azure",
+            )
+        )
+        assert result_tooluse == "fc_abc123"
+
+    def test_normalize_function_call_item_id_rewrites_for_xai(self):
+        result = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+            item_id="call_abc123",
+            model="grok-4",
+            custom_llm_provider="xai",
+        )
+        assert result == "fc_abc123"
+
+        result_tooluse = (
+            ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+                item_id="tooluse_abc123",
+                model="grok-4",
+                custom_llm_provider="xai",
+            )
+        )
+        assert result_tooluse == "fc_abc123"
+
+    def test_normalize_function_call_item_id_rewrites_for_hosted_vllm(self):
+        result = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+            item_id="toolu_vrtx_abc123",
+            model="gpt-4o",
+            custom_llm_provider="hosted_vllm",
+        )
+        assert result == "fc_abc123"
+
     def test_normalize_function_call_item_id_no_rewrite_for_anthropic(self):
         result = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
             item_id="call_abc123",
@@ -278,6 +329,66 @@ class TestResponsesAPIRequestUtils:
             custom_llm_provider="anthropic",
         )
         assert result == "call_abc123"
+
+    def test_provider_uses_openai_function_call_item_ids(self):
+        assert (
+            ResponsesAPIRequestUtils._provider_uses_openai_function_call_item_ids(
+                custom_llm_provider="openai",
+                model="gpt-4o",
+            )
+            is True
+        )
+        assert (
+            ResponsesAPIRequestUtils._provider_uses_openai_function_call_item_ids(
+                custom_llm_provider="azure",
+                model="gpt-4o",
+            )
+            is True
+        )
+        assert (
+            ResponsesAPIRequestUtils._provider_uses_openai_function_call_item_ids(
+                custom_llm_provider="xai",
+                model="grok-4",
+            )
+            is True
+        )
+        assert (
+            ResponsesAPIRequestUtils._provider_uses_openai_function_call_item_ids(
+                custom_llm_provider="hosted_vllm",
+                model="gpt-4o",
+            )
+            is True
+        )
+        assert (
+            ResponsesAPIRequestUtils._provider_uses_openai_function_call_item_ids(
+                custom_llm_provider="anthropic",
+                model="claude-3-5-sonnet",
+            )
+            is False
+        )
+        assert (
+            ResponsesAPIRequestUtils._provider_uses_openai_function_call_item_ids(
+                custom_llm_provider=None,
+            )
+            is False
+        )
+
+    def test_normalize_function_call_item_id_leaves_unmatched_prefix(self):
+        result = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+            item_id="fc_already_normalized",
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        assert result == "fc_already_normalized"
+
+        result_other = (
+            ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+                item_id="random_id_123",
+                model="gpt-4o",
+                custom_llm_provider="openai",
+            )
+        )
+        assert result_other == "random_id_123"
 
     def test_normalize_function_call_ids_in_input(self):
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -308,6 +419,76 @@ class TestResponsesAPIRequestUtils:
         assert result[0]["id"] == "fc_xyz"
         assert result[0]["call_id"] == "call_abc"
         assert result[1]["call_id"] == "call_abc"
+
+    def test_normalize_function_call_ids_in_input_for_azure(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        request_input = [
+            {
+                "type": "function_call",
+                "id": "call_abc123",
+                "call_id": f"call_abc{THOUGHT_SIGNATURE_SEPARATOR}sig",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            "skip-me",
+            {
+                "type": "message",
+                "role": "user",
+                "content": "hi",
+            },
+        ]
+
+        result = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+            request_input=request_input,
+            model="gpt-4o",
+            custom_llm_provider="azure",
+        )
+
+        assert result[0]["id"] == "fc_abc123"
+        assert result[0]["call_id"] == "call_abc"
+        assert result[1] == "skip-me"
+        assert result[2]["type"] == "message"
+
+    def test_normalize_function_call_ids_in_input_for_xai(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        request_input = [
+            {
+                "type": "function_call",
+                "id": "tooluse_xyz",
+                "call_id": f"call_abc{THOUGHT_SIGNATURE_SEPARATOR}sig",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": f"call_abc{THOUGHT_SIGNATURE_SEPARATOR}sig",
+                "output": "sunny",
+            },
+        ]
+
+        result = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+            request_input=request_input,
+            model="grok-4",
+            custom_llm_provider="xai",
+        )
+
+        assert result[0]["id"] == "fc_xyz"
+        assert result[0]["call_id"] == "call_abc"
+        assert result[1]["call_id"] == "call_abc"
+
+    def test_normalize_function_call_ids_in_input_non_list(self):
+        result = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+            request_input="just a string",
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        assert result == "just a string"
 
 
 class TestResponseAPILoggingUtils:
