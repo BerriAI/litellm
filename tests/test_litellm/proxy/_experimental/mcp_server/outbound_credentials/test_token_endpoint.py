@@ -35,10 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 )
 from pydantic import SecretStr
 
-_PATCH_TARGET = (
-    "litellm.proxy._experimental.mcp_server.outbound_credentials."
-    "token_endpoint.get_async_httpx_client"
-)
+_PATCH_TARGET = "litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint.get_async_httpx_client"
 
 _ENDPOINT = "https://idp.example.com/oauth2/token"
 _CLIENT_ID = "litellm-client-id"

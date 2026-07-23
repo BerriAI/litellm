@@ -540,9 +540,7 @@ def test_id_jag_client_secret_maps_to_config():
     # ID-JAG asserts the user's id_token; the access_token default maps to id_token.
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:id_token"
     assert isinstance(spec.config.client_auth, ClientSecretAuth)
-    assert spec.config.client_auth.client_secret.get_secret_value() == (
-        "litellm-client-secret"
-    )
+    assert spec.config.client_auth.client_secret.get_secret_value() == ("litellm-client-secret")
 
 
 def test_id_jag_private_key_maps_to_private_key_jwt_auth():
@@ -568,9 +566,7 @@ def test_id_jag_private_key_wins_over_client_secret():
 
 
 def test_id_jag_honors_explicit_subject_token_type():
-    spec = to_server_spec(
-        _id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2")
-    )
+    spec = to_server_spec(_id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2"))
     assert spec is not None and isinstance(spec.config, IdJagConfig)
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:saml2"
 

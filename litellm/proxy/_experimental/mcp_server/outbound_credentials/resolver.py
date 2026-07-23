@@ -43,11 +43,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Result,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-    ExpiredSsoAssertion,
-    NoSsoAssertion,
-    SsoAssertionLookup,
-    UnavailableSsoAssertion,
-    UsableSsoAssertion,
+    SsoAssertionUnrenewable,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
     ExchangedToken,
@@ -95,14 +91,14 @@ def _inbound_id_token(subject: Subject) -> str | None:
 class SsoAssertionSource(Protocol):
     """Where the ID-JAG arm finds the caller's stored SSO identity assertion by user id."""
 
-    async def fetch_usable(self, user_id: str) -> SsoAssertionLookup: ...
+    async def fetch_usable(self, user_id: str) -> OAuthToken | None: ...
 
 
 class _NullSsoAssertionSource:
     """Fail-closed default: with no assertion source wired, no stored assertion is ever found."""
 
-    async def fetch_usable(self, user_id: str) -> SsoAssertionLookup:
-        return NoSsoAssertion()
+    async def fetch_usable(self, user_id: str) -> OAuthToken | None:
+        return None
 
 
 class _NullOAuthTokenStore:
@@ -215,36 +211,33 @@ class UpstreamCredentialProvider:
         inbound = _inbound_id_token(subject)
         if inbound is not None:
             return Ok(inbound)
-        lookup = await self._sso_assertions.fetch_usable(subject.subject_id)
-        match lookup:
-            case UsableSsoAssertion(assertion=assertion):
-                return Ok(assertion.id_token.get_secret_value())
-            case ExpiredSsoAssertion():
-                return Error(
-                    CredError.of_unauthorized(
-                        "The stored identity assertion for this user has expired and could not "
-                        "be renewed; sign in to the gateway again to re-establish it.",
-                        www_authenticate=(
-                            'Bearer error="invalid_token", '
-                            'error_description="identity assertion expired; re-authenticate"'
-                        ),
-                    )
+        try:
+            assertion = await self._sso_assertions.fetch_usable(subject.subject_id)
+        except SsoAssertionUnrenewable:
+            return Error(
+                CredError.of_unauthorized(
+                    "The stored identity assertion for this user has expired and could not "
+                    "be renewed; sign in to the gateway again to re-establish it.",
+                    www_authenticate=(
+                        'Bearer error="invalid_token", error_description="identity assertion expired; re-authenticate"'
+                    ),
                 )
-            case NoSsoAssertion():
-                return Error(
-                    CredError.of_precondition_required(
-                        "ID-JAG requires a caller identity token; it asserts the calling "
-                        "user's identity upstream and cannot use a static credential."
-                    )
+            )
+        except TokenStoreUnavailable:
+            return Error(
+                CredError.of_upstream_unavailable(
+                    "the stored identity assertion is expired and could not be renewed because "
+                    "the identity provider was unreachable; retry shortly"
                 )
-            case UnavailableSsoAssertion():
-                return Error(
-                    CredError.of_upstream_unavailable(
-                        "the stored identity assertion is expired and could not be renewed because "
-                        "the identity provider was unreachable; retry shortly"
-                    )
+            )
+        if assertion is None:
+            return Error(
+                CredError.of_precondition_required(
+                    "ID-JAG requires a caller identity token; it asserts the calling "
+                    "user's identity upstream and cannot use a static credential."
                 )
-        assert_never(lookup)
+            )
+        return Ok(assertion.access_token)
 
     async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx.Auth, CredError]:
         match await self._id_jag_subject_token(subject):

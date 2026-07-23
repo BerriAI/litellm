@@ -347,15 +347,12 @@ async def test_rotation_skips_unreadable_rows_but_rotates_readable_ones():
 from datetime import datetime, timedelta, timezone  # noqa: E402
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (  # noqa: E402
-    ExpiredSsoAssertion,
     LiveSsoAssertionSource,
-    NoSsoAssertion,
-    SsoRefreshGranted,
-    SsoRefreshRejected,
-    SsoRefreshUnreachable,
     SSOIdentityAssertion,
-    UnavailableSsoAssertion,
-    UsableSsoAssertion,
+    SsoAssertionUnrenewable,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (  # noqa: E402
+    TokenStoreUnavailable,
 )
 from pydantic import SecretStr  # noqa: E402
 
@@ -395,7 +392,9 @@ def _source(stored: SSOIdentityAssertion | None, post_bodies: list, env: dict | 
     async def post(url: str, form: dict):
         posts.append((url, dict(form)))
         body = post_bodies.pop(0) if post_bodies else None
-        return SsoRefreshGranted(body=body) if body is not None else SsoRefreshUnreachable()
+        if body is None:
+            raise TokenStoreUnavailable("idp unreachable")
+        return body
 
     environment = _SSO_ENV if env is None else env
     source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=environment.get)
@@ -405,14 +404,14 @@ def _source(stored: SSOIdentityAssertion | None, post_bodies: list, env: dict | 
 @pytest.mark.asyncio
 async def test_source_empty_user_id_is_absent_without_a_db_read():
     source, fetches, _, _ = _source(_stored(3600), [])
-    assert isinstance(await source.fetch_usable(""), NoSsoAssertion)
+    assert await source.fetch_usable("") is None
     assert fetches == []
 
 
 @pytest.mark.asyncio
 async def test_source_missing_row_is_absent():
     source, _, _, posts = _source(None, [])
-    assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)
+    assert await source.fetch_usable("alice") is None
     assert posts == []
 
 
@@ -421,8 +420,8 @@ async def test_source_unexpired_assertion_is_usable_without_refresh():
     stored = _stored(3600)
     source, _, _, posts = _source(stored, [])
     lookup = await source.fetch_usable("alice")
-    assert isinstance(lookup, UsableSsoAssertion)
-    assert lookup.assertion.id_token.get_secret_value() == stored.id_token.get_secret_value()
+    assert lookup is not None
+    assert lookup.access_token == stored.id_token.get_secret_value()
     assert posts == []
 
 
@@ -430,7 +429,8 @@ async def test_source_unexpired_assertion_is_usable_without_refresh():
 async def test_source_near_expiry_assertion_counts_as_expired():
     """A token inside the buffer would die mid-exchange; it must refresh, not be served."""
     source, _, _, posts = _source(_stored(10, refresh_token=None), [])
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
     assert posts == []
 
 
@@ -441,10 +441,10 @@ async def test_source_expired_with_refresh_renews_persists_and_returns_usable():
         _stored(-100), [{"id_token": new_id_token, "refresh_token": "rt_rotated", "access_token": "at"}]
     )
     lookup = await source.fetch_usable("alice")
-    assert isinstance(lookup, UsableSsoAssertion)
-    assert lookup.assertion.id_token.get_secret_value() == new_id_token
-    assert lookup.assertion.refresh_token is not None
-    assert lookup.assertion.refresh_token.get_secret_value() == "rt_rotated"
+    assert lookup is not None
+    assert lookup.access_token == new_id_token
+    assert lookup.refresh_token is not None
+    assert lookup.refresh_token == "rt_rotated"
     assert len(persisted) == 1 and persisted[0][0] == "alice"
     url, form = posts[0]
     assert url == "https://idp.example.com/token"
@@ -483,15 +483,16 @@ async def test_source_refresh_scope_matches_the_configured_login_scope():
 async def test_source_refresh_without_rotated_token_carries_the_stored_one_forward():
     source, _, _, _ = _source(_stored(-100), [{"id_token": _make_id_token(exp_offset=7200)}])
     lookup = await source.fetch_usable("alice")
-    assert isinstance(lookup, UsableSsoAssertion)
-    assert lookup.assertion.refresh_token is not None
-    assert lookup.assertion.refresh_token.get_secret_value() == "rt_stored"
+    assert lookup is not None
+    assert lookup.refresh_token is not None
+    assert lookup.refresh_token == "rt_stored"
 
 
 @pytest.mark.asyncio
 async def test_source_expired_without_refresh_token_is_expired():
     source, _, _, posts = _source(_stored(-100, refresh_token=None), [])
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
     assert posts == []
 
 
@@ -499,7 +500,8 @@ async def test_source_expired_without_refresh_token_is_expired():
 @pytest.mark.parametrize("body", [{}, {"id_token": ""}, {"id_token": 123}, {"access_token": "at-only"}])
 async def test_source_refresh_granting_no_usable_id_token_is_expired(body):
     source, _, persisted, _ = _source(_stored(-100), [body])
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
     assert persisted == []
 
 
@@ -515,18 +517,20 @@ async def test_source_refresh_rejection_is_expired_and_unreachable_is_unavailabl
         return None
 
     async def rejected_post(url, form):
-        return SsoRefreshRejected(status_code=400)
+        raise SsoAssertionUnrenewable("rejected")
 
     async def unreachable_post(url, form):
-        return SsoRefreshUnreachable()
+        raise TokenStoreUnavailable("unreachable")
 
     rejected_source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=rejected_post, getenv=_SSO_ENV.get)
-    assert isinstance(await rejected_source.fetch_usable("alice"), ExpiredSsoAssertion)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await rejected_source.fetch_usable("alice")
 
     unreachable_source = LiveSsoAssertionSource(
         fetch=fetch, persist=persist, post=unreachable_post, getenv=_SSO_ENV.get
     )
-    assert isinstance(await unreachable_source.fetch_usable("alice"), UnavailableSsoAssertion)
+    with pytest.raises(TokenStoreUnavailable):
+        await unreachable_source.fetch_usable("alice")
 
 
 @pytest.mark.asyncio
@@ -534,7 +538,8 @@ async def test_source_missing_sso_env_is_unavailable_not_expired():
     """Env absence is a deployment problem; a re-login cannot fix it (SSO needs the same env),
     so the state must be Unavailable, not Expired."""
     source, _, _, posts = _source(_stored(-100), [], env={})
-    assert isinstance(await source.fetch_usable("alice"), UnavailableSsoAssertion)
+    with pytest.raises(TokenStoreUnavailable):
+        await source.fetch_usable("alice")
     assert posts == []
 
 
@@ -554,20 +559,23 @@ async def test_source_dead_grant_is_negative_cached_one_post_per_window():
 
     async def post(url, form):
         posts.append(dict(form))
-        return SsoRefreshRejected(status_code=400)
+        raise SsoAssertionUnrenewable("rejected")
 
     source = LiveSsoAssertionSource(
         fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get, now=lambda: clock["now"]
     )
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
     assert len(posts) == 1
 
     clock["now"] = clock["now"] + 31.0
     state["stored"] = _stored(3600)
     lookup = await source.fetch_usable("alice")
-    assert isinstance(lookup, UsableSsoAssertion)
+    assert lookup is not None
     assert len(posts) == 1
 
 
@@ -588,15 +596,16 @@ async def test_source_relogin_within_the_negative_window_is_honored_immediately(
 
     async def post(url, form):
         posts.append(dict(form))
-        return SsoRefreshRejected(status_code=400)
+        raise SsoAssertionUnrenewable("rejected")
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
     assert len(posts) == 1
 
     state["stored"] = _stored(3600)  # re-login lands in the same negative window, no clock advance
     lookup = await source.fetch_usable("alice")
-    assert isinstance(lookup, UsableSsoAssertion)
+    assert lookup is not None
     assert len(posts) == 1  # the fresh usable row short-circuits before any refresh POST
 
 
@@ -618,11 +627,11 @@ async def test_source_waiter_of_an_expired_winner_does_not_respend_the_grant():
     async def post(url, form):
         posts.append(dict(form))
         await asyncio.sleep(0)
-        return SsoRefreshRejected(status_code=400)
+        raise SsoAssertionUnrenewable("rejected")
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
-    results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
-    assert all(isinstance(r, ExpiredSsoAssertion) for r in results)
+    results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"), return_exceptions=True)
+    assert all(isinstance(r, SsoAssertionUnrenewable) for r in results)
     assert len(posts) == 1
 
 
@@ -650,11 +659,11 @@ async def test_source_concurrent_expired_fetches_refresh_once():
     async def post(url: str, form: dict):
         posts.append((url, dict(form)))
         await asyncio.sleep(0)
-        return SsoRefreshGranted(body=bodies.pop(0))
+        return bodies.pop(0)
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
     results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
-    assert all(isinstance(r, UsableSsoAssertion) for r in results)
+    assert all(r is not None for r in results)
     assert len(posts) == 1
 
 
@@ -681,11 +690,11 @@ async def test_source_memoizes_usable_lookups_within_ttl():
     )
     first = await source.fetch_usable("alice")
     second = await source.fetch_usable("alice")
-    assert isinstance(first, UsableSsoAssertion) and isinstance(second, UsableSsoAssertion)
+    assert first is not None and second is not None
     assert fetches == ["alice"]
     clock["now"] = clock["now"] + 61.0
     third = await source.fetch_usable("alice")
-    assert isinstance(third, UsableSsoAssertion)
+    assert third is not None
     assert fetches == ["alice", "alice"]
 
 
@@ -709,12 +718,12 @@ async def test_replacing_the_row_drops_a_cached_superseded_assertion():
         state["stored"] = assertion
 
     async def post(url, form):
-        return SsoRefreshUnreachable()
+        raise TokenStoreUnavailable("unreachable")
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
     warm = await source.fetch_usable("alice")
-    assert isinstance(warm, UsableSsoAssertion)
-    assert warm.assertion.id_token.get_secret_value() == superseded
+    assert warm is not None
+    assert warm.access_token == superseded
 
     # The user signs in again; the row is replaced through the real write chokepoint.
     state["stored"] = SSOIdentityAssertion(id_token=SecretStr(replacement))
@@ -722,8 +731,8 @@ async def test_replacing_the_row_drops_a_cached_superseded_assertion():
         await persist_sso_identity_assertion("alice", state["stored"])
 
     after = await source.fetch_usable("alice")
-    assert isinstance(after, UsableSsoAssertion)
-    assert after.assertion.id_token.get_secret_value() == replacement
+    assert after is not None
+    assert after.access_token == replacement
 
 
 @pytest.mark.asyncio
@@ -742,9 +751,9 @@ async def test_source_never_memoizes_absence_so_a_fresh_login_is_seen_immediatel
         return None
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
-    assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)
+    assert await source.fetch_usable("alice") is None
     state["stored"] = _stored(3600)
-    assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
+    assert await source.fetch_usable("alice") is not None
     assert fetches == ["alice", "alice"]
 
 
@@ -776,10 +785,10 @@ async def test_source_store_outage_reads_as_absent_and_warm_memo_survives_it():
         now=lambda: clock["now"],
         cache_ttl_seconds=60.0,
     )
-    assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
-    assert isinstance(await source.fetch_usable("alice"), UsableSsoAssertion)
+    assert await source.fetch_usable("alice") is not None
+    assert await source.fetch_usable("alice") is not None
     clock["now"] = clock["now"] + 61.0
-    assert isinstance(await source.fetch_usable("alice"), NoSsoAssertion)
+    assert await source.fetch_usable("alice") is None
 
 
 @pytest.mark.asyncio
@@ -797,12 +806,12 @@ async def test_source_persist_failure_after_refresh_still_serves_the_in_hand_tok
 
     async def post(url, form):
         posts.append((url, dict(form)))
-        return SsoRefreshGranted(body={"id_token": new_id_token, "refresh_token": "rt_rotated"})
+        return {"id_token": new_id_token, "refresh_token": "rt_rotated"}
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=failing_persist, post=post, getenv=_SSO_ENV.get)
     lookup = await source.fetch_usable("alice")
-    assert isinstance(lookup, UsableSsoAssertion)
-    assert lookup.assertion.id_token.get_secret_value() == new_id_token
+    assert lookup is not None
+    assert lookup.access_token == new_id_token
     assert len(posts) == 1
 
 
@@ -821,10 +830,11 @@ async def test_source_refresh_returning_expired_token_reads_expired_but_persists
         persisted.append((user_id, assertion))
 
     async def post(url, form):
-        return SsoRefreshGranted(body={"id_token": expired_new, "refresh_token": "rt_rotated"})
+        return {"id_token": expired_new, "refresh_token": "rt_rotated"}
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=persist, post=post, getenv=_SSO_ENV.get)
-    assert isinstance(await source.fetch_usable("alice"), ExpiredSsoAssertion)
+    with pytest.raises(SsoAssertionUnrenewable):
+        await source.fetch_usable("alice")
     assert len(persisted) == 1
     stored_assertion = persisted[0][1]
     assert stored_assertion.refresh_token is not None
@@ -852,12 +862,12 @@ async def test_source_waiter_gets_the_winners_token_when_persist_failed():
         posts.append(dict(form))
         await asyncio.sleep(0)
         if form["refresh_token"] != "rt_stored" or len(posts) > 1:
-            return SsoRefreshRejected(status_code=400)
-        return SsoRefreshGranted(body={"id_token": new_id_token, "refresh_token": "rt_rotated"})
+            raise SsoAssertionUnrenewable("rejected")
+        return {"id_token": new_id_token, "refresh_token": "rt_rotated"}
 
     source = LiveSsoAssertionSource(fetch=fetch, persist=failing_persist, post=post, getenv=_SSO_ENV.get)
     results = await asyncio.gather(source.fetch_usable("alice"), source.fetch_usable("alice"))
-    assert all(isinstance(r, UsableSsoAssertion) for r in results)
+    assert all(r is not None for r in results)
     assert len(posts) == 1
 
 
@@ -865,12 +875,12 @@ async def test_source_waiter_gets_the_winners_token_when_persist_failed():
 @pytest.mark.parametrize(
     "status_code,body,expected_type",
     [
-        (400, {"error": "invalid_grant"}, SsoRefreshRejected),
-        (401, {"error": "invalid_client"}, SsoRefreshRejected),
-        (429, {"error": "rate_limited"}, SsoRefreshUnreachable),
-        (400, "not-json-object", SsoRefreshUnreachable),
-        (400, None, SsoRefreshUnreachable),
-        (502, {"error": "invalid_grant"}, SsoRefreshUnreachable),
+        (400, {"error": "invalid_grant"}, SsoAssertionUnrenewable),
+        (401, {"error": "invalid_client"}, SsoAssertionUnrenewable),
+        (429, {"error": "rate_limited"}, TokenStoreUnavailable),
+        (400, "not-json-object", TokenStoreUnavailable),
+        (400, None, TokenStoreUnavailable),
+        (502, {"error": "invalid_grant"}, TokenStoreUnavailable),
     ],
 )
 async def test_post_helper_rejection_requires_a_proven_oauth_verdict(status_code, body, expected_type, monkeypatch):
@@ -893,8 +903,8 @@ async def test_post_helper_rejection_requires_a_proven_oauth_verdict(status_code
     client = MagicMock()
     client.post = AsyncMock(return_value=response)
     monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
-    outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
-    assert isinstance(outcome, expected_type)
+    with pytest.raises(expected_type):
+        await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
 
 
 @pytest.mark.asyncio
@@ -912,8 +922,8 @@ async def test_post_helper_2xx_non_object_body_is_unreachable_not_a_crash(body, 
     monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
     from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
 
-    outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
-    assert isinstance(outcome, SsoRefreshUnreachable)
+    with pytest.raises(TokenStoreUnavailable):
+        await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
 
 
 @pytest.mark.asyncio
@@ -923,5 +933,5 @@ async def test_post_helper_transport_failure_is_unreachable(monkeypatch):
     monkeypatch.setattr("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", lambda llm_provider: client)
     from litellm.proxy._experimental.mcp_server.outbound_credentials import sso_assertion_store
 
-    outcome = await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})
-    assert isinstance(outcome, SsoRefreshUnreachable)
+    with pytest.raises(TokenStoreUnavailable):
+        await sso_assertion_store._post_sso_token_endpoint("https://idp.example.com/token", {"a": "b"})

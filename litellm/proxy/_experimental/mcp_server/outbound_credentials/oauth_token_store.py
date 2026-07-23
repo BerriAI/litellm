@@ -159,6 +159,7 @@ class CachedOAuthTokenStore:
         *,
         default_ttl_seconds: float,
         expiry_skew_seconds: float = 60.0,
+        max_ttl_seconds: float | None = None,
         max_size: int = 4096,
         backend: TokenCacheBackend | None = None,
         clock: Callable[[], float] = time.time,
@@ -166,13 +167,25 @@ class CachedOAuthTokenStore:
         self._inner = inner
         self._default_ttl_seconds = default_ttl_seconds
         self._expiry_skew_seconds = expiry_skew_seconds
+        self._max_ttl_seconds = max_ttl_seconds
         self._clock = clock
         self._backend: TokenCacheBackend = backend or InMemoryTokenCacheBackend(max_size=max_size, clock=clock)
 
     def _ttl(self, token: OAuthToken) -> float:
-        if token.expires_at is not None:
-            return max(0.0, token.expires_at - self._expiry_skew_seconds - self._clock())
-        return self._default_ttl_seconds
+        """How long this token may be served from cache.
+
+        A token that declares an expiry is held until then (minus the skew); one that does not is
+        held for the default. ``max_ttl_seconds`` caps both, for a credential whose holder must
+        converge on a replacement sooner than the token's own life: an identity assertion is
+        re-issued by a re-login that may REDUCE the user's claims, so serving the superseded one
+        for its full life would keep the old claims usable.
+        """
+        ttl = (
+            max(0.0, token.expires_at - self._expiry_skew_seconds - self._clock())
+            if token.expires_at is not None
+            else self._default_ttl_seconds
+        )
+        return ttl if self._max_ttl_seconds is None else min(ttl, self._max_ttl_seconds)
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         hit = await self._backend.get(user_id, server_id)

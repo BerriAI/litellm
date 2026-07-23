@@ -75,7 +75,9 @@ def _with_inbound(token: str) -> Subject:
 def _idp_jwt(sub: str = "user") -> str:
     import jwt as pyjwt
 
-    return pyjwt.encode({"sub": sub, "iss": "https://idp.example.com"}, "test-signing-key-32-bytes-long-xx", algorithm="HS256")
+    return pyjwt.encode(
+        {"sub": sub, "iss": "https://idp.example.com"}, "test-signing-key-32-bytes-long-xx", algorithm="HS256"
+    )
 
 
 _USER_IDP_JWT = _idp_jwt("user")
@@ -485,21 +487,15 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound(_USER_IDP_JWT), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound(_USER_IDP_JWT), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer final-access"
 
     leg1_endpoint, _, leg1_params = endpoint.calls[0]
     assert leg1_endpoint == "https://idp.example.com/token"
-    assert (
-        leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
-    )
-    assert (
-        leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
-    )
+    assert leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
     assert leg1_params["subject_token"] == _USER_IDP_JWT
 
     leg2_endpoint, _, leg2_params = endpoint.calls[1]
@@ -513,9 +509,7 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
 async def test_id_jag_without_inbound_token_is_precondition_required_no_http():
     endpoint = _FakeTokenEndpoint([])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -524,13 +518,9 @@ async def test_id_jag_without_inbound_token_is_precondition_required_no_http():
 
 @pytest.mark.asyncio
 async def test_id_jag_propagates_a_leg1_error_without_calling_leg2():
-    endpoint = _FakeTokenEndpoint(
-        [Error(CredError.of_upstream_unavailable("leg1 down"))]
-    )
+    endpoint = _FakeTokenEndpoint([Error(CredError.of_upstream_unavailable("leg1 down"))])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound(_USER_IDP_JWT), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound(_USER_IDP_JWT), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -547,9 +537,7 @@ async def test_id_jag_propagates_a_leg2_error():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound(_USER_IDP_JWT), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound(_USER_IDP_JWT), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -668,28 +656,27 @@ class _FakeAssertionSource:
 
     async def fetch_usable(self, user_id: str):
         self.asked.append(user_id)
+        if isinstance(self._lookup, Exception):
+            raise self._lookup
         return self._lookup
 
 
 def _usable_assertion(id_token: str = "hdr.stored-id-token.sig"):
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        SSOIdentityAssertion,
-        UsableSsoAssertion,
-    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 
-    return UsableSsoAssertion(assertion=SSOIdentityAssertion(id_token=SecretStr(id_token)))
+    return OAuthToken(access_token=id_token)
 
 
 def _no_assertion():
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import NoSsoAssertion
-
-    return NoSsoAssertion()
+    return None
 
 
 def _expired_assertion():
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import ExpiredSsoAssertion
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        SsoAssertionUnrenewable,
+    )
 
-    return ExpiredSsoAssertion()
+    return SsoAssertionUnrenewable("dead grant")
 
 
 def _no_inbound(subject_id: str = "alice") -> Subject:
@@ -735,7 +722,10 @@ async def test_id_jag_never_exchanges_a_gateway_credential_inbound_token():
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertions=source)
 
     subject = Subject(
-        tenant_id="", subject_id="alice", inbound_token=SecretStr(gateway_bearer), inbound_provenance="gateway_credential"
+        tenant_id="",
+        subject_id="alice",
+        inbound_token=SecretStr(gateway_bearer),
+        inbound_provenance="gateway_credential",
     )
     result = await provider.resolve_credentials(subject, _spec(_id_jag_config()))
 
@@ -770,7 +760,9 @@ async def test_id_jag_never_forwards_an_opaque_inbound_token():
 @pytest.mark.asyncio
 async def test_id_jag_expired_stored_assertion_is_a_401_challenge_not_a_412():
     endpoint = _FakeTokenEndpoint([])
-    provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertions=_FakeAssertionSource(_expired_assertion()))
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertions=_FakeAssertionSource(_expired_assertion())
+    )
 
     result = await provider.resolve_credentials(_no_inbound(), _spec(_id_jag_config()))
 
@@ -845,13 +837,13 @@ async def test_id_jag_empty_subject_id_with_null_source_stays_precondition_requi
 async def test_id_jag_unavailable_renewal_is_503_not_a_relogin_challenge():
     """An unreachable IdP during renewal proves nothing about the stored assertion, so the
     caller gets a retryable upstream_unavailable, never the re-login challenge."""
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-        UnavailableSsoAssertion,
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+        TokenStoreUnavailable,
     )
 
     endpoint = _FakeTokenEndpoint([])
     provider = UpstreamCredentialProvider(
-        token_endpoint=endpoint, sso_assertions=_FakeAssertionSource(UnavailableSsoAssertion())
+        token_endpoint=endpoint, sso_assertions=_FakeAssertionSource(TokenStoreUnavailable("idp down"))
     )
 
     result = await provider.resolve_credentials(_no_inbound(), _spec(_id_jag_config()))
