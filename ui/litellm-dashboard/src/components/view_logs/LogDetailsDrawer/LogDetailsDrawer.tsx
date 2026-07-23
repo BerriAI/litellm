@@ -14,6 +14,7 @@ import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
+import { ConfigType, getProxyConfigCall, proxyConfigKeys } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 
 export interface LogDetailsDrawerProps {
   open: boolean;
@@ -120,6 +121,18 @@ export function LogDetailsDrawer({
   const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
+
+  // Proxy-wide store_prompts_in_spend_logs. Shares the query key (and therefore
+  // the cache) with useProxyConfig so the Logging Settings page and this drawer
+  // stay consistent. Used to tell apart "storage disabled" (show config hint)
+  // from "storage on but this request has no payload" in the missing-data notice.
+  const { data: generalSettings } = useQuery({
+    queryKey: proxyConfigKeys.list({ filters: { configType: ConfigType.GENERAL_SETTINGS } }),
+    queryFn: () => getProxyConfigCall(accessToken!, ConfigType.GENERAL_SETTINGS),
+    enabled: Boolean(open && accessToken),
+  });
+  const promptStorageEnabled =
+    generalSettings?.find((field) => field.field_name === "store_prompts_in_spend_logs")?.field_value === true;
 
   const { data: sessionData } = useQuery({
     queryKey: ["sessionLogs", sessionId],
@@ -463,6 +476,7 @@ export function LogDetailsDrawer({
               logEntry={enrichedLog}
               isLoadingDetails={isLoadingDetails}
               accessToken={accessToken ?? null}
+              promptStorageEnabled={promptStorageEnabled}
             />
           </div>
         </div>

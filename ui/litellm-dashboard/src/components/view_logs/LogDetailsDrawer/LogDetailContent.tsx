@@ -42,6 +42,12 @@ export interface LogDetailContentProps {
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
   accessToken?: string | null;
+  /**
+   * Whether store_prompts_in_spend_logs is enabled proxy-wide. Controls which
+   * "data not available" hint is shown: the config instructions when storage is
+   * off, or a per-request explanation when storage is on but this row has no payload.
+   */
+  promptStorageEnabled?: boolean;
 }
 
 /**
@@ -52,7 +58,12 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
+export function LogDetailContent({
+  logEntry,
+  isLoadingDetails = false,
+  accessToken,
+  promptStorageEnabled = false,
+}: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -158,7 +169,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       {/* Configuration Info Message */}
       {missingData && (
         <div className="mb-6">
-          <ConfigInfoMessage show={missingData} />
+          <ConfigInfoMessage show={missingData} promptStorageEnabled={promptStorageEnabled} />
         </div>
       )}
 
