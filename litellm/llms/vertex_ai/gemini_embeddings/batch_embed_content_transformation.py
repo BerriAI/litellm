@@ -371,7 +371,9 @@ def _usage_from_embed_content_response(
     prompt_tokens = usage_metadata.get("promptTokenCount", 0)
     total_tokens = usage_metadata.get("totalTokenCount") or prompt_tokens
 
-    details: Sequence[PromptTokensDetails] = usage_metadata.get("promptTokensDetails") or ()
+    details: Sequence[PromptTokensDetails] = (
+        usage_metadata.get("promptTokensDetails") or usage_metadata.get("promptTokenDetails") or ()
+    )
     text_tokens = _tokens_for_modality(details, "TEXT")
     audio_tokens = _tokens_for_modality(details, "AUDIO")
     video_tokens = _tokens_for_modality(details, "VIDEO")
@@ -449,6 +451,8 @@ def process_response(
     model_response: EmbeddingResponse,
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
+    raw_usage_metadata: object = None,
+    resolved_files: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EmbeddingResponse:
     openai_embeddings: List[Embedding] = []
     for idx, embedding in enumerate(_predictions["embeddings"]):
@@ -461,6 +465,15 @@ def process_response(
 
     model_response.data = openai_embeddings
     model_response.model = model
+
+    if _parse_usage_metadata(raw_usage_metadata) is not None:
+        model_response.usage = _usage_from_embed_content_response(
+            input=input,
+            model=model,
+            raw_usage_metadata=raw_usage_metadata,
+            resolved_files=resolved_files or {},
+        )
+        return model_response
 
     has_nested = isinstance(input, list) and any(isinstance(e, list) for e in input)
     if _is_multimodal_input(input) or has_nested:
