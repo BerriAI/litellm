@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.common_utils.timezone_utils import validate_budget_duration
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -326,6 +327,7 @@ async def new_end_user(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
+    validate_budget_duration(data.budget_duration)
     try:
         ## VALIDATION ##
         if data.default_model is not None:

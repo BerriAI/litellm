@@ -4,12 +4,12 @@ from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi import HTTPException
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     compute_budget_reset_at,
@@ -17,6 +17,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
     get_budget_reset_timezone,
     parse_budget_reset_time,
+    validate_budget_duration,
 )
 
 
@@ -158,9 +159,7 @@ def test_get_budget_reset_settings_reads_globals():
 
 
 def test_compute_budget_reset_at_applies_offset():
-    settings = BudgetResetSettings(
-        timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0)
-    )
+    settings = BudgetResetSettings(timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0))
     reset_at = compute_budget_reset_at("1d", settings)
     jerusalem = reset_at.astimezone(ZoneInfo("Asia/Jerusalem"))
     assert jerusalem.hour == 12
@@ -180,3 +179,40 @@ def test_get_budget_reset_time_honors_global_budget_reset_time():
     finally:
         _restore_attr(litellm, "timezone", orig_tz)
         _restore_attr(litellm, "budget_reset_time", orig_rt)
+
+
+class TestValidateBudgetDuration:
+    """`validate_budget_duration` is the fail-closed write-boundary guard shared by
+    the key/team/customer/org/budget endpoints. It must reject any value the budget
+    reset job can't honor, so a bad duration can never be persisted and then silently
+    reset on the wrong cadence.
+    """
+
+    def test_none_is_a_noop(self):
+        assert validate_budget_duration(None) is None
+
+    @pytest.mark.parametrize("duration", ["1s", "30m", "1h", "24h", "7d", "30d", "1mo"])
+    def test_canonical_durations_pass(self, duration):
+        assert validate_budget_duration(duration) is None
+
+    @pytest.mark.parametrize("duration", ["hourly", "daily", "weekly", "monthly", " MONTHLY ", "Weekly"])
+    def test_word_form_durations_pass(self, duration):
+        assert validate_budget_duration(duration) is None
+
+    @pytest.mark.parametrize("duration", ["garbage", "5x", "abc", "", "d30", "1 day"])
+    def test_unparseable_durations_raise_400(self, duration):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_budget_duration(duration)
+        assert exc_info.value.status_code == 400
+        assert "budget_duration" in exc_info.value.detail["error"]
+
+    @pytest.mark.parametrize("duration", ["0s", "0m", "0h", "0d", "0w"])
+    def test_non_positive_durations_raise_400(self, duration):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_budget_duration(duration)
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize("duration", ["1s", "30m", "1h", "24h", "7d", "30d", "1mo", "hourly", "weekly", "monthly"])
+    def test_accepted_iff_reset_job_can_compute_it(self, duration):
+        validate_budget_duration(duration)
+        assert duration_in_seconds(duration) > 0

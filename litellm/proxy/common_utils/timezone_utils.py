@@ -1,5 +1,7 @@
 from datetime import datetime, time, timezone
+from typing import Optional
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
 import litellm
@@ -78,3 +80,34 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     `BudgetResetSettings` by injection (creation/update endpoints, startup backfill).
     """
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
+
+
+def validate_budget_duration(budget_duration: Optional[str]) -> None:
+    """Reject budget durations that can't be parsed, are non-positive, or overflow
+    date math, so a bad value can't be persisted and later silently reset on the
+    wrong cadence (or crash the budget reset job).
+
+    Shared by every management endpoint that accepts a `budget_duration` (key, team,
+    customer, org, budget). `get_next_standardized_reset_time` fails open (warns and
+    falls back to a next-midnight reset) so a bad row never crashes the reset job;
+    this is the fail-closed counterpart at the write boundary that stops the bad row
+    from being written in the first place.
+    """
+    if budget_duration is None:
+        return
+
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+    try:
+        if duration_in_seconds(budget_duration) <= 0:
+            raise ValueError("budget_duration must be positive")
+        get_budget_reset_time(budget_duration=budget_duration)
+    except (ValueError, OverflowError):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid budget_duration '{}'. Use a format like '1h', '24h', '7d', or '30d'.".format(
+                    budget_duration
+                )
+            },
+        )

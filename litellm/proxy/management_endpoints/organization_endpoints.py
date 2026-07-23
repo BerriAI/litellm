@@ -23,6 +23,7 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import validate_budget_duration
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
@@ -231,6 +232,8 @@ async def new_organization(
             status_code=400,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
+
+    validate_budget_duration(data.budget_duration)
 
     user_object_correct_type: Optional[LiteLLM_UserTable] = None
 
@@ -464,6 +467,8 @@ async def update_organization(
             status_code=400,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
+
+    validate_budget_duration(data.budget_duration)
 
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id

@@ -61,7 +61,10 @@ from litellm.proxy.common_utils.callback_utils import (
     encrypt_callback_vars,
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import (
+    get_budget_reset_time,
+    validate_budget_duration,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -1585,6 +1588,8 @@ async def generate_key_fn(
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
 
+        validate_budget_duration(data.budget_duration)
+
         if user_custom_key_generate is not None:
             if inspect.iscoroutinefunction(user_custom_key_generate):
                 result = await user_custom_key_generate(data)  # type: ignore
@@ -2265,6 +2270,8 @@ async def _validate_update_key_data(
     """Validate permissions and constraints for key update."""
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
+
+    validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
