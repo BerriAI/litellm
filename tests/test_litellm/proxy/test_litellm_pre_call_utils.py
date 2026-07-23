@@ -5300,11 +5300,9 @@ async def test_overwrite_user_with_key_hash_disabled_preserves_caller_user():
 
 
 @pytest.mark.asyncio
-async def test_overwrite_user_with_key_hash_never_forwards_raw_custom_credential(monkeypatch):
-    """Custom-auth credentials are not sk-prefixed or JWTs, so UserAPIKeyAuth
-    stores them raw; forwarding them upstream would leak auth material."""
-    from litellm.proxy._types import hash_token
-
+async def test_overwrite_user_with_key_hash_skips_custom_auth_credential(monkeypatch):
+    """Custom-auth credentials are not sk-prefixed or JWTs, so UserAPIKeyAuth stores
+    them raw; the stamp must skip them entirely so auth material never leaks."""
     monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
 
     raw_credential = "my-custom-auth-credential-abc123"
@@ -5312,7 +5310,7 @@ async def test_overwrite_user_with_key_hash_never_forwards_raw_custom_credential
     assert user_api_key_dict.api_key == raw_credential
 
     updated_data = await add_litellm_data_to_request(
-        data={"model": "gpt-4o"},
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
         request=_make_chat_request_mock(),
         user_api_key_dict=user_api_key_dict,
         proxy_config=MagicMock(),
@@ -5320,12 +5318,13 @@ async def test_overwrite_user_with_key_hash_never_forwards_raw_custom_credential
         version="test-version",
     )
 
-    assert updated_data["user"] == hash_token(raw_credential)
-    assert updated_data["user"] != raw_credential
+    assert updated_data["user"] == "caller-chosen-id"
 
 
 @pytest.mark.asyncio
-async def test_overwrite_user_with_key_hash_preserves_hashed_jwt_identifier(monkeypatch):
+async def test_overwrite_user_with_key_hash_skips_jwt_auth(monkeypatch):
+    """A hashed JWT rotates on every token re-issue, so it is useless as a stable
+    ban id; JWT-authenticated requests are not stamped."""
     from litellm.proxy._types import hash_token
 
     monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
@@ -5334,7 +5333,7 @@ async def test_overwrite_user_with_key_hash_preserves_hashed_jwt_identifier(monk
     user_api_key_dict = UserAPIKeyAuth(api_key=hashed_jwt)
 
     updated_data = await add_litellm_data_to_request(
-        data={"model": "gpt-4o"},
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
         request=_make_chat_request_mock(),
         user_api_key_dict=user_api_key_dict,
         proxy_config=MagicMock(),
@@ -5342,4 +5341,4 @@ async def test_overwrite_user_with_key_hash_preserves_hashed_jwt_identifier(monk
         version="test-version",
     )
 
-    assert updated_data["user"] == hashed_jwt
+    assert updated_data["user"] == "caller-chosen-id"
