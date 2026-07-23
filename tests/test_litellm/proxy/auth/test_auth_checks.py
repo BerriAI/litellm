@@ -2276,6 +2276,8 @@ async def test_virtual_key_soft_budget_check_without_user_obj():
         (50.0, 50.0, True),  # At soft budget
         (25.0, 50.0, False),  # Under soft budget
         (100.0, None, False),  # No soft budget set
+        (1.0, 0.0, True),  # Zero is a valid threshold, not "unset"
+        (0.0, 0.0, True),  # At a zero soft budget
     ],
 )
 @pytest.mark.asyncio
@@ -2313,6 +2315,82 @@ async def test_virtual_key_soft_budget_check_scenarios(
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.fixture()
+def spend_counter_cache():
+    import litellm.proxy.proxy_server as ps
+    from litellm.caching.dual_cache import DualCache
+
+    original_counter_cache = ps.spend_counter_cache
+    original_prisma_client = ps.prisma_client
+    counter_cache = DualCache()
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = None
+    try:
+        yield counter_cache
+    finally:
+        ps.spend_counter_cache = original_counter_cache
+        ps.prisma_client = original_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_soft_budget_check_uses_shared_spend_counter(
+    spend_counter_cache,
+):
+    """The alert must fire off the cross-pod spend counter, even when this pod's cached
+    key object is stale-low and still under the soft budget."""
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal captured_call_info
+            captured_call_info = user_info
+
+    await spend_counter_cache.async_increment_cache(
+        key="spend:key:stale-key", value=12.0
+    )
+
+    valid_token = UserAPIKeyAuth(
+        token="stale-key",
+        spend=4.0,
+        soft_budget=10.0,
+        key_alias="test-key",
+    )
+
+    await _virtual_key_soft_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=MockProxyLogging(),
+        user_obj=None,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert captured_call_info is not None, "expected soft budget alert off shared spend 12.0"
+    assert captured_call_info.spend == 12.0
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_soft_budget_check_does_not_raise_on_unverifiable_spend(
+    spend_counter_cache, monkeypatch
+):
+    """Soft budgets only alert. Under fail-closed enforcement an unverifiable counter must
+    still not block the request the way a max_budget read may."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setitem(ps.general_settings, "fail_closed_budget_enforcement", True)
+
+    valid_token = UserAPIKeyAuth(
+        token="unverifiable-key",
+        spend=1.0,
+        soft_budget=10.0,
+    )
+
+    await _virtual_key_soft_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=MagicMock(budget_alerts=AsyncMock()),
+        user_obj=None,
+    )
 
 
 @pytest.mark.asyncio

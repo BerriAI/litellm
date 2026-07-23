@@ -3625,18 +3625,31 @@ async def _virtual_key_soft_budget_check(
     """
     Triggers a budget alert if the token is over it's soft budget.
 
+    Reads the same cross-pod spend counter as `_virtual_key_max_budget_check` so the alert
+    fires off shared spend rather than this pod's cached key object. `max_budget` is left
+    unset on that read: this path only alerts, so it must never raise on an unverifiable
+    counter the way an enforcement read may.
     """
+    if valid_token.soft_budget is None:
+        return
 
-    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+    from litellm.proxy.proxy_server import get_current_spend
+
+    spend = await get_current_spend(
+        counter_key=f"spend:key:{valid_token.token}",
+        fallback_spend=valid_token.spend or 0.0,
+    )
+
+    if spend >= valid_token.soft_budget:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
             valid_token.token,
-            valid_token.spend,
+            spend,
             valid_token.soft_budget,
         )
         call_info = CallInfo(
             token=valid_token.token,
-            spend=valid_token.spend,
+            spend=spend,
             max_budget=valid_token.max_budget,
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
