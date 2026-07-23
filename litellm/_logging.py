@@ -16,13 +16,52 @@ set_verbose = False
 session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("session_id", default="")
 trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
 
-
-def set_session_id(session_id: str) -> None:
-    session_id_var.set(session_id)
+_MAX_CORRELATION_ID_LENGTH = 256
 
 
-def set_trace_id(trace_id: str) -> None:
-    trace_id_var.set(trace_id)
+def _sanitize_correlation_id(value: str) -> str:
+    """Strip control characters and bound length before a caller-controlled
+    trace_id/session_id (e.g. litellm_session_id, x-litellm-trace-id) is
+    stamped into log lines.
+
+    Without this, a caller could embed \\r/\\n or terminal escape sequences to
+    forge fake log entries, or submit an oversized value repeated across every
+    log line for the request.
+    """
+    stripped = "".join(ch for ch in value if ch.isprintable())
+    return stripped[:_MAX_CORRELATION_ID_LENGTH]
+
+
+def set_session_id(session_id: str) -> "contextvars.Token[str]":
+    return session_id_var.set(_sanitize_correlation_id(session_id))
+
+
+def set_trace_id(trace_id: str) -> "contextvars.Token[str]":
+    return trace_id_var.set(_sanitize_correlation_id(trace_id))
+
+
+def reset_session_id(token: "contextvars.Token[str]") -> None:
+    """Restore session_id_var to its pre-call value.
+
+    Best-effort: swallows errors since this is observability plumbing, not
+    call-correctness - a failed reset must never break the actual LLM call.
+    """
+    try:
+        session_id_var.reset(token)
+    except (ValueError, RuntimeError):
+        pass
+
+
+def reset_trace_id(token: "contextvars.Token[str]") -> None:
+    """Restore trace_id_var to its pre-call value.
+
+    Best-effort: swallows errors since this is observability plumbing, not
+    call-correctness - a failed reset must never break the actual LLM call.
+    """
+    try:
+        trace_id_var.reset(token)
+    except (ValueError, RuntimeError):
+        pass
 
 
 if set_verbose is True:
