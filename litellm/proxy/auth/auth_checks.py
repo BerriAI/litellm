@@ -3923,7 +3923,7 @@ async def _team_max_budget_check(
             max_budget=team_object.max_budget,
         )
 
-        if math.isfinite(team_object.max_budget) and spend > team_object.max_budget:
+        if math.isfinite(team_object.max_budget) and spend >= team_object.max_budget:
             if valid_token:
                 call_info = CallInfo(
                     token=valid_token.token,
