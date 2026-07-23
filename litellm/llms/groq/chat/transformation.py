@@ -39,6 +39,8 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
+GROQ_COMPOUND_MODELS = frozenset({"compound", "compound-mini"})
+
 
 class GroqChatConfig(OpenAILikeChatConfig):
     frequency_penalty: Optional[int] = None
@@ -83,6 +85,26 @@ class GroqChatConfig(OpenAILikeChatConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
+
+    @staticmethod
+    def _get_groq_model_name(model: str) -> str:
+        return f"groq/{model}" if model in GROQ_COMPOUND_MODELS else model
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        return super().transform_request(
+            model=self._get_groq_model_name(model),
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def get_model_response_iterator(
         self,

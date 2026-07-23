@@ -25481,6 +25481,28 @@
         "supports_response_schema": false,
         "supports_tool_choice": true
     },
+    "groq/compound": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "groq",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
+    "groq/compound-mini": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "groq",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "groq/whisper-large-v3": {
         "input_cost_per_second": 3.083e-05,
         "litellm_provider": "groq",
