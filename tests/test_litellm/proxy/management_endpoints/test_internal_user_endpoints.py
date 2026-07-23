@@ -2490,6 +2490,8 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
         "user_role": "internal_user",
         "spend": 42.5,
         "max_budget": 100.0,
+        "rpm_limit": 60,
+        "tpm_limit": 10000,
         "models": ["gpt-4"],
         "budget_duration": "30d",
         "budget_reset_at": None,
@@ -2530,6 +2532,8 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
     assert response.user_role == "internal_user"
     assert response.spend == 42.5
     assert response.max_budget == 100.0
+    assert response.rpm_limit == 60
+    assert response.tpm_limit == 10000
     assert response.models == ["gpt-4"]
     assert response.teams == ["team-1", "team-2"]
     assert response.sso_user_id == "sso-abc"
@@ -2885,6 +2889,8 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role",
         "spend",
         "max_budget",
+        "rpm_limit",
+        "tpm_limit",
         "models",
         "budget_duration",
         "budget_reset_at",
