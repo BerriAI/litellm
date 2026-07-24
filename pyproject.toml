@@ -92,6 +92,7 @@ extra_proxy = [
     # Not in PyPI proxy extra.
     "resend>=2.23.0,<3.0",
     "redisvl>=0.4.1,<1.0",
+    "redis[hiredis]>=5.0.0,<6.0",
     "a2a-sdk>=1.1.0,<2.0",
 ]
 utils = [
