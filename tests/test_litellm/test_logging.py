@@ -1033,6 +1033,48 @@ def test_stream_wrapper_del_does_not_clobber_a_newer_active_call():
         session_id_var.set("")
 
 
+def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
+    """The __del__ guard must compare against the *sanitized* id actually
+    stored in the contextvar, not the raw litellm_session_id/litellm_trace_id
+    - set_session_id()/set_trace_id() strip control characters before
+    storing, so a caller-supplied id containing e.g. a newline would never
+    equal the raw attribute, and the guard would wrongly conclude some other
+    call has claimed the context and skip cleanup forever."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-needs-sanitizing")
+    session_id_var.set("outer-session-needs-sanitizing")
+    try:
+        raw_session_id = "abandoned\nsession\rwith-control-chars"
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="abandoned-stream-needs-sanitizing",
+            function_id="fn-abandoned-stream-needs-sanitizing",
+            kwargs={"litellm_session_id": raw_session_id},
+        )
+        # Sanity: the contextvar holds the sanitized value, which differs
+        # from the raw litellm_session_id this test constructed it with.
+        assert session_id_var.get() != raw_session_id
+        assert log_obj.litellm_session_id == raw_session_id
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        wrapper.__del__()
+
+        assert trace_id_var.get() == "outer-trace-needs-sanitizing"
+        assert session_id_var.get() == "outer-session-needs-sanitizing"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 @pytest.mark.asyncio
 async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
     """Explicit early termination (aclose(), e.g. on client disconnect or a

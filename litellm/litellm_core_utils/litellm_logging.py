@@ -357,6 +357,15 @@ class Logging(LiteLLMLoggingBaseClass):
         _sid = (kwargs or {}).get("litellm_session_id")
         self.litellm_session_id: str = str(_sid) if _sid else ""
         set_session_id(self.litellm_session_id)
+        # set_trace_id()/set_session_id() sanitize (strip control chars, bound
+        # length) before storing, so the contextvar's actual value can differ
+        # from self.litellm_trace_id/litellm_session_id. Capture what was
+        # really stored - _restore_correlation_context_if_unclaimed() must
+        # compare against this, not the raw ids, or a caller-supplied id
+        # containing control characters/oversized input would never match
+        # and cleanup would be skipped forever.
+        self._own_trace_id: str = trace_id_var.get()
+        self._own_session_id: str = session_id_var.get()
 
         self.function_id = function_id
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
@@ -2035,7 +2044,7 @@ class Logging(LiteLLMLoggingBaseClass):
         still hold the ids *this* call set - i.e. nothing has claimed them
         since - so an unrelated active call is never overwritten.
         """
-        if trace_id_var.get() == self.litellm_trace_id and session_id_var.get() == self.litellm_session_id:
+        if trace_id_var.get() == self._own_trace_id and session_id_var.get() == self._own_session_id:
             self._restore_correlation_context()
 
     def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
