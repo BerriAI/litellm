@@ -5220,13 +5220,9 @@ def _is_potential_model_name_in_model_cost(
     )
 
 
-# Cost keys the cost calculator composes at request time (context-length
-# thresholds and service tiers) instead of reading from a declared ModelInfo
-# field, e.g. "cache_creation_input_token_cost_priority" or
-# "input_cost_per_token_above_272k_tokens". They are copied onto ModelInfo
-# verbatim so a new pricing dimension in the cost map does not need a matching
-# field before it can be billed.
-_DYNAMIC_COST_KEY = re.compile(r"cost.*(?:_above_\d+k?_tokens|_(?:" + "|".join(st.value for st in ServiceTier) + r"))$")
+_COST_KEY_COMPOSED_AT_REQUEST_TIME = re.compile(
+    r"cost.*(?:_above_\d+k?_tokens|_(?:" + "|".join(st.value for st in ServiceTier) + r"))$"
+)
 
 
 def _get_model_info_helper(
@@ -5542,7 +5538,10 @@ def _get_model_info_helper(
                 supports_image_size=_model_info.get("supports_image_size", None),
             )
             for cost_key, cost_value in _model_info.items():
-                if cost_key not in returned_model_info and _DYNAMIC_COST_KEY.search(cost_key) is not None:
+                if (
+                    cost_key not in returned_model_info
+                    and _COST_KEY_COMPOSED_AT_REQUEST_TIME.search(cost_key) is not None
+                ):
                     returned_model_info[cost_key] = cost_value  # type: ignore[literal-required]
             return returned_model_info
     except Exception as e:
