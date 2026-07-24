@@ -8,10 +8,13 @@ from typing import (
     Any,
     AsyncIterator,
     Iterator,
-    Union,
 )
 
 _UNSET = object()  # sentinel for _cached_deployment_url initialisation
+
+# Env var an operator can set to pin a specific orchestration deployment URL.
+# An empty string is treated as unset and falls through to auto-discovery.
+_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR = "AICORE_ORCHESTRATION_DEPLOYMENT_URL"
 import httpx
 
 import litellm
@@ -104,35 +107,35 @@ def _tools_response_format_and_stream(optional_params: dict, model_params: dict)
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     frequency_penalty: int | None = None
-    function_call: Union[str, dict] | None = None
+    function_call: str | dict | None = None
     functions: list | None = None
     logit_bias: dict | None = None
     max_tokens: int | None = None
     n: int | None = None
     presence_penalty: int | None = None
-    stop: Union[str, list] | None = None
+    stop: str | list | None = None
     temperature: int | None = None
     top_p: int | None = None
     response_format: dict | None = None
     tools: list | None = None
-    tool_choice: Union[str, dict] | None = None  #
+    tool_choice: str | dict | None = None
     model_version: str = "latest"
 
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: Union[str, dict] | None = None,
+        function_call: str | dict | None = None,
         functions: list | None = None,
         logit_bias: dict | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: Union[str, list] | None = None,
+        stop: str | list | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
         response_format: dict | None = None,
         tools: list | None = None,
-        tool_choice: Union[str, dict] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -175,8 +178,20 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     @property
     def deployment_url(self) -> str:
+        """Resolve the orchestration deployment URL, with caching.
+
+        Resolution order:
+        1. ``_AICORE_ORCHESTRATION_URL_ENV_KEY`` env var (operator-level pin).
+           An empty string is treated as unset and falls through to discovery.
+        2. Auto-discovery via ``/lm/deployments`` (one network call, cached).
+
+        A per-request override via ``optional_params["deployment_url"]`` is
+        handled one level up in ``get_complete_url`` before this property
+        is ever called.
+        """
         if self._cached_deployment_url is _UNSET:
-            self._cached_deployment_url = self._resolve_deployment_url()
+            env = os.environ.get(_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR)
+            self._cached_deployment_url = env or self._resolve_deployment_url()
         return self._cached_deployment_url  # pyright: ignore[reportReturnType]  # _UNSET is excluded by the guard above
 
     def _resolve_deployment_url(self) -> str:
@@ -284,16 +299,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        # Step 1: per-request override via optional_params
-        base = optional_params.get("deployment_url")
-        # Step 2: operator-level env var (no discovery needed).
-        # An empty string is treated as unset and falls through to discovery;
-        # export AICORE_ORCHESTRATION_DEPLOYMENT_URL= has no effect.
-        if not base:
-            base = os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
-        # Step 3: auto-discovery (cached; one network round-trip per instance)
-        if not base:
-            base = self.deployment_url
+        # Per-request override wins; deployment_url handles env var + discovery.
+        base = optional_params.get("deployment_url") or self.deployment_url
         return f"{base}/v2/completion"
 
     def _build_prompt_module(
@@ -471,7 +478,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
+        streaming_response: Iterator[str] | AsyncIterator[str] | "ModelResponse",
         sync_stream: bool,
         json_mode: bool | None = False,
     ):
