@@ -91,6 +91,40 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     )
 
 
+def test_version_endpoint():
+    import litellm._version as _ver
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/version")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, dict)
+    assert "version" in body
+    assert isinstance(body["version"], str)
+    assert body["version"] == _ver.version
+
+
+@pytest.mark.parametrize("fake_version", ["unknown", "0.0.0"])
+def test_version_endpoint_fallback_strings_still_return_200(fake_version: str):
+    import litellm.proxy.proxy_server as _ps
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch.object(_ps, "version", fake_version):
+        response = client.get("/version")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == fake_version
+    assert isinstance(body["version"], str)
+
+
 def test_public_ai_hub_info_is_public_by_default(monkeypatch):
     app = FastAPI()
     app.include_router(router)

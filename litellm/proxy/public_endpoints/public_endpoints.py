@@ -29,6 +29,7 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
     ProviderCreateInfo,
     PublicModelHubInfo,
     SupportedEndpointsResponse,
+    VersionResponse,
 )
 from litellm.types.utils import LlmProviders
 
@@ -285,6 +286,13 @@ async def public_skill_hub():
         return ListPluginsResponse(plugins=items, count=len(items))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/version", tags=["version"], response_model=VersionResponse)
+async def version_info() -> VersionResponse:
+    from litellm.proxy.proxy_server import version
+
+    return VersionResponse(version=version)
 
 
 @router.get(
