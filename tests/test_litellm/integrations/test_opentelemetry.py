@@ -4748,6 +4748,32 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
         self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
 
+    def test_emit_once_marker_survives_metadata_json_serialization(self):
+        """Regression for #32250: the dedupe marker is written into
+        ``kwargs["litellm_params"]["metadata"]["_otel_internal"]``, the same
+        dict object that proxy request-processing later shallow-copies by
+        reference into ``proxy_server_request["body"]`` and spend-tracking
+        serializes with ``safe_dumps`` for the DB row. A raw ``tuple`` dict
+        key is valid in Python but not in JSON, so pre-fix, ``safe_dumps``
+        silently dropped the ``spans_logged`` entry (non-``str`` keys are
+        skipped, not raising) and the dedupe marker vanished from the
+        persisted payload. Round-tripping through ``safe_dumps``/``json.loads``
+        must preserve it."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        otel._emit_once(kwargs, "success")
+
+        metadata = kwargs["litellm_params"]["metadata"]
+        round_tripped = json.loads(safe_dumps(metadata))
+
+        spans_logged = round_tripped.get("_otel_internal", {}).get("spans_logged", {})
+        self.assertEqual(
+            len(spans_logged),
+            1,
+            "Dedupe marker must survive JSON round-trip instead of being "
+            "silently dropped for having a non-str key",
+        )
+
     def test_create_guardrail_span_does_not_raise_on_list_mode(self):
         """End-to-end regression for LIT-3428: ``_create_guardrail_span``
         must produce exactly one span (not raise ``TypeError``) when the
