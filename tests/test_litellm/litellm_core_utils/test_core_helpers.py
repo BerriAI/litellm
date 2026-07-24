@@ -1,5 +1,6 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
+import litellm
 import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
@@ -8,6 +9,7 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    safe_deep_copy,
 )
 
 
@@ -255,3 +257,116 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+def test_safe_deep_copy_survives_concurrent_key_insertion():
+    data = {}
+
+    class _InsertsKeyOnDeepcopy:
+        def __deepcopy__(self, memo):
+            data[f"late-{len(data)}"] = "added-mid-iteration"
+            return self
+
+    for i in range(5):
+        data[f"item-{i}"] = _InsertsKeyOnDeepcopy()
+
+    result = safe_deep_copy(data)
+
+    for i in range(5):
+        assert f"item-{i}" in result
+
+
+def test_safe_deep_copy_preserves_otel_span_roundtrip():
+    span = object()
+    data = {"metadata": {"litellm_parent_otel_span": span, "user": "x"}}
+
+    result = safe_deep_copy(data)
+
+    assert data["metadata"]["litellm_parent_otel_span"] is span
+    assert result["metadata"]["user"] == "x"
+
+
+def test_safe_deep_copy_survives_nested_metadata_mutation():
+    data = {"metadata": {}, "litellm_metadata": {}}
+    deepcopied = []
+
+    class _InsertsIntoNestedOnDeepcopy:
+        def __init__(self, name):
+            self.name = name
+
+        def __deepcopy__(self, memo):
+            data["metadata"][f"late-{len(data['metadata'])}"] = "added-mid-iteration"
+            data["litellm_metadata"][f"late-{len(data['litellm_metadata'])}"] = "added-mid-iteration"
+            deepcopied.append(self.name)
+            return self
+
+    for i in range(5):
+        data["metadata"][f"m-{i}"] = _InsertsIntoNestedOnDeepcopy(f"m-{i}")
+        data["litellm_metadata"][f"lm-{i}"] = _InsertsIntoNestedOnDeepcopy(f"lm-{i}")
+
+    result = safe_deep_copy(data)
+
+    # Every nested value must be deep-copied. Without a nested snapshot the
+    # dict grows mid-iteration, copy.deepcopy raises RuntimeError, and the
+    # per-key fallback stores the original ref instead - so the copy silently
+    # stops happening even though the keys are still present.
+    for i in range(5):
+        assert f"m-{i}" in result["metadata"]
+        assert f"lm-{i}" in result["litellm_metadata"]
+    assert sorted(deepcopied) == sorted([f"m-{i}" for i in range(5)] + [f"lm-{i}" for i in range(5)])
+
+
+def test_safe_deep_copy_does_not_mutate_caller_metadata():
+    span = object()
+    metadata = {"litellm_parent_otel_span": span, "user": "x"}
+    litellm_metadata = {"litellm_parent_otel_span": span}
+    data = {"metadata": metadata, "litellm_metadata": litellm_metadata}
+
+    result = safe_deep_copy(data)
+
+    assert data["metadata"] is metadata
+    assert data["litellm_metadata"] is litellm_metadata
+    assert metadata["litellm_parent_otel_span"] is span
+    assert litellm_metadata["litellm_parent_otel_span"] is span
+    assert "placeholder" not in metadata.values()
+    assert "placeholder" not in litellm_metadata.values()
+    # The returned copy keeps the placeholder (unchanged contract): the span is
+    # not safe to reuse across event loops, so callers must not receive it.
+    assert result["metadata"]["litellm_parent_otel_span"] == "placeholder"
+    assert result["litellm_metadata"]["litellm_parent_otel_span"] == "placeholder"
+
+
+def test_safe_deep_copy_returns_non_dict_unchanged():
+    assert safe_deep_copy("plain") == "plain"
+    assert safe_deep_copy([1, 2]) == [1, 2]
+
+
+def test_safe_deep_copy_returns_data_in_safe_memory_mode(monkeypatch):
+    monkeypatch.setattr(litellm, "safe_memory_mode", True)
+    data = {"metadata": {"user": "x"}}
+
+    assert safe_deep_copy(data) is data
+
+
+def test_safe_deep_copy_non_dict_falls_back_to_original_on_failure():
+    class _Unpicklable:
+        def __deepcopy__(self, memo):
+            raise TypeError("cannot deepcopy")
+
+    value = _Unpicklable()
+
+    assert safe_deep_copy(value) is value
+
+
+def test_safe_deep_copy_per_key_falls_back_to_original_on_failure():
+    class _Unpicklable:
+        def __deepcopy__(self, memo):
+            raise TypeError("cannot deepcopy")
+
+    value = _Unpicklable()
+    data = {"client": value, "user": "x"}
+
+    result = safe_deep_copy(data)
+
+    assert result["client"] is value
+    assert result["user"] == "x"
