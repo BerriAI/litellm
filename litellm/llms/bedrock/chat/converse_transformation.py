@@ -493,6 +493,35 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
 
+    def _model_accepts_anthropic_thinking_param(self, model: str, base_model: str) -> bool:
+        """Whether the model accepts the Anthropic-shaped ``thinking`` / ``reasoning_effort`` request field.
+
+        The Converse mapping serializes ``thinking`` into ``additionalModelRequestFields`` in Anthropic's
+        shape. Only Anthropic Claude reasoning models accept that field; DeepSeek models reason natively
+        and reject it (a 400 when it leaks through), even though they advertise ``supports_reasoning``.
+        """
+        if "deepseek" in model or "deepseek" in base_model:
+            return False
+        return (
+            "claude-3-7" in model
+            or "claude-sonnet-4" in model
+            or "claude-opus-4" in model
+            or supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
+        )
+
+    def _model_reasons_natively_and_rejects_request_param(self, model: str, base_model: str) -> bool:
+        """Whether the model reasons natively and rejects any reasoning request field on Converse.
+
+        The Converse mapping serializes ``thinking`` into ``additionalModelRequestFields`` in Anthropic's
+        shape and ``reasoning_effort`` into a provider-specific shape. DeepSeek reasons on its own and
+        returns a 400 when either field is sent, even though it advertises ``supports_reasoning``, so both
+        must be dropped for it. Every other model either accepts one of those shapes (Claude ``thinking``,
+        gpt-oss / Nova 2 ``reasoning_effort``) or is an opaque ARN we can't introspect, so we leave those
+        untouched rather than silently degrading reasoning.
+        """
+        return "deepseek" in model or "deepseek" in base_model
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
 
@@ -553,17 +582,7 @@ class AmazonConverseConfig(BaseConfig):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
             supported_params.append("reasoning_effort")
-        elif (
-            "claude-3-7" in model
-            or "claude-sonnet-4" in model
-            or "claude-opus-4" in model
-            or "deepseek.r1" in model
-            or supports_reasoning(
-                model=model,
-                custom_llm_provider=self.custom_llm_provider,
-            )
-            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
-        ):
+        elif self._model_accepts_anthropic_thinking_param(model=model, base_model=base_model):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
 
@@ -850,6 +869,9 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        drop_reasoning_request_param = self._model_reasons_natively_and_rejects_request_param(
+            model=model, base_model=BedrockModelInfo.get_base_model(model)
+        )
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -898,7 +920,12 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
-            if param == "thinking":
+            if param == "thinking" and drop_reasoning_request_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `thinking` param for Bedrock model=%s; it reasons natively and rejects it.",
+                    model,
+                )
+            elif param == "thinking":
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
@@ -921,6 +948,11 @@ class AmazonConverseConfig(BaseConfig):
                         litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
                 else:
                     optional_params["thinking"] = value
+            elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_request_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it reasons natively and rejects it.",
+                    model,
+                )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
