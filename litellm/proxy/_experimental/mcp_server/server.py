@@ -15,6 +15,7 @@ import types
 import uuid
 from datetime import datetime
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -106,6 +107,9 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # prevents an authenticated client from forcing the proxy to buffer an
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import SpanContext
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -242,10 +246,12 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[dict[str, str]]:
     """The W3C trace context (``traceparent``/``tracestate``) the MCP client
     propagated in the request's ``params._meta`` (SEP-414), or ``None``.
 
-    Per the OTel MCP semconv the MCP span parents to this propagated context rather
-    than to the HTTP/session transport (which is recorded as a link instead), so a
-    streamable-HTTP session that multiplexes many messages does not glue every
-    message under the session's first request. The client's W3C Baggage is
+    When present, per the OTel MCP semconv the MCP span parents to this propagated
+    context rather than to the HTTP transport (which is recorded as a link instead).
+    When absent, the span nests under the transport span of the request carrying
+    this specific message, so a streamable-HTTP session that multiplexes many
+    messages still does not glue every message under the session's first request;
+    see ``resolve_mcp_span_context``. The client's W3C Baggage is
     deliberately excluded: it is caller-controlled, and the otel baggage processor
     stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,
     ...) onto the span, so honoring remote baggage would let a client spoof a
@@ -284,6 +290,56 @@ def _otel_reset_mcp_trace_carrier(token: object) -> None:
         )
 
         reset_mcp_message_trace_carrier(token)
+    except ImportError:
+        return
+
+
+def _otel_request_transport_span_context() -> Optional["SpanContext"]:
+    """The tracing span of the HTTP request being handled, as a portable value.
+
+    Resolved on the ASGI request task, where the proxy's server span is anchored,
+    and carried to the MCP message handler on the authenticated-user object. A
+    stateful streamable-HTTP session handles every message on the task spawned by
+    its ``initialize`` POST, so the handler's own task cannot see later requests'
+    spans; this is the same reason per-request auth is carried across rather than
+    read from a ContextVar. Lazily imported so opentelemetry stays an optional
+    dependency; returns ``None`` when otel_v2 is unavailable or no request span is
+    anchored."""
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            request_root_span_context,
+        )
+
+        return request_root_span_context()
+    except ImportError:
+        return None
+
+
+def _otel_set_mcp_transport_span_context(span_context: Optional["SpanContext"]) -> object:
+    """Publish the current message's transport span for the otel_v2 MCP span and
+    return a reset token, or ``None`` when otel_v2 is unavailable."""
+    if span_context is None:
+        return None
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            set_mcp_message_transport_span_context,
+        )
+
+        return set_mcp_message_transport_span_context(span_context)
+    except ImportError:
+        return None
+
+
+def _otel_reset_mcp_transport_span_context(token: object) -> None:
+    """Paired with ``_otel_set_mcp_transport_span_context``."""
+    if token is None:
+        return
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            reset_mcp_message_transport_span_context,
+        )
+
+        reset_mcp_message_transport_span_context(token)
     except ImportError:
         return
 
@@ -654,6 +710,18 @@ if MCP_AVAILABLE:
     ############### MCP Server Routes #######################
     ########################################################
 
+    def _current_transport_span_context() -> Optional["SpanContext"]:
+        """The transport span of the HTTP request carrying the message being handled.
+
+        Published by the ASGI request task onto the authenticated-user object, because
+        a stateful session's message handler runs on the task spawned by that session's
+        ``initialize`` POST and so cannot read later requests' spans from its own task.
+        """
+        auth_user = auth_context_var.get()
+        if not isinstance(auth_user, MCPAuthenticatedUser):
+            auth_user = _recover_auth_from_session()
+        return auth_user.transport_span_context if auth_user is not None else None
+
     @server.list_tools()
     async def handle_list_tools() -> "ListToolsResult | List[Tool]":
         """
@@ -670,9 +738,11 @@ if MCP_AVAILABLE:
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
+        _transport_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
+            _transport_token = _otel_set_mcp_transport_span_context(_current_transport_span_context())
             # Get user authentication from context variable
             (
                 user_api_key_auth,
@@ -728,6 +798,7 @@ if MCP_AVAILABLE:
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
         finally:
+            _otel_reset_mcp_transport_span_context(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -901,9 +972,11 @@ if MCP_AVAILABLE:
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
+        _transport_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
+            _transport_token = _otel_set_mcp_transport_span_context(_current_transport_span_context())
             # Validate arguments
             (
                 user_api_key_auth,
@@ -1042,6 +1115,7 @@ if MCP_AVAILABLE:
 
             return response
         finally:
+            _otel_reset_mcp_transport_span_context(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -4197,6 +4271,7 @@ if MCP_AVAILABLE:
                     session_id=session_id if use_stateful else None,
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
                     copy_existing_session_auth_context=is_initialize,
+                    transport_span_context=_otel_request_transport_span_context(),
                 )
                 local_send = send
                 if use_stateful and is_initialize:
@@ -4421,6 +4496,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
+        transport_span_context: Optional["SpanContext"] = None,
     ) -> None:
         auth_user.user_api_key_auth = user_api_key_auth
         auth_user.mcp_auth_header = mcp_auth_header
@@ -4429,6 +4505,7 @@ if MCP_AVAILABLE:
         auth_user.oauth2_headers = oauth2_headers
         auth_user.raw_headers = raw_headers
         auth_user.client_ip = client_ip
+        auth_user.transport_span_context = transport_span_context
 
     def set_auth_context(
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -4438,6 +4515,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
+        transport_span_context: Optional["SpanContext"] = None,
     ) -> MCPAuthenticatedUser:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -4448,6 +4526,7 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names and access groups to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
             client_ip: Client IP address for MCP access control
+            transport_span_context: Tracing span of the HTTP request carrying this message
         """
         auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
@@ -4457,6 +4536,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            transport_span_context=transport_span_context,
         )
         auth_context_var.set(auth_user)
         return auth_user
@@ -4472,6 +4552,7 @@ if MCP_AVAILABLE:
         session_id: Optional[str] = None,
         touch_last_seen: bool = True,
         copy_existing_session_auth_context: bool = False,
+        transport_span_context: Optional["SpanContext"] = None,
     ) -> MCPAuthenticatedUser:
         auth_user = _stateful_session_auth_contexts.get(session_id) if session_id else None
         if auth_user is not None and session_id is not None:
@@ -4486,6 +4567,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     client_ip=client_ip,
+                    transport_span_context=transport_span_context,
                 )
             _update_auth_context(
                 auth_user=auth_user,
@@ -4496,6 +4578,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                transport_span_context=transport_span_context,
             )
             auth_context_var.set(auth_user)
             return auth_user
@@ -4507,6 +4590,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            transport_span_context=transport_span_context,
         )
 
     def _wrap_send_with_stateful_session_auth_context(

@@ -18,12 +18,14 @@ before the LLM call even starts), so a guardrail is a sibling of the LLM call,
 not a child of it. The emitter parents every span to the ambient OTel context
 (the active server span), which matches this.
 
-MCP spans (``MCP_TOOL_CALL``, ``MCP_LIST_TOOLS``) are intentionally NOT in this
-tree. Per the OTel GenAI MCP semconv, MCP and the HTTP transport are independent
-contexts, so an MCP span parents to the trace context the client propagated in
-``params._meta`` (or starts its own root when none is propagated) and records the
-``PROXY_REQUEST`` transport span as a span *link*, never a parent. The registry
-encodes this as ``parent=None, links=PROXY_REQUEST``.
+MCP spans (``MCP_TOOL_CALL``, ``MCP_LIST_TOOLS``) have two shapes, chosen at emit
+time by :func:`resolve_mcp_span_context`. When the client propagates trace context
+in ``params._meta`` MCP and the HTTP transport are independent contexts per the
+OTel GenAI MCP semconv, so the span parents to that propagated context and records
+the ``PROXY_REQUEST`` transport span as a span *link*, never a parent — the shape
+this registry's ``parent=None, links=PROXY_REQUEST`` entry encodes. When nothing is
+propagated (the common case) the span nests under the transport span of the request
+carrying that message, so the tool call stays in one trace.
 
 Not every service call becomes a span — :func:`span_role_for_service` decides:
 
@@ -89,12 +91,13 @@ class SpanSpec:
 SPAN_REGISTRY: dict[SpanRole, SpanSpec] = {
     SpanRole.PROXY_REQUEST: SpanSpec(SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None),
     SpanRole.LLM_CALL: SpanSpec(SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
-    # MCP and the HTTP transport are independent contexts (OTel GenAI MCP semconv),
-    # so an MCP span does not nest under the transport span. The proxy is an MCP
-    # client to the upstream server, so it's a CLIENT span; it parents to the trace
-    # context the client propagated in ``params._meta`` (or starts its own root when
-    # none is propagated) and records the PROXY_REQUEST transport span as a span
-    # *link*, never a parent — hence ``parent=None, links=PROXY_REQUEST``.
+    # The proxy is an MCP client to the upstream server, so MCP spans are CLIENT
+    # spans. With trace context propagated in ``params._meta``, MCP and the HTTP
+    # transport are independent contexts (OTel GenAI MCP semconv): the span parents
+    # to the propagated context and records the PROXY_REQUEST transport span as a
+    # span *link*, never a parent — the shape ``parent=None, links=PROXY_REQUEST``
+    # encodes. With nothing propagated, ``resolve_mcp_span_context`` nests the span
+    # under that message's transport span instead, keeping the call in one trace.
     SpanRole.MCP_TOOL_CALL: SpanSpec(
         SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=None, links=SpanRole.PROXY_REQUEST
     ),
