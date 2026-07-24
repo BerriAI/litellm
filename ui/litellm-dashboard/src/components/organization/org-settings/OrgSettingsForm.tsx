@@ -22,9 +22,9 @@ import { fetchClient } from "@/lib/http/api";
 import { buildOrgPatch, orgToForm, type OrgPatchBody } from "./mapper";
 import { orgSettingsSchema } from "./schema";
 
-const NO_RESET = "never";
+export const NO_RESET = "never";
 
-const BUDGET_DURATION_OPTIONS = [
+export const BUDGET_DURATION_OPTIONS = [
   { value: NO_RESET, label: "No reset" },
   { value: "24h", label: "daily" },
   { value: "7d", label: "weekly" },
