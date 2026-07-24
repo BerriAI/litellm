@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import concurrent.futures
 import datetime
 import json
 import logging
@@ -61,6 +62,11 @@ FUNCTION_CALL_ATTRIBUTE = "function_call"
 
 _SYNC_ITER_EXHAUSTED = object()
 
+# Lookahead buffer for _aiter_sync_stream_in_thread. Large enough to decouple
+# the draining thread from consumer/scheduler jitter (the point of the pump),
+# small enough to bound memory and apply backpressure on a slow consumer.
+_SYNC_STREAM_QUEUE_MAXSIZE = 100
+
 _GCHUNK_FIELDS: frozenset = frozenset(GChunk.__annotations__)
 
 
@@ -88,22 +94,34 @@ async def _aiter_sync_stream_in_thread(sync_stream: Any) -> AsyncGenerator[Any, 
     the event loop relies on for unrelated blocking work.
     """
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[Any] = asyncio.Queue()
+    queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=_SYNC_STREAM_QUEUE_MAXSIZE)
     stop = threading.Event()
 
     def _deliver(item: Any) -> None:
         """
-        Hand one item to the consumer's loop. A consumer may abandon the stream
-        (client disconnect) and let its event loop close while this thread is
-        still blocked inside next(); call_soon_threadsafe then raises, so stop
-        draining rather than crash the thread.
+        Hand one item to the consumer's loop, blocking this thread while the
+        bounded queue is full so a slow consumer applies backpressure instead of
+        letting the buffer grow without limit. A consumer may abandon the stream
+        (client disconnect) and let its loop close, so bail out on a closed loop
+        and poll the stop flag rather than blocking or crashing the thread.
         """
         if stop.is_set():
             return
         try:
-            loop.call_soon_threadsafe(queue.put_nowait, item)
+            future = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
         except RuntimeError:
             stop.set()
+            return
+        while not stop.is_set():
+            try:
+                future.result(timeout=0.5)
+                return
+            except concurrent.futures.TimeoutError:
+                continue
+            except RuntimeError:
+                stop.set()
+                return
+        future.cancel()
 
     def _drain() -> None:
         try:
