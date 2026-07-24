@@ -653,6 +653,53 @@ class TestGuardrailLoggingAggregation:
         assert len(info) == 2
         assert info[1]["guardrail_name"] == "test_guardrail"
 
+    def test_caller_metadata_does_not_divert_the_entry_from_the_reader(self):
+        """A caller-supplied `metadata` field must not send the entry to a bucket the
+        spend log never reads. Routes in LITELLM_METADATA_ROUTES (/v1/messages,
+        /v1/responses, batches, files) seed `litellm_metadata`, and Claude Code sends
+        `metadata.user_id`, so both keys are present on the same request."""
+        request_data = {
+            "metadata": {"user_id": "device-account-session"},
+            "litellm_metadata": {"user_api_key_hash": "abc"},
+        }
+
+        self._invoke_add_log(request_data)
+
+        assert (
+            "standard_logging_guardrail_information" not in request_data["metadata"]
+        ), "entry landed in the caller's metadata, where the spend log does not read it"
+        info = request_data["litellm_metadata"][
+            "standard_logging_guardrail_information"
+        ]
+        assert len(info) == 1
+        assert info[0]["guardrail_name"] == "test_guardrail"
+
+    def test_entry_and_applied_guardrails_header_share_one_bucket(self):
+        """The x-litellm-applied-guardrails writer and the guardrail-info writer must
+        resolve the same bucket, otherwise the response header and the spend log
+        disagree about whether the guardrail ran."""
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        request_data = {
+            "metadata": {"user_id": "device-account-session"},
+            "litellm_metadata": {},
+        }
+
+        self._invoke_add_log(request_data)
+        add_guardrail_to_applied_guardrails_header(
+            request_data=request_data, guardrail_name="test_guardrail"
+        )
+
+        buckets = {
+            key
+            for key in ("metadata", "litellm_metadata")
+            for field in ("standard_logging_guardrail_information", "applied_guardrails")
+            if field in request_data[key]
+        }
+        assert buckets == {"litellm_metadata"}
+
 
 class TestGuardrailOtelSpanEmission:
     """Recording a guardrail emits its otel span inline, so every guardrail
