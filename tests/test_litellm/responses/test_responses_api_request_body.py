@@ -200,10 +200,7 @@ async def test_aresponses_azure_shell_tool_400_maps_to_bad_request_error():
 
 @pytest.mark.asyncio
 async def test_aresponses_drops_stream_options():
-    """
-    stream_options is a Chat Completions param; the Responses API rejects it with
-    "Unknown parameter: 'stream_options.include_usage'". It must never reach the wire.
-    """
+    """The Responses API rejects include_usage, so include_usage-only stream_options must never reach the wire."""
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
@@ -223,6 +220,30 @@ async def test_aresponses_drops_stream_options():
         post_kwargs = mock_post.call_args.kwargs
         request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
         assert "stream_options" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_aresponses_keeps_include_obfuscation_in_stream_options():
+    """include_obfuscation is a valid Responses API stream option and must survive the include_usage strip."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(
+            _minimal_responses_api_payload("resp_stream_options_obfuscation", "gpt-5.5"), 200
+        )
+
+        await litellm.aresponses(
+            model="openai/gpt-5.5",
+            api_key="fake-api-key",
+            input="hi",
+            stream_options={"include_usage": True, "include_obfuscation": False},
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert request_body["stream_options"] == {"include_obfuscation": False}
 
 
 @pytest.mark.asyncio
