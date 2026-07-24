@@ -776,3 +776,37 @@ async def test_wrapper_async_restores_originating_task_context_after_success(mon
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
+    """If function_setup() constructs Logging() (which already mutated
+    trace_id_var/session_id_var in __init__) but then raises before returning,
+    the caller's wrapper() never gets a logging_obj reference to restore from.
+    function_setup()'s own except block must restore the correlation context
+    itself in that case, or it leaks into every subsequent log line in this
+    thread/task until something unrelated happens to reset it."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("simulated failure after Logging() construction")
+
+    monkeypatch.setattr(Logging, "update_environment_variables", _boom)
+
+    trace_id_var.set("pre-setup-failure-trace")
+    session_id_var.set("pre-setup-failure-session")
+    try:
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="Hello there!",
+                litellm_session_id="doomed-call-session",
+                num_retries=0,
+            )
+        assert trace_id_var.get() == "pre-setup-failure-trace"
+        assert session_id_var.get() == "pre-setup-failure-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

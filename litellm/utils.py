@@ -1041,6 +1041,13 @@ def function_setup(
         return logging_obj, kwargs
     except Exception as e:
         verbose_logger.exception("litellm.utils.py::function_setup() - [Non-Blocking] Error in function_setup")
+        # If Logging() was constructed above before this failed, its __init__ already
+        # mutated trace_id_var/session_id_var - restore them here since we're about to
+        # raise without ever returning logging_obj to the caller's wrapper()/
+        # wrapper_async(), which would otherwise be the one doing this restore.
+        _logging_obj_for_correlation_cleanup = locals().get("logging_obj")
+        if _logging_obj_for_correlation_cleanup is not None:
+            _logging_obj_for_correlation_cleanup._restore_correlation_context()
         raise e
 
 
