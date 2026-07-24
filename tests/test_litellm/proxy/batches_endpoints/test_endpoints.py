@@ -605,10 +605,12 @@ async def test_create__unified_file_id_other_tenant_gets_404(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_db_error_falls_back_to_raw_id(harness):
-    """A database failure during resolution must not abort batch creation:
-    the original id is dispatched so the managed-files deployment hook can
-    still map it via model_file_id_mapping."""
+async def test_create__unified_file_id_db_error_fails_closed_503(harness):
+    """A lookup failure must fail closed: the ownership gate could not run, and
+    the managed-files deployment hook maps unified ids from cache without
+    re-checking ownership, so dispatching the unverified id would let a caller
+    use another tenant's file during a database outage. Expect a clear 503 and
+    no dispatch."""
     set_body(
         harness,
         {
@@ -629,9 +631,12 @@ async def test_create__unified_file_id_db_error_falls_back_to_raw_id(harness):
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        await call_create(harness)
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
 
-    assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
+    assert exc.value.code == "503"
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
 
 
 @pytest.mark.asyncio

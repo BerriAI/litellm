@@ -51,11 +51,13 @@ async def _resolve_managed_input_file_storage_url(
 ) -> "str | None":
     """Resolve a managed (unified) input_file_id to its backend storage_url.
 
-    Returns None when the proxy has no database, the lookup fails, no managed
-    file row exists, or the row has no storage_url; callers fall back to
-    dispatching the original id so the managed-files deployment hook can still
-    map it via model_file_id_mapping. Raises a 404 when the caller does not
-    own the managed file.
+    Returns None when the proxy has no database, no managed file row exists,
+    or the row has no storage_url; callers fall back to dispatching the
+    original id so the managed-files deployment hook can still map it via
+    model_file_id_mapping. Raises a 404 when the caller does not own the
+    managed file and a 503 when the lookup fails, so an unverifiable id is
+    never dispatched (the deployment hook maps ids from cache without
+    re-checking ownership).
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -65,7 +67,10 @@ async def _resolve_managed_input_file_storage_url(
         db_file = await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
     except Exception as e:
         verbose_proxy_logger.warning("create_batch: managed file lookup failed for %s: %s", input_file_id, e)
-        return None
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "Unable to verify managed file access; please retry"},
+        )
     if db_file is None:
         return None
     if not can_access_resource(
