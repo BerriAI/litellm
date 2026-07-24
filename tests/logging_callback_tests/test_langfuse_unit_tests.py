@@ -94,12 +94,14 @@ standard_params_1 = StandardCallbackDynamicParams(
     langfuse_public_key="test_public_key",
     langfuse_secret="test_secret",
     langfuse_host="https://test.langfuse.com",
+    langfuse_environment="staging",
 )
 
 standard_params_2 = StandardCallbackDynamicParams(
     langfuse_public_key="test_public_key",
     langfuse_secret_key="test_secret",
     langfuse_host="https://test.langfuse.com",
+    langfuse_environment="staging",
 )
 
 
@@ -126,6 +128,7 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
     assert result.public_key == "test_public_key"
     assert result.secret_key == "test_secret"
     assert result.langfuse_host == "https://test.langfuse.com"
+    assert result.langfuse_environment == "staging"
 
     # Check if the logger is cached
     cached_logger = dynamic_logging_cache.get_cache(
@@ -133,6 +136,7 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
             "langfuse_public_key": "test_public_key",
             "langfuse_secret": "test_secret",
             "langfuse_host": "https://test.langfuse.com",
+            "langfuse_environment": "staging",
         },
         service_name="langfuse",
     )
@@ -202,11 +206,13 @@ def test_get_dynamic_langfuse_logging_config():
         langfuse_public_key="dynamic_key",
         langfuse_secret="dynamic_secret",
         langfuse_host="https://dynamic.langfuse.com",
+        langfuse_environment="development",
     )
     config = LangFuseHandler.get_dynamic_langfuse_logging_config(dynamic_params)
     assert config["langfuse_public_key"] == "dynamic_key"
     assert config["langfuse_secret"] == "dynamic_secret"
     assert config["langfuse_host"] == "https://dynamic.langfuse.com"
+    assert config["langfuse_environment"] == "development"
 
     # Test with no dynamic params
     empty_params = StandardCallbackDynamicParams()
@@ -214,6 +220,7 @@ def test_get_dynamic_langfuse_logging_config():
     assert config["langfuse_public_key"] is None
     assert config["langfuse_secret"] is None
     assert config["langfuse_host"] is None
+    assert config["langfuse_environment"] is None
 
 
 def test_return_global_langfuse_logger():

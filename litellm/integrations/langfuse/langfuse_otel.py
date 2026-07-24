@@ -223,7 +223,12 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
+        langfuse_environment = (
+            metadata.get("trace_environment")
+            or metadata.get("environment")
+            or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        )
         if langfuse_environment:
             safe_set_attribute(
                 span,
@@ -231,7 +236,6 @@ class LangfuseOtelLogger(OpenTelemetry):
                 langfuse_environment,
             )
 
-        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
         messages = kwargs.get("messages")

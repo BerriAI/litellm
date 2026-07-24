@@ -118,24 +118,43 @@ class TestLangfuseOtelIntegration:
                 "langfuse.observation.type", "generation"
             )
 
-    def test_set_langfuse_environment_attribute(self):
-        """Test that Langfuse environment is set correctly when environment variable is present."""
+    @pytest.mark.parametrize(
+        ("metadata", "process_environment", "expected_environment"),
+        [
+            (
+                {"trace_environment": "staging", "environment": "development"},
+                "production",
+                "staging",
+            ),
+            ({"environment": "development"}, "production", "development"),
+            ({}, "production", "production"),
+        ],
+    )
+    def test_set_langfuse_environment_attribute(
+        self,
+        metadata: dict[str, str],
+        process_environment: str,
+        expected_environment: str,
+    ):
         mock_span = MagicMock()
-        mock_kwargs = {"test": "kwargs"}
-        test_env = "staging"
+        kwargs = {"litellm_params": {"metadata": metadata}}
 
-        with patch.dict(os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": test_env}):
+        with patch.dict(
+            os.environ,
+            {"LANGFUSE_TRACING_ENVIRONMENT": process_environment},
+        ):
             with patch(
                 "litellm.integrations.arize._utils.safe_set_attribute"
             ) as mock_safe_set_attribute:
                 LangfuseOtelLogger._set_langfuse_specific_attributes(
-                    mock_span, mock_kwargs, {}
+                    mock_span, kwargs, {}
                 )
 
-                # safe_set_attribute(span, key, value) → positional args
-                mock_safe_set_attribute.assert_called_once_with(
-                    mock_span, "langfuse.environment", test_env
-                )
+        mock_safe_set_attribute.assert_any_call(
+            mock_span,
+            "langfuse.environment",
+            expected_environment,
+        )
 
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
