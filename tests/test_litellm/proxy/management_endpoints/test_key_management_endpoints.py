@@ -15312,3 +15312,37 @@ def test_apply_key_budget_window_null_clears_fields():
 
     assert non_default_values["budget_duration"] is None
     assert non_default_values["budget_reset_at"] is None
+
+
+def test_budget_window_audit_values_selects_only_budget_fields():
+    """The audit payload must carry only inferred budget fields, never unchanged
+    metadata that prepare_metadata_fields copies into non_default_values."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _budget_window_audit_values,
+    )
+
+    non_default_values = {
+        "spend": 0.0,
+        "budget_duration": "30d",
+        "budget_reset_at": "2026-08-01T00:00:00Z",
+        "metadata": {"unchanged": "carried-over"},
+        "key_alias": "unchanged-alias",
+    }
+    result = _budget_window_audit_values(non_default_values)
+
+    assert result == {
+        "spend": 0.0,
+        "budget_duration": "30d",
+        "budget_reset_at": "2026-08-01T00:00:00Z",
+    }
+    assert "metadata" not in result
+    assert "key_alias" not in result
+
+
+def test_budget_window_audit_values_empty_when_no_budget_fields():
+    """A plain metadata-only update produces no audit override."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _budget_window_audit_values,
+    )
+
+    assert _budget_window_audit_values({"metadata": {"a": 1}}) == {}

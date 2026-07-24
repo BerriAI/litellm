@@ -1904,6 +1904,12 @@ async def _sync_key_spend_counter(key: str, explicit_spend, non_default_values: 
         )
 
 
+def _budget_window_audit_values(non_default_values: dict) -> dict:
+    return {
+        k: non_default_values[k] for k in ("spend", "budget_duration", "budget_reset_at") if k in non_default_values
+    }
+
+
 def _apply_key_budget_window(non_default_values: dict, existing_key_row: LiteLLM_VerificationToken) -> None:
     budget_duration = non_default_values.pop("budget_duration")
     if budget_duration is None:
@@ -2238,7 +2244,7 @@ async def _process_single_key_update(
             response=response,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
-            applied_values=non_default_values,
+            applied_values=_budget_window_audit_values(non_default_values),
         )
     )
 
@@ -2714,7 +2720,7 @@ async def update_key_fn(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
-                applied_values=non_default_values,
+                applied_values=_budget_window_audit_values(non_default_values),
             )
         )
 
