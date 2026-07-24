@@ -1,5 +1,7 @@
 use crate::error::{CoreError, CoreResult};
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use crate::messages::transformation::{
+    AnthropicMessagesProviderConfig, MessagesAuthKind, MessagesAuthStrategy, MessagesStreaming,
+};
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
@@ -51,6 +53,7 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
         Ok(complete_anthropic_url(api_base, env_lookup))
@@ -64,8 +67,19 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         resolve_anthropic_api_key(api_key, env_lookup)
     }
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::Header("x-api-key")
+    fn auth_kind(
+        &self,
+        _model: &str,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<MessagesAuthKind> {
+        Ok(MessagesAuthKind::ApiKey {
+            strategy: MessagesAuthStrategy::Header("x-api-key"),
+            accepts_bearer: false,
+        })
+    }
+
+    fn streaming(&self) -> MessagesStreaming {
+        MessagesStreaming::SsePassthrough
     }
 }
 
@@ -127,9 +141,14 @@ mod tests {
 
     #[test]
     fn auth_strategy_and_default_headers_match_anthropic() {
-        assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.auth_strategy().header_name(),
-            "x-api-key"
+        assert!(
+            ANTHROPIC_MESSAGES_CONFIG
+                .auth_kind("model", &|_| None)
+                .expect("auth")
+                .eq(&MessagesAuthKind::ApiKey {
+                    strategy: MessagesAuthStrategy::Header("x-api-key"),
+                    accepts_bearer: false,
+                })
         );
         assert_eq!(
             ANTHROPIC_MESSAGES_CONFIG.default_headers(),

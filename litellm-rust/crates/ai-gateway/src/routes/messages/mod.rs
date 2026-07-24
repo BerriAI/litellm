@@ -33,35 +33,32 @@ async fn handle(
         .map_err(MessagesRouteError::from)?
     {
         service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
-        service::MessagesResponse::Stream(upstream) => stream_response(upstream),
+        service::MessagesResponse::Stream(stream) => stream_response(stream),
     }
 }
 
-fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRouteError> {
-    let content_type = upstream
-        .headers()
-        .get(CONTENT_TYPE)
-        .cloned()
-        .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"));
-    let mut response = Response::builder()
-        .status(
-            StatusCode::from_u16(upstream.status().as_u16()).map_err(|error| {
-                MessagesRouteError(CoreError::InvalidResponse(format!(
-                    "invalid upstream response status: {error}"
-                )))
-            })?,
-        )
-        .header(CONTENT_TYPE, content_type);
-    if let Some(value) = upstream.headers().get(CACHE_CONTROL) {
-        response = response.header(CACHE_CONTROL, value);
-    }
-    response
-        .body(Body::from_stream(upstream.bytes_stream()))
-        .map_err(|error| {
+fn stream_response(
+    stream: crate::messages::MessagesStream,
+) -> Result<Response, MessagesRouteError> {
+    let response = Response::builder().status(StatusCode::OK).header(
+        CONTENT_TYPE,
+        HeaderValue::try_from(stream.content_type).map_err(|error| {
             MessagesRouteError(CoreError::InvalidResponse(format!(
-                "failed to build streaming response: {error}"
+                "invalid upstream content type: {error}"
             )))
-        })
+        })?,
+    );
+    let response = if let Some(value) = stream.cache_control.as_deref() {
+        response.header(CACHE_CONTROL, value)
+    } else {
+        response
+    };
+    let body = Body::from_stream(stream.body);
+    response.body(body).map_err(|error| {
+        MessagesRouteError(CoreError::InvalidResponse(format!(
+            "failed to build streaming response: {error}"
+        )))
+    })
 }
 
 fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, CoreError> {

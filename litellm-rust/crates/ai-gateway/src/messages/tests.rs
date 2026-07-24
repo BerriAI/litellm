@@ -55,6 +55,7 @@ fn write_response(body: &str) -> String {
 fn provider_config_resolves_anthropic_and_azure_ai() {
     assert!(messages_provider_config("anthropic").is_some());
     assert!(messages_provider_config("azure_ai").is_some());
+    assert!(messages_provider_config("bedrock").is_some());
     assert!(messages_provider_config("openai").is_none());
 }
 

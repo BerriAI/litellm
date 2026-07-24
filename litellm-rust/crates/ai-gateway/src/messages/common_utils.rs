@@ -3,8 +3,10 @@ use litellm_core::error::{CoreError, json_type_name};
 use litellm_core::messages::transformation::AnthropicMessagesProviderConfig;
 use litellm_core::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
 use litellm_core::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
+use litellm_core::providers::bedrock::messages::transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG;
 use serde_json::{Map, Value};
 
+use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::constants::MESSAGES_ERROR_BODY_MAX_CHARS;
 
 pub(super) fn truncate_error_body(body: &str) -> String {
@@ -19,8 +21,9 @@ pub(super) fn messages_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AnthropicMessagesProviderConfig> {
     match provider {
-        "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
+        ANTHROPIC_MESSAGES_PROVIDER => Some(&ANTHROPIC_MESSAGES_CONFIG),
         "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
+        "bedrock" => Some(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG),
         _ => None,
     }
 }

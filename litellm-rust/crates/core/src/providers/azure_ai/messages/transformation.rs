@@ -1,5 +1,7 @@
 use crate::error::{CoreError, CoreResult};
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use crate::messages::transformation::{
+    AnthropicMessagesProviderConfig, MessagesAuthKind, MessagesStreaming,
+};
 use crate::messages::types::{
     AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
     MessageContent, SystemPrompt,
@@ -146,6 +148,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> CoreResult<String> {
         complete_azure_anthropic_url(api_base, env_lookup)
@@ -159,12 +162,20 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         resolve_azure_api_key(api_key, env_lookup)
     }
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        self.anthropic.auth_strategy()
+    fn auth_kind(
+        &self,
+        model: &str,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> CoreResult<MessagesAuthKind> {
+        let _ = (model, env_lookup);
+        Ok(MessagesAuthKind::ApiKey {
+            strategy: crate::messages::transformation::MessagesAuthStrategy::Header("x-api-key"),
+            accepts_bearer: true,
+        })
     }
 
-    fn accepts_bearer_auth(&self) -> bool {
-        true
+    fn streaming(&self) -> MessagesStreaming {
+        MessagesStreaming::Unsupported
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -292,15 +303,28 @@ mod tests {
     fn auth_strategy_is_x_api_key() {
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .auth_strategy()
-                .header_name(),
-            "x-api-key"
+                .auth_kind("model", &|_| None)
+                .expect("auth"),
+            MessagesAuthKind::ApiKey {
+                strategy: crate::messages::transformation::MessagesAuthStrategy::Header(
+                    "x-api-key"
+                ),
+                accepts_bearer: true,
+            }
         );
     }
 
     #[test]
     fn accepts_bearer_auth_for_entra_id() {
-        assert!(AZURE_ANTHROPIC_MESSAGES_CONFIG.accepts_bearer_auth());
+        assert!(matches!(
+            AZURE_ANTHROPIC_MESSAGES_CONFIG
+                .auth_kind("model", &|_| None)
+                .expect("auth"),
+            MessagesAuthKind::ApiKey {
+                accepts_bearer: true,
+                ..
+            }
+        ));
     }
 
     #[test]

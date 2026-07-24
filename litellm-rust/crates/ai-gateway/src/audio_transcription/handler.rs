@@ -3,8 +3,8 @@ use std::time::SystemTime;
 use litellm_core::CoreResult;
 use litellm_core::audio_transcription::transformation::AudioTranscriptionAuth;
 use litellm_core::error::CoreError;
-use litellm_core::providers::bedrock::audio_transcription::aws_auth_config;
 use litellm_core::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
+use litellm_core::providers::bedrock::common_utils::aws_auth_config;
 use serde_json::Value;
 
 use super::common_utils::truncate_error_body;
@@ -61,13 +61,21 @@ pub(crate) async fn sign_request(
     })?;
     let mut headers = super::common_utils::string_headers(None)?;
     headers.insert("Content-Type".to_string(), "application/json".to_string());
+    let host = reqwest::Url::parse(&request.url)
+        .map_err(|error| CoreError::InvalidRequest(format!("invalid Bedrock URL: {error}")))?
+        .host_str()
+        .ok_or_else(|| CoreError::InvalidRequest("Bedrock URL has no host".to_string()))?
+        .to_string();
+    headers.insert("Host".to_string(), host);
     headers.extend(request.upstream_headers.iter().cloned());
     match auth {
         AudioTranscriptionAuth::Bearer => {}
         AudioTranscriptionAuth::AwsSigV4 { region, .. } => {
-            let credentials =
-                resolve_credentials(aws_auth_config(optional_params, &env_lookup), &env_lookup)
-                    .await?;
+            let credentials = resolve_credentials(
+                aws_auth_config(optional_params, &env_lookup, Some(&region)),
+                &env_lookup,
+            )
+            .await?;
             headers.extend(sign_bedrock_post(
                 &request.url,
                 &body,

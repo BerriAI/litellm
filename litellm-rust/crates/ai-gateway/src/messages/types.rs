@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use litellm_core::messages::transformation::AnthropicMessagesProviderConfig;
+use litellm_core::messages::transformation::{
+    AnthropicMessagesProviderConfig, MessagesAuthKind, MessagesStreaming,
+};
 use serde_json::{Map, Value};
 
 pub struct MessagesRequest<'a> {
@@ -14,9 +16,10 @@ pub struct MessagesRequest<'a> {
 }
 
 pub(crate) struct ProviderMessagesRequest {
-    pub(crate) provider: String,
     pub(crate) model: String,
     pub(crate) config: &'static dyn AnthropicMessagesProviderConfig,
+    pub(crate) auth_kind: MessagesAuthKind,
+    pub(crate) streaming: MessagesStreaming,
     pub(crate) url: String,
     pub(crate) body: Value,
     pub(crate) upstream_headers: Vec<(String, String)>,

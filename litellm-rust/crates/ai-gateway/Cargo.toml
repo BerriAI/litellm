@@ -22,6 +22,7 @@ reqwest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
+bytes = "1"
 serde_json.workspace = true
 base64.workspace = true
 axum = { workspace = true, features = ["ws"], optional = true }
