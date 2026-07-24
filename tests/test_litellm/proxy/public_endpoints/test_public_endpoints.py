@@ -243,6 +243,36 @@ def test_bedrock_mantle_provider_fields():
     assert fields_by_key["api_base"]["field_type"] == "text"
 
 
+def test_nano_gpt_provider_fields():
+    """NanoGPT must be a selectable provider in the Add Model flow.
+
+    The dropdown is driven entirely by /public/providers/fields, so a missing
+    entry means NanoGPT cannot be added through the UI at all even though the
+    backend already supports the `nano-gpt/` route (regression guard for
+    https://github.com/BerriAI/litellm/issues/34499). `provider` must equal the
+    UI provider_map key so the model dropdown resolves nano-gpt models, and
+    `litellm_provider` must be the backend slug.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    nano_gpt = next((p for p in providers if p["provider"] == "NANO_GPT"), None)
+    assert nano_gpt is not None, "NanoGPT provider entry not found"
+
+    assert nano_gpt["provider_display_name"] == "NanoGPT"
+    assert nano_gpt["litellm_provider"] == "nano-gpt"
+    assert nano_gpt["default_model_placeholder"].startswith("nano-gpt/")
+
+    fields_by_key = {f["key"]: f for f in nano_gpt["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 def test_google_ai_studio_provider_fields_expose_api_base():
     """The Google AI Studio (gemini) credential form must let admins set a custom
     api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted
