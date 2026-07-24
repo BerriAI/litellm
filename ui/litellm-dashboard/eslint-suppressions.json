@@ -1088,11 +1088,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/organizations/_components/OrganizationsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/playground/components/chat_ui/A2AMetrics.tsx": {
     "no-restricted-imports": {
       "count": 1
