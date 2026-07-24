@@ -3566,3 +3566,69 @@ async def test_sync_to_async_queue_iterator_aclose_while_producer_blocked_in_nex
         "close() must run on the producer thread, not the event-loop thread, "
         "to avoid 'generator already executing' when the producer is mid-next()"
     )
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_aclose_swallows_close_exception():
+    class ExplodingCloseIter:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise StopIteration
+
+        def close(self):
+            raise RuntimeError("close failed")
+
+    wrapper = _SyncToAsyncQueueIterator(ExplodingCloseIter())
+    await wrapper.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_aclose_drains_queue_race():
+    """Cover the QueueEmpty branch of aclose()'s drain loop, which guards
+    against get_nowait() racing ahead of empty() reporting a non-empty queue."""
+
+    class NeverYieldsIter:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise StopIteration
+
+    wrapper = _SyncToAsyncQueueIterator(NeverYieldsIter())
+    wrapper._queue.empty = lambda: False
+    wrapper._queue.get_nowait = Mock(side_effect=asyncio.QueueEmpty())
+
+    await wrapper.aclose()
+
+
+def test_sync_to_async_queue_iterator_producer_survives_cancelled_put():
+    import concurrent.futures
+
+    from litellm.litellm_core_utils.streaming_handler import (
+        _SYNC_ITER_EXHAUSTED,
+        _SyncToAsyncQueueIterator,
+    )
+
+    class DummyLoop:
+        pass
+
+    wrapper = object.__new__(_SyncToAsyncQueueIterator)
+    wrapper._sync_iter = iter(["chunk"])
+    wrapper._loop = DummyLoop()
+    wrapper._queue = asyncio.Queue()
+    wrapper._closed = threading.Event()
+    wrapper._done = threading.Event()
+    put_calls = []
+
+    def _raise_cancelled(coro, loop):
+        put_calls.append(coro)
+        coro.close()
+        raise concurrent.futures.CancelledError()
+
+    with patch("asyncio.run_coroutine_threadsafe", side_effect=_raise_cancelled):
+        wrapper._producer()
+
+    assert len(put_calls) == 2  # the chunk, then the exhaustion sentinel
+    assert wrapper._done.is_set()

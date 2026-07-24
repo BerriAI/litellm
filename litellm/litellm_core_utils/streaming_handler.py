@@ -69,7 +69,9 @@ class _SyncToAsyncQueueIterator:
 
     def __init__(self, sync_iter: Any) -> None:
         from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
-        from litellm.litellm_core_utils.thread_pool_executor import executor
+        from litellm.litellm_core_utils.sync_stream_producer_executor import (
+            sync_stream_producer_executor,
+        )
 
         self._sync_iter = sync_iter
         self._loop = asyncio.get_running_loop()
@@ -77,7 +79,7 @@ class _SyncToAsyncQueueIterator:
         self._exhausted = False
         self._closed = threading.Event()
         self._done = threading.Event()
-        executor.submit(self._producer)
+        sync_stream_producer_executor.submit(self._producer)
 
     def _producer(self) -> None:
         def _put(item: Any) -> None:
@@ -120,7 +122,7 @@ class _SyncToAsyncQueueIterator:
     async def aclose(self) -> None:
         self._exhausted = True
         self._closed.set()
-        await asyncio.to_thread(self._done.wait, 5)
+        await asyncio.to_thread(self._done.wait)
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
