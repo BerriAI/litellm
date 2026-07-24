@@ -592,6 +592,15 @@ class LiteLLMAnthropicMessagesAdapter:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
+                    # DeepSeek / reasoning models require `reasoning_content`
+                    # when assistant messages in conversation history contain
+                    # thinking blocks. Without it, multi-turn requests fail with
+                    # "The `reasoning_content` in the thinking mode must be
+                    # passed back to the API".
+                    first_thinking = thinking_blocks[0]
+                    assistant_message["reasoning_content"] = first_thinking.get(  # type: ignore
+                        "thinking", ""
+                    )
                 new_messages.append(assistant_message)
 
         return new_messages
