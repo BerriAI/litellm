@@ -3164,6 +3164,17 @@ def test_vertex_ai_function_declarations_with_other_tools_separate():
     assert func_tool["function_declarations"][0]["name"] == "get_weather"
 
 
+def test_vertex_ai_namespace_tool_without_schema_skips():
+    v = VertexGeminiConfig()
+
+    tools = v._map_function(
+        value=[{"type": "namespace", "name": "mcp__node_repl"}],
+        optional_params={},
+    )
+
+    assert tools == []
+
+
 def test_vertex_ai_single_tool_type_still_works():
     """
     Test that single tool type usage still works correctly (backward compatibility).
