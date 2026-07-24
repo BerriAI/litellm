@@ -88,6 +88,47 @@ class CooldownCache:
     def get_cooldown_cache_key(model_id: str) -> str:
         return f"deployment:{model_id}:cooldown"
 
+    @staticmethod
+    def _is_cooldown_expired(
+        cooldown_cache_value: CooldownCacheValue,
+        current_time: Optional[float] = None,
+    ) -> bool:
+        """
+        Check the cooldown payload's own expiry time.
+
+        DualCache may keep a Redis-sourced cooldown value in local memory longer
+        than the Redis key TTL. The cooldown payload timestamp is the source of
+        truth for whether the cooldown is still active.
+        """
+        try:
+            current_time = current_time or time.time()
+            cooldown_expires_at = float(cooldown_cache_value["timestamp"]) + float(
+                cooldown_cache_value["cooldown_time"]
+            )
+            return current_time >= cooldown_expires_at
+        except Exception:
+            return False
+
+    def _get_active_cooldown_from_cache_result(
+        self,
+        model_id: str,
+        result: Any,
+        current_time: float,
+    ) -> Optional[Tuple[str, CooldownCacheValue]]:
+        if result and isinstance(result, dict):
+            cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+            if self._is_cooldown_expired(
+                cooldown_cache_value=cooldown_cache_value,
+                current_time=current_time,
+            ):
+                verbose_logger.debug(
+                    "CooldownCache: ignoring expired cooldown for model_id=%s",
+                    model_id,
+                )
+                return None
+            return model_id, cooldown_cache_value
+        return None
+
     async def async_get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
@@ -110,10 +151,15 @@ class CooldownCache:
             return active_cooldowns
 
         # Process the results
+        current_time = time.time()
         for model_id, result in zip(model_ids, results):
-            if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                active_cooldowns.append((model_id, cooldown_cache_value))
+            active_cooldown = self._get_active_cooldown_from_cache_result(
+                model_id=model_id,
+                result=result,
+                current_time=current_time,
+            )
+            if active_cooldown is not None:
+                active_cooldowns.append(active_cooldown)
 
         return active_cooldowns
 
@@ -130,10 +176,15 @@ class CooldownCache:
 
         active_cooldowns = []
         # Process the results
+        current_time = time.time()
         for model_id, result in zip(model_ids, results):
-            if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                active_cooldowns.append((model_id, cooldown_cache_value))
+            active_cooldown = self._get_active_cooldown_from_cache_result(
+                model_id=model_id,
+                result=result,
+                current_time=current_time,
+            )
+            if active_cooldown is not None:
+                active_cooldowns.append(active_cooldown)
 
         return active_cooldowns
 
@@ -153,9 +204,15 @@ class CooldownCache:
 
         min_cooldown_time: Optional[float] = None
         # Process the results
+        current_time = time.time()
         for model_id, result in zip(model_ids, results):
-            if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+            active_cooldown = self._get_active_cooldown_from_cache_result(
+                model_id=model_id,
+                result=result,
+                current_time=current_time,
+            )
+            if active_cooldown is not None:
+                _, cooldown_cache_value = active_cooldown
                 if min_cooldown_time is None:
                     min_cooldown_time = cooldown_cache_value["cooldown_time"]
                 elif cooldown_cache_value["cooldown_time"] < min_cooldown_time:
