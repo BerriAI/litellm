@@ -478,6 +478,46 @@ def test_get_model_from_request_bedrock_unparseable_endpoint_returns_none():
     )
 
 
+def test_get_model_from_request_bedrock_url_model_overrides_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/model/us.anthropic.claude-opus-4-6-v1/converse",
+        )
+        == "us.anthropic.claude-opus-4-6-v1"
+    )
+
+
+def test_get_model_from_request_bedrock_invoke_url_model_overrides_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/model/us.anthropic.claude-opus-4-6-v1/invoke",
+        )
+        == "us.anthropic.claude-opus-4-6-v1"
+    )
+
+
+def test_get_model_from_request_bedrock_count_tokens_uses_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/v1/messages/count_tokens",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_unparseable_endpoint_keeps_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/agents/some-agent-route",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
 def test_get_model_from_request_includes_file_endpoint_header_model():
     assert (
         get_model_from_request(
