@@ -13,7 +13,6 @@ import traceback
 from datetime import datetime as dt_object
 from functools import lru_cache
 from typing import (
-    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -77,6 +76,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_streaming_responses_for_custom_logger,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
@@ -175,8 +175,6 @@ from .initialize_dynamic_callback_params import (
 )
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
-if TYPE_CHECKING:
-    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -1367,7 +1365,7 @@ class Logging(LiteLLMLoggingBaseClass):
             OpenAIFileObject,
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
-            "SearchResponse",
+            SearchResponse,
             dict,
             list,
         ],
@@ -1837,6 +1835,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
             logging_result = self.normalize_logging_result(result=result)
 
+            if isinstance(result, Response) and isinstance(logging_result, ModelResponse):
+                result = logging_result
+
             if standard_logging_object is None and result is not None and self.stream is not True:
                 if self._is_recognized_call_type_for_logging(logging_result=logging_result) or isinstance(
                     logging_result, (dict, list)
@@ -1913,7 +1914,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _flush_passthrough_collected_chunks_helper(
         self,
         raw_bytes: List[bytes],
-        provider_config: "BasePassthroughConfig",
+        provider_config: BasePassthroughConfig,
     ) -> Optional["CostResponseTypes"]:
         all_chunks = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
         complete_streaming_response = provider_config.handle_logging_collected_chunks(
@@ -1928,7 +1929,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def flush_passthrough_collected_chunks(
         self,
         raw_bytes: List[bytes],
-        provider_config: "BasePassthroughConfig",
+        provider_config: BasePassthroughConfig,
     ):
         """
         Flush collected chunks from the logging object
@@ -1951,7 +1952,7 @@ class Logging(LiteLLMLoggingBaseClass):
     async def async_flush_passthrough_collected_chunks(
         self,
         raw_bytes: List[bytes],
-        provider_config: "BasePassthroughConfig",
+        provider_config: BasePassthroughConfig,
     ):
         complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
             raw_bytes=raw_bytes,
@@ -5418,7 +5419,10 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4), flush=True)  # noqa: T201
+        try:
+            print(json.dumps(payload, indent=4, default=str), flush=True)  # noqa: T201
+        except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
+            verbose_logger.exception("Error serializing standard logging payload for debug output: {}".format(str(e)))
 
 
 def get_standard_logging_metadata(

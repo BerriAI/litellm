@@ -1,12 +1,12 @@
 """
-Tests for error propagation in _async_streaming passthrough routes.
+Tests for error propagation in async passthrough streaming routes.
 
-Verifies that HTTP 4xx/5xx errors from upstream (e.g. Azure 429 rate limits)
-raise exceptions instead of being silently forwarded as raw bytes under HTTP 200.
-
-See: litellm/passthrough/main.py _async_streaming()
+Verifies that streaming passthrough wrappers preserve the previous guarantees:
+HTTP 4xx/5xx failures must raise instead of being silently forwarded as bytes,
+and successful streaming responses should still yield chunks normally.
 """
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -54,25 +54,25 @@ def _make_mock_logging_obj():
 @pytest.mark.asyncio
 async def test_async_streaming_429_raises():
     """429 from upstream should raise HTTPStatusError, not yield error bytes."""
-    from litellm.passthrough.main import _async_streaming
-
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+    
     error_body = json.dumps(
         {"error": {"code": "429", "message": "Rate limit exceeded."}}
     ).encode()
     mock_response = _make_mock_response(429, error_body)
-
+    
     async def response_coro():
         return mock_response
-
+    
     chunks = []
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        async for chunk in _async_streaming(
+        async for chunk in AsyncPassthroughStreamingResponse(
             response=response_coro(),
             litellm_logging_obj=_make_mock_logging_obj(),
             provider_config=MagicMock(),
         ):
             chunks.append(chunk)
-
+    
     assert exc_info.value.response.status_code == 429
     assert len(chunks) == 0
 
@@ -80,45 +80,51 @@ async def test_async_streaming_429_raises():
 @pytest.mark.asyncio
 async def test_async_streaming_500_raises():
     """500 from upstream should also raise, not yield error bytes."""
-    from litellm.passthrough.main import _async_streaming
-
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+    
     error_body = json.dumps(
         {"error": {"code": "500", "message": "Internal server error"}}
     ).encode()
     mock_response = _make_mock_response(500, error_body)
-
+    
     async def response_coro():
         return mock_response
-
+    
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        async for _ in _async_streaming(
+        async for _ in AsyncPassthroughStreamingResponse(
             response=response_coro(),
             litellm_logging_obj=_make_mock_logging_obj(),
             provider_config=MagicMock(),
         ):
             pass
-
+    
     assert exc_info.value.response.status_code == 500
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_200_yields_chunks():
+async def test_async_passthrough_wrapper_200_yields_chunks():
     """Successful 200 streaming responses should continue to work normally."""
-    from litellm.passthrough.main import _async_streaming
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 
     sse_data = b'data: {"type":"response.created"}\n\ndata: [DONE]\n\n'
     mock_response = _make_mock_response(200, sse_data)
+    mock_logging_obj = _make_mock_logging_obj()
 
     async def response_coro():
         return mock_response
 
-    chunks = []
-    async for chunk in _async_streaming(
+    async_stream = AsyncPassthroughStreamingResponse(
         response=response_coro(),
-        litellm_logging_obj=_make_mock_logging_obj(),
+        litellm_logging_obj=mock_logging_obj,
         provider_config=MagicMock(),
-    ):
+    )
+
+    chunks = []
+    async for chunk in async_stream:
         chunks.append(chunk)
+
+    await asyncio.sleep(0)
 
     assert len(chunks) == 1
     assert b"response.created" in chunks[0]
+    mock_logging_obj.async_flush_passthrough_collected_chunks.assert_awaited_once()

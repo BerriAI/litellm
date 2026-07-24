@@ -4,13 +4,14 @@ GigaChat Streaming Response Handler
 
 import json
 import uuid
-from typing import Any, Optional
+from typing import Any
 
+from litellm.llms.gigachat.utils import convert_usage
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import ChatCompletionUsageBlock, GenericStreamingChunk
 
 
 class GigaChatModelResponseIterator:
@@ -20,7 +21,7 @@ class GigaChatModelResponseIterator:
         self,
         streaming_response: Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -29,9 +30,9 @@ class GigaChatModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         """Parse a single streaming chunk from GigaChat."""
         text = ""
-        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        tool_use: ChatCompletionToolCallChunk | None = None
         is_finished = False
-        finish_reason: Optional[str] = None
+        finish_reason: str | None = None
 
         choices = chunk.get("choices", [])
         if not choices:
@@ -70,6 +71,23 @@ class GigaChatModelResponseIterator:
             )
             finish_reason = "tool_calls"
 
+        usage_block = None
+        if finish_reason == "stop":
+            usage_data = chunk.get("usage", {})
+            if usage_data:
+                usage = convert_usage(usage_data)
+                usage_block = ChatCompletionUsageBlock(
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                    prompt_tokens_details=(
+                        usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
+                    ),
+                    completion_tokens_details=(
+                        usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
+                    ),
+                )
+
         if finish_reason is not None:
             is_finished = True
 
@@ -78,7 +96,7 @@ class GigaChatModelResponseIterator:
             tool_use=tool_use,
             is_finished=is_finished,
             finish_reason=finish_reason or "",
-            usage=None,
+            usage=usage_block,
             index=choice.get("index", 0),
         )
 

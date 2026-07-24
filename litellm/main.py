@@ -5354,6 +5354,9 @@ def completion(  # type: ignore
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            gigachat_scope=kwargs.get("gigachat_scope"),
+            gigachat_auth_url=kwargs.get("gigachat_auth_url"),
+            gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{key: kwargs[key] for key in AWS_CREDENTIAL_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
