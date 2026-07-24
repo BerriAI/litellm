@@ -158,6 +158,28 @@ describe("OrgCreateDialog", () => {
     expect(screen.getByLabelText("Organization Name")).toHaveValue("");
   });
 
+  it("cannot be dismissed while a create is pending, then closes once on success", async () => {
+    const user = userEvent.setup();
+    let resolveCreate: (value: unknown) => void = () => {};
+    const createOrganization = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    renderDialog({ createOrganization });
+
+    await user.type(screen.getByLabelText("Organization Name"), "new-org");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(createOrganization).toHaveBeenCalledTimes(1));
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByLabelText("Organization Name")).toHaveValue("new-org");
+
+    resolveCreate({});
+    await waitFor(() => expect(screen.queryByLabelText("Organization Name")).not.toBeInTheDocument());
+  });
+
   it("does not fire a second create while one is pending", async () => {
     const user = userEvent.setup();
     let resolveCreate: (value: unknown) => void = () => {};

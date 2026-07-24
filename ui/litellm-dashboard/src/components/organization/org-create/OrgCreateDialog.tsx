@@ -43,11 +43,9 @@ export const OrgCreateDialog = ({
   const queryClient = useQueryClient();
   const form = useZodForm(orgSettingsSchema, { defaultValues: emptyOrgFormValues });
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      form.reset(emptyOrgFormValues);
-    }
-    onOpenChange(nextOpen);
+  const closeAndReset = () => {
+    form.reset(emptyOrgFormValues);
+    onOpenChange(false);
   };
 
   const mutation = useMutation({
@@ -55,11 +53,19 @@ export const OrgCreateDialog = ({
     onSuccess: () => {
       NotificationsManager.success("Organization created successfully");
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
-      handleOpenChange(false);
+      closeAndReset();
     },
     onError: (error: unknown) =>
       NotificationsManager.fromBackend(error instanceof Error ? error.message : "Failed to create organization"),
   });
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && mutation.isPending) return;
+    if (!nextOpen) {
+      form.reset(emptyOrgFormValues);
+    }
+    onOpenChange(nextOpen);
+  };
 
   const onSubmit = form.handleSubmit((values) => {
     if (mutation.isPending) return;
