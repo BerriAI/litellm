@@ -25,6 +25,7 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: >-
+        tests/test_litellm/proxy/analytics_endpoints
         tests/test_litellm/proxy/management_endpoints
         tests/test_litellm/proxy/guardrails
         tests/test_litellm/proxy/management_helpers
