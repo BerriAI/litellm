@@ -7726,3 +7726,67 @@ class TestPreemptive401ModeAware:
             await self._run(delegate, None, has_stored_token=False)
         assert exc.value.status_code == 401
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+
+@pytest.mark.asyncio
+async def test_local_registry_tool_calls_release_max_parallel_requests_slot(monkeypatch):
+    """
+    The local (OpenAPI-backed) dispatch path runs the same pre-call hooks as the
+    managed path, so it acquires a ``max_parallel_requests`` slot too. Nothing
+    downstream releases it, so ``execute_mcp_tool`` must; otherwise a key with
+    ``max_parallel_requests: N`` wedges after N sequential tool calls.
+    """
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+
+    cache = DualCache()
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=cache)
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+    monkeypatch.setattr(litellm, "callbacks", [limiter])
+
+    openapi_server = MCPServer(
+        server_id="openapi-server-id",
+        name="openapi_server",
+        server_name="openapi_server",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        spec_path="/fake/openapi.json",
+    )
+    user_api_key_auth = UserAPIKeyAuth(api_key="hashed-key", max_parallel_requests=1)
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=MagicMock()),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=openapi_server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "resolve_openapi_upstream_auth",
+            new=AsyncMock(return_value=(None, None)),
+        ),
+        patch.object(mcp_module.MCPRequestHandler, "is_tool_allowed", return_value=True),
+        patch.object(
+            mcp_module,
+            "_handle_local_mcp_tool",
+            new=AsyncMock(return_value=[TextContent(type="text", text="ok")]),
+        ),
+    ):
+        for _ in range(3):
+            result = await mcp_module.execute_mcp_tool(
+                name="openapi_server-tool",
+                arguments={},
+                allowed_mcp_servers=[openapi_server],
+                start_time=datetime.now(),
+                user_api_key_auth=user_api_key_auth,
+            )
+            assert result.isError is False

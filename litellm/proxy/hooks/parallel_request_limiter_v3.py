@@ -3378,7 +3378,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception(f"Error in rate limit failure event: {str(e)}")
 
-    async def async_release_max_parallel_requests_on_disconnect(
+    async def async_release_max_parallel_requests_slot(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict | None = None,
@@ -3393,7 +3393,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         client cancels a stream mid-flight, the cancellation surfaces as
         ``asyncio.CancelledError`` / ``GeneratorExit`` and neither callback
         runs, so without this the slot leaks per cancelled stream until its
-        TTL prunes it. ``request_data`` carries the stashed acquisition;
+        TTL prunes it. MCP tool calls are the other caller: they run the
+        pre-call hooks against a synthetic request dict that no logging
+        callback ever sees, so the tool call path releases its own slot.
+        ``request_data`` carries the stashed acquisition;
         its presence (not the key object's current max_parallel_requests
         configuration, which can change mid-request) decides whether there
         is anything to release.

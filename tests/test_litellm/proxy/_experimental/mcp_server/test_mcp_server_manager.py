@@ -9240,3 +9240,164 @@ class TestDiscoveryFailureLogging:
         assert "typo_row" in caplog.text
         assert "authorization_url, token_url" in caplog.text
         assert "unresolved" in caplog.text
+
+
+class TestMaxParallelRequestsSlotRelease:
+    """
+    Every MCP tool call runs the proxy pre-call hooks, which acquire a
+    ``max_parallel_requests`` slot. Nothing in the MCP path fires the litellm
+    success/failure logging callbacks that release the slot for LLM requests,
+    so the tool call itself must release it; otherwise a key with
+    ``max_parallel_requests: N`` wedges after N strictly sequential tool calls
+    and only a restart (or the hour-long slot TTL) frees it.
+    """
+
+    @staticmethod
+    def _proxy_logging_with_limiter():
+        from litellm.caching.dual_cache import DualCache
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            _PROXY_MaxParallelRequestsHandler_v3,
+        )
+        from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+
+        cache = DualCache()
+        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=cache)
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+        return proxy_logging_obj, limiter
+
+    @staticmethod
+    def _server() -> MCPServer:
+        return MCPServer(
+            server_id="slot-server",
+            name="slot_server",
+            server_name="slot_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+
+    @staticmethod
+    def _user_api_key_auth(max_parallel_requests: int):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        return UserAPIKeyAuth(api_key="hashed-key", max_parallel_requests=max_parallel_requests)
+
+    @staticmethod
+    def _patched_manager(manager: MCPServerManager, server: MCPServer, tool_call):
+        async def fake_create_mcp_client(server, **kwargs):
+            class _Client:
+                async def call_tool(self, params, host_progress_callback=None):
+                    return await tool_call()
+
+            return _Client()
+
+        return (
+            patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server),
+            patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client),
+        )
+
+    async def _call(self, manager, proxy_logging_obj, user_api_key_auth):
+        return await manager.call_tool(
+            server_name="slot_server",
+            name="tool",
+            arguments={},
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    @pytest.mark.asyncio
+    async def test_sequential_tool_calls_never_exhaust_the_limit(self, monkeypatch):
+        proxy_logging_obj, limiter = self._proxy_logging_with_limiter()
+        monkeypatch.setattr("litellm.callbacks", [limiter])
+        manager = MCPServerManager()
+        server = self._server()
+        user_api_key_auth = self._user_api_key_auth(max_parallel_requests=1)
+
+        async def tool_call():
+            return "ok"
+
+        resolve_patch, client_patch = self._patched_manager(manager, server, tool_call)
+        with resolve_patch, client_patch:
+            for _ in range(5):
+                await self._call(manager, proxy_logging_obj, user_api_key_auth)
+
+    @pytest.mark.asyncio
+    async def test_failed_tool_call_releases_its_slot(self, monkeypatch):
+        proxy_logging_obj, limiter = self._proxy_logging_with_limiter()
+        monkeypatch.setattr("litellm.callbacks", [limiter])
+        manager = MCPServerManager()
+        server = self._server()
+        user_api_key_auth = self._user_api_key_auth(max_parallel_requests=1)
+
+        async def failing_tool_call():
+            raise ValueError("upstream exploded")
+
+        resolve_patch, client_patch = self._patched_manager(manager, server, failing_tool_call)
+        with resolve_patch, client_patch:
+            with pytest.raises(ValueError):
+                await self._call(manager, proxy_logging_obj, user_api_key_auth)
+
+        async def tool_call():
+            return "ok"
+
+        resolve_patch, client_patch = self._patched_manager(manager, server, tool_call)
+        with resolve_patch, client_patch:
+            await self._call(manager, proxy_logging_obj, user_api_key_auth)
+
+    @pytest.mark.asyncio
+    async def test_guardrail_blocked_tool_call_releases_its_slot(self, monkeypatch):
+        """A guardrail that rejects the call after the limiter admitted it must
+        not strand the acquired slot."""
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _BlockingGuardrail(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                raise HTTPException(status_code=400, detail="blocked by guardrail")
+
+        proxy_logging_obj, limiter = self._proxy_logging_with_limiter()
+        monkeypatch.setattr("litellm.callbacks", [limiter, _BlockingGuardrail()])
+        manager = MCPServerManager()
+        server = self._server()
+        user_api_key_auth = self._user_api_key_auth(max_parallel_requests=1)
+
+        async def tool_call():
+            return "ok"
+
+        resolve_patch, client_patch = self._patched_manager(manager, server, tool_call)
+        with resolve_patch, client_patch:
+            with pytest.raises(HTTPException):
+                await self._call(manager, proxy_logging_obj, user_api_key_auth)
+
+        monkeypatch.setattr("litellm.callbacks", [limiter])
+        resolve_patch, client_patch = self._patched_manager(manager, server, tool_call)
+        with resolve_patch, client_patch:
+            await self._call(manager, proxy_logging_obj, user_api_key_auth)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_tool_calls_still_hit_the_limit(self, monkeypatch):
+        """Releasing after the call must not turn the limiter off: two tool
+        calls in flight against a limit of 1 still reject the second."""
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        proxy_logging_obj, limiter = self._proxy_logging_with_limiter()
+        monkeypatch.setattr("litellm.callbacks", [limiter])
+        manager = MCPServerManager()
+        server = self._server()
+        user_api_key_auth = self._user_api_key_auth(max_parallel_requests=1)
+
+        async def slow_tool_call():
+            await asyncio.sleep(0.2)
+            return "ok"
+
+        resolve_patch, client_patch = self._patched_manager(manager, server, slow_tool_call)
+        with resolve_patch, client_patch:
+            results = await asyncio.gather(
+                self._call(manager, proxy_logging_obj, user_api_key_auth),
+                self._call(manager, proxy_logging_obj, user_api_key_auth),
+                return_exceptions=True,
+            )
+
+        rejections = [r for r in results if isinstance(r, ProxyRateLimitError)]
+        assert len(rejections) == 1
+        assert "max_parallel_requests" in str(rejections[0].detail)
