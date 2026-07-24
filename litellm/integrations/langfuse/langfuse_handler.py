@@ -108,6 +108,7 @@ class LangFuseHandler:
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret") or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),
+            langfuse_environment=credentials.get("langfuse_environment"),
             allow_env_credentials=credentials.get("langfuse_host") is None,
         )
         in_memory_dynamic_logger_cache.set_cache(
@@ -135,6 +136,7 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_secret_key"),
             langfuse_public_key=standard_callback_dynamic_params.get("langfuse_public_key"),
             langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
+            langfuse_environment=standard_callback_dynamic_params.get("langfuse_environment"),
         )
 
     @staticmethod
@@ -153,6 +155,7 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_public_key") is not None
             or standard_callback_dynamic_params.get("langfuse_secret") is not None
             or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
+            or standard_callback_dynamic_params.get("langfuse_environment") is not None
         ):
             return True
         return False
