@@ -1095,6 +1095,57 @@ class TestToolTransformation:
         assert len(result_tools) == 0
         assert web_search_options is None
 
+    def test_transform_codex_namespace_and_tool_search_tools_dropped(self):
+        """Codex CLI (Responses wire) sends `namespace` and `tool_search` tools that
+        have no Chat Completions equivalent. Forwarding them verbatim made chat-only
+        providers such as Nvidia NIM reject the whole request with
+        `unknown variant 'namespace', expected 'function'` (issue #33779). The bridge
+        must drop them while keeping real function tools."""
+        tools = [
+            {
+                "type": "function",
+                "name": "shell",
+                "description": "run a shell command",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "namespace",
+                "name": "mcp__server",
+                "description": "grouped tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "do_thing",
+                        "description": "d",
+                        "strict": False,
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            {
+                "type": "tool_search",
+                "execution": "client",
+                "description": "search available tools",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {"type": "local_shell"},
+        ]
+
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "shell"
+        assert all(t.get("type") != "namespace" for t in result_tools)
+        assert all(t.get("type") != "tool_search" for t in result_tools)
+        assert all(t.get("type") != "local_shell" for t in result_tools)
+
     def test_transform_custom_tools_to_function_tools(self):
         """Test that custom (freeform/grammar) tools are converted to function tools"""
         custom_tool = {
