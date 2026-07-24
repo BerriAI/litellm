@@ -239,8 +239,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def _supports_sampling_params(model: str) -> bool:
         """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
-        rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
-        a 400 ("`temperature` is deprecated for this model").
+        rejects ``top_p``, ``top_k``, and ``temperature`` with a 400
+        ("`temperature` is deprecated for this model").
 
         Driven by the ``supports_sampling_params`` flag in the model map; the
         name check remains only as a fallback for provider-routed ids whose
@@ -277,13 +277,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         ``optional_params[output_key]`` unless the model removed sampling
         params, in which case drop the param (with drop_params) or raise a
         clean client-side 400."""
-        if AnthropicModelInfo._supports_sampling_params(model) or (param == "temperature" and value == 1):
+        if AnthropicModelInfo._supports_sampling_params(model):
             optional_params[output_key] = value
         elif not (litellm.drop_params or drop_params):
-            supported_hint = "Only temperature=1 is supported. " if param == "temperature" else ""
             raise litellm.utils.UnsupportedParamsError(
                 message=(
-                    f"{model} does not support {param}={value}. {supported_hint}"
+                    f"{model} does not support {param}={value}. "
                     "To drop unsupported params, set `litellm.drop_params = True`."
                 ),
                 status_code=400,
