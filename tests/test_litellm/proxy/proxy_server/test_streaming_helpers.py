@@ -1060,6 +1060,31 @@ def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
     router.get_deployment.assert_called_once_with(model_id="deploy-abc")
 
 
+def test_keepalive_from_deployment_config_stale_model_id_does_not_fall_through(monkeypatch):
+    """A populated model_id names the specific deployment that served the stream.
+    If that ID no longer resolves (e.g. removed by a config reload mid-stream),
+    that's a stale identity, not an absent one: it must not fall through to the
+    model_name fallback, since a currently-live sibling deployment's config was
+    never what actually served this stream, even if that sibling's config is
+    unambiguous on its own."""
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 20.0}},
+    ]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "stale-deploy-id"}
+
+    result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
+    assert result is None
+    router.get_model_list.assert_not_called()
+
+
 def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
     from unittest.mock import MagicMock
 

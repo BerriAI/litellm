@@ -7688,13 +7688,21 @@ def _keepalive_from_deployment_config(request_data: dict[str, Any], response: An
     model_id = hidden.get("model_id") if isinstance(hidden, dict) else None
     if model_id:
         deployment = llm_router.get_deployment(model_id=model_id)
+        # A populated model_id names the specific deployment that served this
+        # stream. If it no longer resolves (e.g. removed by a config reload
+        # mid-stream), that's a stale identity, not an absent one: don't fall
+        # through to guessing via model_name below, since a currently-live
+        # sibling deployment's config was never what actually served this
+        # stream.
         if deployment is not None:
             return getattr(deployment.litellm_params, "keepalive_seconds", None)
+        return None
 
-    # No model_id to pin down which deployment actually served this stream: only
-    # trust the fallback when every deployment under this model_name agrees,
-    # including deployments that leave keepalive_seconds unset (None), so an
-    # unconfigured deployment never inherits a sibling's configured interval.
+    # No model_id at all to pin down which deployment actually served this
+    # stream: only trust the fallback when every deployment under this
+    # model_name agrees, including deployments that leave keepalive_seconds
+    # unset (None), so an unconfigured deployment never inherits a sibling's
+    # configured interval.
     values = {
         (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")
         for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or []
