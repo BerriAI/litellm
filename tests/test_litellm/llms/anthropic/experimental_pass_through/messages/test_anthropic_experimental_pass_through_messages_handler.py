@@ -821,3 +821,50 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+def _route(provider, model=None):
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _should_route_to_responses_api,
+    )
+
+    return _should_route_to_responses_api(provider, model)
+
+
+def test_should_route_to_responses_api_openai_unchanged():
+    assert _route("openai") is True
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.4", "openai.gpt-5.5"])
+def test_should_route_bedrock_mantle_responses_models_to_responses(model):
+    assert _route("bedrock_mantle", model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["openai.gpt-oss-safeguard-120b", "openai.gpt-oss-safeguard-20b"],
+)
+def test_bedrock_mantle_chat_only_models_stay_on_chat_completions(model):
+    # Regression guard: chat-only Mantle models (mode=chat) must NOT be forced
+    # onto the Responses API just because the provider is bedrock_mantle.
+    assert _route("bedrock_mantle", model) is False
+
+
+def test_should_route_bedrock_mantle_requires_model():
+    assert _route("bedrock_mantle", None) is False
+
+
+def test_should_route_to_responses_api_other_provider_false():
+    assert _route("anthropic", "claude-sonnet-4-5") is False
+
+
+def test_use_chat_completions_url_opt_out_overrides_bedrock_mantle():
+    import litellm
+
+    original = litellm.use_chat_completions_url_for_anthropic_messages
+    litellm.use_chat_completions_url_for_anthropic_messages = True
+    try:
+        assert _route("bedrock_mantle", "openai.gpt-5.4") is False
+        assert _route("openai") is False
+    finally:
+        litellm.use_chat_completions_url_for_anthropic_messages = original
