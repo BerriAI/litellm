@@ -1411,28 +1411,12 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                       <Text>{selectedMcpServer.alias}</Text>
                     </div>
                   )}
-                  <div>
-                    <Text className="font-medium">Auth Type:</Text>
-                    <Tag color={selectedMcpServer.auth_type === "none" ? "gray" : "green"}>
-                      {selectedMcpServer.auth_type}
-                    </Tag>
-                  </div>
                   <div className="col-span-2">
                     <Text className="font-medium">Description:</Text>
                     <Text>{selectedMcpServer.mcp_info?.description || "-"}</Text>
                   </div>
                 </div>
               </div>
-
-              {/* Additional Info */}
-              {selectedMcpServer.mcp_info && Object.keys(selectedMcpServer.mcp_info).length > 0 && (
-                <div>
-                  <Text className="text-lg font-semibold mb-4">Additional Information</Text>
-                  <div className="bg-gray-50 p-4 rounded-lg">
-                    <pre className="text-xs overflow-x-auto">{JSON.stringify(selectedMcpServer.mcp_info, null, 2)}</pre>
-                  </div>
-                </div>
-              )}
 
               {/* Usage Example */}
               <div>

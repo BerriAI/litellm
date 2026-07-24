@@ -156,10 +156,8 @@ const mockMcpServer: MCPServerData = {
   server_id: "server-1",
   name: "exa_test",
   server_name: "exa_test",
-  url: PUBLIC_SERVER_URL,
   transport: "http",
-  auth_type: "none",
-  mcp_info: { server_name: "exa_test", description: "Fast, intelligent web search and web crawling" },
+  mcp_info: { description: "Public server description" },
 };
 
 function PublicMcpTestTable({ data }: { data: MCPServerData[] }) {
@@ -194,36 +192,62 @@ describe("publicMCPHubColumns", () => {
   it("keeps the non-sensitive columns", () => {
     render(<PublicMcpTestTable data={[mockMcpServer]} />);
     expect(screen.getByText("Server Name")).toBeInTheDocument();
+    expect(screen.getByText("Description")).toBeInTheDocument();
     expect(screen.getByText("Transport")).toBeInTheDocument();
-    expect(screen.getByText("Auth Type")).toBeInTheDocument();
   });
 
-  it("does not expose a URL column header", () => {
+  it("does not expose URL or auth type column headers", () => {
     render(<PublicMcpTestTable data={[mockMcpServer]} />);
     expect(screen.queryByText("URL")).not.toBeInTheDocument();
     const columns = getPublicMCPHubColumns({ onServerClick: vi.fn() });
     expect(columns.some((c) => c.header === "URL" || c.meta?.title === "URL")).toBe(false);
+    expect(screen.queryByText("Auth Type")).not.toBeInTheDocument();
+    expect(columns.some((c) => c.header === "Auth Type" || c.meta?.title === "Auth Type")).toBe(false);
   });
 
-  it("does not render the server url anywhere in the table", () => {
-    render(<PublicMcpTestTable data={[mockMcpServer]} />);
+  it("does not render private response fields in the table", () => {
+    const serverWithPrivateData = {
+      ...mockMcpServer,
+      url: PUBLIC_SERVER_URL,
+      auth_type: "api_key",
+      mcp_info: {
+        description: "Public server description",
+        upstream_url: "https://internal.example.com/mcp",
+      },
+    };
+
+    render(<PublicMcpTestTable data={[serverWithPrivateData]} />);
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+    expect(screen.queryByText("api_key")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://internal.example.com/mcp")).not.toBeInTheDocument();
   });
 });
 
 describe("public hub MCP details modal", () => {
-  it("does not show the upstream url when a server is opened", async () => {
+  it("only shows the LiteLLM proxy endpoint when a server is opened", async () => {
     const networkingModule = await import("./networking");
-    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([
+      {
+        ...mockMcpServer,
+        url: PUBLIC_SERVER_URL,
+        auth_type: "api_key",
+        mcp_info: {
+          description: "Public server description",
+          upstream_url: "https://internal.example.com/mcp",
+        },
+      },
+    ]);
 
     render(<PublicModelHub />);
 
     fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
     fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
 
-    // "Server Overview" only exists inside the opened MCP details modal,
-    // so finding it proves the modal rendered and the url assertion is not vacuous.
     await screen.findByText("Server Overview");
+    expect(screen.getAllByText("Public server description")).not.toHaveLength(0);
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+    expect(screen.queryByText("api_key")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://internal.example.com/mcp")).not.toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("/exa_test/mcp"))).toBeInTheDocument();
   });
 });

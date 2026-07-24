@@ -61,14 +61,9 @@ export interface MCPServerData {
   alias?: string | null;
   server_name: string;
   transport: string;
-  spec_path?: string | null;
-  auth_type: string;
-  mcp_info: {
-    server_name: string;
+  mcp_info?: {
     description?: string;
-    mcp_server_cost_info?: any;
-  };
-  [key: string]: any;
+  } | null;
 }
 
 const formatCapabilityName = (key: string) =>
@@ -453,18 +448,6 @@ export const getPublicMCPHubColumns = ({ onServerClick }: PublicMCPHubColumnsDep
       <Badge variant="secondary" className="font-mono font-normal uppercase">
         {row.original.transport}
       </Badge>
-    ),
-  },
-  {
-    id: "auth_type",
-    accessorKey: "auth_type",
-    meta: { title: "Auth Type", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Auth Type" />,
-    size: 110,
-    enableSorting: true,
-    sortingFn: "alphanumeric",
-    cell: ({ row }) => (
-      <StatusBadge tone={row.original.auth_type === "none" ? "neutral" : "success"} label={row.original.auth_type} />
     ),
   },
 ];
