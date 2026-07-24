@@ -64,6 +64,12 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
+    def _make_error_chunk(self, message: str) -> dict[str, Any]:
+        return {
+            "type": "error",
+            "error": {"type": "api_error", "message": message},
+        }
+
     def _process_event(self, event: Any) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
@@ -216,10 +222,47 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        # ---- response failed -> error ----
+        if event_type == "response.failed":
+            response_obj = getattr(event, "response", None) or (
+                event.get("response") if isinstance(event, dict) else None
+            )
+            error_obj = None
+            if response_obj is not None:
+                error_obj = getattr(response_obj, "error", None) or (
+                    response_obj.get("error") if isinstance(response_obj, dict) else None
+                )
+            message = "The upstream provider reported the response as failed."
+            if error_obj is not None:
+                error_message = getattr(error_obj, "message", None) or (
+                    error_obj.get("message") if isinstance(error_obj, dict) else None
+                )
+                error_code = getattr(error_obj, "code", None) or (
+                    error_obj.get("code") if isinstance(error_obj, dict) else None
+                )
+                if error_message:
+                    message = f"{error_code}: {error_message}" if error_code else str(error_message)
+            self._chunk_queue.append(self._make_error_chunk(message))
+            self._sent_message_stop = True
+            return
+
+        # ---- error event -> error ----
+        if event_type == "error":
+            nested_error = getattr(event, "error", None) or (event.get("error") if isinstance(event, dict) else None)
+            message = getattr(event, "message", None) or (event.get("message") if isinstance(event, dict) else None)
+            if message is None and nested_error is not None:
+                message = getattr(nested_error, "message", None) or (
+                    nested_error.get("message") if isinstance(nested_error, dict) else None
+                )
+            if message is None:
+                message = "The upstream provider returned an error while streaming."
+            self._chunk_queue.append(self._make_error_chunk(str(message)))
+            self._sent_message_stop = True
+            return
+
         # ---- response completed -> message_delta + message_stop ----
         if event_type in (
             "response.completed",
-            "response.failed",
             "response.incomplete",
         ):
             response_obj = getattr(event, "response", None) or (
@@ -284,6 +327,11 @@ class AnthropicResponsesStreamWrapper:
         if self._chunk_queue:
             return self._chunk_queue.popleft()
 
+        # Don't consume the upstream again after a terminal chunk
+        # (message_stop / error) has been emitted
+        if self._sent_message_stop:
+            raise StopAsyncIteration
+
         # Emit message_start if not yet done (fallback if response.created wasn't fired)
         if not self._sent_message_start:
             self._sent_message_start = True
@@ -300,6 +348,8 @@ class AnthropicResponsesStreamWrapper:
             pass
         except Exception as e:
             verbose_logger.error(f"AnthropicResponsesStreamWrapper error: {e}\n{traceback.format_exc()}")
+            self._chunk_queue.append(self._make_error_chunk("Upstream provider error while streaming."))
+            self._sent_message_stop = True
 
         # Drain any remaining queued chunks
         if self._chunk_queue:
