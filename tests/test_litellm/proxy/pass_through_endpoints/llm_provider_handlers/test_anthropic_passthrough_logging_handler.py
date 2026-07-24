@@ -2044,6 +2044,42 @@ class TestAnthropicUsageOnlyFallback:
         assert usage._cache_read_input_tokens == 421714
         assert usage._cache_creation_input_tokens == 1139
 
+    def test_build_usage_only_recovers_cache_creation_split_from_message_delta(self):
+        """Same as above when only the 5m/1h split reaches message_delta: the
+        cache-write total must be derived from it rather than left at zero"""
+        chunks = [
+            _sse_bytes(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-3-5-haiku-20241022",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                }
+            ),
+            _sse_bytes(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {
+                        "output_tokens": 162,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 1000,
+                            "ephemeral_1h_input_tokens": 139,
+                        },
+                    },
+                }
+            ),
+        ]
+        response = (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=chunks, model="claude-3-5-haiku-20241022"
+            )
+        )
+        assert response is not None
+        assert response.usage._cache_creation_input_tokens == 1139
+        assert response.usage.prompt_tokens == 1140
+
     @pytest.mark.parametrize(
         "event_str,expected",
         [
