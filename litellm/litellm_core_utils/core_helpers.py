@@ -130,6 +130,9 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "content_filter": "content_filter",
     # Anthropic Sonnet 4
     "content_filtered": "content_filter",
+    # Generic error passthrough (OpenRouter and other OpenAI-compatible providers
+    # emit lowercase "error" when a provider fails mid-stream)
+    "error": "stop",
 }
 
 

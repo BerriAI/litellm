@@ -151,6 +151,19 @@ class TestMapFinishReasonOpenAIPassthrough:
         assert map_finish_reason(reason) == reason
 
 
+class TestMapFinishReasonGenericError:
+    def test_lowercase_error_is_explicitly_mapped(self):
+        assert "error" in _FINISH_REASON_MAP
+        assert map_finish_reason("error") == "stop"
+
+    def test_lowercase_error_does_not_warn(self, mocker):
+        warn = mocker.patch(
+            "litellm.litellm_core_utils.core_helpers.verbose_logger.warning"
+        )
+        assert map_finish_reason("error") == "stop"
+        warn.assert_not_called()
+
+
 class TestMapFinishReasonUnknown:
     def test_unknown_value_defaults_to_stop(self):
         assert map_finish_reason("some_unknown_value") == "stop"
