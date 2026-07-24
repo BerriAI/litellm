@@ -59,28 +59,54 @@ def extract_ttl_from_cached_messages(messages: List[AllMessageValues]) -> Option
         Optional[str]: TTL string in format "3600s" or None if not found/invalid
     """
     for message in messages:
-        if not is_cached_message(message):
-            continue
+        # Check message-level cache_control first
+        msg_cache_control = (
+            message.get("cache_control") if isinstance(message, dict) else getattr(message, "cache_control", None)
+        )
+        if msg_cache_control is not None:
+            cc_type = (
+                msg_cache_control.get("type")
+                if isinstance(msg_cache_control, dict)
+                else getattr(msg_cache_control, "type", None)
+            )
+            if cc_type == "ephemeral":
+                ttl = (
+                    msg_cache_control.get("ttl")
+                    if isinstance(msg_cache_control, dict)
+                    else getattr(msg_cache_control, "ttl", None)
+                )
+                normalized = _normalize_ttl_to_seconds(ttl)
+                if normalized is not None:
+                    return normalized
 
-        content = message.get("content")
-        if not content or isinstance(content, str):
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+        if not isinstance(content, list):
             continue
 
         for content_item in content:
-            # Type check to ensure content_item is a dictionary before calling .get()
-            if not isinstance(content_item, dict):
-                continue
+            # Check if content_item is dict or object model
+            if isinstance(content_item, dict):
+                cache_control = content_item.get("cache_control")
+                item_type = content_item.get("type")
+            else:
+                cache_control = getattr(content_item, "cache_control", None)
+                item_type = getattr(content_item, "type", None)
 
-            cache_control = content_item.get("cache_control")
-            if not cache_control or not isinstance(cache_control, dict):
-                continue
-
-            if cache_control.get("type") != "ephemeral":
-                continue
-
-            ttl = cache_control.get("ttl")
-            if ttl and _is_valid_ttl_format(ttl):
-                return str(ttl)
+            if item_type == "text" and cache_control is not None:
+                cc_type = (
+                    cache_control.get("type")
+                    if isinstance(cache_control, dict)
+                    else getattr(cache_control, "type", None)
+                )
+                if cc_type == "ephemeral":
+                    ttl = (
+                        cache_control.get("ttl")
+                        if isinstance(cache_control, dict)
+                        else getattr(cache_control, "ttl", None)
+                    )
+                    normalized = _normalize_ttl_to_seconds(ttl)
+                    if normalized is not None:
+                        return normalized
 
     return None
 
@@ -112,6 +138,63 @@ def _is_valid_ttl_format(ttl: str) -> bool:
         return numeric_part > 0
     except ValueError:
         return False
+
+
+def _normalize_ttl_to_seconds(ttl: object) -> str | None:
+    """
+    Normalize a cache_control TTL into Gemini's "<seconds>s" format.
+
+    Accepts Gemini-native seconds (e.g. "3600s", "1.5s") and Anthropic-style
+    minute/hour units (e.g. "5m", "1h") that Claude Code and the Anthropic
+    /v1/messages spec use. Caps the requested TTL at 24 hours (86400s) to
+    prevent unbounded persistent storage costs. Returns None for missing or
+    unparseable values so Gemini falls back to its own default TTL.
+    """
+    if not isinstance(ttl, str):
+        return None
+
+    match = re.match(r"^([0-9]*\.?[0-9]+)(s|m|h)$", ttl)
+    if not match:
+        return None
+
+    value = float(match.group(1))
+
+    if value <= 0:
+        return None
+
+    multiplier = {"s": 1, "m": 60, "h": 3600}[match.group(2)]
+    seconds = value * multiplier
+
+    # Cap explicit caches to 24 hours to prevent unbounded billing costs
+    seconds = min(seconds, 86400.0)
+
+    # Google Protobuf Duration requires up to 9 fractional digits
+    seconds = round(seconds, 9)
+    return f"{int(seconds)}s" if seconds.is_integer() else f"{seconds}s"
+
+
+def get_gemini_context_caching_min_tokens(model: str) -> int:
+    """
+    Minimum input token count required to create an explicit Gemini context cache.
+
+    Looks up the `cache_creation_min_tokens` property from model_prices_and_context_window.json.
+    Defaults to string-matching fallbacks for unknown models.
+    """
+    import litellm
+
+    try:
+        model_info = litellm.get_model_info(model=model)
+        if model_info and "cache_creation_min_tokens" in model_info:
+            return int(model_info["cache_creation_min_tokens"])
+    except Exception:  # noqa: BLE001  # fallback to string-matching heuristic if model lookup fails
+        pass
+
+    model_lower = model.lower()
+    if "gemini-2.5" in model_lower or "gemini-2-5" in model_lower:
+        return 2048
+    if "gemini-3" in model_lower:
+        return 4096
+    return 32768
 
 
 def separate_cached_messages(
