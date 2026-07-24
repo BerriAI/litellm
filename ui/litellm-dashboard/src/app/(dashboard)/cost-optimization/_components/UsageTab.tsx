@@ -236,15 +236,27 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
             </div>
           </CardHeader>
           <CardContent>
-            <AreaChart
-              data={overTime}
-              index="date"
-              categories={SAVINGS_SERIES}
-              colors={SAVINGS_COLORS}
-              valueFormatter={usd}
-              showLegend={false}
-              showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
-            />
+            {accumulation === "cumulative" ? (
+              <AreaChart
+                data={overTime}
+                index="date"
+                categories={SAVINGS_SERIES}
+                colors={SAVINGS_COLORS}
+                valueFormatter={usd}
+                showLegend={false}
+                showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
+              />
+            ) : (
+              <BarChart
+                data={overTime}
+                index="date"
+                categories={SAVINGS_SERIES}
+                colors={SAVINGS_COLORS}
+                stack
+                valueFormatter={usd}
+                showLegend={false}
+              />
+            )}
           </CardContent>
         </Card>
         <Card>

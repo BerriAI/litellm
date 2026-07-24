@@ -172,16 +172,21 @@ describe("UsageTab", () => {
     expect(cumulative[1]["Prompt caching"]).toBeGreaterThan(cumulative[0]["Prompt caching"]);
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
-    const perDay = readSeries(getByTestId("area-chart"));
+    const perDay = readSeries(getByTestId("bar-chart"));
     expect(perDay.map((p: { date: string }) => p.date)).toEqual(["Jul 12", "Jul 13"]);
   });
 
-  it("drops back to the raw per-interval readings on the other tab", async () => {
-    const { getByRole, getByTestId } = renderWith(twoDays());
+  it("draws bars of the raw per-interval readings on the other tab", async () => {
+    const { getByRole, getByTestId, queryByTestId } = renderWith(twoDays());
+
+    // Cumulative opens on the area line.
+    expect(getByTestId("area-chart")).toBeInTheDocument();
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
 
-    const series = readSeries(getByTestId("area-chart"));
+    // Per day switches to a bar chart of the unaccumulated daily savings.
+    expect(queryByTestId("area-chart")).toBeNull();
+    const series = readSeries(getByTestId("bar-chart"));
     expect(series[0]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
     expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.01 });
   });
