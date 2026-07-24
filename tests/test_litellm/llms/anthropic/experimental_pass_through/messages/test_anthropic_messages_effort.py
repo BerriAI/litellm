@@ -2,6 +2,7 @@ import pytest
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
@@ -29,6 +30,37 @@ def _transform(model, params, litellm_params=None):
         litellm_params=litellm_params or {},
         headers={},
     )
+
+
+def test_adaptive_thinking_only_translated_to_legacy_for_haiku_4_5():
+    """The minimal autoroute repro: Claude Code sends bare ``thinking={type: adaptive}``
+    (no ``output_config``) and the complexity router picks Haiku 4.5, which does not
+    support adaptive thinking. Anthropic 400s with "adaptive thinking is not supported on
+    this model" unless the flag is dropped, so it must be translated to the legacy extended
+    thinking the model does support rather than forwarded raw."""
+    result = _transform("claude-haiku-4-5", {"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "output_config" not in result
+
+
+def test_adaptive_thinking_only_dropped_for_non_reasoning_model():
+    """Bare adaptive thinking on a model with no reasoning support at all is silently
+    dropped so the request still succeeds instead of being rejected."""
+    result = _transform("claude-3-5-haiku-latest", {"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+
+    assert "thinking" not in result
+
+
+def test_adaptive_thinking_only_preserved_for_4_6():
+    """A 4.6+ model natively supports adaptive thinking, so a bare adaptive flag must not
+    be rewritten even without output_config."""
+    result = _transform("claude-sonnet-4-6", {"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+
+    assert result["thinking"] == {"type": "adaptive"}
 
 
 def test_effort_translated_to_legacy_thinking_for_haiku_4_5():
@@ -172,6 +204,81 @@ def test_unrecognized_effort_raises_clean_400():
         _transform("claude-haiku-4-5", _claude_code_payload(effort="turbo"))
 
     assert exc_info.value.status_code == 400
+
+
+def test_pinned_temperature_dropped_when_adaptive_downgraded_to_enabled():
+    """Regression (#33203): Claude Code's safety classifier sends adaptive thinking +
+    temperature=0 to Haiku 4.5. The adaptive interface is downgraded to legacy enabled
+    thinking, but Anthropic rejects "temperature may only be set to 1 when thinking is
+    enabled". The pinned temperature must be dropped so the request succeeds while the
+    downgraded thinking is preserved."""
+    params = _claude_code_payload(effort="medium")
+    params["temperature"] = 0
+    result = _transform("claude-haiku-4-5", params)
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    }
+    assert "temperature" not in result
+
+
+def test_temperature_one_preserved_with_enabled_thinking():
+    """temperature=1 is compatible with extended thinking, so it must be kept."""
+    params = _claude_code_payload(effort="medium")
+    params["temperature"] = 1
+    result = _transform("claude-haiku-4-5", params)
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["temperature"] == 1
+
+
+def test_pinned_temperature_preserved_when_thinking_dropped():
+    """When thinking is dropped entirely (non-reasoning model), there is no thinking
+    conflict, so a pinned temperature must survive untouched."""
+    params = _claude_code_payload(effort="medium")
+    params["temperature"] = 0
+    result = _transform("claude-3-5-haiku-latest", params)
+
+    assert "thinking" not in result
+    assert result["temperature"] == 0
+
+
+def test_pinned_temperature_preserved_for_adaptive_model():
+    """Adaptive models (4.6+) own the thinking/temperature relationship natively, so
+    the passthrough must not strip a pinned temperature for them."""
+    params = _claude_code_payload(effort="high")
+    params["temperature"] = 0
+    result = _transform("claude-sonnet-4-6", params)
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["temperature"] == 0
+
+
+def test_pinned_temperature_dropped_for_opus_4_5_effort():
+    """Opus 4.5 keeps native output_config.effort (extended thinking), which is equally
+    incompatible with a pinned non-1 temperature, so the temperature must be dropped."""
+    params = _claude_code_payload(effort="medium")
+    params["temperature"] = 0
+    result = _transform("claude-opus-4-5", params)
+
+    assert result["output_config"] == {"effort": "medium"}
+    assert "temperature" not in result
+
+
+def test_reasoning_effort_with_pinned_temperature_drops_temperature():
+    """The reasoning_effort alias synthesizes legacy enabled thinking on a non-adaptive
+    model; a co-pinned non-1 temperature must be dropped to avoid the Anthropic 400."""
+    result = _transform(
+        "claude-haiku-4-5",
+        {"max_tokens": 8192, "reasoning_effort": "low", "temperature": 0},
+    )
+
+    assert result["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "temperature" not in result
 
 
 def test_non_adaptive_request_without_effort_is_untouched():

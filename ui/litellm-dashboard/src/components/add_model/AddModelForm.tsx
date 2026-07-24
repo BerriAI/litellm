@@ -10,7 +10,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import TeamDropdown from "../common_components/team_dropdown";
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
+import { Providers } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AdvancedSettings from "./advanced_settings";
 import ConditionalPublicModelName from "./conditional_public_model_name";
@@ -181,7 +181,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                     {sortedProviderMetadata.map((providerInfo) => {
                       const displayName = providerInfo.provider_display_name;
                       const providerKey = providerInfo.provider;
-                      const logoSrc = providerLogoMap[displayName] ?? "";
 
                       return (
                         <AntdSelect.Option key={providerKey} value={providerKey} data-label={displayName}>

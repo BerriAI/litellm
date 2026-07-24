@@ -396,6 +396,122 @@ def test_is_langfuse_route():
     assert handler.is_langfuse_route("") is False
 
 
+def test_is_vertex_route_ignores_plain_predict_path_segment():
+    """
+    Regression for LIT-4527: a custom (non-Vertex) passthrough URL whose path
+    contains a plain `predict`/`search` segment must not be classified as a
+    Vertex route, otherwise its success logging is routed into the Vertex
+    handler, the Vertex-shaped transform fails, and no log row is recorded.
+
+    Real Vertex custom methods are invoked with the GCP `resource:method` colon
+    syntax, so only the colon form should count as Vertex.
+    """
+    handler = PassThroughEndpointLogging()
+
+    assert (
+        handler.is_vertex_route(
+            "https://upstream.example.com/ml/api/v1/time-series-forecast/predict"
+        )
+        is False
+    )
+    assert handler.is_vertex_route("https://upstream.example.com/api/v1/search") is False
+    assert (
+        handler.is_vertex_route("https://upstream.example.com/predict/generateContent")
+        is False
+    )
+
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:predict"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/anthropic/models/claude:rawPredict"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:generateContent"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/publishers/google/models/m:predictLongRunning"
+        )
+        is True
+    )
+    assert (
+        handler.is_vertex_route("https://discoveryengine.googleapis.com/v1/x:search")
+        is True
+    )
+
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/l/batchPredictionJobs"
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_custom_passthrough_predict_path_logs_via_generic_handler():
+    """
+    Regression for LIT-4527: an upstream-successful custom passthrough request to
+    a `/predict` path (non-Vertex body) must still produce a log row. Before the
+    fix it was routed into VertexPassthroughLoggingHandler, which failed on the
+    non-Vertex body and dropped the log entirely.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    handler = PassThroughEndpointLogging()
+    handler._handle_logging = AsyncMock()
+
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = '{"forecast": [1, 2, 3]}'
+
+    url_route = "https://upstream.example.com/ml/api/v1/time-series-forecast/predict"
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url=url_route,
+        request_body={"series": [1, 2]},
+        request_method="POST",
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.success_handler.VertexPassthroughLoggingHandler.vertex_passthrough_handler"
+    ) as mock_vertex_handler:
+        await handler.pass_through_async_success_handler(
+            httpx_response=mock_response,
+            response_body={"forecast": [1, 2, 3]},
+            logging_obj=mock_logging_obj,
+            url_route=url_route,
+            result="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body={"series": [1, 2]},
+            passthrough_logging_payload=passthrough_logging_payload,
+        )
+
+    mock_vertex_handler.assert_not_called()
+    handler._handle_logging.assert_awaited_once()
+    logged_object = handler._handle_logging.call_args.kwargs[
+        "standard_logging_response_object"
+    ]
+    assert logged_object == {"response": '{"forecast": [1, 2, 3]}'}
+
+
 @pytest.mark.asyncio
 async def test_langfuse_passthrough_no_logging():
     """

@@ -11,7 +11,7 @@ import NumericalInput from "./shared/numerical_input";
 import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import KeyValueInput from "./key_value_input";
 import QueryParamInput from "./query_param_input";
-import { passThroughItem } from "./pass_through_settings";
+import { passThroughItem } from "./PassThroughSettings/PassThroughSettings";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";

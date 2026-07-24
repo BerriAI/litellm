@@ -57,12 +57,13 @@ export function ChatShellProvider({
   children,
 }: ChatShellProviderProps) {
   const searchParams = useSearchParams();
-  const activeConversationId = searchParams.get("id");
+  const urlConversationId = searchParams.get("id");
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
 
   const {
     conversations,
     activeConversation,
+    currentActiveId,
     storageUnavailable,
     staleId,
     createConversation,
@@ -71,7 +72,7 @@ export function ChatShellProvider({
     truncateFromMessage,
     deleteConversation,
     renameConversation,
-  } = useChatHistory(activeConversationId, userId);
+  } = useChatHistory(urlConversationId, userId);
 
   return (
     <ChatShellContext.Provider
@@ -85,7 +86,7 @@ export function ChatShellProvider({
         setSelectedMCPServers,
         conversations,
         activeConversation,
-        activeConversationId,
+        activeConversationId: currentActiveId,
         storageUnavailable,
         staleId,
         createConversation,

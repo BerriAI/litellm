@@ -203,6 +203,7 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
     data_dict = await _run_update_with_existing(data, existing_auth_type="oauth2")
 
     for stale_field in (
+        "issuer",
         "authorization_url",
         "token_url",
         "registration_url",
@@ -215,6 +216,165 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
     ):
         assert data_dict[stale_field] is None, f"{stale_field} must be cleared on auth_type switch"
     assert _credentials_cleared(data_dict["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_url_change_clears_stale_discovered_oauth_fields():
+    """Re-pointing the server url at a potentially different upstream must clear the discovered or
+    trust-on-first-use OAuth issuer and endpoints, so the new upstream re-discovers instead of
+    anchoring on the previous upstream's issuer (RFC 8414 §3.3 against a stale anchor)."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://old.example.com/mcp"
+    existing.credentials = None
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="my-test-server", url="https://new.example.com/mcp")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["url"] == "https://new.example.com/mcp"
+    for stale_field in ("issuer", "authorization_url", "token_url", "registration_url"):
+        assert data_dict[stale_field] is None, f"{stale_field} must be cleared on url change"
+
+
+@pytest.mark.asyncio
+async def test_url_change_clears_stale_oauth_fields_even_when_resubmitted_unchanged():
+    """The edit form re-sends every field, so a URL change arrives WITH the previous upstream's issuer
+    and endpoints in the payload. Those resubmitted-unchanged values are stale and must still clear
+    (otherwise they survive the url change and win in the resolution merge). A genuinely new value the
+    caller changed in the same submit is kept."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://old.example.com/mcp"
+    existing.credentials = None
+    existing.issuer = "https://old-idp.example.com"
+    existing.token_url = "https://old-idp.example.com/token"
+    existing.authorization_url = "https://old-idp.example.com/authorize"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        url="https://new.example.com/mcp",
+        issuer="https://old-idp.example.com",  # resubmitted unchanged -> stale, must clear
+        token_url="https://old-idp.example.com/token",  # resubmitted unchanged -> stale, must clear
+        authorization_url="https://new-idp.example.com/authorize",  # genuinely changed -> kept
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["issuer"] is None
+    assert data_dict["token_url"] is None
+    assert data_dict["authorization_url"] == "https://new-idp.example.com/authorize"
+
+
+@pytest.mark.asyncio
+async def test_clearing_pinned_issuer_clears_stale_oauth_endpoints():
+    """Clearing a previously pinned issuer must not revive the endpoints resolved under it. Under an
+    issuer anchor the endpoints come solely from the issuer document and are not persisted, but a row
+    that was resource-rooted before the pin can still hold stale authorization_url/token_url; clearing
+    the anchor without clearing those would let them win the resolution merge and be posted to without
+    fresh discovery (RFC 8414 §3.3 provenance)."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://same.example.com/mcp"
+    existing.credentials = None
+    existing.issuer = "https://pinned-idp.example.com"
+    existing.token_url = "https://pinned-idp.example.com/token"
+    existing.authorization_url = "https://pinned-idp.example.com/authorize"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        issuer="",  # admin clears the anchor; url and auth_type unchanged
+        token_url="https://pinned-idp.example.com/token",
+        authorization_url="https://pinned-idp.example.com/authorize",
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["token_url"] is None
+    assert data_dict["authorization_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_repointing_pinned_issuer_clears_stale_endpoints_keeps_new_issuer():
+    """Re-pointing the issuer to a different authorization server invalidates the old issuer's
+    endpoints while keeping the new issuer the admin submitted."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://same.example.com/mcp"
+    existing.credentials = None
+    existing.issuer = "https://old-idp.example.com"
+    existing.token_url = "https://old-idp.example.com/token"
+    existing.authorization_url = "https://old-idp.example.com/authorize"
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        issuer="https://new-idp.example.com",
+        token_url="https://old-idp.example.com/token",  # resubmitted stale -> must clear
+        authorization_url="https://old-idp.example.com/authorize",  # resubmitted stale -> must clear
+    )
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["issuer"] == "https://new-idp.example.com"
+    assert data_dict["token_url"] is None
+    assert data_dict["authorization_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_establishing_issuer_first_time_preserves_discovered_fields():
+    """Establishing an issuer for the first time (None -> X), which is exactly what the trust-on-first-use
+    discovery write-back does, must NOT clear the endpoints or oauth2_flow it discovered in the same
+    write. Only an issuer that was already pinned and is now changed or cleared invalidates its
+    endpoints, so the discovery persist cannot wipe the fields it just resolved."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://same.example.com/mcp"
+    existing.credentials = None
+    existing.issuer = None
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        issuer="https://discovered-idp.example.com",
+        authorization_url="https://discovered-idp.example.com/authorize",
+        token_url="https://discovered-idp.example.com/token",
+        oauth2_flow="authorization_code",
+    )
+    await update_mcp_server(mock_prisma, data, "mcp_oauth_discovery")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    assert data_dict["issuer"] == "https://discovered-idp.example.com"
+    assert data_dict["authorization_url"] == "https://discovered-idp.example.com/authorize"
+    assert data_dict["token_url"] == "https://discovered-idp.example.com/token"
+    assert data_dict.get("oauth2_flow") == "authorization_code"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_url_does_not_clear_discovered_oauth_fields():
+    """A partial update that resends the same url (or omits it) must not clear the discovered OAuth
+    fields, so a routine save does not force needless re-discovery."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://same.example.com/mcp"
+    existing.credentials = None
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="my-test-server", url="https://same.example.com/mcp")
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    for preserved_field in ("issuer", "authorization_url", "token_url", "registration_url"):
+        assert preserved_field not in data_dict, f"{preserved_field} must not be cleared when url is unchanged"
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,7 @@ service_tier lives in test_provider_features_e2e.py.
 
 The provider-native cache_control request shape is not expressible with the
 shared ``ChatBody`` (whose content is a plain string), so the cacheable body is
-modelled locally with typed content blocks.
+built from the typed content blocks shared in ``endpoints_client.py``.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, unwrap
+from endpoints_client import CacheControl, RichMessage, TextBlock
 from lifecycle import ResourceManager
 from models import ChatResponse, LiteLLMParamsBody, Usage
 from passthrough_client import PassthroughClient
@@ -36,21 +37,6 @@ pytestmark = pytest.mark.e2e
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
-
-
-class CacheControl(BaseModel):
-    type: str = "ephemeral"
-
-
-class TextBlock(BaseModel):
-    type: str = "text"
-    text: str
-    cache_control: CacheControl | None = None
-
-
-class RichMessage(BaseModel):
-    role: str
-    content: list[TextBlock]
 
 
 class CacheChatBody(BaseModel):
@@ -95,9 +81,9 @@ def _cache_chat(
             RichMessage(role="user", content=[TextBlock(text="Reply with one word.")]),
         ],
     )
-    return client.gateway.transport.post(
+    return client.proxy.transport.post(
         "/chat/completions",
-        headers=client.gateway.transport.bearer(key),
+        headers=client.proxy.transport.bearer(key),
         json=body,
         response_type=ChatResponse,
     )
@@ -134,11 +120,11 @@ class TestCacheControl:
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-bedrock-cache-{unique_marker()}"
-        model_id = client.gateway.create_model(
+        model_id = client.proxy.create_model(
             model,
             LiteLLMParamsBody(model=BEDROCK_MODEL, aws_region_name="us-east-1"),
         )
-        resources.defer(lambda: client.gateway.delete_model(model_id))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
         _assert_cache_read_on_second_call(client, resources.key(), model)
 
     @pytest.mark.covers(
@@ -149,7 +135,7 @@ class TestCacheControl:
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model = f"e2e-vertex-cache-{unique_marker()}"
-        model_id = client.gateway.create_model(
+        model_id = client.proxy.create_model(
             model,
             LiteLLMParamsBody(
                 model=VERTEX_MODEL,
@@ -158,5 +144,5 @@ class TestCacheControl:
                 vertex_credentials=os.environ.get("VERTEXAI_CREDENTIALS"),
             ),
         )
-        resources.defer(lambda: client.gateway.delete_model(model_id))
+        resources.defer(lambda: client.proxy.delete_model(model_id))
         _assert_cache_read_on_second_call(client, resources.key(), model)

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from e2e_http import Headers, StreamingResponse
 from models import ChatMessage
 
@@ -108,7 +108,7 @@ def _tags_header(tags: list[str] | None) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class PassthroughClient:
-    gateway: Gateway
+    proxy: ProxyClient
 
     # ---- Gemini native passthrough (/gemini/v1beta/...) -----------------
 
@@ -121,7 +121,7 @@ class PassthroughClient:
         tools: list[GeminiTool] | None = None,
         tags: list[str] | None = None,
     ) -> StreamingResponse:
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             f"/gemini/v1beta/models/{model}:generateContent",
             headers=GeminiHeaders(x_goog_api_key=key, tags=_tags_header(tags)),
             json=GeminiGenerateBody(
@@ -132,7 +132,7 @@ class PassthroughClient:
     def gemini_stream(
         self, key: str, model: str, text: str, *, tags: list[str] | None = None
     ) -> StreamingResponse:
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             f"/gemini/v1beta/models/{model}:streamGenerateContent",
             headers=GeminiHeaders(x_goog_api_key=key, tags=_tags_header(tags)),
             json=GeminiGenerateBody(
@@ -151,7 +151,7 @@ class PassthroughClient:
             f"/vertex_ai/v1/projects/{project}/locations/{location}"
             f"/publishers/google/models/{model}:generateContent"
         )
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             path,
             headers=VertexHeaders(x_litellm_api_key=key),
             json=GeminiGenerateBody(
@@ -172,7 +172,7 @@ class PassthroughClient:
         stream: bool = False,
         tags: list[str] | None = None,
     ) -> StreamingResponse:
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             "/anthropic/v1/messages",
             headers=AnthropicHeaders(x_api_key=key, tags=_tags_header(tags)),
             json=AnthropicMessageBody(
@@ -186,5 +186,5 @@ class PassthroughClient:
         )
 
 
-def build_client() -> PassthroughClient:
-    return PassthroughClient(gateway=build_gateway())
+def build_client(proxy: ProxyClient) -> PassthroughClient:
+    return PassthroughClient(proxy=proxy)

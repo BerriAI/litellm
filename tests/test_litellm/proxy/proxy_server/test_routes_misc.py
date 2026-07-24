@@ -94,7 +94,11 @@ def test_adaptive_router_state_returns_snapshots(client, auth_as, monkeypatch):
     snap = {"router_name": "ar-1", "queue_depth": 0, "posteriors": []}
     bandit = MagicMock()
     bandit.get_state_snapshot = AsyncMock(return_value=snap)
-    fake_router.adaptive_routers = {"ar-1": bandit}
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    fake_router.adaptive_routers = {
+        "ar-1": [TaggedPreRoutingStrategy(tags=(), strategy=bandit)]
+    }
     monkeypatch.setattr(ps, "llm_router", fake_router)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):

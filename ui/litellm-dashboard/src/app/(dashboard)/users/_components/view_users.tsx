@@ -1,5 +1,5 @@
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "antd";
 import BulkEditUserModal from "./BulkEditUsers";
@@ -16,20 +16,25 @@ import {
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
 import { updateExistingKeys } from "@/utils/dataUtils";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
-import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Typography } from "antd";
+import {
+  ColumnFiltersState,
+  OnChangeFn,
+  PaginationState,
+  RowSelectionState,
+  SortingState,
+} from "@tanstack/react-table";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { modelAvailableCall, userDeleteCall } from "@/components/networking";
 import DefaultUserSettings from "./DefaultUserSettings";
-import { columns } from "./view_users/columns";
-import { UserDataTable } from "./view_users/table";
+import { UsersTable } from "./view_users/UsersTable";
+import UserInfoView from "./view_users/user_info_view";
 import { UserInfo } from "@/components/networking";
 import { Skeleton } from "antd";
-
-const { Text, Title } = Typography;
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -40,33 +45,11 @@ interface ViewUserDashboardProps {
   orgAdminOrgIds?: Array<{ organization_id: string; organization_alias: string }> | null;
 }
 
-interface FilterState {
-  email: string;
-  user_id: string;
-  user_role: string;
-  sso_user_id: string;
-  team: string;
-  model: string;
-  min_spend: number | null;
-  max_spend: number | null;
-  sort_by: string;
-  sort_order: "asc" | "desc";
-}
-
 const DEFAULT_PAGE_SIZE = 25;
 
-const initialFilters: FilterState = {
-  email: "",
-  user_id: "",
-  user_role: "",
-  sso_user_id: "",
-  team: "",
-  model: "",
-  min_spend: null,
-  max_spend: null,
-  sort_by: "created_at",
-  sort_order: "desc",
-};
+const DEFAULT_SORT_BY = "created_at";
+
+const DEFAULT_SORTING: SortingState = [{ id: DEFAULT_SORT_BY, desc: true }];
 
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,
@@ -78,33 +61,29 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 }) => {
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
-  const [currentPage, setCurrentPage] = useState(1);
+
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [searchInput, setSearchInput] = useState("");
+  const [searchEmail] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
+
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [openInEditMode, setOpenInEditMode] = useState(false);
+
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
-  const [activeTab, setActiveTab] = useState("users");
-  const [filters, setFilters] = useState<FilterState>(initialFilters);
-  const [debouncedFilters, setDebouncedFilters, debouncer] = useDebouncedState(filters, { wait: 300 });
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [selectedUsers, setSelectedUsers] = useState<UserInfo[]>([]);
-  const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
-
-  const handleDelete = (user: UserInfo) => {
-    setUserToDelete(user);
-    setIsDeleteModalOpen(true);
-  };
-
-  useEffect(() => {
-    return () => {
-      debouncer.cancel();
-    };
-  }, [debouncer]);
 
   useEffect(() => {
     setBaseUrl(getProxyBaseUrl());
@@ -129,32 +108,69 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     fetchUserModels();
   }, [accessToken, userID, userRole]);
 
-  const updateFilters = (update: Partial<FilterState>) => {
-    setFilters((previousFilters) => {
-      const newFilters = { ...previousFilters, ...update };
-      setDebouncedFilters(newFilters);
-      return newFilters;
-    });
-  };
+  const getFilterValue = useCallback(
+    (columnId: string): string | undefined => {
+      const entry = columnFilters.find((filter) => filter.id === columnId);
+      return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
+    },
+    [columnFilters],
+  );
 
-  const handleSortChange = (sortBy: string, sortOrder: "asc" | "desc") => {
-    updateFilters({ sort_by: sortBy, sort_order: sortOrder });
-  };
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
+    setRowSelection({});
+  }, []);
 
-  const handleResetPassword = async (userId: string) => {
-    if (!accessToken) {
-      NotificationsManager.fromBackend("Access token not found");
-      return;
-    }
-    try {
-      NotificationsManager.success("Generating password reset link...");
-      const data = await invitationCreateCall(accessToken, userId);
-      setInvitationLinkData(data);
-      setIsInvitationLinkModalVisible(true);
-    } catch (error) {
-      NotificationsManager.fromBackend("Failed to generate password reset link");
-    }
-  };
+  const handleSortingChange = useCallback<OnChangeFn<SortingState>>((updaterOrValue) => {
+    setSorting(updaterOrValue);
+    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
+    setRowSelection({});
+  }, []);
+
+  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
+    setColumnFilters(updaterOrValue);
+    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
+    setRowSelection({});
+  }, []);
+
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>((updaterOrValue) => {
+    setPagination(updaterOrValue);
+    setRowSelection({});
+  }, []);
+
+  const handleUserClick = useCallback((userId: string, openInEdit: boolean = false) => {
+    setSelectedUserId(userId);
+    setOpenInEditMode(openInEdit);
+  }, []);
+
+  const handleCloseUserInfo = useCallback(() => {
+    setSelectedUserId(null);
+    setOpenInEditMode(false);
+  }, []);
+
+  const handleDelete = useCallback((user: UserInfo) => {
+    setUserToDelete(user);
+    setIsDeleteModalOpen(true);
+  }, []);
+
+  const handleResetPassword = useCallback(
+    async (userId: string) => {
+      if (!accessToken) {
+        NotificationsManager.fromBackend("Access token not found");
+        return;
+      }
+      try {
+        NotificationsManager.success("Generating password reset link...");
+        const data = await invitationCreateCall(accessToken, userId);
+        setInvitationLinkData(data);
+        setIsInvitationLinkModalVisible(true);
+      } catch (error) {
+        NotificationsManager.fromBackend("Failed to generate password reset link");
+      }
+    },
+    [accessToken],
+  );
 
   const confirmDelete = async () => {
     if (userToDelete && accessToken) {
@@ -219,58 +235,63 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     // Close the modal
   };
 
-  const handlePageChange = async (newPage: number) => {
-    setCurrentPage(newPage);
-  };
-
   const handleToggleSelectionMode = () => {
     setSelectionMode(!selectionMode);
-    setSelectedUsers([]);
-  };
-
-  const handleSelectionChange = (users: UserInfo[]) => {
-    setSelectedUsers(users);
-  };
-
-  const handleBulkEdit = () => {
-    if (selectedUsers.length === 0) {
-      NotificationsManager.fromBackend("Please select users to edit");
-      return;
-    }
-
-    setIsBulkEditModalVisible(true);
+    setRowSelection({});
   };
 
   const handleBulkEditSuccess = () => {
     // Refresh the user list
     queryClient.invalidateQueries({ queryKey: ["userList"] });
-    setSelectedUsers([]);
+    setRowSelection({});
     setSelectionMode(false);
   };
 
+  const activeSort = sorting[0];
+  const sortBy = activeSort?.id ?? DEFAULT_SORT_BY;
+  const sortOrder: "asc" | "desc" = activeSort?.desc ?? true ? "desc" : "asc";
+
+  const userIdFilter = getFilterValue("user_id");
+  const ssoUserIdFilter = getFilterValue("sso_user_id");
+  const userRoleFilter = getFilterValue("user_role");
+  const teamFilter = getFilterValue("team");
+  const emailFilter = searchEmail.trim() || null;
+
+  const userListQueryFilters = {
+    page: pagination.pageIndex + 1,
+    pageSize: pagination.pageSize,
+    email: emailFilter,
+    userId: userIdFilter,
+    ssoUserId: ssoUserIdFilter,
+    role: userRoleFilter,
+    team: teamFilter,
+    sortBy,
+    sortOrder,
+    orgAdminOrgIds,
+  };
+
   const userListQuery = useQuery({
-    queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage, orgAdminOrgIds }],
+    queryKey: ["userList", userListQueryFilters],
     queryFn: async () => {
       if (!accessToken) throw new Error("Access token required");
 
       return await userListCall(
         accessToken,
-        debouncedFilters.user_id ? [debouncedFilters.user_id] : null,
-        currentPage,
-        DEFAULT_PAGE_SIZE,
-        debouncedFilters.email || null,
-        debouncedFilters.user_role || null,
-        debouncedFilters.team || null,
-        debouncedFilters.sso_user_id || null,
-        debouncedFilters.sort_by,
-        debouncedFilters.sort_order,
+        userIdFilter ? [userIdFilter] : null,
+        pagination.pageIndex + 1,
+        pagination.pageSize,
+        emailFilter,
+        userRoleFilter ?? null,
+        teamFilter ?? null,
+        ssoUserIdFilter ?? null,
+        sortBy,
+        sortOrder,
         orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),
     placeholderData: (previousData) => previousData,
   });
-  const userListResponse = userListQuery.data;
 
   const userRolesQuery = useQuery<Record<string, Record<string, string>>>({
     queryKey: ["userRoles"],
@@ -283,28 +304,61 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   });
   const possibleUIRoles = userRolesQuery.data;
 
-  const tableColumns = columns(
-    possibleUIRoles,
-    (user) => {
-      setSelectedUser(user);
-      setEditModalVisible(true);
-    },
-    handleDelete,
-    handleResetPassword,
-    () => {}, // placeholder function, will be overridden in UserDataTable
+  const users = useMemo<UserInfo[]>(() => userListQuery.data?.users ?? [], [userListQuery.data]);
+  const totalUserCount = userListQuery.data?.total ?? 0;
+
+  const selectedUsers = useMemo(() => users.filter((user) => rowSelection[user.user_id]), [users, rowSelection]);
+
+  if (selectedUserId) {
+    return (
+      <UserInfoView
+        userId={selectedUserId}
+        onClose={handleCloseUserInfo}
+        accessToken={accessToken}
+        userRole={userRole}
+        possibleUIRoles={possibleUIRoles}
+        initialTab={openInEditMode ? 1 : 0}
+        startInEditMode={openInEditMode}
+      />
+    );
+  }
+
+  const usersTable = (
+    <UsersTable
+      data={users}
+      rowCount={totalUserCount}
+      isLoading={userListQuery.isLoading}
+      possibleUIRoles={possibleUIRoles}
+      teams={teams}
+      sorting={sorting}
+      onSortingChange={handleSortingChange}
+      pagination={pagination}
+      onPaginationChange={handlePaginationChange}
+      columnFilters={columnFilters}
+      onColumnFiltersChange={handleColumnFiltersChange}
+      searchValue={searchInput}
+      onSearchChange={handleSearchChange}
+      selectionEnabled={isProxyAdmin && selectionMode}
+      rowSelection={rowSelection}
+      onRowSelectionChange={setRowSelection}
+      onUserClick={handleUserClick}
+      onDeleteUser={handleDelete}
+      onResetPassword={handleResetPassword}
+    />
   );
 
   return (
     <div className="w-full p-8 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <div className="flex space-x-3">
-          {userListQuery.isLoading ? (
+          {userListQuery.isLoading && (
             <>
               <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
               <Skeleton.Button active size="default" shape="default" style={{ width: 145, height: 36 }} />
               <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
             </>
-          ) : userID && accessToken ? (
+          )}
+          {!userListQuery.isLoading && userID && accessToken && (
             <>
               {isProxyAdmin && (
                 <CreateUserButton
@@ -320,6 +374,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
                   onClick={handleToggleSelectionMode}
                   type={selectionMode ? "primary" : "default"}
                   className="flex items-center"
+                  data-testid="toggle-user-selection"
                 >
                   {selectionMode ? "Cancel Selection" : "Select Users"}
                 </Button>
@@ -328,57 +383,28 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               {isProxyAdmin && selectionMode && (
                 <Button
                   type="primary"
-                  onClick={handleBulkEdit}
+                  onClick={() => setIsBulkEditModalVisible(true)}
                   disabled={selectedUsers.length === 0}
                   className="flex items-center"
+                  data-testid="bulk-edit-users"
                 >
                   Bulk Edit ({selectedUsers.length} selected)
                 </Button>
               )}
             </>
-          ) : null}
+          )}
         </div>
       </div>
 
       {isProxyAdmin ? (
-        <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
+        <TabGroup defaultIndex={0}>
           <TabList className="mb-4">
             <Tab>Users</Tab>
             <Tab>Default User Settings</Tab>
           </TabList>
 
           <TabPanels>
-            <TabPanel>
-              <UserDataTable
-                data={userListQuery.data?.users || []}
-                columns={tableColumns}
-                isLoading={userListQuery.isLoading}
-                accessToken={accessToken}
-                userRole={userRole}
-                onSortChange={handleSortChange}
-                currentSort={{
-                  sortBy: filters.sort_by,
-                  sortOrder: filters.sort_order,
-                }}
-                possibleUIRoles={possibleUIRoles}
-                handleEdit={(user) => {
-                  setSelectedUser(user);
-                  setEditModalVisible(true);
-                }}
-                handleDelete={handleDelete}
-                handleResetPassword={handleResetPassword}
-                enableSelection={selectionMode}
-                selectedUsers={selectedUsers}
-                onSelectionChange={handleSelectionChange}
-                filters={filters}
-                updateFilters={updateFilters}
-                initialFilters={initialFilters}
-                teams={teams}
-                userListResponse={userListResponse}
-                currentPage={currentPage}
-                handlePageChange={handlePageChange}
-              />
-            </TabPanel>
+            <TabPanel>{usersTable}</TabPanel>
 
             <TabPanel>
               {!userID || !userRole || !accessToken ? (
@@ -397,35 +423,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           </TabPanels>
         </TabGroup>
       ) : (
-        <UserDataTable
-          data={userListQuery.data?.users || []}
-          columns={tableColumns}
-          isLoading={userListQuery.isLoading}
-          accessToken={accessToken}
-          userRole={userRole}
-          onSortChange={handleSortChange}
-          currentSort={{
-            sortBy: filters.sort_by,
-            sortOrder: filters.sort_order,
-          }}
-          possibleUIRoles={possibleUIRoles}
-          handleEdit={(user) => {
-            setSelectedUser(user);
-            setEditModalVisible(true);
-          }}
-          handleDelete={handleDelete}
-          handleResetPassword={handleResetPassword}
-          enableSelection={false}
-          selectedUsers={[]}
-          onSelectionChange={handleSelectionChange}
-          filters={filters}
-          updateFilters={updateFilters}
-          initialFilters={initialFilters}
-          teams={teams}
-          userListResponse={userListResponse}
-          currentPage={currentPage}
-          handlePageChange={handlePageChange}
-        />
+        usersTable
       )}
 
       {/* Existing Modals */}

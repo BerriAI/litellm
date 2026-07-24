@@ -439,6 +439,9 @@ class ContentThinkingSignatureBlockDelta(TypedDict):
     signature: str
 
 
+StreamingContentBlockDeltaType = Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"]
+
+
 class ContentBlockDelta(TypedDict):
     type: Literal["content_block_delta"]
     index: int

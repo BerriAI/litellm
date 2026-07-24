@@ -22,6 +22,12 @@ vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({
   default: ({ userId }: { userId: string }) => <span>{userId}</span>,
 }));
 
+vi.mock("./ProjectKeysSection", () => ({
+  ProjectKeysSection: ({ projectId }: { projectId: string }) => (
+    <div data-testid="project-keys-section">{projectId}</div>
+  ),
+}));
+
 const mockProject: ProjectResponse = {
   project_id: "proj-1",
   project_alias: "My Project",
@@ -96,6 +102,11 @@ describe("ProjectDetail", () => {
     it("should display the project alias as the page title", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByRole("heading", { name: "My Project" })).toBeInTheDocument();
+    });
+
+    it("should render the project keys section for the project", () => {
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByTestId("project-keys-section")).toHaveTextContent("proj-1");
     });
 
     it("should display 'Active' for a non-blocked project", () => {

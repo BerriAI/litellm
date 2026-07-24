@@ -36,6 +36,7 @@ interface VectorStoreProps {
 
 const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID, userRole }) => {
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
+  const [isLoadingVectorStores, setIsLoadingVectorStores] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [vectorStoreToDelete, setVectorStoreToDelete] = useState<string | null>(null);
@@ -46,13 +47,18 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [isDeleting, setIsDeleting] = useState(false);
 
   const fetchVectorStores = async () => {
-    if (!accessToken) return;
+    if (!accessToken) {
+      setIsLoadingVectorStores(false);
+      return;
+    }
     try {
       const response = await vectorStoreListCall(accessToken);
       setVectorStores(response.data || []);
     } catch (error) {
       console.error("Error fetching vector stores:", error);
       NotificationsManager.fromBackend("Error fetching vector stores: " + error);
+    } finally {
+      setIsLoadingVectorStores(false);
     }
   };
 
@@ -138,7 +144,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       />
     </div>
   ) : (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       <div className="gap-2 p-8 h-[75vh] w-full mt-2">
         <div className="flex justify-between mt-2 w-full items-center mb-4">
           <h1>Vector Store Management</h1>
@@ -181,6 +187,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
                 <Col numColSpan={1}>
                   <VectorStoreTable
                     data={vectorStores}
+                    isLoading={isLoadingVectorStores}
                     onView={handleView}
                     onEdit={handleEdit}
                     onDelete={handleDelete}

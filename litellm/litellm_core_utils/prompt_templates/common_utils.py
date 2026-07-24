@@ -42,6 +42,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init__.py
+    from litellm.types.llms.anthropic import AnthropicInputSchema
     from litellm.types.llms.openai import ChatCompletionImageObject
 
 DEFAULT_USER_CONTINUE_MESSAGE = ChatCompletionUserMessage(content="Please continue.", role="user")
@@ -1044,6 +1045,31 @@ def unpack_legacy_defs(
     defs.update(schema.pop("definitions", None) or {})
     unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
     return schema
+
+
+def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":
+    """Coerce an arbitrary tool input_schema into the shape Anthropic accepts.
+
+    Anthropic requires ``type == "object"``, only recognises ``$defs`` (legacy
+    ``definitions`` / OpenAPI ``components.schemas`` refs must be inlined first),
+    and rejects keys outside ``AnthropicInputSchema``. Both the chat
+    (``AnthropicConfig._map_tool_helper``) and Anthropic Messages MCP paths run
+    a schema through here so an external MCP schema cannot succeed on one route
+    and 400 on the other.
+    """
+    from litellm.types.llms.anthropic import AnthropicInputSchema
+
+    normalized = dict(input_schema) if input_schema else {}
+    if normalized.get("type") != "object":
+        normalized["type"] = "object"
+    if "properties" not in normalized:
+        normalized["properties"] = {}
+
+    normalized = unpack_legacy_defs(normalized, copy=True)
+
+    allowed_keys = set(AnthropicInputSchema.__annotations__.keys())
+    filtered = {key: value for key, value in normalized.items() if key in allowed_keys}
+    return AnthropicInputSchema(**filtered)
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:

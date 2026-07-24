@@ -1,7 +1,9 @@
 "use client";
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { ClearOutlined, DeleteOutlined, FilePdfOutlined, PlusOutlined } from "@ant-design/icons";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { Button, Input, Select, Tooltip } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -105,14 +107,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     disabledPersonalKeyCreation ? "custom" : "session",
   );
   const [customApiKey, setCustomApiKey] = useState("");
-  const [debouncedCustomApiKey, setDebouncedCustomApiKey] = useState("");
+  const [debouncedCustomApiKey] = useDebouncedValue(customApiKey, { wait: DEBOUNCE_WAIT_MS });
   const [customProxyBaseUrl] = useState<string>(() => sessionStorage.getItem("customProxyBaseUrl") || "");
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedCustomApiKey(customApiKey);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [customApiKey]);
   useEffect(() => {
     return () => {
       if (uploadedFilePreviewUrl) {

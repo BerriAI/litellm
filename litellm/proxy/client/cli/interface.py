@@ -27,13 +27,13 @@ def styled_prompt():
         verbose_logger.debug(f"Error getting terminal size: {e}")
         click.echo("\n" * 3)
 
-    # Unicode box drawing characters
-    top_left = "┌"
-    top_right = "┐"
-    bottom_left = "└"
-    bottom_right = "┘"
-    horizontal = "─"
-    vertical = "│"
+    # ASCII box drawing characters
+    top_left = "+"
+    top_right = "+"
+    bottom_left = "+"
+    bottom_right = "+"
+    horizontal = "-"
+    vertical = "|"
 
     # Create the box with increased width
     width = 80

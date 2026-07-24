@@ -206,6 +206,9 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "failed_requests": 0,  # 0 + 0
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0,
+        "prompt_caching_savings_spend": 0,
     }
 
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
@@ -253,6 +256,9 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "failed_requests": 0,  # 0 + 0
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0,
+        "prompt_caching_savings_spend": 0,
     }
 
     # Add updates to queue
@@ -476,3 +482,48 @@ async def test_queue_size_reduction_with_large_volume(
     assert result[user2_key]["api_requests"] == 100
     assert result[user2_key]["successful_requests"] == 100
     assert result[user2_key]["failed_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_compression_saved_tokens_aggregation(daily_spend_update_queue):
+    """compression_saved_tokens must accumulate across payloads for the same key."""
+    test_key = "user1_2023-01-01_key123_claude-sonnet-5_anthropic"
+    transaction1 = {
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "cache_read_input_tokens": 7,
+        "cache_creation_input_tokens": 3,
+        "compression_saved_tokens": 7000,
+        "compression_savings_spend": 0.007,
+        "prompt_caching_savings_spend": 0.0063,
+    }
+    transaction2 = {
+        "spend": 2.0,
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "cache_read_input_tokens": 5,
+        "cache_creation_input_tokens": 4,
+        "compression_saved_tokens": 600,
+        "compression_savings_spend": 0.0006,
+        "prompt_caching_savings_spend": 0.0045,
+    }
+
+    await daily_spend_update_queue.add_update({test_key: transaction1})
+    await daily_spend_update_queue.add_update({test_key: transaction2})
+    await daily_spend_update_queue.aggregate_queue_updates()
+    updates = await daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
+
+    assert len(updates) == 1
+    agg = updates[0][test_key]
+    assert agg["compression_saved_tokens"] == 7600
+    assert agg["cache_read_input_tokens"] == 12
+    assert agg["cache_creation_input_tokens"] == 7
+    assert agg["compression_savings_spend"] == pytest.approx(0.0076)
+    assert agg["prompt_caching_savings_spend"] == pytest.approx(0.0108)

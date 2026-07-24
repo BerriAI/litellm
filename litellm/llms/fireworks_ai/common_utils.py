@@ -12,6 +12,23 @@ class FireworksAIException(BaseLLMException):
     pass
 
 
+def get_fireworks_session_id(litellm_params: dict) -> str | None:
+    params = litellm_params
+    for key in ("litellm_session_id", "session_id"):
+        value = params.get(key)
+        if value:
+            return str(value)
+    metadata = params.get("metadata")
+    if isinstance(metadata, dict):
+        value = metadata.get("session_id")
+        if value:
+            return str(value)
+    value = params.get("litellm_trace_id")
+    if value:
+        return str(value)
+    return None
+
+
 class FireworksAIMixin:
     """
     Common Base Config functions across Fireworks AI Endpoints
@@ -47,4 +64,16 @@ class FireworksAIMixin:
         if api_key is None:
             raise ValueError("FIREWORKS_API_KEY is not set")
 
-        return {"Authorization": "Bearer {}".format(api_key), **headers}
+        auth_headers = {"Authorization": "Bearer {}".format(api_key), **headers}
+        content_type_header = (
+            {} if any(key.lower() == "content-type" for key in auth_headers) else {"Content-Type": "application/json"}
+        )
+        return self._add_session_affinity_header({**auth_headers, **content_type_header}, litellm_params)
+
+    def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
+        if any(key.lower() == "x-session-affinity" for key in headers):
+            return headers
+        session_id = get_fireworks_session_id(litellm_params)
+        if not session_id:
+            return headers
+        return {**headers, "x-session-affinity": session_id}

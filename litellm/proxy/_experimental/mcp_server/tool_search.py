@@ -91,7 +91,7 @@ async def handle_mcp_tool_search(
 
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-    mcp_tools = await _list_mcp_tools(
+    mcp_listing = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -100,6 +100,7 @@ async def handle_mcp_tool_search(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
     )
+    mcp_tools = mcp_listing.tools
     tools = [
         {
             "name": t.name,

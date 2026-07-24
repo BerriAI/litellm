@@ -4,6 +4,7 @@ import { useSSOSettings, type SSOSettingsValues } from "@/app/(dashboard)/hooks/
 import { Button, Card, Descriptions, Space, Tag, Typography } from "antd";
 import { Edit, Shield, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./constants";
 import AddSSOSettingsModal from "./Modals/AddSSOSettingsModal";
 import DeleteSSOSettingsModal from "./Modals/DeleteSSOSettingsModal";
@@ -110,6 +111,7 @@ export default function SSOSettings() {
           label: "User Info Endpoint",
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
+        { label: "Scopes", render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_scope) },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
         isTeamMappingsEnabled
           ? {
@@ -142,6 +144,7 @@ export default function SSOSettings() {
           label: "User Info Endpoint",
           render: (values: SSOSettingsValues) => renderEndpointValue(values.generic_userinfo_endpoint),
         },
+        { label: "Scopes", render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_scope) },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
         isTeamMappingsEnabled
           ? {
@@ -166,10 +169,10 @@ export default function SSOSettings() {
         <Descriptions.Item label="Provider">
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {ssoProviderLogoMap[selectedProvider] && (
-              <img
+              <Logo
                 src={ssoProviderLogoMap[selectedProvider]}
-                alt={selectedProvider}
-                style={{ height: 24, width: 24, objectFit: "contain" }}
+                label={ssoProviderDisplayNames[selectedProvider] || selectedProvider}
+                className="h-6 w-6 object-contain"
               />
             )}
             <span>{config.providerText}</span>

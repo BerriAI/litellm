@@ -1614,3 +1614,303 @@ class TestGuardrailInterventionClassification:
 
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_status"] == "guardrail_intervened"
+
+
+class _ApplyStyleGuardrail(CustomGuardrail):
+    """Overrides only apply_guardrail, like openai_moderation; async_pre_call_hook stays the CustomLogger no-op."""
+
+    def __init__(self, block: bool):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        super().__init__(
+            guardrail_name="apply-style-guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=False,
+        )
+        self.block = block
+        self.apply_called = False
+        self.seen_texts = None
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        from fastapi import HTTPException
+
+        self.apply_called = True
+        self.seen_texts = inputs.get("texts")
+        if self.block:
+            raise HTTPException(status_code=400, detail={"error": "Violated moderation policy"})
+        return inputs
+
+
+class TestApplyGuardrailStyleDeploymentDispatch:
+    """LIT-4217 regression: model-level guardrails that implement only the
+    unified apply_guardrail interface must execute in
+    async_pre_call_deployment_hook instead of silently hitting the
+    async_pre_call_hook no-op."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", [CallTypes.completion, CallTypes.acompletion])
+    async def test_blocks_when_requested_via_model_level_guardrails(self, call_type):
+        from fastapi import HTTPException
+
+        guardrail = _ApplyStyleGuardrail(block=True)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "flagged content"}],
+            "guardrails": ["apply-style-guardrail"],
+            "metadata": {},
+        }
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_deployment_hook(kwargs, call_type)
+
+        assert guardrail.apply_called is True
+        assert guardrail.seen_texts == ["flagged content"]
+
+    @pytest.mark.asyncio
+    async def test_pass_path_runs_guardrail_and_strips_dispatch_key(self):
+        guardrail = _ApplyStyleGuardrail(block=False)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "guardrails": ["apply-style-guardrail"],
+            "metadata": {},
+        }
+
+        result = await guardrail.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+        assert guardrail.apply_called is True
+        assert result is not None
+        assert "guardrail_to_apply" not in result
+        assert result["messages"] == [{"role": "user", "content": "hello"}]
+
+    @pytest.mark.asyncio
+    async def test_skips_when_not_requested(self):
+        guardrail = _ApplyStyleGuardrail(block=True)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello"}],
+            "guardrails": ["some-other-guardrail"],
+            "metadata": {},
+        }
+
+        result = await guardrail.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+        assert guardrail.apply_called is False
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_fails_closed_when_proxy_extras_missing(self):
+        import sys
+        from unittest.mock import patch
+
+        guardrail = _ApplyStyleGuardrail(block=True)
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "flagged content"}],
+            "guardrails": ["apply-style-guardrail"],
+            "metadata": {},
+        }
+
+        with patch.dict(sys.modules, {"litellm.proxy.utils": None}):
+            with pytest.raises(ImportError, match="litellm\\[proxy\\]"):
+                await guardrail.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+        assert guardrail.apply_called is False
+
+
+class TestOnlyScanNewMessages:
+    """Incremental guardrail scanning: only send text segments not already scanned this session."""
+
+    def _guardrail(self, **overrides):
+        params = dict(guardrail_name="test-guard", only_scan_new_messages=True)
+        params.update(overrides)
+        return CustomGuardrail(**params)
+
+    def _cache(self):
+        from litellm.caching import DualCache
+
+        return DualCache()
+
+    @pytest.mark.asyncio
+    async def test_disabled_returns_none(self):
+        guardrail = self._guardrail(only_scan_new_messages=False)
+        result = await guardrail.filter_new_texts_for_session(
+            texts=["hi"],
+            request_data={"litellm_session_id": "s1"},
+            cache=self._cache(),
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_no_session_id_fails_safe_to_full_scan(self):
+        guardrail = self._guardrail()
+        result = await guardrail.filter_new_texts_for_session(
+            texts=["hi"],
+            request_data={"metadata": {}},
+            cache=self._cache(),
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_masking_guardrail_not_supported(self):
+        guardrail = self._guardrail(mask_request_content=True)
+        result = await guardrail.filter_new_texts_for_session(
+            texts=["hi"],
+            request_data={"litellm_session_id": "s1"},
+            cache=self._cache(),
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_cache_read_failure_fails_safe_to_full_scan(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail()
+        cache = self._cache()
+        cache.async_get_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+        result = await guardrail.filter_new_texts_for_session(
+            texts=["hi"],
+            request_data={"litellm_session_id": "s1"},
+            cache=cache,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_dedupes_previously_scanned_texts(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"litellm_session_id": "sess-dedupe"}
+        turn1 = ["you are helpful", "first question"]
+
+        first = await guardrail.filter_new_texts_for_session(texts=turn1, request_data=request, cache=cache)
+        assert first == turn1
+        await guardrail.mark_texts_scanned(texts=turn1, request_data=request, cache=cache)
+
+        turn2 = turn1 + ["an answer", "second question"]
+        second = await guardrail.filter_new_texts_for_session(texts=turn2, request_data=request, cache=cache)
+        assert second == ["an answer", "second question"]
+
+    @pytest.mark.asyncio
+    async def test_no_new_texts_returns_empty(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"litellm_session_id": "sess-empty"}
+        texts = ["only message"]
+
+        await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        await guardrail.mark_texts_scanned(texts=texts, request_data=request, cache=cache)
+
+        again = await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        assert again == []
+
+    @pytest.mark.asyncio
+    async def test_modified_earlier_text_is_rescanned(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"litellm_session_id": "sess-edit"}
+        original = ["original"]
+
+        await guardrail.filter_new_texts_for_session(texts=original, request_data=request, cache=cache)
+        await guardrail.mark_texts_scanned(texts=original, request_data=request, cache=cache)
+
+        edited = ["original EDITED"]
+        result = await guardrail.filter_new_texts_for_session(texts=edited, request_data=request, cache=cache)
+        assert result == edited
+
+    @pytest.mark.asyncio
+    async def test_blocked_scan_does_not_persist_hashes(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"litellm_session_id": "sess-blocked"}
+        texts = ["please block me"]
+
+        filtered = await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        assert filtered == texts
+
+        again = await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        assert again == texts
+
+    @pytest.mark.asyncio
+    async def test_scanned_hashes_written_with_fixed_ttl(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.constants import GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS
+
+        guardrail = self._guardrail()
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock()
+        request = {"litellm_session_id": "sess-ttl"}
+
+        await guardrail.mark_texts_scanned(texts=["a", "b"], request_data=request, cache=cache)
+
+        cache.async_set_cache.assert_awaited_once()
+        assert cache.async_set_cache.await_args.kwargs["ttl"] == GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS
+
+    @pytest.mark.asyncio
+    async def test_session_id_from_metadata_is_used_for_dedupe(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"metadata": {"session_id": "sess-meta"}}
+        texts = ["shared message"]
+
+        await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        await guardrail.mark_texts_scanned(texts=texts, request_data=request, cache=cache)
+
+        again = await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        assert again == []
+
+    @pytest.mark.asyncio
+    async def test_session_id_from_litellm_metadata_is_used_for_dedupe(self):
+        guardrail = self._guardrail()
+        cache = self._cache()
+        request = {"litellm_metadata": {"session_id": "sess-lmeta"}}
+        texts = ["shared message"]
+
+        await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        await guardrail.mark_texts_scanned(texts=texts, request_data=request, cache=cache)
+
+        again = await guardrail.filter_new_texts_for_session(texts=texts, request_data=request, cache=cache)
+        assert again == []
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_disabled_does_not_persist(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail(only_scan_new_messages=False)
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock()
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
+        cache.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_masking_does_not_persist(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail(mask_request_content=True)
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock()
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)
+        cache.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_without_session_does_not_persist(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail()
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock()
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"metadata": {}}, cache=cache)
+        cache.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_texts_scanned_survives_cache_write_failure(self):
+        from unittest.mock import AsyncMock
+
+        guardrail = self._guardrail()
+        cache = self._cache()
+        cache.async_set_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+
+        await guardrail.mark_texts_scanned(texts=["a"], request_data={"litellm_session_id": "s1"}, cache=cache)

@@ -260,7 +260,7 @@ class LiteLLM_Proxy_MCP_Handler:
         # names), so use None and let the auth object's mcp_servers do the filtering.
         effective_server_filter = None if resolved_toolset_ids else (resolved_mcp_servers or None)
 
-        tools = await _get_tools_from_mcp_servers(
+        listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_servers=effective_server_filter,
@@ -270,6 +270,7 @@ class LiteLLM_Proxy_MCP_Handler:
             litellm_trace_id=litellm_trace_id,
             request_tags=request_tags,
         )
+        tools = listing.tools
 
         allowed_mcp_server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
@@ -478,17 +479,25 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> bool:
         """Check if we should auto-execute tool calls.
 
-        Only auto-execute tools if user passed a MCP tool with require_approval set to "never".
-
-
+        Auto-execution requires EVERY MCP reference to opt in with
+        ``require_approval="never"``. A single reference that requires approval
+        ("always", "manual", the object form, or an unset value) disables
+        auto-execution for the whole request. This fails closed: when an
+        approval-required reference shares a request with a "never" one, the
+        model's tool calls are returned to the caller instead of being run, so
+        an approval-gated tool can never be invoked without approval. Returns
+        False for an empty list.
         """
-        for tool in mcp_tools_with_litellm_proxy:
-            if isinstance(tool, dict):
-                if tool.get("require_approval") == "never":
-                    return True
-            elif getattr(tool, "require_approval", None) == "never":
-                return True
-        return False
+        references = list(mcp_tools_with_litellm_proxy or [])
+        if not references:
+            return False
+        for tool in references:
+            approval = (
+                tool.get("require_approval") if isinstance(tool, dict) else getattr(tool, "require_approval", None)
+            )
+            if approval != "never":
+                return False
+        return True
 
     @staticmethod
     def _extract_tool_calls_from_response(response: ResponsesAPIResponse) -> List[Any]:
@@ -541,7 +550,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 tool_arguments = function_block.get("arguments")
             else:
                 tool_name = tool_call.get("name")
+                # Anthropic tool_use blocks carry the arguments under `input`
                 tool_arguments = tool_call.get("arguments")
+                if tool_arguments is None:
+                    tool_arguments = tool_call.get("input")
         else:
             tool_call_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None)
 
@@ -552,6 +564,8 @@ class LiteLLM_Proxy_MCP_Handler:
             else:
                 tool_name = getattr(tool_call, "name", None)
                 tool_arguments = getattr(tool_call, "arguments", None)
+                if tool_arguments is None:
+                    tool_arguments = getattr(tool_call, "input", None)
 
         return tool_name, tool_arguments, tool_call_id
 

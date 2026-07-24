@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
-    from ddtrace.tracer import Tracer as DD_TRACER
+    from ddtrace.trace import Tracer as DD_TRACER
 else:
     DD_TRACER = Any
 

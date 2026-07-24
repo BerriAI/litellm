@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
+from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
 
 import litellm
@@ -766,6 +767,30 @@ def test_get_request_headers_with_sigv4():
         mock_sigv4_class.assert_called_once_with(credentials, "bedrock", "us-west-2")
         mock_sigv4.add_auth.assert_called_once_with(mock_request)
         assert result == mock_request.prepare.return_value
+
+
+def test_sigv4_matches_rust_golden_vector():
+    request = AWSRequest(
+        method="POST",
+        url="https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke",
+        data=b'{"input":"hello"}',
+        headers={"Content-Type": "application/json"},
+    )
+    credentials = Credentials(
+        "AKIDEXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        "session-token",
+    )
+    with patch("botocore.auth.get_current_datetime", return_value=datetime(2024, 1, 2, 3, 4, 5)):
+        SigV4Auth(credentials, "bedrock", "us-east-1").add_auth(request)
+    assert request.headers["X-Amz-Date"] == "20240102T030405Z"
+    assert request.headers["X-Amz-Security-Token"] == "session-token"
+    assert (
+        request.headers["Authorization"]
+        == "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, "
+        "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, "
+        "Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
+    )
 
 
 def test_get_request_headers_with_api_key_bearer_token():

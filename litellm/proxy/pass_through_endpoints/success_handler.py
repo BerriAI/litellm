@@ -48,18 +48,18 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
 
 class PassThroughEndpointLogging:
     def __init__(self):
-        self.TRACKED_VERTEX_ROUTES = [
+        self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
             "predict",
             "rawPredict",
             "streamRawPredict",
             "search",
-            "batchPredictionJobs",
             "predictLongRunning",
             "embedContent",
             "batchEmbedContents",
-        ]
+        )
+        self.TRACKED_VERTEX_RESOURCE_ROUTES = ("batchPredictionJobs",)
 
         # Anthropic
         self.TRACKED_ANTHROPIC_ROUTES = ["/messages", "/v1/messages/batches"]
@@ -339,11 +339,10 @@ class PassThroughEndpointLogging:
             **kwargs,
         )
 
-    def is_vertex_route(self, url_route: str):
-        for route in self.TRACKED_VERTEX_ROUTES:
-            if route in url_route:
-                return True
-        return False
+    def is_vertex_route(self, url_route: str) -> bool:
+        if any(f":{method}" in url_route for method in self.TRACKED_VERTEX_METHOD_ROUTES):
+            return True
+        return any(resource in url_route for resource in self.TRACKED_VERTEX_RESOURCE_ROUTES)
 
     def is_anthropic_route(self, url_route: str):
         for route in self.TRACKED_ANTHROPIC_ROUTES:

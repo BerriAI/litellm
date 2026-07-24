@@ -693,6 +693,8 @@ class TestLassoGuardrail:
         assert prompt_payload["messages"] == messages
         assert prompt_payload["userId"] == "test-user"
         assert prompt_payload["sessionId"] == "test-conversation"
+        # Every call is attributed to the "litellm" integration for the "Used By" badge.
+        assert prompt_payload["source"] == {"type": "litellm"}
 
         # Test COMPLETION payload
         completion_messages = [{"role": "assistant", "content": "Test response"}]
@@ -703,6 +705,7 @@ class TestLassoGuardrail:
         assert completion_payload["messages"] == completion_messages
         assert completion_payload["userId"] == "test-user"
         assert completion_payload["sessionId"] == "test-conversation"
+        assert completion_payload["source"] == {"type": "litellm"}
 
     def test_header_preparation(self):
         """Test header preparation."""

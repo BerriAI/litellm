@@ -66,6 +66,7 @@ from litellm.proxy.auth.budget_throttle import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
@@ -361,7 +362,11 @@ def _global_proxy_budget_check(global_proxy_spend: Optional[float], skip_budget_
         and route != "/models"
     ):
         if math.isfinite(litellm.max_budget) and global_proxy_spend > litellm.max_budget:
-            raise litellm.BudgetExceededError(current_cost=global_proxy_spend, max_budget=litellm.max_budget)
+            raise litellm.BudgetExceededError(
+                current_cost=global_proxy_spend,
+                max_budget=litellm.max_budget,
+                entity_type=Litellm_EntityType.PROXY.value,
+            )
 
 
 _GUARDRAIL_MODIFICATION_KEYS: tuple = (
@@ -523,6 +528,7 @@ async def common_checks(
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
+        request=request,
     )
 
     if route in MODEL_DISCOVERY_ROUTES:
@@ -626,26 +632,31 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            # 4.1 personal budget, if personal key
-            if (
-                (team_object is None or team_object.team_id is None)
-                and user_object is not None
-                and user_object.max_budget is not None
-            ):
-                from litellm.proxy.proxy_server import get_current_spend
+            if user_object is None or user_object.max_budget is None:
+                return
+            skip_for_team = (
+                general_settings.get("skip_user_budget_on_team_key") is True
+                and team_object is not None
+                and team_object.team_id is not None
+            )
+            if skip_for_team:
+                return
+            from litellm.proxy.proxy_server import get_current_spend
 
-                user_budget = user_object.max_budget
-                user_spend = await get_current_spend(
-                    counter_key=f"spend:user:{user_object.user_id}",
-                    fallback_spend=user_object.spend or 0.0,
+            user_budget = user_object.max_budget
+            user_spend = await get_current_spend(
+                counter_key=f"spend:user:{user_object.user_id}",
+                fallback_spend=user_object.spend or 0.0,
+                max_budget=user_budget,
+            )
+            if math.isfinite(user_budget) and user_spend >= user_budget:
+                raise litellm.BudgetExceededError(
+                    current_cost=user_spend,
                     max_budget=user_budget,
+                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+                    entity_type=Litellm_EntityType.USER.value,
+                    entity_id=user_object.user_id,
                 )
-                if math.isfinite(user_budget) and user_spend >= user_budget:
-                    raise litellm.BudgetExceededError(
-                        current_cost=user_spend,
-                        max_budget=user_budget,
-                        message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
-                    )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead
@@ -1090,6 +1101,8 @@ async def _check_end_user_budget(
             current_cost=end_user_spend,
             max_budget=end_user_budget,
             message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
+            entity_type=Litellm_EntityType.END_USER.value,
+            entity_id=end_user_obj.user_id,
         )
 
 
@@ -1665,6 +1678,13 @@ async def get_user_object(
                     new_user_params["user_email"] = user_email
                 if litellm.default_internal_user_params is not None:
                     new_user_params.update(litellm.default_internal_user_params)
+                if (
+                    new_user_params.get("budget_duration") is not None
+                    and new_user_params.get("budget_reset_at") is None
+                ):
+                    new_user_params["budget_reset_at"] = get_budget_reset_time(
+                        budget_duration=new_user_params["budget_duration"]
+                    )
 
                 response = await UserRepository(prisma_client).table.create(
                     data=new_user_params,
@@ -2641,6 +2661,15 @@ async def get_managed_vector_store_rows_by_uuids(
     return result
 
 
+class OrganizationNotFoundError(Exception):
+    """The organization row is CONFIRMED absent, as opposed to a lookup that failed.
+
+    Subclasses Exception so every existing except Exception caller keeps its current
+    behavior; it exists so a caller that wants to treat "no such org" as "no restriction" can do
+    that WITHOUT also swallowing an outage and silently dropping a real org ceiling.
+    """
+
+
 @log_db_metrics
 async def get_org_object(
     org_id: str,
@@ -2687,24 +2716,29 @@ async def get_org_object(
             query_kwargs["include"] = {"litellm_budget_table": True}
 
         response = await OrganizationRepository(prisma_client).table.find_unique(**query_kwargs)
-
-        if response is None:
-            raise Exception
-
-        _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
-        # Cache the result
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=_org_obj,
-            model_type=LiteLLM_OrganizationTable,
-            ttl=DEFAULT_IN_MEMORY_TTL,
-        )
-
-        return _org_obj
     except Exception:
-        raise Exception(
+        # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
+        # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
+        # apart — a caller that treats absence as "this org places no restriction" then drops a real
+        # org ceiling during an outage. Propagate the real error; callers that already catch
+        # Exception are unaffected.
+        raise
+
+    if response is None:
+        raise OrganizationNotFoundError(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
+
+    _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
+    # Cache the result
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=_org_obj,
+        model_type=LiteLLM_OrganizationTable,
+        ttl=DEFAULT_IN_MEMORY_TTL,
+    )
+
+    return _org_obj
 
 
 async def _get_resources_from_access_groups(
@@ -3549,6 +3583,8 @@ async def _virtual_key_max_budget_check(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
                 message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
+                entity_type=Litellm_EntityType.KEY.value,
+                entity_id=valid_token.token,
             )
 
 
@@ -3590,6 +3626,8 @@ async def _virtual_key_multi_budget_check(
                     f"ExceededBudget: Key over {w['budget_duration']} budget. "
                     f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
                 ),
+                entity_type=Litellm_EntityType.KEY.value,
+                entity_id=valid_token.token,
             )
 
 
@@ -3821,6 +3859,8 @@ async def _check_team_member_budget(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,
                     message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
+                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+                    entity_id=f"{valid_token.user_id}:{team_object.team_id}",
                 )
 
 
@@ -3920,6 +3960,8 @@ async def _team_max_budget_check(
                 current_cost=spend,
                 max_budget=team_object.max_budget,
                 message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
+                entity_type=Litellm_EntityType.TEAM.value,
+                entity_id=team_object.team_id,
             )
 
 
@@ -3957,6 +3999,8 @@ async def _team_multi_budget_check(
                     f"ExceededBudget: Team={team_object.team_id} over {w['budget_duration']} budget. "
                     f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
                 ),
+                entity_type=Litellm_EntityType.TEAM.value,
+                entity_id=team_object.team_id,
             )
 
 
@@ -4078,6 +4122,8 @@ async def _project_max_budget_check(
             current_cost=project_object.spend,
             max_budget=max_budget,
             message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_object.spend}, Max budget: {max_budget}",
+            entity_type=Litellm_EntityType.PROJECT.value,
+            entity_id=project_object.project_id,
         )
 
 
@@ -4266,6 +4312,8 @@ async def _organization_max_budget_check(
             current_cost=org_spend,
             max_budget=org_max_budget,
             message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
+            entity_type=Litellm_EntityType.ORGANIZATION.value,
+            entity_id=org_id,
         )
 
 
@@ -4323,6 +4371,8 @@ async def _tag_max_budget_check(
                 current_cost=tag_spend,
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
+                entity_type=Litellm_EntityType.TAG.value,
+                entity_id=tag_name,
             )
 
 
@@ -4383,14 +4433,23 @@ def _model_custom_llm_provider_matches_wildcard_pattern(model: str, allowed_mode
     or
     - `model=claude-3-5-sonnet-20240620`
     - `allowed_model_pattern=anthropic/*`
+
+    A model that already carries a namespace get_llm_provider did not consume
+    (e.g. `bedrockz/anthropic.claude-...`) is never granted here: its provider was
+    inferred from a fragment of the full string, so rebuilding
+    `{provider}/{model}` would produce `bedrock/bedrockz/...` and slip an
+    unrecognized namespace through a `bedrock/*` key.
     """
     try:
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        stripped_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         return False
 
+    if stripped_model == model and "/" in model:
+        return False
+
     return is_model_allowed_by_pattern(
-        model=f"{custom_llm_provider}/{model}",
+        model=f"{custom_llm_provider}/{stripped_model}",
         allowed_model_pattern=allowed_model_pattern,
     )
 

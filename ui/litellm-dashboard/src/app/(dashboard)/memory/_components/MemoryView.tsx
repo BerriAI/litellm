@@ -1,21 +1,19 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Drawer, Empty, Input, Space, Table, Typography, message } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import {
-  DeleteOutlined,
-  EditOutlined,
-  EyeOutlined,
-  PlusOutlined,
-  ReloadOutlined,
-  SearchOutlined,
-} from "@ant-design/icons";
+import type { PaginationState } from "@tanstack/react-table";
+import { PlusOutlined } from "@ant-design/icons";
+import { Button, Space, Typography, message } from "antd";
+import React, { useCallback, useMemo, useState } from "react";
+
 import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
-import { DateCell, IdCell } from "@/components/shared/table_cells";
-import { MemoryEditModal } from "./MemoryEditModal";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+
+import { MemoryDetailDrawer } from "./MemoryDetailDrawer";
+import { MemoryEditModal } from "./MemoryEditModal";
+import { MemoryTable } from "./MemoryTable";
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -25,38 +23,16 @@ interface MemoryViewProps {
   userRole: string | null;
 }
 
-function previewValue(value: string, max = 120): string {
-  if (!value) return "";
-  const trimmed = value.trim();
-  if (trimmed.length <= max) return trimmed;
-  return `${trimmed.slice(0, max)}…`;
-}
-
-function formatTimestamp(ts?: string): string {
-  if (!ts) return "—";
-  try {
-    const d = new Date(ts);
-    return d.toLocaleString();
-  } catch {
-    return ts;
-  }
-}
-
-const PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 50;
 
 export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   const [searchInput, setSearchInput] = useState("");
-  const [appliedSearch, setAppliedSearch] = useState("");
+  const [debouncedSearch] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const [detailRow, setDetailRow] = useState<MemoryRow | null>(null);
   const [editRow, setEditRow] = useState<MemoryRow | null>(null);
   const [deleteRow, setDeleteRow] = useState<MemoryRow | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-
-  // Reset to page 1 whenever the filter changes.
-  React.useEffect(() => {
-    setCurrentPage(1);
-  }, [appliedSearch]);
 
   const queryClient = useQueryClient();
   // React Query key prefix for all memory-list variants (paged + filtered).
@@ -65,15 +41,15 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   const MEMORY_LIST_KEY = "memoryList" as const;
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: [MEMORY_LIST_KEY, appliedSearch, currentPage],
+    queryKey: [MEMORY_LIST_KEY, debouncedSearch, pagination.pageIndex, pagination.pageSize],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
       // Prefix search matches the Redis-style mental model (namespace scan):
       // typing "user:" finds "user:profile", "user:prefs", etc.
       return fetchMemoryList(accessToken, {
-        keyPrefix: appliedSearch || undefined,
-        page: currentPage,
-        pageSize: PAGE_SIZE,
+        keyPrefix: debouncedSearch || undefined,
+        page: pagination.pageIndex + 1,
+        pageSize: pagination.pageSize,
       });
     },
     enabled: !!accessToken,
@@ -88,7 +64,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   //     refetches from scratch (pagination + filter-aware).
   //   - on error: surface the message via antd `message.error`.
 
-  const invalidateList = () => queryClient.invalidateQueries({ queryKey: [MEMORY_LIST_KEY] });
+  const invalidateList = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: [MEMORY_LIST_KEY] }),
+    [queryClient],
+  );
 
   const createMutation = useMutation({
     mutationFn: (args: { key: string; value: string; metadata: unknown }) => {
@@ -133,9 +112,14 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     },
   });
 
-  const handleDelete = (row: MemoryRow) => {
-    setDeleteRow(row);
-  };
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
+
+  const handleView = useCallback((row: MemoryRow) => setDetailRow(row), []);
+  const handleEdit = useCallback((row: MemoryRow) => setEditRow(row), []);
+  const handleDelete = useCallback((row: MemoryRow) => setDeleteRow(row), []);
 
   const confirmDelete = async () => {
     if (!deleteRow) return;
@@ -192,242 +176,43 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     }
   };
 
-  const columns: ColumnsType<MemoryRow> = [
-    {
-      title: "ID",
-      dataIndex: "memory_id",
-      key: "memory_id",
-      width: 140,
-      render: (_: unknown, r: MemoryRow) => <IdCell value={r.memory_id} onClick={() => setDetailRow(r)} />,
-    },
-    {
-      title: "Name",
-      dataIndex: "key",
-      key: "key",
-      width: 200,
-      render: (k: string) => <Text code>{k}</Text>,
-      // No client-side sorter: pagination is server-side, so a client sort
-      // would only reorder the current page and mislead users into thinking
-      // the whole list is sorted. Backend returns rows ordered by
-      // `updated_at DESC`; use the prefix filter for discovery by name.
-    },
-    {
-      title: "Preview",
-      dataIndex: "value",
-      key: "value",
-      render: (v: string) => (
-        <Text type="secondary" style={{ whiteSpace: "pre-wrap" }}>
-          {previewValue(v)}
-        </Text>
-      ),
-    },
-    {
-      title: "User ID",
-      dataIndex: "user_id",
-      key: "user_id",
-      width: 160,
-      render: (uid?: string | null) => <IdCell value={uid} />,
-    },
-    {
-      title: "Team ID",
-      dataIndex: "team_id",
-      key: "team_id",
-      width: 160,
-      render: (tid?: string | null) => <IdCell value={tid} />,
-    },
-    {
-      title: "Updated",
-      dataIndex: "updated_at",
-      key: "updated_at",
-      width: 180,
-      render: (ts?: string) => <DateCell value={ts} />,
-      // No sorter — backend already returns rows in `updated_at DESC` order,
-      // and a client-side sorter on a paginated view would only affect the
-      // current page.
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 140,
-      render: (_: unknown, r: MemoryRow) => (
-        <Space size={4}>
-          <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => setDetailRow(r)} aria-label="View" />
-          <Button size="small" type="text" icon={<EditOutlined />} onClick={() => setEditRow(r)} aria-label="Edit" />
-          <Button
-            size="small"
-            type="text"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => handleDelete(r)}
-            aria-label="Delete"
-          />
-        </Space>
-      ),
-    },
-  ];
-
   return (
     <div className="w-full" style={{ padding: 24 }}>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
-        <div>
-          <Title level={3} style={{ marginBottom: 4 }}>
-            Memory
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            Inspect what your agents have stored under <Text code>/v1/memory</Text>. Scoped to memories visible to your
-            user / team (admins see all).
-          </Paragraph>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+          <div>
+            <Title level={3} style={{ marginBottom: 4 }}>
+              Memory
+            </Title>
+            <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              Inspect what your agents have stored under <Text code>/v1/memory</Text>. Scoped to memories visible to
+              your user / team (admins see all).
+            </Paragraph>
+          </div>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateOpen(true)}>
+            New memory
+          </Button>
         </div>
 
-        <Card>
-          <Space
-            style={{
-              width: "100%",
-              justifyContent: "space-between",
-              marginBottom: 16,
-            }}
-            wrap
-          >
-            <Space>
-              <Input
-                allowClear
-                placeholder='Filter by key prefix, e.g. "user:"'
-                prefix={<SearchOutlined />}
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                onPressEnter={() => setAppliedSearch(searchInput.trim())}
-                onClear={() => {
-                  setSearchInput("");
-                  setAppliedSearch("");
-                }}
-                style={{ width: 280 }}
-              />
-              <Button type="primary" ghost onClick={() => setAppliedSearch(searchInput.trim())}>
-                Search
-              </Button>
-              <Button icon={<ReloadOutlined />} onClick={() => invalidateList()} loading={isFetching && !isLoading}>
-                Refresh
-              </Button>
-            </Space>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateOpen(true)}>
-              New memory
-            </Button>
-          </Space>
-
-          <Table
-            rowKey="memory_id"
-            loading={isLoading}
-            dataSource={rows}
-            columns={columns}
-            // Server-side pagination: we fetch one page at a time so we never
-            // silently truncate large stores. `total` drives the page count;
-            // changing page/pageSize retriggers the query via `currentPage`.
-            pagination={{
-              current: currentPage,
-              pageSize: PAGE_SIZE,
-              total,
-              showSizeChanger: false,
-              showTotal: (n, range) => `${range[0]}–${range[1]} of ${n}`,
-              onChange: (page) => setCurrentPage(page),
-            }}
-            locale={{
-              emptyText: (
-                <Empty
-                  description={
-                    appliedSearch ? `No memories with keys starting with "${appliedSearch}"` : "No memories stored yet"
-                  }
-                />
-              ),
-            }}
-          />
-        </Card>
+        <MemoryTable
+          data={rows}
+          isLoading={isLoading}
+          rowCount={total}
+          pagination={pagination}
+          onPaginationChange={setPagination}
+          searchValue={searchInput}
+          onSearchChange={handleSearchChange}
+          isRefreshing={isFetching && !isLoading}
+          onRefresh={invalidateList}
+          hasActiveSearch={!!debouncedSearch}
+          onViewClick={handleView}
+          onEditClick={handleEdit}
+          onDeleteClick={handleDelete}
+        />
       </Space>
 
       {/* Detail drawer */}
-      <Drawer
-        open={!!detailRow}
-        onClose={() => setDetailRow(null)}
-        title={
-          detailRow ? (
-            <Space>
-              <Text code>{detailRow.key}</Text>
-            </Space>
-          ) : (
-            "Memory"
-          )
-        }
-        width={720}
-        destroyOnClose
-      >
-        {detailRow && (
-          <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-            <Space size="large" wrap>
-              <div>
-                <Text strong style={{ display: "block" }}>
-                  Memory ID
-                </Text>
-                <Text code style={{ fontSize: 12 }}>
-                  {detailRow.memory_id}
-                </Text>
-              </div>
-              <div>
-                <Text strong style={{ display: "block" }}>
-                  User ID
-                </Text>
-                <Text type={detailRow.user_id ? undefined : "secondary"}>{detailRow.user_id ?? "-"}</Text>
-              </div>
-              <div>
-                <Text strong style={{ display: "block" }}>
-                  Team ID
-                </Text>
-                <Text type={detailRow.team_id ? undefined : "secondary"}>{detailRow.team_id ?? "-"}</Text>
-              </div>
-            </Space>
-            <div>
-              <Text strong>Value</Text>
-              <Paragraph
-                style={{
-                  background: "#fafafa",
-                  padding: 12,
-                  borderRadius: 6,
-                  whiteSpace: "pre-wrap",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                  fontSize: 13,
-                }}
-              >
-                {detailRow.value}
-              </Paragraph>
-            </div>
-            {detailRow.metadata !== undefined && detailRow.metadata !== null && (
-              <div>
-                <Text strong>Metadata</Text>
-                <Paragraph
-                  style={{
-                    background: "#fafafa",
-                    padding: 12,
-                    borderRadius: 6,
-                    whiteSpace: "pre-wrap",
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                    fontSize: 12,
-                  }}
-                >
-                  {JSON.stringify(detailRow.metadata, null, 2)}
-                </Paragraph>
-              </div>
-            )}
-            <Space split={<Text type="secondary">·</Text>} wrap size="small" style={{ color: "rgba(0,0,0,0.45)" }}>
-              <Text type="secondary">
-                Created {formatTimestamp(detailRow.created_at)}
-                {detailRow.created_by ? ` by ${detailRow.created_by}` : ""}
-              </Text>
-              <Text type="secondary">
-                Updated {formatTimestamp(detailRow.updated_at)}
-                {detailRow.updated_by ? ` by ${detailRow.updated_by}` : ""}
-              </Text>
-            </Space>
-          </Space>
-        )}
-      </Drawer>
+      <MemoryDetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />
 
       {/* Create / edit modal */}
       <MemoryEditModal

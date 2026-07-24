@@ -196,3 +196,66 @@ async def test_aresponses_azure_shell_tool_400_maps_to_bad_request_error():
     assert excinfo.value.status_code == 400
     assert "shell" in str(excinfo.value).lower()
     assert "not supported" in str(excinfo.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service_tier(
+    monkeypatch,
+):
+    """
+    Request-level drop_params=True (as the proxy injects for agentic CLIs) must
+    reach the provider config so bedrock_mantle strips the unsupported
+    service_tier before the request hits the wire.
+    """
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(
+            _minimal_responses_api_payload("resp_mantle_tier_test", "openai.gpt-5.5"),
+            200,
+        )
+
+        await litellm.aresponses(
+            model="bedrock_mantle/openai.gpt-5.5",
+            api_key="fake-bearer-token",
+            aws_region_name="us-east-1",
+            input="hi",
+            service_tier="priority",
+            drop_params=True,
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert "service_tier" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_aresponses_bedrock_mantle_service_tier_raises_without_drop_params(
+    monkeypatch,
+):
+    """
+    Without drop_params, an unsupported service_tier must fail fast with an
+    error that names drop_params instead of sending a request Mantle rejects.
+    """
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            await litellm.aresponses(
+                model="bedrock_mantle/openai.gpt-5.5",
+                api_key="fake-bearer-token",
+                aws_region_name="us-east-1",
+                input="hi",
+                service_tier="priority",
+            )
+
+        mock_post.assert_not_called()
+        assert "drop_params" in str(excinfo.value)
+        assert "priority" in str(excinfo.value)

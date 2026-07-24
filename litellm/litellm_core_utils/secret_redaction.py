@@ -9,6 +9,8 @@ secrets from strings without depending on the logging-configuration module.
 import re
 from typing import List
 
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
+
 _REDACTED = "REDACTED"
 
 
@@ -30,7 +32,7 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # Basic auth headers
         r"Basic\s+[A-Za-z0-9+/]{10,}={0,2}",
         # OpenAI / Anthropic sk- prefixed keys
-        r"sk-[A-Za-z0-9\-_]{20,}",
+        rf"sk-[A-Za-z0-9\-_]{{{MINIMUM_CUSTOM_KEY_LENGTH - len('sk-')},}}",
         # Generic api_key / api-key / apikey (handles 'key': 'value' dict repr)
         r"(?:api[_-]?key)['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]{8,}",
         # x-api-key / api-key header values (handles 'key': 'value' dict repr)

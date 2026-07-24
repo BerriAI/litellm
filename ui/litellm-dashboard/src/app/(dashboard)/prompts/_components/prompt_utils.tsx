@@ -1,7 +1,7 @@
 import { PromptSpec } from "@/components/networking";
 import { getVersionNumber } from "./prompt_editor_view/utils";
 
-interface ModelGroupInfo {
+export interface ModelGroupInfo {
   model_group: string;
   providers: string[];
   [key: string]: any;

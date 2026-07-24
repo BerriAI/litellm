@@ -1,7 +1,9 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { Form } from "antd";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
-import Settings from "./settings";
+import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
 
 vi.mock("./networking", () => ({
   getCallbacksCall: vi.fn(),
@@ -160,7 +162,8 @@ describe("Settings", () => {
 
     mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
 
-    const { getByText, container } = render(<Settings {...defaultProps} />);
+    const user = userEvent.setup();
+    const { getByText } = render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -170,18 +173,8 @@ describe("Settings", () => {
       expect(getByText("Langfuse")).toBeInTheDocument();
     });
 
-    const actionsCell = container.querySelector('[class*="flex justify-end gap-2"]');
-    expect(actionsCell).toBeTruthy();
-
-    const icons = actionsCell?.querySelectorAll("svg");
-    expect(icons?.length).toBeGreaterThanOrEqual(2);
-
-    const editIconParent = icons?.[1]?.closest('[class*="cursor-pointer"]');
-    expect(editIconParent).toBeTruthy();
-
-    act(() => {
-      fireEvent.click(editIconParent!);
-    });
+    await user.click(screen.getByTestId("callback-actions-langfuse-success"));
+    await user.click(await screen.findByTestId("callback-action-edit"));
 
     await waitFor(() => {
       expect(getByText("Edit Callback Settings")).toBeInTheDocument();
@@ -194,6 +187,42 @@ describe("Settings", () => {
     });
   });
 
+  it("should hold the callbacks table in loading state until the fetch settles", async () => {
+    let resolveCallbacks: (value: {
+      callbacks: never[];
+      available_callbacks: never[];
+      alerts: never[];
+    }) => void = () => {};
+    mockGetCallbacksCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCallbacks = resolve;
+      }),
+    );
+
+    render(<Settings {...defaultProps} />);
+
+    expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      resolveCallbacks({ callbacks: [], available_callbacks: [], alerts: [] });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("No callbacks configured")).toBeInTheDocument();
+  });
+
+  it("should resolve loading without fetching when the user id is missing", async () => {
+    render(<Settings {...defaultProps} userID={null as unknown as string} />);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
+    });
+    expect(mockGetCallbacksCall).not.toHaveBeenCalled();
+    expect(screen.getByText("No callbacks configured")).toBeInTheDocument();
+  });
+
   it("should display CloudZero Cost Tracking tab", async () => {
     const { getByText } = render(<Settings {...defaultProps} />);
 
@@ -202,5 +231,46 @@ describe("Settings", () => {
     });
 
     expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+  });
+});
+
+describe("backendCallbackLogoSrc", () => {
+  it("prefixes bare filenames with the assets logo folder", () => {
+    expect(backendCallbackLogoSrc("datadog.png")).toBe("/ui/assets/logos/datadog.png");
+  });
+
+  it("passes through urls, data uris, and paths untouched", () => {
+    expect(backendCallbackLogoSrc("https://logos.example.com/x.png")).toBe("https://logos.example.com/x.png");
+    expect(backendCallbackLogoSrc("data:image/png;base64,abc")).toBe("data:image/png;base64,abc");
+    expect(backendCallbackLogoSrc("/custom/path.png")).toBe("/custom/path.png");
+  });
+
+  it("returns undefined when the backend provides no logo", () => {
+    expect(backendCallbackLogoSrc(undefined)).toBeUndefined();
+    expect(backendCallbackLogoSrc(null)).toBeUndefined();
+    expect(backendCallbackLogoSrc("")).toBeUndefined();
+  });
+});
+
+describe("CallbackSelector logos", () => {
+  it("resolves backend logos per entry: bare filename, external url, and missing logo", async () => {
+    const callbackConfigs = [
+      { id: "langfuse", displayName: "Langfuse", logo: "langfuse.png" },
+      { id: "hosted", displayName: "Hosted", logo: "https://logos.example.com/hosted.png" },
+      { id: "nologo", displayName: "NoLogo" },
+    ];
+
+    render(
+      <Form>
+        <CallbackSelector callbackConfigs={callbackConfigs} selectedCallback={null} onCallbackChange={vi.fn()} />
+      </Form>,
+    );
+
+    fireEvent.mouseDown(screen.getByRole("combobox"));
+
+    expect(await screen.findByAltText("Langfuse logo")).toHaveAttribute("src", "/ui/assets/logos/langfuse.png");
+    expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
+    expect(screen.queryByAltText("NoLogo logo")).toBeNull();
+    expect(screen.getByText("N")).toBeInTheDocument();
   });
 });

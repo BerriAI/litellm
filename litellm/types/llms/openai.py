@@ -529,6 +529,7 @@ class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
 
 class ChatCompletionCachedContent(TypedDict):
     type: Literal["ephemeral"]
+    ttl: NotRequired[Literal["5m", "1h"]]
 
 
 class ChatCompletionThinkingBlock(TypedDict, total=False):

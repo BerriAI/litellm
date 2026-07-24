@@ -43,14 +43,21 @@ ITPM_CACHE_KEY = "_litellm_itpm_cache_key"
 OTPM_CACHE_KEY = "_litellm_otpm_cache_key"
 
 
-def set_io_token_rate_limit_request_kwargs(kwargs: Optional[dict[str, Any]]) -> None:
+def set_io_token_rate_limit_request_kwargs(kwargs: Optional[dict[str, Any]], store_in_context: bool = True) -> None:
     # The reservation sentinels are server-only, but `metadata` is caller
     # controlled on proxy requests. Strip any client-supplied copies here (this
     # runs before the router stashes its own reservation) so a forged
     # reservation can't drive the post-call reconcile/refund against an
     # arbitrary counter and bypass the configured limits.
     _clear_reservation_from_kwargs(kwargs)
-    _io_token_rate_limit_request_kwargs.set(kwargs)
+    # The context slot pins the entire request kwargs (messages included) for
+    # the lifetime of the surrounding context, which outlives the request when
+    # the context is captured by pooled resources (e.g. a redis connection
+    # created mid-request). Only ITPM/OTPM-limited deployments read it, so for
+    # every other deployment overwrite the slot with None instead of the
+    # kwargs; overwriting (rather than skipping) also releases a previous
+    # request's kwargs when a context is reused.
+    _io_token_rate_limit_request_kwargs.set(kwargs if store_in_context else None)
 
 
 def get_io_token_rate_limit_request_kwargs() -> Optional[dict[str, Any]]:

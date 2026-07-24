@@ -25,10 +25,6 @@ from litellm.types.llms.openai import AllMessageValues
 
 MODEL_ARMOR_MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024
 
-# Hard cap on how many attachments a single request may submit to Model Armor, to bound
-# per-request fan-out (latency and quota).
-MAX_FILE_ATTACHMENTS_PER_REQUEST = 10
-
 _REMOTE_URI_SCHEMES = ("gs://", "http://", "https://")
 
 ModelArmorByteDataType = Literal["PDF", "WORD_DOCUMENT", "EXCEL_DOCUMENT", "POWERPOINT_DOCUMENT", "CSV", "TXT"]

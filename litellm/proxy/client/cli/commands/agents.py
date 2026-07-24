@@ -212,7 +212,7 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _resolve_api_key(ctx: click.Context) -> str:
+def resolve_api_key(ctx: click.Context) -> str:
     base_url = ctx.obj["base_url"]
     api_key = ctx.obj.get("api_key")
     if api_key:
@@ -238,7 +238,7 @@ _SKIP_VERIFY_HELP = "Skip the pre-launch key check against the proxy."
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
     base_url = ctx.obj["base_url"]
     started_interactive = _is_interactive()
-    api_key = _resolve_api_key(ctx)
+    api_key = resolve_api_key(ctx)
 
     display_name, _ = agent_profile(binary)
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
@@ -288,5 +288,6 @@ __all__ = [
     "agent_launch_args",
     "verify_proxy_key",
     "agent_profile",
+    "resolve_api_key",
     "AgentRunError",
 ]
