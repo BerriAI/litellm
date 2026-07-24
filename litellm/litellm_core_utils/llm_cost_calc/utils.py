@@ -275,15 +275,11 @@ def _get_token_base_cost(
         "input_cost_per_token": prompt_base_cost,
         "output_cost_per_token": completion_base_cost,
         "cache_creation_input_token_cost": cache_creation_cost,
-        "cache_creation_input_token_cost_above_1hr": (
-            cache_creation_cost_above_1hr
-        ),
+        "cache_creation_input_token_cost_above_1hr": (cache_creation_cost_above_1hr),
         "cache_read_input_token_cost": cache_read_cost,
     }
 
-    for base_key, (_, threshold_key) in (
-        selected_threshold_keys.items()
-    ):
+    for base_key, (_, threshold_key) in selected_threshold_keys.items():
         tiered_key = _get_service_tier_cost_key(
             threshold_key,
             service_tier,
@@ -300,15 +296,9 @@ def _get_token_base_cost(
     return (
         costs_by_base_key["input_cost_per_token"],
         costs_by_base_key["output_cost_per_token"],
-        costs_by_base_key[
-            "cache_creation_input_token_cost"
-        ],
-        costs_by_base_key[
-            "cache_creation_input_token_cost_above_1hr"
-        ],
-        costs_by_base_key[
-            "cache_read_input_token_cost"
-        ],
+        costs_by_base_key["cache_creation_input_token_cost"],
+        costs_by_base_key["cache_creation_input_token_cost_above_1hr"],
+        costs_by_base_key["cache_read_input_token_cost"],
     )
 
 
