@@ -125,14 +125,16 @@ class GigaChatConfig(BaseConfig):
         return headers
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        """Return list of supported OpenAI parameters."""
+        """Return list of supported OpenAI parameters.
+
+        No stop: the GigaChat request body has no stop field.
+        """
         return [
             "stream",
             "temperature",
             "top_p",
             "max_tokens",
             "max_completion_tokens",
-            "stop",
             "tools",
             "tool_choice",
             "functions",
@@ -161,9 +163,6 @@ class GigaChatConfig(BaseConfig):
                 optional_params["top_p"] = value
             elif param in ("max_tokens", "max_completion_tokens"):
                 optional_params["max_tokens"] = value
-            elif param == "stop":
-                # GigaChat doesn't support stop sequences
-                pass
             elif param == "tools":
                 # Convert tools to functions format
                 optional_params["functions"] = self._convert_tools_to_functions(value)
