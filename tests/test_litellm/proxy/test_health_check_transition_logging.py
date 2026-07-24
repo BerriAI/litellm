@@ -162,6 +162,21 @@ def test_relog_cooldown_reemits_after_interval(caplog):
     assert "still unreachable" in warnings[0].getMessage()
 
 
+def test_maybe_log_gated_to_background_loop(caplog):
+    caplog.set_level(logging.INFO, logger="litellm.proxy.health_check")
+    exc = ConnectionRefusedError("[Errno 111] Connection refused")
+
+    # on-demand /health source: must not log or touch shared state
+    hc._maybe_log_health_transitions("endpoint", [], _unhealthy(), {"d1": exc})
+    assert _warnings(caplog) == []
+    assert hc._deployment_reachability_state == {}
+
+    # background loop source: logs and records state
+    hc._maybe_log_health_transitions("proxy_background_loop", [], _unhealthy(), {"d1": exc})
+    assert len(_warnings(caplog)) == 1
+    assert hc._deployment_reachability_state["d1"]["reachable"] is False
+
+
 def test_endpoint_without_model_id_is_ignored(caplog):
     caplog.set_level(logging.INFO, logger="litellm.proxy.health_check")
     hc._log_deployment_health_transitions(

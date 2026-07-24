@@ -278,6 +278,25 @@ def _log_deployment_health_transitions(
             _deployment_reachability_state[model_id] = previous
 
 
+def _maybe_log_health_transitions(
+    source: str,
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+    exceptions_by_model_id: dict,
+) -> None:
+    """
+    Gate transition logging to the recurring background poll (so an on-demand
+    /health call does not mutate the shared reachability state) and never let a
+    logging error break the health cycle.
+    """
+    if source != "proxy_background_loop":
+        return
+    try:
+        _log_deployment_health_transitions(healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id)
+    except Exception:  # noqa: BLE001
+        logger.debug("health_check: transition logging failed", exc_info=True)
+
+
 def health_check_filter_kwargs_from_general_settings(
     general_settings: Optional[dict],
 ) -> dict:
@@ -796,13 +815,7 @@ async def perform_health_check(
         )
 
     # Emit one log line per reachability transition (down/up) for the recurring
-    # background poll, instead of a stack trace per cycle (issue #34281). Gated
-    # to the background loop so an on-demand /health call does not mutate the
-    # shared reachability state. Never allowed to break the health cycle.
-    if source == "proxy_background_loop":
-        try:
-            _log_deployment_health_transitions(healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id)
-        except Exception:  # noqa: BLE001
-            logger.debug("health_check: transition logging failed", exc_info=True)
+    # background poll, instead of a stack trace per cycle (issue #34281).
+    _maybe_log_health_transitions(source, healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id)
 
     return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
