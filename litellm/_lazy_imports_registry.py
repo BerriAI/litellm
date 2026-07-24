@@ -255,6 +255,7 @@ LLM_CONFIG_NAMES = (
     "NvidiaNimEmbeddingConfig",
     "FeatherlessAIConfig",
     "CerebrasConfig",
+    "OpenCodeGoConfig",
     "BasetenConfig",
     "SambanovaConfig",
     "SambaNovaEmbeddingConfig",
