@@ -257,3 +257,31 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+
+
+@pytest.mark.asyncio
+async def test_aclose_delegates_to_base_iterator():
+    """When the wrapped base iterator owns the HTTP stream, ``aclose`` must
+    forward to it so the connection is released, and mark itself finished."""
+    iterator = _make_iterator([])
+    base = MagicMock()
+    base.aclose = AsyncMock()
+    iterator.base_iterator = base
+
+    await iterator.aclose()
+
+    base.aclose.assert_awaited_once()
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_aclose_without_base_iterator_marks_finished():
+    """A base iterator that is ``None`` (LLM call never created one) or a plain
+    ``ResponsesAPIResponse`` has no ``aclose``; delegation must be skipped
+    without raising, and ``finished`` still set."""
+    iterator = _make_iterator([])
+    iterator.base_iterator = None
+
+    await iterator.aclose()
+
+    assert iterator.finished is True

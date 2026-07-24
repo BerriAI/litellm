@@ -9,12 +9,14 @@ from datetime import datetime
 from typing import Optional
 from unittest.mock import AsyncMock, Mock
 
+import anyio
 import httpx
 import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
+    BaseResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
 )
@@ -123,12 +125,15 @@ async def test_responses_streaming_aclose_releases_response():
 
 
 @pytest.mark.asyncio
-async def test_responses_streaming_aclose_marks_finished_when_close_fails():
+async def test_responses_streaming_aclose_suppresses_genuine_cleanup_failure():
+    """A non-RuntimeError failure in ``response.aclose()`` does not hit the sync
+    fallback, so this exercises the real cleanup-failure path: the exception is
+    swallowed (aclose does not raise) and ``finished`` is still set."""
     iterator = _make_iterator(
         sse_events=_COMPLETE_STREAM_EVENTS,
         logging_obj=_logging_obj_stub(),
     )
-    iterator.response.aclose = AsyncMock(side_effect=RuntimeError("close failed"))
+    iterator.response.aclose = AsyncMock(side_effect=ValueError("cleanup boom"))
 
     await iterator.aclose()
 
@@ -231,6 +236,94 @@ def test_sync_responses_streaming_close_releases_response():
 
     iterator.response.close.assert_called_once()
     assert iterator.finished is True
+
+
+def _base_iterator_without_response() -> BaseResponsesAPIStreamingIterator:
+    iterator = object.__new__(BaseResponsesAPIStreamingIterator)
+    iterator.finished = False
+    return iterator
+
+
+@pytest.mark.asyncio
+async def test_aclose_without_response_attribute_marks_finished():
+    """Subclasses that skip the base ``__init__`` never set ``self.response``;
+    the inherited ``aclose`` must not raise ``AttributeError`` for them."""
+    iterator = _base_iterator_without_response()
+
+    await iterator.aclose()
+
+    assert iterator.finished is True
+
+
+def test_close_without_response_attribute_marks_finished():
+    iterator = _base_iterator_without_response()
+
+    iterator.close()
+
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_aclose_marks_finished_before_awaiting_response_close():
+    """``finished`` must flip True at ``aclose`` entry so a concurrent
+    ``__anext__`` stops immediately instead of iterating (and possibly
+    failure-logging) the stream that is being deliberately closed."""
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_aclose() -> None:
+        entered.set()
+        await release.wait()
+
+    iterator.response.aclose = blocking_aclose
+
+    close_task = asyncio.ensure_future(iterator.aclose())
+    await entered.wait()
+
+    assert iterator.finished is True
+    with pytest.raises(StopAsyncIteration):
+        await iterator.__anext__()
+    assert iterator._failure_handled is False
+
+    release.set()
+    await close_task
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_aclose_completes_cleanup_and_preserves_persistent_anyio_cancellation():
+    """Under a persistently cancelled anyio scope the shield lets cleanup run to
+    completion (no spin, no hang) and returns normally, yet the cancellation is
+    not lost: the caller's next checkpoint still raises ``CancelledError``."""
+    iterator = _base_iterator_without_response()
+    cleanup_done = asyncio.Event()
+
+    async def slow_aclose() -> None:
+        await asyncio.sleep(0.2)
+        cleanup_done.set()
+
+    response = Mock()
+    response.aclose = slow_aclose
+    iterator.response = response
+
+    async def scenario() -> None:
+        async with anyio.create_task_group() as tg:
+
+            async def worker() -> None:
+                tg.cancel_scope.cancel()
+                await iterator.aclose()
+                assert cleanup_done.is_set() is True
+                assert iterator.finished is True
+                with pytest.raises(asyncio.CancelledError):
+                    await anyio.lowlevel.checkpoint()
+
+            tg.start_soon(worker)
+
+    await asyncio.wait_for(scenario(), timeout=5)
 
 
 @pytest.mark.asyncio

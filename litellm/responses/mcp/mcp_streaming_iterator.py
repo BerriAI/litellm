@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from litellm._logging import verbose_logger
@@ -322,6 +323,12 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._stream_error: Exception | None = None
         self._error_event_emitted = False
         self._last_sequence_number = 0
+
+    async def aclose(self) -> None:
+        self.finished = True
+        base_close: Callable[[], Awaitable[None]] | None = getattr(self.base_iterator, "aclose", None)
+        if base_close is not None:
+            await base_close()
 
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""

@@ -106,6 +106,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._accumulated_provider_specific_fields: dict[str, Any] = {}
         self._custom_tool_names: set[str] = extract_custom_tool_names(self.responses_api_request.get("tools"))
 
+    async def aclose(self) -> None:
+        self.finished = True
+        await self.litellm_custom_stream_wrapper.aclose()
+
+    def close(self) -> None:
+        self.finished = True
+
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
         if existing is not None:

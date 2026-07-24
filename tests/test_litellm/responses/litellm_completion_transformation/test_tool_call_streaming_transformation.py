@@ -10,6 +10,8 @@ before response.completed.
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -397,3 +399,23 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     assert arguments_by_call_id["call_b"] == '{"b":'
     assert arguments_by_call_id["call_a"] != '{"a":1}'
     assert arguments_by_call_id["call_b"] != '{"b":1}'
+
+
+@pytest.mark.asyncio
+async def test_aclose_delegates_to_custom_stream_wrapper():
+    """The iterator owns no ``response``; its ``aclose`` must delegate to the
+    wrapped ``CustomStreamWrapper`` (which releases the HTTP connection) and mark
+    itself finished."""
+    wrapper = AsyncMock()
+    wrapper.aclose = AsyncMock()
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=wrapper,
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    await iterator.aclose()
+
+    wrapper.aclose.assert_awaited_once()
+    assert iterator.finished is True
