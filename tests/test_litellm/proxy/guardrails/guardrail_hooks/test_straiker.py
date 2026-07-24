@@ -9,6 +9,8 @@ from litellm.exceptions import GuardrailRaisedException, ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.straiker import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.straiker.straiker import (
     StraikerGuardrail,
+    _build_usage,
+    _request_structured_messages,
     _response_finish_reason,
 )
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -671,6 +673,7 @@ async def test_post_call_resolves_request_from_responses_input_when_messages_abs
         "model": "gpt-4o-mini",
         "input": "responses-surface prompt",
         "response": response,
+        "litellm_metadata": {"user_api_key_request_route": "/v1/responses"},
     }
 
     await g.apply_guardrail(
@@ -989,3 +992,78 @@ async def test_response_finish_reason_from_openai_choices_still_works():
 )
 def test_response_finish_reason_handles_supported_shapes(response, expected):
     assert _response_finish_reason(response) == expected
+
+
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"input": ["ssn 123-45-6789"], "litellm_metadata": {"user_api_key_request_route": "/vllm/v1/embeddings"}},
+        {"input": [[1, 2, 3]], "litellm_metadata": {}},
+        {"input": "confidential memo", "litellm_metadata": {}},
+        {"input": "confidential memo"},
+    ],
+)
+def test_request_messages_not_resolved_for_unmapped_surfaces(request_data):
+    """Bodies from surfaces without a translation handler yield no messages, and never raise."""
+    assert _request_structured_messages(request_data) is None
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        (
+            {"messages": [{"role": "user", "content": "hi"}], "litellm_metadata": {}},
+            [{"role": "user", "content": "hi"}],
+        ),
+        (
+            {
+                "input": [{"role": "user", "content": "weather in Paris?"}],
+                "litellm_metadata": {"user_api_key_request_route": "/v1/responses"},
+            },
+            [{"role": "user", "content": "weather in Paris?"}],
+        ),
+    ],
+)
+def test_request_messages_resolved_for_mapped_surfaces(request_data, expected):
+    assert _request_structured_messages(request_data) == expected
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"usage": {"input_tokens": 10, "output_tokens": 5}}, (10, 5)),
+        ({"usage": {"prompt_tokens": 7, "completion_tokens": 3}}, (7, 3)),
+        (SimpleNamespace(usage=Usage(prompt_tokens=7, completion_tokens=3)), (7, 3)),
+        ({"usage": {"prompt_tokens": 0, "input_tokens": 99}}, (0, None)),
+        ({"usage": {}}, None),
+        ({}, None),
+    ],
+)
+def test_build_usage_handles_openai_and_anthropic_shapes(response, expected):
+    usage = _build_usage(response)
+    if expected is None:
+        assert usage is None
+    else:
+        assert (usage.input_tokens, usage.output_tokens) == expected
+
+
+@pytest.mark.asyncio
+async def test_anthropic_non_streaming_response_reports_usage():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    await g.apply_guardrail(
+        inputs={"texts": ["hello"]},
+        request_data={
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "response": {
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+    payload = _posted_payload(g)
+    assert payload["usage"] == {"input_tokens": 10, "output_tokens": 5}
+    assert payload["response"]["finish_reason"] == "end_turn"

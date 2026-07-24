@@ -624,9 +624,15 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
         try:
+            prepared_request_data = self._prepare_request_data(
+                request_data,
+                responses_so_far,
+                user_api_key_dict,
+                key="responses",
+            )
             _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs={"texts": [string_so_far]},
-                request_data=request_data if request_data is not None else {},
+                request_data=prepared_request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )

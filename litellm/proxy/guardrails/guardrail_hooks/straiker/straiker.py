@@ -43,7 +43,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     StraikerWebhookStream,
     StraikerWebhookUsage,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs, Usage
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -139,6 +139,26 @@ def _resolve_destination(request_data: dict) -> str | None:
         return None
 
 
+def _route_has_translation(request_data: dict) -> bool:
+    from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+    from litellm.llms import load_guardrail_translation_mappings
+
+    route = _as_dict(request_data.get("litellm_metadata")).get("user_api_key_request_route")
+    if not isinstance(route, str) or not route:
+        return False
+    mappings = load_guardrail_translation_mappings()
+    return any(call_type in mappings for call_type in get_call_types_for_route(route) or ())
+
+
+def _request_structured_messages(request_data: dict) -> list[dict[str, Any]] | None:
+    messages = request_data.get("messages")
+    if messages:
+        return messages if isinstance(messages, list) else None
+    if not _route_has_translation(request_data):
+        return None
+    return resolve_structured_messages(messages=None, request_kwargs=request_data)
+
+
 def _hook_name(value: object) -> str:
     return value.value if isinstance(value, GuardrailEventHooks) else str(value)
 
@@ -220,12 +240,22 @@ def _response_finish_reason(response: Any) -> str | None:
     return None
 
 
+def _as_optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _usage_token_count(usage: object, openai_key: str, anthropic_key: str) -> int | None:
+    get = usage.get if isinstance(usage, dict) else lambda key: getattr(usage, key, None)
+    openai_count = _as_optional_int(get(openai_key))
+    return openai_count if openai_count is not None else _as_optional_int(get(anthropic_key))
+
+
 def _build_usage(response: object) -> StraikerWebhookUsage | None:
-    usage = getattr(response, "usage", None)
-    if not isinstance(usage, Usage):
+    usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+    if usage is None:
         return None
-    input_tokens = usage.prompt_tokens
-    output_tokens = usage.completion_tokens
+    input_tokens = _usage_token_count(usage, "prompt_tokens", "input_tokens")
+    output_tokens = _usage_token_count(usage, "completion_tokens", "output_tokens")
     if input_tokens is None and output_tokens is None:
         return None
     return StraikerWebhookUsage(input_tokens=input_tokens, output_tokens=output_tokens)
@@ -372,9 +402,7 @@ class StraikerGuardrail(CustomGuardrail):
         response_obj = request_data.get("response")
         content.finish_reason = _response_finish_reason(response_obj)
         request_content = StraikerWebhookContent(
-            structured_messages=_opaque_dict_list(
-                resolve_structured_messages(messages=request_data.get("messages"), request_kwargs=request_data)
-            ),
+            structured_messages=_opaque_dict_list(_request_structured_messages(request_data)),
         )
         phase: Literal["none", "assembled"] = "assembled" if _is_streamed_request(request_data) else "none"
         event = StraikerWebhookEvent(type="post_call", id=event_id, stream=StraikerWebhookStream(phase=phase))
