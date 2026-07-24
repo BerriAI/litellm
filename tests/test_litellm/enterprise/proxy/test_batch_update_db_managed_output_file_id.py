@@ -468,3 +468,128 @@ async def test_get_batch_from_database_does_not_leak_attribution_to_caller():
     assert "litellm_batch_attribution" not in (response.metadata or {})
     # The raw row still carries the snapshot so update_batch_in_database can preserve it
     assert read_stored_batch_attribution(db_batch_object) == _BATCH_ATTRIBUTION
+
+
+def test_merge_preserved_batch_attribution_forces_stored_over_incoming():
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        merge_preserved_batch_attribution,
+    )
+
+    incoming = json.dumps(
+        {"id": "b", "metadata": {"litellm_batch_attribution": {"user_api_key": "hash-poller"}}}
+    )
+    merged = json.loads(merge_preserved_batch_attribution(_BATCH_ATTRIBUTION, incoming))
+    assert merged["metadata"]["litellm_batch_attribution"] == _BATCH_ATTRIBUTION
+
+
+@pytest.mark.parametrize("stored", [None, {}])
+def test_merge_preserved_batch_attribution_noop_without_stored(stored):
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        merge_preserved_batch_attribution,
+    )
+
+    incoming = json.dumps({"id": "b", "status": "completed"})
+    assert merge_preserved_batch_attribution(stored, incoming) == incoming
+
+
+def _in_memory_managed_files():
+    """Build a real _PROXY_LiteLLMManagedFiles whose prisma upsert/find_first hit an in-memory row."""
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
+    store: dict = {}
+
+    async def _upsert(where, data):
+        key = where["unified_object_id"]
+        if key in store:
+            store[key].update(data["update"])
+        else:
+            store[key] = dict(data["create"])
+
+    async def _find_first(where):
+        row = store.get(where["unified_object_id"])
+        return SimpleNamespace(**row) if row is not None else None
+
+    table = MagicMock()
+    table.upsert = AsyncMock(side_effect=_upsert)
+    table.find_first = AsyncMock(side_effect=_find_first)
+    prisma = MagicMock()
+    prisma.db.litellm_managedobjecttable = table
+
+    cache = MagicMock()
+    cache.async_set_cache = AsyncMock()
+
+    instance = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=cache, prisma_client=prisma
+    )
+    return instance, store
+
+
+def _batch_with_attribution(attribution):
+    batch = _build_batch_response(batch_id="b", status="validating")
+    if attribution is not None:
+        batch.metadata = {"litellm_batch_attribution": attribution}
+    return batch
+
+
+def _stored_snapshot(store):
+    return json.loads(store["unified-b"]["file_object"])["metadata"][
+        "litellm_batch_attribution"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_snapshot_is_immutable_across_polls():
+    """Regression (spend redirect): once a batch row exists, a later store carrying a different
+    caller's attribution (e.g. a passthrough GET poll rebuilding the snapshot from the poller's
+    identity) must not overwrite the create-time snapshot, or spend re-attributes to the poller
+    """
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alice")
+    poller = UserAPIKeyAuth(user_id="bob", team_id="team-bob")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_batch_with_attribution({"user_api_key": "hash-alice"}),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+    )
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_batch_with_attribution({"user_api_key": "hash-bob"}),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=poller,
+    )
+
+    assert _stored_snapshot(store) == {"user_api_key": "hash-alice"}
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_preserves_snapshot_on_snapshotless_restore():
+    """Regression (attribution erased): the post-call hook re-stores the caller-facing batch, whose
+    snapshot has been stripped to avoid leaking it; that re-store must not wipe the persisted snapshot
+    """
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alice")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_batch_with_attribution({"user_api_key": "hash-alice"}),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+    )
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_batch_with_attribution(None),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+    )
+
+    assert _stored_snapshot(store) == {"user_api_key": "hash-alice"}

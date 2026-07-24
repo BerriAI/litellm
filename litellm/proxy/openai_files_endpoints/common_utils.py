@@ -1025,6 +1025,25 @@ def read_stored_batch_attribution(db_batch_object) -> dict | None:
     return snapshot if isinstance(snapshot, dict) else None
 
 
+def merge_preserved_batch_attribution(stored_attribution: dict | None, file_object_json: str) -> str:
+    """Force the create-time litellm_batch_attribution snapshot back onto a re-stored batch file_object.
+
+    The snapshot is written once, at batch creation, and is the authoritative owner of the batch-cost
+    spend. Every later writer (status poll, retrieve, list refresh) rebuilds file_object from a
+    provider or caller response that either drops the snapshot or carries the polling caller's own
+    identity, so each re-store must restore the original; otherwise a poll re-attributes the spend to
+    whoever last touched the batch, or erases attribution entirely
+    """
+    if not stored_attribution:
+        return file_object_json
+    file_object_data = json.loads(file_object_json)
+    file_object_data["metadata"] = {
+        **(file_object_data.get("metadata") or {}),
+        "litellm_batch_attribution": stored_attribution,
+    }
+    return json.dumps(file_object_data)
+
+
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: Union[str, Literal[False]],
@@ -1085,15 +1104,9 @@ async def update_batch_in_database(
         # Normalize status for database storage
         db_status = response.status if response.status != "completed" else "complete"
 
-        stored_attribution = read_stored_batch_attribution(db_batch_object)
-        file_object_json = response.model_dump_json()
-        if stored_attribution is not None:
-            file_object_data = json.loads(file_object_json)
-            file_object_data["metadata"] = {
-                **(file_object_data.get("metadata") or {}),
-                "litellm_batch_attribution": stored_attribution,
-            }
-            file_object_json = json.dumps(file_object_data)
+        file_object_json = merge_preserved_batch_attribution(
+            read_stored_batch_attribution(db_batch_object), response.model_dump_json()
+        )
 
         update_data: dict = {
             "status": db_status,
