@@ -2603,7 +2603,33 @@ if MCP_AVAILABLE:
             original_tool_name = name
         else:
             # Resolve from tool name (MCP JSON-RPC or prefixed REST tool names).
-            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if requested_server is None:
+                route = global_mcp_server_manager.resolve_tool_route(
+                    name,
+                    allowed_server_ids=frozenset(server.server_id for server in allowed_mcp_servers),
+                )
+                if route.kind == "ambiguous":
+                    candidates = sorted(
+                        server.name
+                        for server in (
+                            global_mcp_server_manager.get_mcp_server_by_id(server_id) for server_id in route.server_ids
+                        )
+                        if server is not None
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "ambiguous_tool_name",
+                            "message": (
+                                f"Tool '{name}' is served by more than one MCP server "
+                                f"({', '.join(candidates)}). Call it by its server-prefixed name to "
+                                f"select one."
+                            ),
+                        },
+                    )
+                mcp_server = route.server if route.kind == "resolved" else None
+            else:
+                mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
             if mcp_server is None and requested_server is not None:
                 for known_prefix in iter_known_server_prefixes(requested_server):
                     candidate = global_mcp_server_manager._get_mcp_server_from_tool_name(
@@ -2656,8 +2682,13 @@ if MCP_AVAILABLE:
             litellm_logging_obj.model_call_details["model"] = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
+        # Stay within the caller's scope: a scope-blind lookup here would undo the
+        # scope decision already made above and dispatch to an out-of-scope server.
         if mcp_server is None:
-            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            allowed_server_ids = {server.server_id for server in allowed_mcp_servers}
+            fallback_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+            if fallback_server is not None and fallback_server.server_id in allowed_server_ids:
+                mcp_server = fallback_server
 
         if mcp_server:
             standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get(
@@ -2817,6 +2848,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
                 host_progress_callback=host_progress_callback,
+                resolved_server=mcp_server,
             )
 
         # Fall back to local tool registry with original name (legacy support)
@@ -3129,6 +3161,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
         host_progress_callback: Optional[Callable] = None,
+        resolved_server: MCPServer | None = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -3145,6 +3178,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
+            resolved_server=resolved_server,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result

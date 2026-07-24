@@ -467,17 +467,20 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
 
             server_id = request_data.get("server_id")
-            if server_id:
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if server:
-                    return (
-                        getattr(server, "alias", None)
-                        or getattr(server, "server_name", None)
-                        or getattr(server, "name", None)
-                        or getattr(server, "server_id", None)
-                        or "unknown"
-                    )
-            return global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.get(mcp_tool_name, "unknown")
+            server = (
+                global_mcp_server_manager.get_mcp_server_by_id(server_id)
+                if server_id
+                else global_mcp_server_manager._get_mcp_server_from_tool_name(mcp_tool_name)
+            )
+            if server:
+                return (
+                    getattr(server, "alias", None)
+                    or getattr(server, "server_name", None)
+                    or getattr(server, "name", None)
+                    or getattr(server, "server_id", None)
+                    or "unknown"
+                )
+            return "unknown"
         except ImportError:
             return "unknown"
         except Exception:

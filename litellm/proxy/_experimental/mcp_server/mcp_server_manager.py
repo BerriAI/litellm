@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Literal, Optional, Union, cast
 from urllib.parse import urlparse
 
@@ -198,6 +199,34 @@ _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES: tuple[MCPAuth, ...] = (
     MCPAuth.true_passthrough,
     MCPAuth.oauth_delegate,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolRouteResolved:
+    """Exactly one MCP server serves the tool name."""
+
+    server: MCPServer
+    kind: Literal["resolved"] = "resolved"
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolRouteNotFound:
+    """No MCP server serves the tool name."""
+
+    tool_name: str
+    kind: Literal["not_found"] = "not_found"
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolRouteAmbiguous:
+    """Several MCP servers serve the tool name, so it cannot address one of them."""
+
+    tool_name: str
+    server_ids: frozenset[str]
+    kind: Literal["ambiguous"] = "ambiguous"
+
+
+MCPToolRoute = Union[MCPToolRouteResolved, MCPToolRouteNotFound, MCPToolRouteAmbiguous]
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -1179,7 +1208,7 @@ class MCPServerManager:
         # semaphore so an edited limit rebuilds it instead of keeping the old cap
         # until restart.
         self._server_call_semaphores: dict[str, tuple[int, asyncio.Semaphore]] = {}
-        self.tool_name_to_mcp_server_name_mapping: dict[str, str] = {}
+        self.tool_name_to_mcp_server_ids_mapping: dict[str, frozenset[str]] = {}
         """
         {
             "gmail_send_email": "zapier_mcp_server",
@@ -1550,7 +1579,7 @@ class MCPServerManager:
 
         await self._hydrate_config_servers_dcr_clients()
 
-        self.initialize_tool_name_to_mcp_server_name_mapping()
+        self.initialize_tool_name_to_mcp_server_ids_mapping()
 
     async def _hydrate_config_servers_dcr_clients(self) -> None:
         """Overlay each config-declared server's persisted DCR client (from the server-scoped
@@ -1665,7 +1694,7 @@ class MCPServerManager:
                     resolved_operation = resolve_operation_params(operation, path_item, components)
 
                     # Generate tool name (without prefix initially)
-                    operation_id = operation.get("operationId", f"{method}_{path.replace('/', '_')}")
+                    operation_id = str(operation.get("operationId", f"{method}_{path.replace('/', '_')}"))
                     base_tool_name = operation_id.replace(" ", "_").lower()
 
                     # Add server prefix to tool name
@@ -1693,9 +1722,9 @@ class MCPServerManager:
                         handler=tool_func,
                     )
 
-                    # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = server_prefix
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = server_prefix
+                    # Update tool name to server id mapping (for both prefixed and base names)
+                    self._register_tool_route(base_tool_name, server.server_id)
+                    self._register_tool_route(prefixed_tool_name, server.server_id)
 
                     registered_count += 1
                     verbose_logger.debug(f"Registered OpenAPI tool: {prefixed_tool_name} for server {server.name}")
@@ -1711,9 +1740,12 @@ class MCPServerManager:
 
         When a server leaves ``self.registry`` (eviction, ``remove_server``, etc.),
         OpenAPI tools remain in ``global_mcp_tool_registry`` and
-        ``tool_name_to_mcp_server_name_mapping`` unless removed here. Stale
-        mappings make ``_get_mcp_server_from_tool_name`` resolve to a prefix that
+        ``tool_name_to_mcp_server_ids_mapping`` unless removed here. Stale
+        mappings make ``_get_mcp_server_from_tool_name`` resolve to a server that
         no longer exists in the live registry.
+
+        Only ``server``'s own id is withdrawn from each routing row, so a tool name
+        shared with another server keeps routing to that other server.
         """
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -1724,24 +1756,12 @@ class MCPServerManager:
             openapi_key_prefix = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
             global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
 
-        owned_raw: set[str] = set()
-        for p in iter_known_server_prefixes(server):
-            if p:
-                owned_raw.add(p)
-        if server.name:
-            owned_raw.add(server.name)
-
-        owned_normalized = {normalize_server_name(x) for x in owned_raw}
-
-        stale_mapping_keys: list[str] = []
-        for tool_name, mapped_server in list(self.tool_name_to_mcp_server_name_mapping.items()):
-            if mapped_server in owned_raw:
-                stale_mapping_keys.append(tool_name)
-            elif normalize_server_name(str(mapped_server)) in owned_normalized:
-                stale_mapping_keys.append(tool_name)
-
-        for key in stale_mapping_keys:
-            del self.tool_name_to_mcp_server_name_mapping[key]
+        for tool_name in list(self.tool_name_to_mcp_server_ids_mapping):
+            remaining = self.tool_name_to_mcp_server_ids_mapping[tool_name] - {server.server_id}
+            if remaining:
+                self.tool_name_to_mcp_server_ids_mapping[tool_name] = remaining
+            else:
+                del self.tool_name_to_mcp_server_ids_mapping[tool_name]
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
@@ -2186,7 +2206,7 @@ class MCPServerManager:
                 base_url=server.url or "",
             )
             if initialize_mapping:
-                self.initialize_tool_name_to_mcp_server_name_mapping()
+                self.initialize_tool_name_to_mcp_server_ids_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         # The runtime registry is the allowlist for tool calls and health
@@ -4189,10 +4209,10 @@ class MCPServerManager:
             # Register every known prefix form (alias, server_name, server_id,
             # short ID) so call_tool can resolve regardless of which form a
             # caller / cached client is using.
-            self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
+            self._register_tool_route(original_name, server.server_id)
             for known_prefix in iter_known_server_prefixes(server):
                 qualified = add_server_prefix_to_name(original_name, known_prefix)
-                self.tool_name_to_mcp_server_name_mapping[qualified] = prefix
+                self._register_tool_route(qualified, server.server_id)
 
         verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
         return prefixed_tools
@@ -4920,8 +4940,8 @@ class MCPServerManager:
 
         if resolved_by_server_name_only:
             tool_known = (
-                name in self.tool_name_to_mcp_server_name_mapping
-                or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
+                name in self.tool_name_to_mcp_server_ids_mapping
+                or prefixed_tool_name in self.tool_name_to_mcp_server_ids_mapping
             )
             if not tool_known:
                 raise ValueError(f"Tool {name} not found")
@@ -5087,6 +5107,7 @@ class MCPServerManager:
         oauth2_headers: Optional[dict[str, str]] = None,
         raw_headers: Optional[dict[str, str]] = None,
         host_progress_callback: Optional[Callable] = None,
+        resolved_server: MCPServer | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -5099,13 +5120,21 @@ class MCPServerManager:
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
             proxy_logging_obj: Optional ProxyLogging object for hook integration
+            resolved_server: Server the caller already resolved. When supplied it is
+                dispatched to verbatim, so identity never round-trips through the
+                non-unique ``server_name``. Callers without one fall back to
+                resolving by name.
 
 
         Returns:
             CallToolResult from the MCP server
         """
         start_time = datetime.datetime.now()
-        mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
+        mcp_server = (
+            resolved_server
+            if resolved_server is not None
+            else self._resolve_mcp_server_for_tool_call(server_name, name)
+        )
 
         # Resolved before any hook runs so a missing BYOK credential (401) never
         # leaves during-hook side effects (audit logging, rate-limit bookkeeping)
@@ -5216,19 +5245,19 @@ class MCPServerManager:
     # End of Methods that call the upstream MCP servers
     #########################################################
 
-    def initialize_tool_name_to_mcp_server_name_mapping(self):
+    def initialize_tool_name_to_mcp_server_ids_mapping(self):
         """
         On startup, initialize the tool name to MCP server name mapping
         """
         try:
             if asyncio.get_running_loop():
-                asyncio.create_task(self._initialize_tool_name_to_mcp_server_name_mapping())
+                asyncio.create_task(self._initialize_tool_name_to_mcp_server_ids_mapping())
         except RuntimeError as e:  # no running event loop
             verbose_logger.exception(
                 f"No running event loop - skipping tool name to MCP server name mapping initialization: {str(e)}"
             )
 
-    async def _initialize_tool_name_to_mcp_server_name_mapping(self):
+    async def _initialize_tool_name_to_mcp_server_ids_mapping(self):
         """
         Call list_tools for each server and update the tool name to MCP server name mapping
         Note: This now handles prefixed tool names
@@ -5256,8 +5285,51 @@ class MCPServerManager:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
                 original_name, _ = split_server_prefix_from_name(tool.name)
-                self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
-                self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
+                self._register_tool_route(original_name, server.server_id)
+                self._register_tool_route(tool.name, server.server_id)
+
+    def _register_tool_route(self, tool_name: str, server_id: str) -> None:
+        """Record that ``server_id`` serves ``tool_name``, preserving any other owners.
+
+        Routing rows accumulate rather than overwrite so that a tool name served by
+        more than one server stays resolvable as ambiguous instead of silently
+        collapsing to whichever server registered last.
+        """
+        owners = self.tool_name_to_mcp_server_ids_mapping.get(tool_name, frozenset())
+        self.tool_name_to_mcp_server_ids_mapping[tool_name] = owners | {server_id}
+
+    def resolve_tool_route(
+        self,
+        tool_name: str,
+        allowed_server_ids: frozenset[str] | None = None,
+    ) -> "MCPToolRoute":
+        """Resolve ``tool_name`` to the single MCP server that serves it.
+
+        Ambiguity is judged against ``allowed_server_ids`` when given, because an
+        unprefixed name is only ambiguous relative to the servers the caller can
+        actually reach; a session scoped to one server (``x-mcp-servers``) is served
+        unprefixed names precisely because nothing else is in scope for it.
+
+        Returns ``MCPToolRouteAmbiguous`` when several reachable servers expose the
+        name, so callers fail loudly instead of dispatching to an arbitrary one.
+        """
+        owner_ids = self.tool_name_to_mcp_server_ids_mapping.get(tool_name)
+        if owner_ids:
+            in_scope = owner_ids if allowed_server_ids is None else owner_ids & allowed_server_ids
+            if len(in_scope) > 1:
+                return MCPToolRouteAmbiguous(tool_name=tool_name, server_ids=in_scope)
+            if len(in_scope) == 1:
+                scoped_server = self.get_mcp_server_by_id(next(iter(in_scope)))
+                if scoped_server is not None:
+                    return MCPToolRouteResolved(server=scoped_server)
+            # The tool exists but no owner is reachable by this caller. Fail closed
+            # rather than fall through to a scope-blind lookup that could hand back a
+            # server outside the caller's scope.
+            return MCPToolRouteNotFound(tool_name=tool_name)
+        server = self._get_mcp_server_from_tool_name(tool_name)
+        if server is None:
+            return MCPToolRouteNotFound(tool_name=tool_name)
+        return MCPToolRouteResolved(server=server)
 
     def _get_mcp_server_from_tool_name(self, tool_name: str) -> Optional[MCPServer]:
         """
@@ -5267,45 +5339,43 @@ class MCPServerManager:
             tool_name: Tool name (can be prefixed or non-prefixed)
 
         Returns:
-            MCPServer if found, None otherwise
+            MCPServer if found, None otherwise. None is also returned when several
+            servers expose ``tool_name``; use ``resolve_tool_route`` to tell the two
+            cases apart.
         """
-        registry_servers = list(self.get_registry().values())
+        # The ownership map is the single source of truth. When ``tool_name`` is a
+        # registered tool (in any of its prefixed or unprefixed forms), a unique
+        # owner resolves by id and several owners are ambiguous, so we never collapse
+        # to an arbitrary one.
+        owner_ids = self.tool_name_to_mcp_server_ids_mapping.get(tool_name)
+        if owner_ids is not None:
+            return self.get_mcp_server_by_id(next(iter(owner_ids))) if len(owner_ids) == 1 else None
 
-        # Build prefix → server lookup covering every known form a tool name
-        # may take (alias / server_name / server_id / short ID).  This is what
-        # makes the short-prefix mode work without breaking historical names.
-        prefix_to_server: dict[str, MCPServer] = {}
-        for server in registry_servers:
-            for known_prefix in iter_known_server_prefixes(server):
-                normalised = normalize_server_name(known_prefix)
-                prefix_to_server.setdefault(normalised, server)
+        # ``tool_name`` is not itself registered. Interpret it as
+        # ``<server-prefix>-<tool>`` and resolve to the one server that both matches
+        # the prefix and owns the underlying tool. A prefix shared by several servers
+        # (server names are not unique) stays ambiguous and resolves to None.
+        known_prefixes = {
+            normalize_server_name(known_prefix)
+            for server in self.get_registry().values()
+            for known_prefix in iter_known_server_prefixes(server)
+        }
+        if not is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
+            return None
 
-        # First try with the original tool name
-        if tool_name in self.tool_name_to_mcp_server_name_mapping:
-            server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
-            normalised_lookup = normalize_server_name(server_name)
-            if normalised_lookup in prefix_to_server:
-                return prefix_to_server[normalised_lookup]
-            for server in registry_servers:
-                if normalize_server_name(server.name) == normalised_lookup:
-                    return server
+        original_tool_name, server_name_from_prefix = split_server_prefix_from_name(tool_name)
+        tool_owner_ids = self.tool_name_to_mcp_server_ids_mapping.get(original_tool_name)
+        if not tool_owner_ids:
+            return None
 
-        # If not found and tool name is prefixed, extract the prefix and
-        # match against any known form.
-        if is_tool_name_prefixed(tool_name, known_server_prefixes=set(prefix_to_server.keys())):
-            (
-                original_tool_name,
-                server_name_from_prefix,
-            ) = split_server_prefix_from_name(tool_name)
-            normalised_prefix = normalize_server_name(server_name_from_prefix)
-            matched_server = prefix_to_server.get(normalised_prefix)
-            if matched_server is not None and (
-                original_tool_name in self.tool_name_to_mcp_server_name_mapping
-                or tool_name in self.tool_name_to_mcp_server_name_mapping
-            ):
-                return matched_server
-
-        return None
+        normalised_prefix = normalize_server_name(server_name_from_prefix)
+        prefix_owners = [
+            server
+            for server in self.get_registry().values()
+            if server.server_id in tool_owner_ids
+            and normalised_prefix in {normalize_server_name(p) for p in iter_known_server_prefixes(server)}
+        ]
+        return prefix_owners[0] if len(prefix_owners) == 1 else None
 
     async def reload_servers_from_database(self):
         """Re-synchronize the in-memory MCP server registry with the database."""
@@ -5404,7 +5474,7 @@ class MCPServerManager:
 
         self.registry = registered_registry
         if registered_openapi_tools:
-            self.initialize_tool_name_to_mcp_server_name_mapping()
+            self.initialize_tool_name_to_mcp_server_ids_mapping()
 
         verbose_logger.debug("MCP registry refreshed (%s servers in registry)", len(registered_registry))
 
