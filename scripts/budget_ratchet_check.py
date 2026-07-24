@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Non-gating ratchet guard: budget limits may only fall, never rise.
 
-Every `*-budget.json` file (ruff-strict, type-discipline, basedpyright-code) is a
-one-way ratchet: each rule's ceiling is its `limit`, and that limit is meant to be
-driven DOWN over time. This check compares every budget file against its own
+Every `*-budget.json` file (ruff-strict, type-discipline, basedpyright-code,
+spend-logs-query) is a one-way ratchet: each rule's ceiling is its `limit`, and that
+limit is meant to be driven DOWN over time. This check compares every budget file against its own
 content at the merge-base with the target branch and fails (exits 1, red) if:
 
   * a rule's `limit` went up,
@@ -39,6 +39,7 @@ DEFAULT_BUDGETS: tuple[str, ...] = (
     "ruff-strict-budget.json",
     "type-discipline-budget.json",
     "basedpyright-code-budget.json",
+    "spend-logs-query-budget.json",
 )
 
 

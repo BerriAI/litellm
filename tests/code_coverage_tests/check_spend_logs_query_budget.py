@@ -96,12 +96,13 @@ def over_budget(counts: dict[str, int], budget: dict[str, int]) -> dict[str, int
 def load_budget(budget_path: Path) -> dict[str, int]:
     parsed: object = json.loads(budget_path.read_text(encoding="utf-8"))
     if not isinstance(parsed, dict):
-        raise ValueError(f"{budget_path.name} must be an object mapping file paths to query counts")
-    return {str(path): int(limit) for path, limit in parsed.items()}
+        raise ValueError(f"{budget_path.name} must be an object mapping file paths to {{'limit': int}}")
+    return {str(path): int(spec["limit"]) for path, spec in parsed.items()}
 
 
 def write_budget(budget_path: Path, counts: dict[str, int]) -> None:
-    _ = budget_path.write_text(json.dumps(counts, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    specs = {path: {"limit": count} for path, count in counts.items()}
+    _ = budget_path.write_text(json.dumps(specs, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _report(sites: tuple[QuerySite, ...], violations: dict[str, int], budget: dict[str, int]) -> None:

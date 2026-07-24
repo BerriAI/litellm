@@ -8,16 +8,18 @@ the two things that would silently defeat it: detecting every shape of query we 
 prose mentions, and failing the budget comparison for files that grow or appear.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
 
 _CODE_COVERAGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "code_coverage_tests")
-sys.path.insert(0, _CODE_COVERAGE_DIR)
-
-import check_spend_logs_query_budget as guard  # noqa: E402
-
 _REPO_ROOT = Path(_CODE_COVERAGE_DIR).resolve().parents[1]
+sys.path.insert(0, _CODE_COVERAGE_DIR)
+sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+
+import budget_ratchet_check as ratchet  # noqa: E402
+import check_spend_logs_query_budget as guard  # noqa: E402
 
 
 def _scan(tmp_path: Path, source: str) -> tuple[guard.QuerySite, ...]:
@@ -77,6 +79,24 @@ def test_over_budget_flags_new_file_and_growth_but_not_shrinkage():
     counts = {"a.py": 2, "b.py": 1, "c.py": 1}
     budget = {"a.py": 1, "c.py": 3}
     assert guard.over_budget(counts, budget) == {"a.py": 2, "b.py": 1}
+
+
+def test_budget_file_uses_the_ratchet_schema(tmp_path):
+    budget_path = tmp_path / "spend-logs-query-budget.json"
+    guard.write_budget(budget_path, {"litellm/module.py": 3})
+    assert json.loads(budget_path.read_text(encoding="utf-8")) == {"litellm/module.py": {"limit": 3}}
+    assert guard.load_budget(budget_path) == {"litellm/module.py": 3}
+
+
+def test_committed_budget_is_watched_by_the_ratchet():
+    assert "spend-logs-query-budget.json" in ratchet.DEFAULT_BUDGETS
+    budget = json.loads((_REPO_ROOT / "spend-logs-query-budget.json").read_text(encoding="utf-8"))
+    raised = ratchet.regressions_for(
+        "spend-logs-query-budget.json",
+        budget,
+        {path: {"limit": spec["limit"] + 1} for path, spec in budget.items()},
+    )
+    assert len(raised) == len(budget)
 
 
 def test_committed_budget_matches_the_repository():
