@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Modal, Spin, Radio, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { modelHubCall, enrichPolicyTemplateStream } from "@/components/networking";
@@ -75,6 +75,14 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     }
   }, [visible, hasEnrichment, competitorMode]);
 
+  const enrichAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!visible) enrichAbortRef.current?.abort();
+  }, [visible]);
+
+  useEffect(() => () => enrichAbortRef.current?.abort(), []);
+
   const loadModels = async () => {
     if (!accessToken) return;
     setIsLoadingModels(true);
@@ -100,6 +108,9 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     setCompetitorTags([]);
     setVariationsMap({});
     setStatusMessage("");
+    enrichAbortRef.current?.abort();
+    const controller = new AbortController();
+    enrichAbortRef.current = controller;
     try {
       await enrichPolicyTemplateStream(
         accessToken,
@@ -121,11 +132,13 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
           setIsGenerating(false);
           setStatusMessage("");
         },
-        undefined,
+        { signal: controller.signal },
         (status) => setStatusMessage(status),
       );
     } catch (error) {
-      console.error("Error generating competitor names:", error);
+      if (!controller.signal.aborted) {
+        console.error("Error generating competitor names:", error);
+      }
       setIsGenerating(false);
     }
   };
@@ -135,6 +148,9 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
 
     setIsRefining(true);
     setStatusMessage("");
+    enrichAbortRef.current?.abort();
+    const controller = new AbortController();
+    enrichAbortRef.current = controller;
     try {
       await enrichPolicyTemplateStream(
         accessToken,
@@ -162,11 +178,14 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
         {
           instruction: refinementInput.trim(),
           existingCompetitors: competitorTags,
+          signal: controller.signal,
         },
         (status) => setStatusMessage(status),
       );
     } catch (error) {
-      console.error("Error refining competitor names:", error);
+      if (!controller.signal.aborted) {
+        console.error("Error refining competitor names:", error);
+      }
       setIsRefining(false);
     }
   };
