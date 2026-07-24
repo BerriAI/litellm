@@ -5539,6 +5539,7 @@ def completion(  # type: ignore
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "nadir"
             or custom_llm_provider == "baseten"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"

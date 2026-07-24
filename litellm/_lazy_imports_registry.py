@@ -255,6 +255,7 @@ LLM_CONFIG_NAMES = (
     "NvidiaNimEmbeddingConfig",
     "FeatherlessAIConfig",
     "CerebrasConfig",
+    "NadirConfig",
     "BasetenConfig",
     "SambanovaConfig",
     "SambaNovaEmbeddingConfig",
@@ -1014,6 +1015,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "FeatherlessAIConfig",
     ),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
+    "NadirConfig": (".llms.nadir.chat.transformation", "NadirConfig"),
     "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
     "SambanovaConfig": (".llms.sambanova.chat", "SambanovaConfig"),
     "SambaNovaEmbeddingConfig": (
