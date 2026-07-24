@@ -209,3 +209,28 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         "claude-opus-4-5",
     ]:
         assert "supports_adaptive_thinking" not in backup[non_adaptive], non_adaptive
+
+
+def test_azure_ai_claude_1m_context_entries():
+    """Microsoft Foundry serves a 1M-token context window for Opus 4.6+ and Sonnet
+    4.6+, so the ``azure_ai`` entries must not advertise the 200k cap that made
+    context-aware clients compact prompts early (LIT-4406)."""
+    backup = GetModelCostMap.load_local_model_cost_map()
+
+    for model in [
+        "azure_ai/claude-opus-4-6",
+        "azure_ai/claude-opus-4-7",
+        "azure_ai/claude-opus-4-8",
+        "azure_ai/claude-opus-5",
+        "azure_ai/claude-sonnet-5",
+        "azure_ai/claude-sonnet-4-6",
+    ]:
+        assert backup[model]["max_input_tokens"] == 1000000, model
+
+    for model in [
+        "azure_ai/claude-opus-4-1",
+        "azure_ai/claude-opus-4-5",
+        "azure_ai/claude-sonnet-4-5",
+        "azure_ai/claude-haiku-4-5",
+    ]:
+        assert backup[model]["max_input_tokens"] == 200000, model
