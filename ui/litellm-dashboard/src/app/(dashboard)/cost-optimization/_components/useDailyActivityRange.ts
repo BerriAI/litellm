@@ -18,6 +18,7 @@ export interface DailyActivityRange {
   results: DailyData[];
   loading: boolean;
   isFetchingMore: boolean;
+  isAdmin: boolean;
 }
 
 export const useDailyActivityRange = (
@@ -31,7 +32,8 @@ export const useDailyActivityRange = (
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
-  const effectiveUserId = all_admin_roles.includes(userRole) ? null : userId;
+  const isAdmin = all_admin_roles.includes(userRole);
+  const effectiveUserId = isAdmin ? null : userId;
 
   const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
     fetchFn: userDailyActivityCall,
@@ -45,5 +47,6 @@ export const useDailyActivityRange = (
     results: data.results as DailyData[],
     loading,
     isFetchingMore,
+    isAdmin,
   };
 };

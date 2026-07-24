@@ -1,13 +1,15 @@
-import { render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import type { ToolSpendResponse } from "@/components/networking";
+import { render, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HourlySavingsResponse, ToolSpendResponse } from "@/components/networking";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 const mockGetToolSpend = vi.fn();
+const mockGetHourlySavings = vi.fn();
 
 vi.mock("@/components/networking", () => ({
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
+  getHourlySavings: (...args: unknown[]) => mockGetHourlySavings(...args),
 }));
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({
@@ -58,23 +60,62 @@ const day = (date: string, metrics: Partial<SpendMetrics>): DailyData => ({
   },
 });
 
-const renderWith = (results: DailyData[], toolSpend = emptyToolSpend) => {
+interface RenderOptions {
+  toolSpend?: ToolSpendResponse;
+  from?: Date;
+  to?: Date;
+  isAdmin?: boolean;
+}
+
+const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
+  const {
+    toolSpend = emptyToolSpend,
+    from = new Date(2026, 6, 1),
+    to = new Date(2026, 6, 14),
+    isAdmin = true,
+  } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
   return render(
     <UsageTab
       accessToken="test-token"
       activity={{
-        dateValue: { from: new Date("2026-07-01"), to: new Date("2026-07-14") },
+        dateValue: { from, to },
         onDateChange: vi.fn(),
         results,
         loading: false,
         isFetchingMore: false,
+        isAdmin,
       }}
     />,
   );
 };
 
+const hourlyResponse = (
+  buckets: HourlySavingsResponse["buckets"],
+  spendLogsDisabled = false,
+): HourlySavingsResponse => ({
+  buckets,
+  start_date: "2026-07-23",
+  end_date: "2026-07-23",
+  utc_offset_minutes: 0,
+  spend_logs_disabled: spendLogsDisabled,
+});
+
+const fullDayOfBuckets = (): HourlySavingsResponse["buckets"] =>
+  Array.from({ length: 24 }, (_unused, hour) => ({
+    bucket_start: `2026-07-23T${String(hour).padStart(2, "0")}:00`,
+    compression_savings_spend: hour === 9 ? 0.5 : 0,
+    prompt_caching_savings_spend: hour === 14 ? 2.25 : 0,
+  }));
+
+const readSeries = (element: HTMLElement) => JSON.parse(element.getAttribute("data-series") ?? "[]");
+
 describe("UsageTab", () => {
+  beforeEach(() => {
+    mockGetHourlySavings.mockReset();
+    mockGetToolSpend.mockReset();
+  });
+
   it("sums compression and caching dollars across days into the summary cards", () => {
     const { getByText } = renderWith([
       day("2026-07-12", {
@@ -131,10 +172,106 @@ describe("UsageTab", () => {
       start_date: "2026-07-12",
       end_date: "2026-07-12",
     };
-    const { findAllByTestId } = renderWith([day("2026-07-12", {})], toolSpend);
+    const { findAllByTestId } = renderWith([day("2026-07-12", {})], { toolSpend });
 
     const bars = await findAllByTestId("bar-chart");
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
+  });
+  it("charts a single day by hour instead of collapsing it to one point", async () => {
+    mockGetHourlySavings.mockResolvedValue(hourlyResponse(fullDayOfBuckets()));
+    const oneDay = new Date(2026, 6, 23);
+    const { getByTestId } = renderWith([day("2026-07-23", { prompt_caching_savings_spend: 2.25 })], {
+      from: oneDay,
+      to: oneDay,
+    });
+
+    await waitFor(() => expect(readSeries(getByTestId("area-chart"))).toHaveLength(24));
+    const series = readSeries(getByTestId("area-chart"));
+    expect(series[0]).toMatchObject({ date: "12am", Compression: 0, "Prompt caching": 0 });
+    expect(series[9]).toMatchObject({ date: "9am", Compression: 0.5 });
+    expect(series[14]).toMatchObject({ date: "2pm", "Prompt caching": 2.25 });
+  });
+
+  it("asks for the day on the viewer's own clock", async () => {
+    mockGetHourlySavings.mockResolvedValue(hourlyResponse(fullDayOfBuckets()));
+    const oneDay = new Date(2026, 6, 23, 22, 45);
+    renderWith([], { from: oneDay, to: oneDay });
+
+    await waitFor(() => expect(mockGetHourlySavings).toHaveBeenCalled());
+    expect(mockGetHourlySavings).toHaveBeenCalledWith(
+      "test-token",
+      "2026-07-23",
+      "2026-07-23",
+      -new Date().getTimezoneOffset(),
+    );
+  });
+
+  it("labels hours with their date once the range covers more than one day", async () => {
+    mockGetHourlySavings.mockResolvedValue(
+      hourlyResponse([
+        { bucket_start: "2026-07-23T09:00", compression_savings_spend: 1, prompt_caching_savings_spend: 0 },
+        { bucket_start: "2026-07-24T09:00", compression_savings_spend: 2, prompt_caching_savings_spend: 0 },
+      ]),
+    );
+    const { getByTestId } = renderWith([], { from: new Date(2026, 6, 23), to: new Date(2026, 6, 24) });
+
+    await waitFor(() => expect(readSeries(getByTestId("area-chart"))).toHaveLength(2));
+    expect(readSeries(getByTestId("area-chart")).map((point: { date: string }) => point.date)).toEqual([
+      "7/23 9am",
+      "7/24 9am",
+    ]);
+  });
+
+  it("leaves long ranges on the daily rollup", async () => {
+    const { getByTestId } = renderWith([
+      day("2026-07-12", { compression_savings_spend: 0.04 }),
+      day("2026-07-13", { compression_savings_spend: 0.1 }),
+    ]);
+
+    await waitFor(() => expect(mockGetToolSpend).toHaveBeenCalled());
+    expect(mockGetHourlySavings).not.toHaveBeenCalled();
+    expect(readSeries(getByTestId("area-chart"))).toHaveLength(2);
+  });
+
+  it("does not ask for hourly savings as a non-admin, who cannot read them", async () => {
+    const oneDay = new Date(2026, 6, 23);
+    const { getByTestId } = renderWith([day("2026-07-23", { compression_savings_spend: 0.04 })], {
+      from: oneDay,
+      to: oneDay,
+      isAdmin: false,
+    });
+
+    await waitFor(() => expect(mockGetToolSpend).toHaveBeenCalled());
+    expect(mockGetHourlySavings).not.toHaveBeenCalled();
+    expect(readSeries(getByTestId("area-chart"))).toHaveLength(1);
+  });
+
+  it("falls back to the daily rollup when spend logs are turned off", async () => {
+    mockGetHourlySavings.mockResolvedValue(hourlyResponse(fullDayOfBuckets(), true));
+    const oneDay = new Date(2026, 6, 23);
+    const { getByTestId } = renderWith([day("2026-07-23", { compression_savings_spend: 0.04 })], {
+      from: oneDay,
+      to: oneDay,
+    });
+
+    await waitFor(() => expect(mockGetHourlySavings).toHaveBeenCalled());
+    const series = readSeries(getByTestId("area-chart"));
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({ Compression: 0.04 });
+  });
+
+  it("falls back to the daily rollup when the hourly request fails", async () => {
+    mockGetHourlySavings.mockRejectedValue(new Error("boom"));
+    const oneDay = new Date(2026, 6, 23);
+    const { getByTestId } = renderWith([day("2026-07-23", { compression_savings_spend: 0.04 })], {
+      from: oneDay,
+      to: oneDay,
+    });
+
+    await waitFor(() => expect(mockGetHourlySavings).toHaveBeenCalled());
+    const series = readSeries(getByTestId("area-chart"));
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({ Compression: 0.04 });
   });
 });

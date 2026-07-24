@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
-import { buildDailyToolSeries, computeCacheLeakage, isAnthropicModel, topToolsBySpend } from "./costOptimizationUtils";
+import {
+  buildDailyToolSeries,
+  computeCacheLeakage,
+  formatHourBucket,
+  isAnthropicModel,
+  localIsoDay,
+  shouldUseHourlySavings,
+  spanInDays,
+  topToolsBySpend,
+} from "./costOptimizationUtils";
 
 const metrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
   spend: 0,
@@ -219,5 +228,58 @@ describe("topToolsBySpend", () => {
 
   it("sorts by spend descending and truncates to the limit", () => {
     expect(topToolsBySpend(byTool, 2).map((t) => t.tool_name)).toEqual(["b", "c"]);
+  });
+});
+
+describe("spanInDays", () => {
+  it("counts both endpoints, so one calendar day is a span of one", () => {
+    expect(spanInDays(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe(1);
+    expect(spanInDays(new Date(2026, 6, 23), new Date(2026, 6, 24))).toBe(2);
+    expect(spanInDays(new Date(2026, 6, 1), new Date(2026, 6, 31))).toBe(31);
+  });
+
+  it("ignores the time of day, so a range picked at 11pm is still one day", () => {
+    expect(spanInDays(new Date(2026, 6, 23, 0, 1), new Date(2026, 6, 23, 23, 59))).toBe(1);
+  });
+});
+
+describe("shouldUseHourlySavings", () => {
+  it("switches to hours only for ranges the daily rollup renders as a dot", () => {
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe(true);
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), new Date(2026, 6, 24))).toBe(true);
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), new Date(2026, 6, 25))).toBe(false);
+  });
+
+  it("stays off until both ends of the range are picked", () => {
+    expect(shouldUseHourlySavings(undefined, new Date(2026, 6, 23))).toBe(false);
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), undefined)).toBe(false);
+  });
+});
+
+describe("localIsoDay", () => {
+  it("reads the date off the viewer's clock rather than shifting it to UTC", () => {
+    expect(localIsoDay(new Date(2026, 6, 23, 23, 30))).toBe("2026-07-23");
+    expect(localIsoDay(new Date(2026, 0, 5, 0, 30))).toBe("2026-01-05");
+  });
+});
+
+describe("formatHourBucket", () => {
+  it("reads midnight and noon as 12, not 0", () => {
+    expect(formatHourBucket("2026-07-23T00:00", false)).toBe("12am");
+    expect(formatHourBucket("2026-07-23T12:00", false)).toBe("12pm");
+  });
+
+  it("labels the rest of the day on a 12 hour clock", () => {
+    expect(formatHourBucket("2026-07-23T09:00", false)).toBe("9am");
+    expect(formatHourBucket("2026-07-23T14:00", false)).toBe("2pm");
+    expect(formatHourBucket("2026-07-23T23:00", false)).toBe("11pm");
+  });
+
+  it("prefixes the date when the range spans more than one day", () => {
+    expect(formatHourBucket("2026-07-03T14:00", true)).toBe("7/3 2pm");
+  });
+
+  it("passes an unrecognized bucket through instead of rendering NaN", () => {
+    expect(formatHourBucket("garbage", false)).toBe("garbage");
   });
 });

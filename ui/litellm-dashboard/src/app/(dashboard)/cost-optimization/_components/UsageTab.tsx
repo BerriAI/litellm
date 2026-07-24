@@ -9,8 +9,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
 import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { buildDailyToolSeries, topToolsBySpend, usd } from "./costOptimizationUtils";
+import { buildDailyToolSeries, formatHourBucket, spanInDays, topToolsBySpend, usd } from "./costOptimizationUtils";
 import { DailyActivityRange } from "./useDailyActivityRange";
+import { useHourlySavings } from "./useHourlySavings";
 
 interface UsageTabProps {
   accessToken: string | null;
@@ -82,7 +83,7 @@ const SummaryCard = ({ label, value, hint }: { label: string; value: string; hin
 );
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { dateValue, onDateChange, results, loading, isFetchingMore, isAdmin } = activity;
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
@@ -114,15 +115,23 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
   const totalSaved = compressionTotal + cachingTotal;
 
-  const overTime = useMemo(
-    () =>
-      results.map((d) => ({
+  const hourly = useHourlySavings(accessToken, startTime ?? undefined, endTime ?? undefined, isAdmin);
+
+  const overTime = useMemo(() => {
+    if (!hourly) {
+      return results.map((d) => ({
         date: shortDate(d.date),
         Compression: compressionOf(d.metrics),
         "Prompt caching": cachingOf(d.metrics),
-      })),
-    [results],
-  );
+      }));
+    }
+    const withDate = !!startTime && !!endTime && spanInDays(startTime, endTime) > 1;
+    return hourly.buckets.map((b) => ({
+      date: formatHourBucket(b.bucket_start, withDate),
+      Compression: b.compression_savings_spend,
+      "Prompt caching": b.prompt_caching_savings_spend,
+    }));
+  }, [hourly, results, startTime, endTime]);
 
   const byDriver = useMemo(
     () =>
@@ -174,6 +183,9 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Savings over time</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              {hourly ? "By hour, on your local clock, read from request logs" : "By day, read from the daily rollup"}
+            </p>
           </CardHeader>
           <CardContent>
             <AreaChart

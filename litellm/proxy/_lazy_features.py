@@ -125,6 +125,11 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
         path_prefixes=("/v1/tool", "/tool"),
     ),
     LazyFeature(
+        name="savings",
+        module_path="litellm.proxy.spend_tracking.savings_endpoints",
+        path_prefixes=("/v1/savings",),
+    ),
+    LazyFeature(
         name="search_tools",
         module_path="litellm.proxy.search_endpoints.search_tool_management",
         path_prefixes=("/search_tools",),

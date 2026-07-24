@@ -149,3 +149,42 @@ const seedPoint = (date: string, toolNames: readonly string[]): DailyToolSpendPo
 
 export const topToolsBySpend = (byTool: readonly ToolSpendEntry[], limit = 8): ToolSpendEntry[] =>
   [...byTool].sort((a, b) => b.spend - a.spend).slice(0, limit);
+
+export const HOURLY_SAVINGS_MAX_SPAN_DAYS = 2;
+
+export const localIsoDay = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+export const spanInDays = (from: Date, to: Date): number =>
+  Math.floor(
+    (new Date(to.getFullYear(), to.getMonth(), to.getDate()).getTime() -
+      new Date(from.getFullYear(), from.getMonth(), from.getDate()).getTime()) /
+      86_400_000,
+  ) + 1;
+
+/**
+ * The daily rollup is keyed by date, so a range this short plots as one or two
+ * points. Short ranges are served from spend logs at hour granularity instead.
+ */
+export const shouldUseHourlySavings = (from: Date | undefined, to: Date | undefined): boolean => {
+  if (!from || !to) return false;
+  const span = spanInDays(from, to);
+  return span >= 1 && span <= HOURLY_SAVINGS_MAX_SPAN_DAYS;
+};
+
+/**
+ * Buckets arrive as naive local wall-clock stamps ("2026-07-23T14:00"); they are
+ * already on the viewer's clock, so they are read apart rather than parsed as
+ * dates, which would re-apply a timezone shift.
+ */
+export const formatHourBucket = (bucketStart: string, withDate: boolean): string => {
+  const [date, time] = bucketStart.split("T");
+  const hour = Number(time?.slice(0, 2));
+  if (!date || Number.isNaN(hour)) return bucketStart;
+  const suffix = hour < 12 ? "am" : "pm";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  const clock = `${hour12}${suffix}`;
+  if (!withDate) return clock;
+  const [, month, day] = date.split("-");
+  return `${Number(month)}/${Number(day)} ${clock}`;
+};
