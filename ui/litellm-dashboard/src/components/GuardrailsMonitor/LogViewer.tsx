@@ -74,7 +74,7 @@ export function LogViewer({
     ? moment(endDate).endOf("day").utc().format("YYYY-MM-DD HH:mm:ss")
     : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-  const { data: fullLogResponse, isFetching: isFetchingFullLog } = useQuery({
+  const { data: fullLogResponse, isFetching: isFetchingFullLog, isError: isFullLogError } = useQuery({
     queryKey: ["spend-log-by-request", selectedRequestId, startTime, endTime],
     queryFn: async () => {
       if (!accessToken || !selectedRequestId) return null;
@@ -198,6 +198,7 @@ export function LogViewer({
         onClose={handleCloseDrawer}
         logEntry={selectedLog}
         logEntryLoading={isFetchingFullLog}
+        logEntryError={isFullLogError}
         accessToken={accessToken}
         allLogs={selectedLog ? [selectedLog] : []}
         startTime={startTime}

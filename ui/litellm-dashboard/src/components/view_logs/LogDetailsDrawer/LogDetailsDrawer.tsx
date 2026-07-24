@@ -21,6 +21,7 @@ export interface LogDetailsDrawerProps {
   onClose: () => void;
   logEntry: LogEntry | null;
   logEntryLoading?: boolean;
+  logEntryError?: boolean;
   sessionId?: string | null;
   accessToken?: string | null;
   allLogs?: LogEntry[];
@@ -114,6 +115,7 @@ export function LogDetailsDrawer({
   onClose,
   logEntry,
   logEntryLoading = false,
+  logEntryError = false,
   sessionId,
   accessToken,
   allLogs = [],
@@ -126,7 +128,7 @@ export function LogDetailsDrawer({
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
-  const { data: sessionData, isFetching: isFetchingSession } = useQuery({
+  const { data: sessionData, isFetching: isFetchingSession, isError: isSessionError } = useQuery({
     queryKey: ["sessionLogs", sessionId],
     queryFn: async () => {
       if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
@@ -298,6 +300,7 @@ export function LogDetailsDrawer({
     if (!open) return null;
 
     const isResolvingLog = isSessionMode ? isFetchingSession : logEntryLoading;
+    const lookupFailed = isSessionMode ? isSessionError : logEntryError;
 
     return (
       <Drawer
@@ -316,8 +319,9 @@ export function LogDetailsDrawer({
             <Spin />
           ) : (
             <p className="text-sm text-slate-500 text-center px-6">
-              Log details are unavailable for this request. It may have been purged from the spend logs, or it falls
-              outside the selected date range.
+              {lookupFailed
+                ? "Loading the details for this request failed. Check the proxy is reachable and try again."
+                : "Log details are unavailable for this request. It may have been purged from the spend logs, or it falls outside the selected date range."}
             </p>
           )}
         </div>
