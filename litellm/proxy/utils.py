@@ -4157,6 +4157,14 @@ class PrismaClient:
     def _is_engine_alive(self) -> bool:
         if self._engine_pid <= 0:
             return True
+        # Windows 上 os.kill(pid, 0) 不是 Unix 的「signal-0 存活探測」，而是直接
+        # 呼叫 TerminateProcess(handle, 0) 把 engine 殺掉：CPython 在 Windows 只
+        # 把 CTRL_C_EVENT / CTRL_BREAK_EVENT 當特例，其餘 sig 值（含 0）一律
+        # TerminateProcess。Windows 沒有安全的 signal-0 探測方式，故一律回報存活，
+        # 真正的 engine 故障交由查詢層 call_with_db_reconnect_retry 在
+        # ReadError / ConnectError 時惰性處理。
+        if sys.platform == "win32":
+            return True
         try:
             os.kill(self._engine_pid, 0)
             return True
@@ -4381,6 +4389,11 @@ class PrismaClient:
         Only used when BOTH waitpid thread and pidfd are unavailable
         (e.g., PID is not our child process and pidfd_open fails)
         """
+        # 保險絲：Windows 上 os.kill(pid, 0) 會 TerminateProcess 殺掉 engine，
+        # 這個 poller 絕不能在 Windows 執行。_start_engine_watcher 已在 win32
+        # 不會排這個 task，此處再擋一道以防未來有其他呼叫點。
+        if sys.platform == "win32":
+            return
         while self._watching_engine and self._engine_pid > 0:
             try:
                 os.kill(self._engine_pid, 0)
@@ -4461,6 +4474,18 @@ class PrismaClient:
         elif pidfd_ok:
             verbose_proxy_logger.info(
                 "Watching engine PID %s via pidfd.",
+                pid,
+            )
+        elif sys.platform == "win32":
+            # Windows 沒有 waitpid/pidfd，唯一的 fallback 是 os.kill 輪詢，但
+            # os.kill(pid, 0) 在 Windows 會 TerminateProcess 把 engine 殺掉
+            # （連上後約 1 秒就被自己的存活檢查殺死，之後所有查詢 ConnectError）。
+            # 因此 Windows 不做主動 engine-death 偵測——回到 1.82 之前 Windows 的
+            # 既有行為，engine 故障由查詢層的 reconnect retry 惰性處理。
+            verbose_proxy_logger.info(
+                "Engine PID %s: proactive engine-death detection is unavailable on "
+                "Windows (waitpid/pidfd unsupported; os.kill polling would terminate "
+                "the engine). Relying on query-level reconnect retry instead.",
                 pid,
             )
         else:
