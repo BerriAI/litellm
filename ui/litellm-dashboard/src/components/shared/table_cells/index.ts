@@ -1,3 +1,10 @@
+export {
+  AutoRouterTag,
+  AutoRouterIcon,
+  AutoRouterModelGroupsProvider,
+  useIsAutoRoutedModelGroup,
+  type AutoRouterTagProps,
+} from "./AutoRouterTag";
 export { CellTooltip } from "./cell_tooltip";
 export { DateCell, formatCellDate, formatFullTimestamp, type DatePrecision } from "./date_cell";
 export { IdCell, type IdCellVariant } from "./id_cell";

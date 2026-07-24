@@ -1,8 +1,6 @@
-import { migratedHref } from "@/utils/migratedPages";
+import { createTabRoutes } from "@/utils/tabRoutes";
 
-export const MODELS_BASE_SEGMENT = "models-and-endpoints";
-
-export const MODEL_TAB_SLUGS = [
+export const modelsRoutes = createTabRoutes("models-and-endpoints", [
   "add",
   "llm-credentials",
   "pass-through",
@@ -10,20 +8,11 @@ export const MODEL_TAB_SLUGS = [
   "retry-settings",
   "model-group-alias",
   "price-data",
-] as const;
+] as const);
 
-export type ModelTabSlug = (typeof MODEL_TAB_SLUGS)[number];
+export type ModelTabSlug = (typeof modelsRoutes.slugs)[number];
 
-export function modelTabHref(slug: string): string {
-  const base = migratedHref(MODELS_BASE_SEGMENT);
-  return slug ? `${base}/${slug}/` : `${base}/`;
-}
-
-export function slugFromPathname(pathname: string): string {
-  const parts = pathname.split("/").filter(Boolean);
-  const idx = parts.indexOf(MODELS_BASE_SEGMENT);
-  if (idx === -1) {
-    return "";
-  }
-  return parts[idx + 1] ?? "";
-}
+export const MODELS_BASE_SEGMENT = modelsRoutes.baseSegment;
+export const MODEL_TAB_SLUGS = modelsRoutes.slugs;
+export const modelTabHref = modelsRoutes.tabHref;
+export const slugFromPathname = modelsRoutes.slugFromPathname;

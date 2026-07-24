@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1393,6 +1394,38 @@ class TestEventTypeLogging:
         logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_records_every_concurrent_guardrail(self):
+        """Guardrails run concurrently (parallel pre_call/post_call, during_call) share one
+        request_data dict. Each must still record its own entry. The previous guard counted
+        entries in that shared dict, so a sibling's append made a guardrail think it had already
+        recorded and skip its own auto-record — silently dropping lifecycle logs the UI shows."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class SleeperGuardrail(CustomGuardrail):
+            def __init__(self, name, sleep):
+                super().__init__(guardrail_name=name, event_hook=GuardrailEventHooks.pre_call)
+                self._sleep = sleep
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data: dict, **kwargs):
+                await asyncio.sleep(self._sleep)
+                return data
+
+        request_data = {"metadata": {}}
+        # Different sleeps guarantee overlapping execution windows: the faster guardrail
+        # records while the slower one is still awaiting, which is exactly what tripped the
+        # old shared-count guard.
+        await asyncio.gather(
+            SleeperGuardrail("guardrail-a", 0.05).async_pre_call_hook(data=request_data),
+            SleeperGuardrail("guardrail-b", 0.15).async_pre_call_hook(data=request_data),
+        )
+
+        logged = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert {entry["guardrail_name"] for entry in logged} == {"guardrail-a", "guardrail-b"}
+        assert len(logged) == 2
 
     def test_add_standard_logging_falls_back_to_event_hook_when_event_type_is_none(
         self,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call, unwrap
 from endpoints_client import EndpointsClient, MessagesResult
 from lifecycle import ResourceManager
@@ -73,7 +73,6 @@ class TestAnthropicMessages:
     def test_messages_logs_cost_matching_the_response_header(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("ANTHROPIC_API_KEY")
         model = f"e2e-messages-cost-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,

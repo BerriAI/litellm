@@ -2333,6 +2333,59 @@ class TestMCPServerManager:
         assert emitted.headers["Authorization"] == "Bearer upstream-token"
         assert not kwargs["extra_headers"] or "authorization" not in {k.lower() for k in kwargs["extra_headers"]}
 
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_token_exchange_never_falls_back_to_v1(self):
+        """A configured OBO server is owned end to end by the v2 token_exchange arm, even when the
+        caller supplies an x-mcp-* override. This is what makes the v1 OBO handler unreachable, so if
+        it ever defers to v1 again the deleted handler is silently needed back."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+            OAuthToken,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import (
+            UpstreamCredentialProvider,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _StubExchanger:
+            def __init__(self):
+                self.subject_tokens = []
+
+            async def exchange(self, subject_token, server, config, *, tenant_id=""):
+                self.subject_tokens.append(subject_token)
+                return Ok(OAuthToken(access_token="exchanged-token"))
+
+            async def invalidate(self, subject_token, server, config, *, tenant_id=""):
+                return None
+
+        exchanger = _StubExchanger()
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="obo-egress",
+            name="obo",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://idp.example.com/oauth2/token",
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.resolve_mcp_auth",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as mock_client_cls,
+        ):
+            await manager._create_mcp_client(
+                server=server,
+                mcp_auth_header="Bearer caller-override",
+                subject_token="eyJ-subject-token",
+                cred_provider=UpstreamCredentialProvider(token_exchanger=exchanger),
+            )
+        mock_resolve.assert_not_awaited()
+        assert exchanger.subject_tokens == ["eyJ-subject-token"]
+        assert self._emitted_authorization(mock_client_cls) == "Bearer exchanged-token"
+
     @staticmethod
     def _emitted_authorization(mock_client_cls) -> str:
         kwargs = mock_client_cls.call_args.kwargs
