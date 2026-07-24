@@ -121,7 +121,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     parse_admin_env_vars,
     split_server_prefix_from_name,
-    strip_known_server_prefix,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
@@ -2492,6 +2491,13 @@ class MCPServerManager:
         the given toolsets.  Results are cached via ``user_api_key_cache`` (a
         Redis-backed ``DualCache`` in production) so that cache entries are
         shared across workers and cold-cache DB hits are minimised.
+
+        A row names a tool on the server identified by ``server_id``, so the
+        stored name is the tool's own name and is used as written.  It is never
+        reduced by the server's wire prefix: that prefix is added on the way out
+        and is not part of any tool's identity, so treating a leading segment as
+        one silently renames the tool when a native name happens to begin with
+        it (``greyhound_internal_events`` on a server prefixed ``greyhound``).
         """
         from litellm.proxy._experimental.mcp_server.toolset_db import list_mcp_toolsets
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -2509,12 +2515,9 @@ class MCPServerManager:
             tool_permissions: dict[str, list[str]] = {}
             for toolset in toolsets:
                 for tool in toolset.tools:
-                    raw_name = tool["tool_name"]
-                    server = self.get_mcp_server_by_id(tool["server_id"])
-                    unprefixed = strip_known_server_prefix(raw_name, server)
-                    tool_permissions.setdefault(tool["server_id"], [])
-                    if unprefixed not in tool_permissions[tool["server_id"]]:
-                        tool_permissions[tool["server_id"]].append(unprefixed)
+                    allowed_names = tool_permissions.setdefault(tool["server_id"], [])
+                    if tool["tool_name"] not in allowed_names:
+                        allowed_names.append(tool["tool_name"])
             await user_api_key_cache.async_set_cache(
                 key=cache_key,
                 value=tool_permissions,
