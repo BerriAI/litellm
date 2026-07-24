@@ -1,0 +1,266 @@
+"""Credential resolution + request-scoped stash for Alice WonderFence.
+
+Resolves ``api_key`` / ``app_id`` per request from API-key metadata, team
+metadata, optionally request metadata, with ``api_key`` falling back to a
+configured default. ``app_id`` has no default.
+
+Admin-pinned credentials (key/team metadata) always win over request metadata
+so a caller cannot bypass their assigned WonderFence app.
+``allow_request_metadata_override`` defaults to False; enable only for
+trusted-gateway deployments that need request-level overrides.
+
+The two metadata buckets (``metadata`` and ``litellm_metadata``) are merged
+with the proxy-injected ``litellm_metadata`` winning on key collision, so admin
+pins cannot be shadowed by a caller-supplied ``metadata`` body — see
+``get_metadata``.
+
+The stash bridges pre_call resolution into post_call where request metadata is
+gone — see ``stash_resolved`` for the full rationale.
+"""
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Optional
+
+from .exceptions import WonderFenceMissingSecrets
+
+
+@dataclass(frozen=True)
+class CredentialConfig:
+    """Per-guardrail config consulted during credential resolution."""
+
+    guardrail_name: str
+    default_api_key: str | None
+    allow_request_metadata_override: bool
+
+
+def _nonempty_str(value: object) -> str | None:
+    """Return ``value`` only if it is a non-empty/non-blank string, else None.
+
+    Credential sources (request body, key/team metadata, config default) are
+    only honored when they carry a real string. A truthy non-string override
+    (list, dict, number) must not pass through to the SDK, where it would raise
+    a type error that ``fail_open`` could swallow into a skipped scan.
+    """
+    return value if isinstance(value, str) and value.strip() else None
+
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObj,
+    )
+
+
+# Prefix for the per-guardrail attribute on the request-scoped logging_obj where
+# the resolved (api_key, app_id) is stashed so post_call can recover it. The
+# guardrail name is baked into the attribute so each instance has a physically
+# separate slot — one instance can never read another's credentials.
+#
+# These are private instance attributes, NOT model_call_details keys, because
+# model_call_details is forwarded verbatim as ``kwargs`` to every logging
+# callback / exporter (litellm_logging.py) — stashing the resolved WonderFence
+# api_key there would leak a tenant secret into logs. A private attribute on the
+# same object gives the identical cross-hook / cross-task visibility (see
+# stash_resolved) without entering the logged payload.
+_STASH_ATTR_PREFIX = "_alice_wonderfence_resolved__"
+
+
+def _stash_attr(guardrail_name: str) -> str:
+    return _STASH_ATTR_PREFIX + guardrail_name
+
+
+def get_metadata(request_data: dict) -> dict:
+    """Merge caller metadata with proxy-injected litellm_metadata.
+
+    Proxy-injected values win on key collision so admin-pinned
+    user_api_key_metadata / user_api_key_team_metadata can never be shadowed
+    by a caller-supplied `metadata` body. On routes in LITELLM_METADATA_ROUTES
+    (e.g. /v1/responses) the admin pins live in `litellm_metadata` while the
+    caller bucket is `metadata`; on /chat/completions they coincide.
+    """
+    caller = request_data.get("metadata")
+    litellm_md = request_data.get("litellm_metadata")
+    caller = caller if isinstance(caller, dict) else {}
+    litellm_md = litellm_md if isinstance(litellm_md, dict) else {}
+    return {**caller, **litellm_md}
+
+
+def resolve_api_key(
+    request_data: dict,
+    default_api_key: str | None,
+    allow_request_metadata_override: bool,
+) -> str:
+    """Resolve api_key from key → team → (request, when opt-in) → default.
+
+    Admin-pinned sources (API-key and team metadata) take precedence over
+    request-body metadata so a caller cannot bypass their assigned WonderFence
+    credentials. Request metadata is consulted only when
+    ``allow_request_metadata_override`` is True, and even then only after the
+    admin-controlled sources.
+
+    The LiteLLM framework copies key/team metadata from ``UserAPIKeyAuth`` into
+    ``data['metadata']`` under ``user_api_key_metadata`` and
+    ``user_api_key_team_metadata``, so all sources are read from
+    ``request_data``.
+    """
+    metadata = get_metadata(request_data)
+
+    key_metadata = metadata.get("user_api_key_metadata") or {}
+    if isinstance(key_metadata, dict):
+        val = _nonempty_str(key_metadata.get("alice_wonderfence_api_key"))
+        if val:
+            return val
+
+    team_metadata = metadata.get("user_api_key_team_metadata") or {}
+    if isinstance(team_metadata, dict):
+        val = _nonempty_str(team_metadata.get("alice_wonderfence_api_key"))
+        if val:
+            return val
+
+    if allow_request_metadata_override:
+        val = _nonempty_str(metadata.get("alice_wonderfence_api_key"))
+        if val:
+            return val
+
+    val = _nonempty_str(default_api_key)
+    if val:
+        return val
+
+    raise WonderFenceMissingSecrets(
+        "No alice_wonderfence_api_key found in API-key metadata, team "
+        "metadata, request metadata (when allow_request_metadata_override "
+        "is enabled), or default config (ALICE_API_KEY)."
+    )
+
+
+def resolve_app_id(request_data: dict, allow_request_metadata_override: bool) -> str:
+    """Resolve app_id from key → team → (request, when opt-in). No default.
+
+    Admin-pinned sources win over request-body metadata; request metadata is
+    only consulted when ``allow_request_metadata_override`` is True. Raises
+    ``WonderFenceMissingSecrets`` when nothing resolves.
+    """
+    metadata = get_metadata(request_data)
+
+    key_metadata = metadata.get("user_api_key_metadata") or {}
+    if isinstance(key_metadata, dict):
+        val = _nonempty_str(key_metadata.get("alice_wonderfence_app_id"))
+        if val:
+            return val
+
+    team_metadata = metadata.get("user_api_key_team_metadata") or {}
+    if isinstance(team_metadata, dict):
+        val = _nonempty_str(team_metadata.get("alice_wonderfence_app_id"))
+        if val:
+            return val
+
+    if allow_request_metadata_override:
+        val = _nonempty_str(metadata.get("alice_wonderfence_app_id"))
+        if val:
+            return val
+
+    raise WonderFenceMissingSecrets(
+        "No alice_wonderfence_app_id found in API-key metadata, team "
+        "metadata, or request metadata (when allow_request_metadata_override "
+        "is enabled). app_id must be provided per request."
+    )
+
+
+def stash_resolved(
+    logging_obj: Optional["LiteLLMLoggingObj"],
+    guardrail_name: str,
+    api_key: str,
+    app_id: str,
+) -> None:
+    """Persist resolved (api_key, app_id) on the request-scoped logging_obj
+    so post_call can recover it.
+
+    Why we need this:
+        LiteLLM's per-provider chat translation handler synthesizes a fresh
+        ``request_data`` for post_call (``process_output_response``, e.g.
+        ``litellm/llms/openai/chat/guardrail_translation/handler.py:312``).
+        That dict only carries ``litellm_metadata.user_api_key_metadata`` and
+        ``user_api_key_team_metadata`` — the original request body's
+        ``metadata`` field (where per-request ``alice_wonderfence_app_id``
+        lives) is dropped. Without a bridge, post_call resolution fails even
+        though the request explicitly supplied the value.
+
+    Why a private attribute on logging_obj (and not model_call_details):
+        ``model_call_details`` is forwarded verbatim as ``kwargs`` to every
+        logging callback / exporter (``litellm_logging.py`` passes
+        ``kwargs=self.model_call_details`` to success/failure handlers and
+        logging hooks), and the redaction layer only scrubs message
+        input/output and known StandardLoggingPayload fields, not arbitrary
+        custom keys. Stashing the resolved WonderFence ``api_key`` there leaks
+        a tenant secret into logs. A private instance attribute is request
+        scoped on the same object but is not part of the logged ``kwargs``.
+
+    Why an attribute on logging_obj (and not a ContextVar):
+        during_call hooks run via ``asyncio.gather`` in
+        ``litellm/proxy/utils.py:1500``, which wraps each coroutine in its own
+        asyncio Task with a *copied* context. ContextVar writes in a child
+        Task are not visible to the parent Task that runs post_call, so a
+        ContextVar bridge silently fails. ``logging_obj`` is passed through
+        every hook by reference (same object across pre_call, during_call,
+        and post_call), so mutations to it are visible regardless of task
+        boundary.
+
+    The attribute is per-guardrail (see ``_stash_attr``) so multiple
+    alice_wonderfence instances on the same request each get an isolated slot.
+    """
+    if logging_obj is None:
+        return
+    setattr(logging_obj, _stash_attr(guardrail_name), (api_key, app_id))
+
+
+def recover_resolved(logging_obj: Optional["LiteLLMLoggingObj"], guardrail_name: str) -> tuple[str, str] | None:
+    """Look up the (api_key, app_id) this guardrail stashed earlier in this
+    request, or ``None``.
+
+    Returns only this instance's own stash. It deliberately does NOT fall back
+    to another alice_wonderfence instance's stash: a sibling may have resolved
+    under a different policy (e.g. ``allow_request_metadata_override=True``,
+    carrying caller-supplied request-body credentials) that a stricter instance
+    must not inherit. When this instance has no own stash, the caller fails
+    closed rather than borrowing.
+    """
+    if logging_obj is None:
+        return None
+    value = getattr(logging_obj, _stash_attr(guardrail_name), None)
+    return value if isinstance(value, tuple) else None
+
+
+def resolve_credentials(
+    request_data: dict,
+    input_type: Literal["request", "response"],
+    logging_obj: Optional["LiteLLMLoggingObj"],
+    config: CredentialConfig,
+) -> tuple[str, str]:
+    """Resolve (api_key, app_id) for this call.
+
+    For ``request``: read from request_data (canonical pre_call path) and stash
+    on logging_obj so post_call can recover.
+
+    For ``response`` (post_call): try synthesized request_data first (works
+    when supplied via virtual key or team metadata, which the framework
+    preserves as ``litellm_metadata.user_api_key_metadata`` /
+    ``user_api_key_team_metadata``); fall back to the per-request logging_obj
+    stash for values supplied in the original request body's metadata, which
+    the framework drops before post_call.
+    """
+    default_api_key = config.default_api_key
+    allow_override = config.allow_request_metadata_override
+    if input_type == "request":
+        api_key = resolve_api_key(request_data, default_api_key, allow_override)
+        app_id = resolve_app_id(request_data, allow_override)
+        stash_resolved(logging_obj, config.guardrail_name, api_key, app_id)
+        return api_key, app_id
+    try:
+        return (
+            resolve_api_key(request_data, default_api_key, allow_override),
+            resolve_app_id(request_data, allow_override),
+        )
+    except WonderFenceMissingSecrets:
+        recovered = recover_resolved(logging_obj, config.guardrail_name)
+        if recovered is None:
+            raise
+        return recovered
