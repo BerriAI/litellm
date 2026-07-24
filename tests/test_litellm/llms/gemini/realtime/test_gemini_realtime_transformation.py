@@ -151,6 +151,47 @@ def test_gemini_realtime_transformation_content_delta():
     assert len(set(output_item_ids)) == 1
 
 
+def test_gemini_realtime_interrupted_emits_speech_started():
+    """``serverContent.interrupted`` should also surface
+    ``input_audio_buffer.speech_started`` so OpenAI-Realtime clients can barge-in,
+    while keeping the existing ``interrupted -> response.done`` mapping."""
+    config = GeminiRealtimeConfig()
+
+    session_configuration_request_str = json.dumps(
+        {
+            "setup": {
+                "model": "gemini-2.5-flash-native-audio",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            }
+        }
+    )
+
+    result = config.transform_realtime_response(
+        json.dumps({"serverContent": {"interrupted": True}}),
+        "gemini-2.5-flash-native-audio",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": "my-output-item-id",
+            "current_response_id": "my-response-id",
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": "audio",
+        },
+    )
+
+    types = [event["type"] for event in result["response"] if "type" in event]
+    # Barge-in is surfaced for clients that flush playback on speech-start.
+    assert "input_audio_buffer.speech_started" in types
+    # The existing interrupted -> response.done mapping is preserved.
+    assert "response.done" in types
+    # speech-start precedes response.done (flush/cancel, then lifecycle reset).
+    assert types.index("input_audio_buffer.speech_started") < types.index(
+        "response.done"
+    )
+
+
 def test_gemini_model_turn_event_mapping():
     from litellm.types.llms.openai import OpenAIRealtimeEventTypes
 
