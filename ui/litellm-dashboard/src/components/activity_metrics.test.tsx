@@ -648,6 +648,22 @@ describe("processActivityData", () => {
     expect(result).toEqual({});
   });
 
+  it.each(["models", "api_keys", "mcp_servers"] as const)("should skip %s entries without metrics", (breakdownKey) => {
+    const sparseEntry =
+      breakdownKey === "api_keys"
+        ? { metadata: { key_alias: "Sparse Key", team_id: null } }
+        : { metadata: {}, api_key_breakdown: {} };
+    const sparseBreakdown = {
+      ...EMPTY_BREAKDOWN,
+      [breakdownKey]: { sparse: sparseEntry },
+    } as unknown as typeof EMPTY_BREAKDOWN;
+    const dailyActivity = {
+      results: [createMockDailyData("2025-01-01", EMPTY_SPEND_METRICS, sparseBreakdown)],
+    };
+
+    expect(processActivityData(dailyActivity, breakdownKey, MOCK_TEAMS)).toEqual({});
+  });
+
   it("should process data for api_keys key with teams parameter", () => {
     const result = processActivityData(mockDailyActivity, "api_keys", MOCK_TEAMS);
 
