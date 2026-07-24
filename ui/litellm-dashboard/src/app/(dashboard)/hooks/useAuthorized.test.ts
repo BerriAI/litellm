@@ -243,6 +243,39 @@ describe("useAuthorized", () => {
     expect(result.current.token).toBeNull();
   });
 
+  it("should redirect immediately when token is missing, without waiting for the UI config fetch", async () => {
+    getUiConfigMock.mockReturnValue(new Promise(() => {}));
+
+    decodeTokenMock.mockReturnValue(null);
+    checkTokenValidityMock.mockReturnValue(false);
+
+    const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+    await waitFor(() => {
+      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
+    });
+
+    expect(clearTokenCookiesMock).not.toHaveBeenCalled();
+    expect(result.current.token).toBeNull();
+  });
+
+  it("should clear cookies and redirect immediately when token is expired, without waiting for the UI config fetch", async () => {
+    getUiConfigMock.mockReturnValue(new Promise(() => {}));
+
+    decodeTokenMock.mockReturnValue({ key: "api-key-123", user_id: "user-1" });
+    checkTokenValidityMock.mockReturnValue(false);
+
+    document.cookie = "token=expired-token; path=/;";
+
+    renderHook(() => useAuthorized(), { wrapper });
+
+    await waitFor(() => {
+      expect(clearTokenCookiesMock).toHaveBeenCalled();
+    });
+
+    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
+  });
+
   it("should clear cookies and redirect when token is expired", async () => {
     getUiConfigMock.mockResolvedValue({
       server_root_path: "/",

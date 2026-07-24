@@ -46,9 +46,10 @@ const Navbar: React.FC<NavbarProps> = ({
 
   const handleLogout = () => {
     clearTokenCookies();
+    clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = proxySettings.PROXY_LOGOUT_URL || "";
+    window.location.replace(proxySettings.PROXY_LOGOUT_URL || getLoginUrl(baseUrl));
   };
 
   const handleWorkerSwitch = (workerId: string) => {

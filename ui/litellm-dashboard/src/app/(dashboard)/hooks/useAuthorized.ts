@@ -28,15 +28,14 @@ const useAuthorized = () => {
 
   // Single useEffect for all redirect logic
   useEffect(() => {
-    if (isLoading) return;
+    if (isTokenValid && isLoading) return;
+    if (isAuthorized) return;
 
-    if (!isAuthorized) {
-      if (token) {
-        clearTokenCookies();
-      }
-      redirectToLogin();
+    if (token) {
+      clearTokenCookies();
     }
-  }, [isLoading, isAuthorized, token, redirectToLogin]);
+    redirectToLogin();
+  }, [isLoading, isTokenValid, isAuthorized, token, redirectToLogin]);
 
   return {
     isLoading,
