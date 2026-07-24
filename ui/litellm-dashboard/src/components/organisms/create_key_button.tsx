@@ -468,17 +468,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       if (
         formValues.allowed_mcp_servers_and_groups &&
         (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
-          formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0)
+          formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
+          formValues.allowed_mcp_servers_and_groups.toolsets?.length > 0)
       ) {
         if (!formValues.object_permission) {
           formValues.object_permission = {};
         }
-        const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+        const { servers, accessGroups, toolsets } = formValues.allowed_mcp_servers_and_groups;
         if (servers && servers.length > 0) {
           formValues.object_permission.mcp_servers = servers;
         }
         if (accessGroups && accessGroups.length > 0) {
           formValues.object_permission.mcp_access_groups = accessGroups;
+        }
+        if (toolsets && toolsets.length > 0) {
+          formValues.object_permission.mcp_toolsets = toolsets;
         }
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_servers_and_groups;
