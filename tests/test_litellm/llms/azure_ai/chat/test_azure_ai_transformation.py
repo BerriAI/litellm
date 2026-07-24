@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
+from litellm import UnsupportedParamsError
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
 from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+from litellm.utils import get_optional_params
 
 
 @pytest.mark.asyncio
@@ -197,8 +197,7 @@ def test_azure_model_router_response_shows_actual_model():
 
     # Verify that the response contains the actual model used, not the router model
     assert result.model == "azure_ai/gpt-5-nano-2025-08-07", (
-        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
-        f"but got '{result.model}'"
+        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), but got '{result.model}'"
     )
 
 
@@ -222,14 +221,10 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     mock_response.text = error_text
     mock_response.json.return_value = json.loads(error_text)
     mock_response.status_code = 400
-    e = httpx.HTTPStatusError(
-        message="400", request=MagicMock(), response=mock_response
-    )
+    e = httpx.HTTPStatusError(message="400", request=MagicMock(), response=mock_response)
 
     assert config._error_has_tool_level_extra_fields(error_text) is True
-    assert (
-        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
-    )
+    assert config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
 
     request_data = {
         "model": "FW-Kimi-K2.6",
@@ -262,3 +257,61 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+class TestAzureAIReasoningEffort:
+    def test_reasoning_effort_in_supported_params_for_reasoning_model(self):
+        config = AzureAIStudioConfig()
+        assert "reasoning_effort" in config.get_supported_openai_params("deepseek-v4-pro")
+
+    def test_reasoning_effort_mapped_for_reasoning_model(self):
+        config = AzureAIStudioConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high", "temperature": 0.5},
+            optional_params={},
+            model="deepseek-v4-pro",
+            drop_params=False,
+        )
+        assert optional_params.get("reasoning_effort") == "high"
+        assert optional_params.get("temperature") == 0.5
+
+    def test_reasoning_effort_dropped_for_non_reasoning_model(self):
+        config = AzureAIStudioConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="Phi-4",
+            drop_params=True,
+        )
+        assert "reasoning_effort" not in optional_params
+
+    def test_explicit_allowed_param_is_preserved_for_unknown_model(self):
+        optional_params = get_optional_params(
+            model="custom-reasoning-model",
+            custom_llm_provider="azure_ai",
+            reasoning_effort="high",
+            allowed_openai_params=["reasoning_effort"],
+        )
+        assert optional_params["reasoning_effort"] == "high"
+
+    def test_gpt_5_reasoning_effort_is_validated(self):
+        config = AzureAIStudioConfig()
+        with pytest.raises(UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": "minimal"},
+                optional_params={},
+                model="gpt-5.4-mini",
+                drop_params=False,
+            )
+
+    def test_gpt_5_reasoning_effort_dict_is_normalized(self):
+        config = AzureAIStudioConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={
+                "reasoning_effort": {"effort": "high", "summary": "detailed"}
+            },
+            optional_params={},
+            model="gpt-5.4-mini",
+            drop_params=False,
+        )
+        assert optional_params["reasoning_effort"] == "high"
