@@ -4916,3 +4916,33 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+class TestValidateEnvironmentHeroku:
+    """heroku must report HEROKU_API_KEY like other openai-compat providers."""
+
+    def test_heroku_reports_key_present(self):
+        with patch.dict(
+            os.environ,
+            {"HEROKU_API_KEY": "test-key", "HEROKU_API_BASE": "https://test.heroku.com"},
+            clear=True,
+        ):
+            result = litellm.validate_environment(model="heroku/test-model")
+        assert result["keys_in_environment"] is True
+        assert "HEROKU_API_KEY" not in result["missing_keys"]
+        assert "HEROKU_API_BASE" not in result["missing_keys"]
+
+    def test_heroku_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(model="heroku/test-model")
+        assert result["keys_in_environment"] is False
+        assert "HEROKU_API_KEY" in result["missing_keys"]
+        assert "HEROKU_API_BASE" in result["missing_keys"]
+
+    def test_heroku_reports_api_base_missing(self):
+        # Heroku's get_complete_url unconditionally requires HEROKU_API_BASE,
+        # so validate_environment must not give a clean all-clear when only the
+        # API key is present (Greptile review of PR #33791).
+        with patch.dict(os.environ, {"HEROKU_API_KEY": "test-key"}, clear=True):
+            result = litellm.validate_environment(model="heroku/test-model")
+        assert result["keys_in_environment"] is False
+        assert "HEROKU_API_BASE" in result["missing_keys"]
+        assert "HEROKU_API_KEY" not in result["missing_keys"]
