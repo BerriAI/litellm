@@ -2191,6 +2191,13 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
+def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> List[str]:
+    field_names = list(type(prompt_tokens_details).model_fields)
+    if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
+        return field_names
+    return [attr for attr in field_names if attr != "cache_creation_tokens"]
+
+
 class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: List[Usage]) -> Usage:
@@ -2225,7 +2232,7 @@ class BaseTokenUsageProcessor:
 
                 # Check what keys exist in the model's prompt_tokens_details
                 # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-                for attr in type(usage.prompt_tokens_details).model_fields:
+                for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
                     if (
                         hasattr(usage.prompt_tokens_details, attr)
                         and not attr.startswith("_")
