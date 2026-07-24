@@ -21,7 +21,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.utils import _add_path_to_api_base, supports_reasoning, supports_tool_choice
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -45,7 +45,32 @@ class AzureAIStudioConfig(OpenAIConfig):
         if not self._supports_stop_reason(model):
             supported_params = [param for param in supported_params if param != "stop"]
 
+        if supports_reasoning(model=f"azure_ai/{model}") and "reasoning_effort" not in supported_params:
+            supported_params.append("reasoning_effort")
+
         return supported_params
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        optional_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+        reasoning_effort = non_default_params.get("reasoning_effort")
+        if (
+            reasoning_effort is not None
+            and "reasoning_effort" not in optional_params
+            and supports_reasoning(model=f"azure_ai/{model}")
+        ):
+            optional_params["reasoning_effort"] = reasoning_effort
+        return optional_params
 
     def _supports_stop_reason(self, model: str) -> bool:
         """
