@@ -157,6 +157,26 @@ def _should_cooldown_based_on_deployment_policy(
     )
 
 
+def _has_explicit_allowed_fails_policy_for_exception(
+    litellm_router_instance: LitellmRouter,
+    deployment: str | None,
+    original_exception: Any,
+) -> bool:
+    """True if an operator explicitly configured an allowed_fails_policy field matching
+    *original_exception*'s type, at either the deployment level or the router level.
+
+    `_is_cooldown_required` skips cooldown evaluation for most 4XX errors (BadRequestError,
+    ContentPolicyViolationError) by default, since a generic client error is usually not the
+    deployment's fault. An explicit allowed_fails_policy entry for that exact exception type
+    is a deliberate opt-in that should override that default.
+    """
+    if deployment is not None:
+        dep_policy, _ = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
+        if _resolve_allowed_fails_from_policy(dep_policy, original_exception) is not None:
+            return True
+    return litellm_router_instance.get_allowed_fails_from_policy(exception=original_exception) is not None
+
+
 def _is_cooldown_required(
     litellm_router_instance: LitellmRouter,
     model_id: str,
@@ -254,6 +274,10 @@ def _should_run_cooldown_logic(
         model_id=deployment,
         exception_status=exception_status,
         exception_str=str(original_exception),
+    ) and not _has_explicit_allowed_fails_policy_for_exception(
+        litellm_router_instance=litellm_router_instance,
+        deployment=deployment,
+        original_exception=original_exception,
     ):
         verbose_router_logger.debug("Should Not Run Cooldown Logic: _is_cooldown_required returned False")
         return False
