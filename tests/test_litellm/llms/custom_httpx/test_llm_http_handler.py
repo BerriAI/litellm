@@ -31,6 +31,53 @@ _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
 
 
+@pytest.mark.asyncio
+async def test_async_streaming_completion_uses_shared_session():
+    handler = BaseLLMHTTPHandler()
+    provider_config = Mock()
+    provider_config.should_fake_stream.return_value = False
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://openrouter.ai/api/v1/chat/completions"
+    provider_config.transform_request.return_value = {"model": "openai/gpt-4o", "messages": []}
+    provider_config.sign_request.return_value = ({}, None)
+    provider_config.supports_stream_param_in_request_body = True
+    provider_config.has_custom_stream_wrapper = False
+    provider_config.max_retry_on_unprocessable_entity_error = 0
+    provider_config.get_model_response_iterator.return_value = Mock()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    shared_session = Mock()
+    async_client = Mock()
+    async_client.post = AsyncMock(return_value=httpx.Response(200))
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        return_value=async_client,
+    ) as get_async_httpx_client:
+        await handler.completion(
+            model="openai/gpt-4o",
+            messages=[],
+            api_base=None,
+            custom_llm_provider="openrouter",
+            model_response=litellm.ModelResponse(),
+            encoding=None,
+            logging_obj=logging_obj,
+            optional_params={},
+            timeout=60.0,
+            litellm_params={},
+            acompletion=True,
+            stream=True,
+            provider_config=provider_config,
+            shared_session=shared_session,
+        )
+
+    get_async_httpx_client.assert_called_once_with(
+        llm_provider=litellm.LlmProviders.OPENROUTER,
+        params={"ssl_verify": None},
+        shared_session=shared_session,
+    )
+
+
 def test_prepare_fake_stream_request():
     # Initialize the BaseLLMHTTPHandler
     handler = BaseLLMHTTPHandler()
