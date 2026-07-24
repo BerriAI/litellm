@@ -253,6 +253,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
+                    elif endpoint == "https://opencode.ai/zen/go/v1":
+                        custom_llm_provider = "opencode_go"
+                        dynamic_api_key = get_secret_str("OPENCODE_GO_API_KEY")
                     elif endpoint == "https://inference.baseten.co/v1":
                         custom_llm_provider = "baseten"
                         dynamic_api_key = get_secret_str("BASETEN_API_KEY")
@@ -593,6 +596,9 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "cerebras":
         api_base = api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
+    elif custom_llm_provider == "opencode_go":
+        api_base = api_base or get_secret("OPENCODE_GO_API_BASE") or "https://opencode.ai/zen/go/v1"
+        dynamic_api_key = api_key or get_secret_str("OPENCODE_GO_API_KEY")
     elif custom_llm_provider == "baseten":
         # Use BasetenConfig to determine the appropriate API base URL
         if api_base is None:
