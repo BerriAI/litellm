@@ -178,3 +178,98 @@ class TestBareModelFallback:
         finally:
             if key in litellm.model_cost and original is not None:
                 litellm.model_cost[key]["supports_function_calling"] = original
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek V4 model metadata tests
+# ---------------------------------------------------------------------------
+
+
+class TestDeepSeekV4ModelMetadata:
+    """Verify that DeepSeek V4 Flash and V4 Pro model entries exist
+    and have correct metadata in the main JSON file."""
+
+    def _load_main_json(self) -> dict:
+        main_path = os.path.join(
+            os.path.dirname(os.path.dirname(litellm.__file__)),
+            "model_prices_and_context_window.json",
+        )
+        with open(main_path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_v4_flash_exists_prefixed(self):
+        data = self._load_main_json()
+        assert "deepseek/deepseek-v4-flash" in data
+
+    def test_v4_pro_exists_prefixed(self):
+        data = self._load_main_json()
+        assert "deepseek/deepseek-v4-pro" in data
+
+    def test_v4_flash_exists_bare(self):
+        data = self._load_main_json()
+        assert "deepseek-v4-flash" in data
+
+    def test_v4_pro_exists_bare(self):
+        data = self._load_main_json()
+        assert "deepseek-v4-pro" in data
+
+    def test_v4_flash_context_window(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-flash"]
+        assert entry["max_input_tokens"] == 1000000
+        assert entry["max_output_tokens"] == 384000
+
+    def test_v4_pro_context_window(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-pro"]
+        assert entry["max_input_tokens"] == 1000000
+        assert entry["max_output_tokens"] == 384000
+
+    def test_v4_flash_supports_function_calling(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-flash"]
+        assert entry.get("supports_function_calling") is True
+        assert entry.get("supports_tool_choice") is True
+
+    def test_v4_pro_supports_function_calling(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-pro"]
+        assert entry.get("supports_function_calling") is True
+        assert entry.get("supports_tool_choice") is True
+
+    def test_v4_flash_supports_reasoning(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-flash"]
+        assert entry.get("supports_reasoning") is True
+
+    def test_v4_pro_supports_reasoning(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-pro"]
+        assert entry.get("supports_reasoning") is True
+
+    def test_v4_flash_provider_is_deepseek(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-flash"]
+        assert entry["litellm_provider"] == "deepseek"
+
+    def test_v4_pro_provider_is_deepseek(self):
+        data = self._load_main_json()
+        entry = data["deepseek/deepseek-v4-pro"]
+        assert entry["litellm_provider"] == "deepseek"
+
+    def test_v4_flash_bare_and_prefixed_match(self):
+        """Bare and prefixed entries must have the same context window."""
+        data = self._load_main_json()
+        bare = data["deepseek-v4-flash"]
+        prefixed = data["deepseek/deepseek-v4-flash"]
+        assert bare["max_input_tokens"] == prefixed["max_input_tokens"]
+        assert bare["max_output_tokens"] == prefixed["max_output_tokens"]
+
+    def test_v4_pro_bare_and_prefixed_match(self):
+        """Bare and prefixed entries must have the same context window."""
+        data = self._load_main_json()
+        bare = data["deepseek-v4-pro"]
+        prefixed = data["deepseek/deepseek-v4-pro"]
+        assert bare["max_input_tokens"] == prefixed["max_input_tokens"]
+        assert bare["max_output_tokens"] == prefixed["max_output_tokens"]
+
