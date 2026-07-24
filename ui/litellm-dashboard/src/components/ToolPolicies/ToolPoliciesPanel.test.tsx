@@ -67,21 +67,27 @@ const row = (toolId: string): HTMLElement => {
 const policySelect = (toolId: string, kind: "input" | "output"): HTMLElement =>
   within(row(toolId)).getAllByRole("combobox")[kind === "input" ? 0 : 1];
 
-/** Exact selected-value text. Never assert with toHaveTextContent here: it substring-matches, so "untrusted" satisfies "trusted". */
-const policyValue = (toolId: string, kind: "input" | "output"): string =>
-  policySelect(toolId, kind).closest(".ant-select")?.querySelector(".ant-select-selection-item")?.textContent ?? "";
+/**
+ * Exact selected-value text, read off the policy cell and stripped of anything
+ * that is not a letter (the control draws a status dot and a chevron around the
+ * label). Never assert with toHaveTextContent here: it substring-matches, so
+ * "untrusted" satisfies "trusted".
+ */
+const policyValue = (toolId: string, kind: "input" | "output"): string => {
+  const cell = policySelect(toolId, kind).closest("td");
+  return (cell?.textContent ?? "").replace(/[^a-z]/gi, "");
+};
 
 const isSaving = (toolId: string, kind: "input" | "output"): boolean =>
-  policySelect(toolId, kind).closest(".ant-select")?.classList.contains("ant-select-disabled") ?? false;
+  policySelect(toolId, kind).hasAttribute("disabled");
 
 const chooseOption = async (user: ReturnType<typeof userEvent.setup>, trigger: HTMLElement, label: string) => {
   await user.click(trigger);
+  // The label also renders in the trigger once selected, so take the last match:
+  // the popup is portalled after the table in document order.
   const option = await waitFor(() => {
-    const match = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-      (element) => element.textContent === label,
-    );
-    if (match === undefined) throw new Error(`option ${label} not open`);
-    return match as HTMLElement;
+    const matches = screen.getAllByText(label);
+    return matches[matches.length - 1];
   });
   await user.click(option);
 };
