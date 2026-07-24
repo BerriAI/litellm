@@ -30,7 +30,6 @@ interface RequestLogsTableProps {
   onKeyHashClick: (keyHash: string) => void;
   onSessionClick: (sessionId: string) => void;
   teams: Team[];
-  accessToken: string;
   toolbarChildren?: ReactNode;
 }
 
@@ -68,7 +67,6 @@ export function RequestLogsTable({
   onKeyHashClick,
   onSessionClick,
   teams,
-  accessToken,
   toolbarChildren,
 }: RequestLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -122,7 +120,7 @@ export function RequestLogsTable({
             title="Filters"
             description="Narrow down request logs"
           >
-            {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} accessToken={accessToken} />}
+            {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} />}
           </DataTableFilterDrawer>
         </>
       )}

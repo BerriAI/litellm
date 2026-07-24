@@ -1,4 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
@@ -13,11 +14,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useInfiniteModelInfo: vi.fn(),
 }));
 
-vi.mock("../networking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../networking")>();
-  return { ...actual, allEndUsersCall: vi.fn().mockResolvedValue([]) };
-});
+vi.mock("@/app/(dashboard)/hooks/customers/useEndUserAliases", () => ({
+  useInfiniteEndUserAliases: vi.fn(),
+}));
 
+import { useInfiniteEndUserAliases } from "@/app/(dashboard)/hooks/customers/useEndUserAliases";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
 
@@ -31,9 +32,7 @@ const emptyInfiniteQuery = {
 
 function renderFilters(filters: Record<string, string> = {}) {
   const set = vi.fn();
-  renderWithProviders(
-    <RequestLogsFilters get={(id: string) => filters[id]} set={set} teams={[]} accessToken="test-token" />,
-  );
+  renderWithProviders(<RequestLogsFilters get={(id: string) => filters[id]} set={set} teams={[]} />);
   return { set };
 }
 
@@ -46,6 +45,9 @@ describe("RequestLogsFilters", () => {
     );
     vi.mocked(useInfiniteModelInfo).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteModelInfo>,
+    );
+    vi.mocked(useInfiniteEndUserAliases).mockReturnValue(
+      emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteEndUserAliases>,
     );
   });
 
@@ -87,5 +89,58 @@ describe("RequestLogsFilters", () => {
 
     await waitFor(() => expect(useInfiniteModelInfo).toHaveBeenCalled());
     expect(useInfiniteModelInfo).toHaveBeenCalledWith(50, undefined);
+  });
+
+  it("asks the server for a bounded page of end users instead of the whole customer table", async () => {
+    renderFilters();
+
+    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalled());
+    expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(50, undefined);
+  });
+
+  it("pushes the End User query to the server rather than filtering a preloaded list", async () => {
+    const user = userEvent.setup();
+    renderFilters();
+
+    const input = await screen.findByPlaceholderText("Search an end user");
+    await user.click(input);
+    await user.type(input, "acme");
+
+    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(50, "acme"));
+  });
+
+  it("renders only the end users the current page returned", async () => {
+    vi.mocked(useInfiniteEndUserAliases).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: { pages: [{ aliases: ["cust-a", "cust-b"], current_page: 1, size: 50, has_more: true }], pageParams: [1] },
+    } as unknown as ReturnType<typeof useInfiniteEndUserAliases>);
+    const user = userEvent.setup();
+    renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Search an end user"));
+
+    expect(await screen.findByText("cust-a")).toBeInTheDocument();
+    expect(screen.getByText("cust-b")).toBeInTheDocument();
+  });
+
+  it("loads the next page when the End User list is scrolled near the end", async () => {
+    const fetchNextPage = vi.fn();
+    vi.mocked(useInfiniteEndUserAliases).mockReturnValue({
+      ...emptyInfiniteQuery,
+      fetchNextPage,
+      hasNextPage: true,
+      data: { pages: [{ aliases: ["cust-a"], current_page: 1, size: 50, has_more: true }], pageParams: [1] },
+    } as unknown as ReturnType<typeof useInfiniteEndUserAliases>);
+    const user = userEvent.setup();
+    renderFilters();
+
+    await user.click(await screen.findByPlaceholderText("Search an end user"));
+    const list = await screen.findByTestId("paginated-search-select-list");
+    Object.defineProperty(list, "scrollTop", { value: 90, configurable: true });
+    Object.defineProperty(list, "clientHeight", { value: 10, configurable: true });
+    Object.defineProperty(list, "scrollHeight", { value: 100, configurable: true });
+    list.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    await waitFor(() => expect(fetchNextPage).toHaveBeenCalled());
   });
 });

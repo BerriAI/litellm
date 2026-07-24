@@ -2772,6 +2772,36 @@ export interface paths {
         patch: operations["cursor_proxy_route_cursor__endpoint__patch"];
         trace?: never;
     };
+    "/customer/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Customer Aliases
+         * @description [Admin-only] List customer ids with pagination and optional search.
+         *
+         *     Lightweight counterpart to `/customer/list`, for UI filter dropdowns.
+         *     `/customer/list` returns every customer with its budget and object-permission
+         *     relations eagerly loaded, which is unusable once LiteLLM_EndUserTable grows
+         *     (end-user rows are created automatically per distinct `user` seen in traffic).
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/customer/aliases?page=1&size=50&search=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_customer_aliases_customer_aliases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/block": {
         parameters: {
             query?: never;
@@ -23291,6 +23321,29 @@ export interface components {
             };
         };
         /**
+         * CustomerAliasesResponse
+         * @description Paginated, id-only customer listing used by UI filter dropdowns.
+         *
+         *     Deliberately excludes budget/object-permission relations so a proxy with a
+         *     large LiteLLM_EndUserTable can back a search-as-you-type control without
+         *     materializing every row (see /customer/list for the full objects).
+         *
+         *     Reports ``has_more`` rather than a total count on purpose: a total requires
+         *     COUNT(*) over the whole match set on every keystroke, which is the exact
+         *     cost this endpoint exists to avoid. Fetching one row beyond the page is
+         *     enough to drive an infinite-scroll dropdown.
+         */
+        CustomerAliasesResponse: {
+            /** Aliases */
+            aliases: string[];
+            /** Current Page */
+            current_page: number;
+            /** Has More */
+            has_more: boolean;
+            /** Size */
+            size: number;
+        };
+        /**
          * CustomerResponse
          * @description Customer object returned by the /customer read+write endpoints.
          *
@@ -38382,6 +38435,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_customer_aliases_customer_aliases_get: {
+        parameters: {
+            query?: {
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                size?: number;
+                /** @description Case-insensitive partial match on the customer id */
+                search?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerAliasesResponse"];
                 };
             };
             /** @description Validation Error */
