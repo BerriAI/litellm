@@ -134,31 +134,42 @@ def resolve_mcp_span_context(
 ) -> "tuple[Context, tuple[Link, ...]]":
     """Parent context + links for an MCP message span, per the OTel GenAI MCP semconv.
 
-    MCP and the underlying transport (HTTP) are independent lifecycles — one
-    streamable-HTTP session multiplexes many messages, so nesting the message span
-    under the HTTP/session span is wrong (it renders the message at the session's
-    start, skewed by however long the session has been open). Instead:
+    When the client propagates W3C trace context in the request's ``params._meta``
+    (SEP-414), MCP and the underlying transport (HTTP) are treated as independent
+    lifecycles — one streamable-HTTP session can multiplex many messages, so nesting
+    the message span under the transport span would render it skewed at the session's
+    start. So in that case:
 
-    * parent to the trace context the client propagated in the request's
-      ``params._meta`` (a *remote* parent), and
-    * record the transport/session span as a *link*, never the parent.
+    * parent to the trace context the client propagated (a *remote* parent), and
+    * record the transport span as a *link*, never the parent.
+
+    When the client propagates no trace context (the common case today, since almost
+    no MCP client implements SEP-414 yet), there is no remote parent to honor and the
+    span would otherwise start its own disconnected root trace, surfacing as two
+    separate traces joined only by a link. Instead, fall back to nesting under the
+    per-request transport span (``request_root_span()`` — the FastAPI SERVER span of
+    this message's POST, not a long-lived session span), so the tool call stays in
+    one unified trace. No link is added there since the transport is now the parent.
+    With neither a remote parent nor a transport span the returned context carries no
+    span and the span legitimately starts its own root trace.
 
     Only trace context (``traceparent``/``tracestate``) is extracted, never the
     client's W3C Baggage: ``params._meta`` is caller-controlled, and the otel
     baggage processor stamps allowlisted baggage keys (``litellm.team.id``,
     ``litellm.metadata.*``, ...) onto the span as attributes, so honoring remote
-    baggage would let a client spoof a span's identity attribution.
-
-    With no propagated context the returned context carries no span, so the span
-    starts its own root trace (still linked to the transport). The base context is
-    explicitly empty so an absent ``traceparent`` can never fall through to the
-    ambient (stale session) span.
+    baggage would let a client spoof a span's identity attribution. The base context
+    for extraction is explicitly empty so an absent/malformed ``traceparent`` can
+    never fall through to the ambient (stale session) span.
     """
     source = carrier if carrier is not None else _mcp_message_trace_carrier.get()
     parent = _PROPAGATOR.extract(dict(source or {}), context=Context())
     transport = request_root_span()
-    links = (Link(transport.get_span_context()),) if transport is not None else ()
-    return parent, links
+    if is_recordable_span(get_current_span(parent)):
+        links = (Link(transport.get_span_context()),) if transport is not None else ()
+        return parent, links
+    if transport is not None:
+        return context_from_span(transport), ()
+    return parent, ()
 
 
 def is_recordable_span(obj: object) -> bool:

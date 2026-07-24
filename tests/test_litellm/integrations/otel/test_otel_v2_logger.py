@@ -528,15 +528,15 @@ _MCP_SPAN_CASES = [
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_roots_and_links_transport_without_propagated_context(
+def test_mcp_span_nests_under_transport_without_propagated_context(
     make_payload, span_name
 ):
-    """MCP and the HTTP transport are independent lifecycles (one streamable-HTTP
-    session multiplexes many messages), so per the MCP semconv the message span
-    must NOT nest under the session/transport span — that is what made it render
-    skewed at the session's start. With no propagated ``params._meta`` context it
-    starts its own root trace and records the transport span as a *link*, never
-    the parent."""
+    """With no propagated ``params._meta`` trace context (the common case, since
+    almost no MCP client implements SEP-414 yet) the message span nests under the
+    per-request transport span so the tool call stays in ONE unified trace, instead
+    of starting a disconnected root trace joined only by a link (which surfaced as
+    two separate traces in APM). The transport is the real parent, so no link is
+    recorded."""
     logger, exporter = _logger()
     transport = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -549,11 +549,28 @@ def test_mcp_span_roots_and_links_transport_without_propagated_context(
     )
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert span.context.trace_id == transport.get_span_context().trace_id
+    assert span.links == ()
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_roots_without_transport_or_propagated_context(
+    make_payload, span_name
+):
+    """With neither a remote parent nor an anchored transport span there is nothing
+    to nest under, so the span legitimately starts its own root trace with no
+    links."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": make_payload()}, None, None, None
+        )
+    )
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
     assert span.parent is None
-    assert span.context.trace_id != transport.get_span_context().trace_id
-    assert [link.context.span_id for link in span.links] == [
-        transport.get_span_context().span_id
-    ]
+    assert span.links == ()
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
@@ -641,10 +658,11 @@ def test_mcp_span_carries_authenticated_identity(make_payload, span_name):
     assert span.attributes[LiteLLM.TEAM_ID] == "t1"
 
 
-def test_mcp_span_malformed_traceparent_starts_root():
+def test_mcp_span_malformed_traceparent_nests_under_transport():
     """A malformed traceparent in ``params._meta`` must not crash or parent to a
-    bogus span: the propagator ignores it, so the span starts its own root trace and
-    still links the transport span."""
+    bogus span: the propagator ignores it, leaving no remote parent, so the span
+    falls back to nesting under the transport span (one unified trace) rather than
+    starting a disconnected root trace."""
     logger, exporter = _logger()
     transport = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -661,10 +679,10 @@ def test_mcp_span_malformed_traceparent_starts_root():
         reset_mcp_message_trace_carrier(token)
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
-    assert span.parent is None
-    assert [link.context.span_id for link in span.links] == [
-        transport.get_span_context().span_id
-    ]
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert span.context.trace_id == transport.get_span_context().trace_id
+    assert span.links == ()
 
 
 def test_pre_call_idempotent_keeps_first_span():
