@@ -66,6 +66,7 @@ from litellm.proxy.auth.budget_throttle import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
@@ -527,6 +528,7 @@ async def common_checks(
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
         llm_router=llm_router,
+        request=request,
     )
 
     if route in MODEL_DISCOVERY_ROUTES:
@@ -1676,6 +1678,13 @@ async def get_user_object(
                     new_user_params["user_email"] = user_email
                 if litellm.default_internal_user_params is not None:
                     new_user_params.update(litellm.default_internal_user_params)
+                if (
+                    new_user_params.get("budget_duration") is not None
+                    and new_user_params.get("budget_reset_at") is None
+                ):
+                    new_user_params["budget_reset_at"] = get_budget_reset_time(
+                        budget_duration=new_user_params["budget_duration"]
+                    )
 
                 response = await UserRepository(prisma_client).table.create(
                     data=new_user_params,
@@ -2652,6 +2661,15 @@ async def get_managed_vector_store_rows_by_uuids(
     return result
 
 
+class OrganizationNotFoundError(Exception):
+    """The organization row is CONFIRMED absent, as opposed to a lookup that failed.
+
+    Subclasses Exception so every existing except Exception caller keeps its current
+    behavior; it exists so a caller that wants to treat "no such org" as "no restriction" can do
+    that WITHOUT also swallowing an outage and silently dropping a real org ceiling.
+    """
+
+
 @log_db_metrics
 async def get_org_object(
     org_id: str,
@@ -2698,24 +2716,29 @@ async def get_org_object(
             query_kwargs["include"] = {"litellm_budget_table": True}
 
         response = await OrganizationRepository(prisma_client).table.find_unique(**query_kwargs)
-
-        if response is None:
-            raise Exception
-
-        _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
-        # Cache the result
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=_org_obj,
-            model_type=LiteLLM_OrganizationTable,
-            ttl=DEFAULT_IN_MEMORY_TTL,
-        )
-
-        return _org_obj
     except Exception:
-        raise Exception(
+        # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
+        # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
+        # apart — a caller that treats absence as "this org places no restriction" then drops a real
+        # org ceiling during an outage. Propagate the real error; callers that already catch
+        # Exception are unaffected.
+        raise
+
+    if response is None:
+        raise OrganizationNotFoundError(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
+
+    _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
+    # Cache the result
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=_org_obj,
+        model_type=LiteLLM_OrganizationTable,
+        ttl=DEFAULT_IN_MEMORY_TTL,
+    )
+
+    return _org_obj
 
 
 async def _get_resources_from_access_groups(

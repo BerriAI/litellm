@@ -1,7 +1,9 @@
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -9,9 +11,21 @@ sys.path.insert(
 
 import litellm
 from litellm.proxy.common_utils.timezone_utils import (
+    BudgetResetSettings,
+    compute_budget_reset_at,
+    get_budget_reset_settings,
     get_budget_reset_time,
     get_budget_reset_timezone,
+    parse_budget_reset_time,
 )
+
+
+def _restore_attr(obj, name, original):
+    if original is None:
+        if hasattr(obj, name):
+            delattr(obj, name)
+    else:
+        setattr(obj, name, original)
 
 
 def test_get_budget_reset_time():
@@ -100,3 +114,69 @@ def test_get_budget_reset_time_respects_timezone():
                 delattr(litellm, "timezone")
         else:
             litellm.timezone = original
+
+
+def test_parse_budget_reset_time_hh_mm():
+    assert parse_budget_reset_time("12:00") == time(12, 0)
+
+
+def test_parse_budget_reset_time_hh_mm_ss():
+    assert parse_budget_reset_time("09:30:15") == time(9, 30, 15)
+
+
+def test_parse_budget_reset_time_unset_defaults_to_midnight():
+    assert parse_budget_reset_time(None) == time(0, 0)
+    assert parse_budget_reset_time("") == time(0, 0)
+
+
+def test_parse_budget_reset_time_invalid_string_raises():
+    with pytest.raises(ValueError):
+        parse_budget_reset_time("25:00")
+    with pytest.raises(ValueError):
+        parse_budget_reset_time("noon")
+
+
+def test_parse_budget_reset_time_non_string_raises():
+    # Unquoted "12:00" in YAML parses to the int 720; it must fail loudly,
+    # not silently fall back to midnight.
+    with pytest.raises(ValueError):
+        parse_budget_reset_time(720)
+
+
+def test_get_budget_reset_settings_reads_globals():
+    orig_tz = getattr(litellm, "timezone", None)
+    orig_rt = getattr(litellm, "budget_reset_time", None)
+    try:
+        litellm.timezone = "Asia/Jerusalem"
+        litellm.budget_reset_time = "12:00"
+        settings = get_budget_reset_settings()
+        assert settings.timezone == "Asia/Jerusalem"
+        assert settings.reset_time_of_day == time(12, 0)
+    finally:
+        _restore_attr(litellm, "timezone", orig_tz)
+        _restore_attr(litellm, "budget_reset_time", orig_rt)
+
+
+def test_compute_budget_reset_at_applies_offset():
+    settings = BudgetResetSettings(
+        timezone="Asia/Jerusalem", reset_time_of_day=time(12, 0)
+    )
+    reset_at = compute_budget_reset_at("1d", settings)
+    jerusalem = reset_at.astimezone(ZoneInfo("Asia/Jerusalem"))
+    assert jerusalem.hour == 12
+    assert jerusalem.minute == 0
+    assert reset_at > datetime.now(timezone.utc)
+
+
+def test_get_budget_reset_time_honors_global_budget_reset_time():
+    orig_tz = getattr(litellm, "timezone", None)
+    orig_rt = getattr(litellm, "budget_reset_time", None)
+    try:
+        litellm.timezone = "UTC"
+        litellm.budget_reset_time = "12:00"
+        reset_at = get_budget_reset_time(budget_duration="1d")
+        assert reset_at.astimezone(timezone.utc).hour == 12
+        assert reset_at.astimezone(timezone.utc).minute == 0
+    finally:
+        _restore_attr(litellm, "timezone", orig_tz)
+        _restore_attr(litellm, "budget_reset_time", orig_rt)

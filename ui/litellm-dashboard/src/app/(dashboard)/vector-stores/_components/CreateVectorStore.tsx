@@ -14,7 +14,7 @@ import {
   getProviderSpecificFields,
   VectorStoreFieldConfig,
 } from "@/components/vector_store_providers";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Logo } from "@/components/molecules/logo/Logo";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import S3VectorsConfig from "./S3VectorsConfig";
 
@@ -294,22 +294,10 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                   return (
                     <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
                       <div className="flex items-center space-x-2">
-                        <img
-                          src={resolveLogoSrc(vectorStoreProviderLogoMap[providerDisplayName])}
-                          alt={`${providerEnum} logo`}
+                        <Logo
+                          src={vectorStoreProviderLogoMap[providerDisplayName]}
+                          label={providerDisplayName}
                           className="w-5 h-5"
-                          onError={(e) => {
-                            // Create a div with provider initial as fallback
-                            const target = e.target as HTMLImageElement;
-                            const parent = target.parentElement;
-                            if (parent) {
-                              const fallbackDiv = document.createElement("div");
-                              fallbackDiv.className =
-                                "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                              fallbackDiv.textContent = providerDisplayName.charAt(0);
-                              parent.replaceChild(fallbackDiv, target);
-                            }
-                          }}
                         />
                         <span>{providerDisplayName}</span>
                       </div>

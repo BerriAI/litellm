@@ -23,6 +23,7 @@ from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKey
 from litellm.proxy.a2a.agent_card import (
     SUPPORTED_A2A_PROTOCOL_VERSIONS,
     merge_agent_card,
+    normalize_protocol_version,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
@@ -51,7 +52,7 @@ def _proxy_base_url(http_request: Request) -> str:
 def _validate_protocol_version(upstream_card: Mapping[str, Any] | None) -> None:
     """Reject an agent card pinning an unsupported A2A protocol version."""
     version = upstream_card.get("protocolVersion") if upstream_card else None
-    if version is not None and version not in SUPPORTED_A2A_PROTOCOL_VERSIONS:
+    if version is not None and normalize_protocol_version(version) is None:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -1082,6 +1083,7 @@ async def get_agent_daily_activity(
                     total_failed_requests=0,
                     total_cache_read_input_tokens=0,
                     total_cache_creation_input_tokens=0,
+                    total_compression_saved_tokens=0,
                     page=page,
                     total_pages=0,
                     has_more=False,

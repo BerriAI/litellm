@@ -15,6 +15,9 @@ litellm/rust_bridge/_native*.so
 litellm/rust_bridge/_native*.pyd
 litellm-rust/target/
 
+# Python package build output
+dist/
+
 bun.lockb
 **/.DS_Store
 .aider*

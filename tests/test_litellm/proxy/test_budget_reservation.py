@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -1563,6 +1564,100 @@ async def test_should_skip_reservation_when_counter_increment_fails(
 
 
 @pytest.mark.asyncio
+async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(
+    spend_counter_state,
+    monkeypatch,
+):
+    """#33923: with fail_closed_budget_enforcement on, a failed reservation write
+    must reject instead of silently degrading to read-time-only enforcement."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-reserve-fail-closed",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    async def fail_increment_cache(*args, **kwargs):
+        raise RuntimeError("counter unavailable")
+
+    monkeypatch.setattr(counter_cache, "async_increment_cache", fail_increment_cache)
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.5,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-reserve-fail-closed"
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_releases_earlier_counters_before_503(
+    spend_counter_state,
+):
+    """#33923: when a later counter's reservation write fails in strict mode, the
+    counters that already reserved must be released before the 503 propagates."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-fail-closed-release",
+        spend=0.0,
+        max_budget=1.0,
+        budget_limits=[
+            {
+                "budget_duration": "1h",
+                "max_budget": 1.0,
+            }
+        ],
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.5,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.status_code == 503
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-fail-closed-release"
+        )
+        == 0.0
+    )
+
+
+@pytest.mark.asyncio
 async def test_should_skip_reservation_when_counter_initialization_fails(
     spend_counter_state,
 ):
@@ -2279,7 +2374,8 @@ async def _reserve_for_stream(counter_cache, key_cache, proxy_logging_obj, token
 def _drive_streaming_cancel(valid_token, iterator_hook):
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook
-    return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
+    generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
         user_api_key_dict=valid_token,
         request_data=_request_body(),
@@ -2287,6 +2383,7 @@ def _drive_streaming_cancel(valid_token, iterator_hook):
         serialize_chunk=lambda chunk: chunk,
         serialize_error=lambda exc: str(exc),
     )
+    return generator, streaming_logging_obj
 
 
 @pytest.mark.asyncio
@@ -2305,7 +2402,7 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
             yield ""  # make this an async generator
         raise asyncio.CancelledError()
 
-    generator = _drive_streaming_cancel(valid_token, cancel_before_chunk)
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_before_chunk)
     received = []
     with pytest.raises(asyncio.CancelledError):
         async for chunk in generator:
@@ -2318,6 +2415,7 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
         key="spend:key:key-cancel-no-chunk"
     ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2336,7 +2434,7 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
         yield "data: chunk\n\n"
         raise asyncio.CancelledError()
 
-    generator = _drive_streaming_cancel(valid_token, cancel_after_chunk)
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, cancel_after_chunk)
     received = []
     with pytest.raises(asyncio.CancelledError):
         async for chunk in generator:
@@ -2348,6 +2446,7 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
         key="spend:key:key-cancel-after-chunk"
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2382,6 +2481,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
 
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
     # On the slow path the per-chunk hook is awaited before the chunk is yielded
     # to the client; cancel there. Nothing has reached the client yet.
     streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
@@ -2411,6 +2511,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
         key="spend:key:key-cancel-slowpath"
     ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2427,7 +2528,7 @@ async def test_streaming_disconnect_after_consuming_chunk_keeps_reservation(
         yield "data: a\n\n"
         yield "data: b\n\n"
 
-    generator = _drive_streaming_cancel(valid_token, two_chunks)
+    generator, streaming_logging_obj = _drive_streaming_cancel(valid_token, two_chunks)
 
     # Client consumes one chunk, then disconnects. aclose() raises GeneratorExit
     # at the suspended yield, after the chunk already reached the client.
@@ -2440,6 +2541,7 @@ async def test_streaming_disconnect_after_consuming_chunk_keeps_reservation(
         key="spend:key:key-disconnect-after-chunk"
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
+    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio

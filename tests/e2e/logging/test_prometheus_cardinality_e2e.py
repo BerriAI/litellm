@@ -55,13 +55,13 @@ class TestPrometheusPerKeyCardinality:
             assert response.model, f"driver call for {alias} returned no model: {response}"
 
         wanted = frozenset(aliases)
-        deadline = time.monotonic() + client.gateway.poll_timeout
+        deadline = time.monotonic() + client.proxy.poll_timeout
         seen: frozenset[str] = frozenset()
         while time.monotonic() < deadline:
             seen = _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
             if wanted <= seen:
                 break
-            time.sleep(client.gateway.poll_interval)
+            time.sleep(client.proxy.poll_interval)
 
         missing = wanted - seen
         assert not missing, (

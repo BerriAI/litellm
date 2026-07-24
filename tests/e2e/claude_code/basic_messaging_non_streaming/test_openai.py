@@ -23,6 +23,7 @@ green if all three pass.
 from __future__ import annotations
 
 from claude_code._basic_messaging import run_basic_messaging_cell
+from claude_code._gpt_cells import skip_unless_openai_gpt_cells_enabled
 
 OPENAI_MODELS = [
     "gpt-5-6-sol-openai",
@@ -34,6 +35,7 @@ OPENAI_MODELS = [
 def test_basic_messaging_non_streaming_openai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     non-empty reply from each GPT-5.6 tier."""
+    skip_unless_openai_gpt_cells_enabled()
     run_basic_messaging_cell(
         compat_result=compat_result,
         models=OPENAI_MODELS,

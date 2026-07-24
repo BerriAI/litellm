@@ -1,5 +1,6 @@
 import React from "react";
-import { Button, Typography, Tooltip, Space, Divider, Flex, Popover } from "antd";
+import { Button, Typography, Tooltip, Space, Divider, Flex, Popover, Dropdown, Tag } from "antd";
+import type { MenuProps } from "antd";
 import {
   ArrowLeftOutlined,
   SyncOutlined,
@@ -12,6 +13,9 @@ import {
   SafetyCertificateOutlined,
   TransactionOutlined,
   FieldTimeOutlined,
+  MoreOutlined,
+  StopOutlined,
+  CheckCircleOutlined,
 } from "@ant-design/icons";
 import LabeledField from "../common_components/LabeledField";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
@@ -38,6 +42,8 @@ interface KeyInfoHeaderProps {
   onRegenerate?: () => void;
   onDelete?: () => void;
   onResetSpend?: () => void;
+  onToggleBlocked?: () => void;
+  isBlocked?: boolean;
   canModifyKey?: boolean;
   backButtonText?: string;
   regenerateDisabled?: boolean;
@@ -133,11 +139,33 @@ export function KeyInfoHeader({
   onRegenerate,
   onDelete,
   onResetSpend,
+  onToggleBlocked,
+  isBlocked = false,
   canModifyKey = true,
   backButtonText = "Back to Keys",
   regenerateDisabled = false,
   regenerateTooltip,
 }: KeyInfoHeaderProps) {
+  const destructiveActionItems: MenuProps["items"] = [
+    ...(onToggleBlocked
+      ? [
+          isBlocked
+            ? { key: "unblock", label: "Unblock Key", icon: <CheckCircleOutlined /> }
+            : { key: "block", label: "Block Key", icon: <StopOutlined />, danger: true },
+        ]
+      : []),
+    ...(onResetSpend
+      ? [{ key: "reset-spend", label: "Reset Spend", icon: <TransactionOutlined />, danger: true }]
+      : []),
+    { key: "delete", label: "Delete Key", icon: <DeleteOutlined />, danger: true },
+  ];
+
+  const handleDestructiveActionClick: MenuProps["onClick"] = ({ key }) => {
+    if (key === "block" || key === "unblock") onToggleBlocked?.();
+    if (key === "reset-spend") onResetSpend?.();
+    if (key === "delete") onDelete?.();
+  };
+
   return (
     <div>
       {onCreateNew && (
@@ -156,9 +184,16 @@ export function KeyInfoHeader({
 
       <Flex justify="space-between" align="start" style={{ marginBottom: 20 }}>
         <div>
-          <Title level={3} copyable={{ tooltips: ["Copy Key Alias", "Copied!"] }} style={{ margin: 0 }}>
-            {data.keyName}
-          </Title>
+          <Space align="center">
+            <Title level={3} copyable={{ tooltips: ["Copy Key Alias", "Copied!"] }} style={{ margin: 0 }}>
+              {data.keyName}
+            </Title>
+            {isBlocked && (
+              <Tag color="red" icon={<StopOutlined />}>
+                Blocked
+              </Tag>
+            )}
+          </Space>
           <Text type="secondary" copyable={{ text: data.keyId, tooltips: ["Copy Key ID", "Copied!"] }}>
             Key ID: {data.keyId}
           </Text>
@@ -172,14 +207,12 @@ export function KeyInfoHeader({
                 </Button>
               </span>
             </Tooltip>
-            {onResetSpend && (
-              <Button danger icon={<TransactionOutlined />} onClick={onResetSpend}>
-                Reset Spend
-              </Button>
-            )}
-            <Button danger icon={<DeleteOutlined />} onClick={onDelete}>
-              Delete Key
-            </Button>
+            <Dropdown
+              menu={{ items: destructiveActionItems, onClick: handleDestructiveActionClick }}
+              trigger={["click"]}
+            >
+              <Button icon={<MoreOutlined />} aria-label="More key actions" />
+            </Dropdown>
           </Space>
         )}
       </Flex>

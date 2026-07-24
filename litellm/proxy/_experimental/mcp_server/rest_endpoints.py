@@ -19,12 +19,20 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
+    MCPUpstreamAuthError,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    classify_list_exception,
+    list_fault_http_status,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCPMissingUserEnvVarsError,
+    get_server_prefix,
     merge_mcp_headers,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -222,16 +230,33 @@ if MCP_AVAILABLE:
                 return server_auth
         return mcp_auth_header
 
-    def _get_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
-        """Return the subset of *allowed_server_ids* whose servers use OAuth2 auth.
+    def _is_v1_resolved_oauth2_server(server: Optional[MCPServer]) -> bool:
+        """Whether this server's per-user OAuth2 token is still resolved by v1.
 
-        Used as a cheap pre-flight check to skip bulk credential fetching when no
-        OAuth2 servers are involved in the current request.
+        A server the v2 resolver owns reads its stored token from the resolver at connect
+        time and drops any Authorization built for it here, so the v1 lookup would be a DB
+        round-trip whose result is discarded. Mirrors the same guard on the protocol listing
+        path and in ``_resolve_oauth2_headers_for_tool_call``.
+        """
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+            to_server_spec,
+        )
+
+        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+            return False
+        return to_server_spec(server) is None
+
+    def _v1_resolved_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
+        """Return the subset of *allowed_server_ids* whose per-user OAuth2 token is still
+        resolved by v1.
+
+        Used as a cheap pre-flight check to skip bulk credential fetching when no such
+        server is involved in the current request.
         """
         return {
             sid
             for sid in allowed_server_ids
-            if getattr(global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None) == MCPAuth.oauth2
+            if _is_v1_resolved_oauth2_server(global_mcp_server_manager.get_mcp_server_by_id(sid))
         }
 
     async def _get_user_oauth_extra_headers(
@@ -245,11 +270,13 @@ if MCP_AVAILABLE:
         the MCP server the same way the admin "Add MCP / Authorize and Fetch" flow does.
         Returns None for non-OAuth2 servers or when no credential is stored.
 
+        A server the v2 resolver owns is skipped; see ``_is_v1_resolved_oauth2_server``.
+
         Args:
             prefetched_creds: Optional dict keyed by server_id with credential payloads.
                               When provided, avoids a per-server DB round-trip.
         """
-        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+        if not _is_v1_resolved_oauth2_server(server):
             return None
         user_id = getattr(user_api_key_dict, "user_id", None)
         server_id = getattr(server, "server_id", None)
@@ -310,38 +337,6 @@ if MCP_AVAILABLE:
             return {c["server_id"]: c for c in creds if "server_id" in c}
         except Exception as e:
             verbose_logger.warning(f"_prefetch_user_oauth_creds: failed to prefetch for user={user_id}: {e}")
-            return {}
-
-    async def _get_bulk_user_oauth_headers(
-        user_api_key_dict: UserAPIKeyAuth,
-    ) -> Dict[str, Dict[str, str]]:
-        """
-        Fetch ALL OAuth2 credentials for the current user in a single DB query and
-        return a mapping of server_id → {"Authorization": "Bearer <token>"}.
-
-        This is the batch alternative to calling _get_user_oauth_extra_headers
-        per-server inside a loop (N+1 DB queries).
-        """
-        user_id = getattr(user_api_key_dict, "user_id", None)
-        if not user_id:
-            return {}
-        try:
-            from litellm.proxy._experimental.mcp_server.db import (
-                list_user_oauth_credentials,
-            )
-            from litellm.proxy.utils import get_prisma_client_or_throw
-
-            prisma_client = get_prisma_client_or_throw(
-                "Database not connected. Connect a database to use OAuth2 MCP tools."
-            )
-            creds = await list_user_oauth_credentials(prisma_client, user_id)
-            return {
-                c["server_id"]: {"Authorization": f"Bearer {c['access_token']}"}
-                for c in creds
-                if c.get("access_token") and c.get("server_id")
-            }
-        except Exception:
-            verbose_logger.debug("Failed to bulk-fetch OAuth credentials", exc_info=True)
             return {}
 
     def _create_tool_response_objects(tools, server: MCPServer):
@@ -515,20 +510,19 @@ if MCP_AVAILABLE:
         # enforced even when no allowlist is set (matches the SSE/HTTP path).
         tools = filter_tools_by_allowed_tools(tools, server)
 
-        # Filter tools based on user_api_key_auth.object_permission.mcp_tool_permissions
-        # This provides per-key/team/org control over which tools can be accessed
-        if (
-            user_api_key_auth
-            and user_api_key_auth.object_permission
-            and user_api_key_auth.object_permission.mcp_tool_permissions
-        ):
-            # Dict keys may be server_ids OR names/aliases; normalize so lookup
-            # by concrete server_id resolves name-keyed restrictions too.
-            allowed_tools_for_server = global_mcp_server_manager.expand_tool_permissions(
-                user_api_key_auth.object_permission.mcp_tool_permissions
-            ).get(server.server_id)
-            if allowed_tools_for_server is not None and len(allowed_tools_for_server) > 0:
-                # Filter tools to only include those in the allowed list
+        # Filter by the key's effective tool permissions through the same
+        # primitive the MCP protocol path uses (direct grants, toolset grants,
+        # and team/agent/org ceilings), so REST listing cannot drift from it
+        if user_api_key_auth:
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler,
+            )
+
+            allowed_tools_for_server = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id=server.server_id,
+                user_api_key_auth=user_api_key_auth,
+            )
+            if allowed_tools_for_server is not None:
                 tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server)]
 
         return _create_tool_response_objects(tools, server)
@@ -627,6 +621,16 @@ if MCP_AVAILABLE:
             # matching status code and WWW-Authenticate challenge; that is what
             # lets standards-compliant MCP clients run the upstream OAuth flow.
             raise
+        except MCPServerListError as e:
+            fault = classify_list_exception(e)
+            verbose_logger.info(f"Listing tools from {server.name} failed with a {fault.tag} fault")
+            raise HTTPException(
+                status_code=list_fault_http_status(fault),
+                detail={
+                    "error": fault.tag,
+                    "message": f"Failed to list tools from server {get_server_prefix(server)}",
+                },
+            ) from e
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -808,7 +812,7 @@ if MCP_AVAILABLE:
                 # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
                 prefetched_oauth_creds = (
                     await _prefetch_user_oauth_creds(user_api_key_dict)
-                    if _get_oauth2_server_ids(allowed_server_ids)
+                    if _v1_resolved_oauth2_server_ids(allowed_server_ids)
                     else {}
                 )
 
@@ -838,7 +842,11 @@ if MCP_AVAILABLE:
                         list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                        errors.append(f"{server.name}: {str(e)}")
+                        errors.append(
+                            f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
+                            if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
+                            else f"{get_server_prefix(server)}: {str(e)}"
+                        )
                         continue
 
                 if errors and not list_tools_result:
@@ -858,7 +866,10 @@ if MCP_AVAILABLE:
                 request_path=request.scope.get("_original_path") or request.url.path,
             )
         except HTTPException as http_exc:
-            if http_exc.status_code == status.HTTP_404_NOT_FOUND:
+            if http_exc.status_code == status.HTTP_404_NOT_FOUND or server_id:
+                # Single-server requests relay the truthful status (a 502/504 upstream fault must
+                # not masquerade as a 200 empty-success body); only the multi-server aggregate
+                # keeps the legacy error-dict response shape below.
                 raise
             # Internal access/IP 403s keep the legacy error-dict response shape
             # so the existing contract stays intact.

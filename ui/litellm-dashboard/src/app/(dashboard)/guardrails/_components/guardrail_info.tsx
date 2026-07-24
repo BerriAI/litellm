@@ -12,6 +12,7 @@ import { Button, Divider, Form, Input, Select, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import { Logo } from "@/components/molecules/logo/Logo";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
 import {
@@ -524,17 +525,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card>
                 <Text>Provider</Text>
                 <div className="mt-2 flex items-center space-x-2">
-                  {logo && (
-                    <img
-                      src={logo}
-                      alt={`${displayName} logo`}
-                      className="w-6 h-6"
-                      onError={(e) => {
-                        // Hide broken image
-                        (e.target as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                  )}
+                  <Logo src={logo} label={displayName} className="w-6 h-6" />
                   <Title>{displayName}</Title>
                 </div>
               </Card>

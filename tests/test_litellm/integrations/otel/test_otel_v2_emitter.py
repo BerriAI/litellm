@@ -16,10 +16,12 @@ from litellm.integrations.otel import (  # noqa: E402
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
+from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
     ServiceSpanData,
+    SpanError,
 )
 from litellm.integrations.otel.model.spans import SPAN_REGISTRY, SpanRole  # noqa: E402
 
@@ -153,6 +155,46 @@ def test_error_span_sets_status_and_error_type():
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["error.type"] == "RateLimitError"
+
+
+def test_stamp_error_writes_full_attribute_set_and_event():
+    engine, exporter = _engine()
+    span = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    result = stamp_error(
+        span, SpanError("ProxyException", "boom", code="401", stack_trace="tb", llm_provider="anthropic")
+    )
+    span.end()
+    (s,) = exporter.get_finished_spans()
+    assert result == ("ProxyException", "boom")
+    assert s.attributes["error.type"] == "ProxyException"
+    assert s.attributes["error.message"] == "boom"
+    assert s.attributes["litellm.provider.error.code"] == "401"
+    assert s.attributes["litellm.provider.error.stack_trace"] == "tb"
+    assert s.attributes["litellm.provider.error.llm_provider"] == "anthropic"
+    assert s.status.status_code is StatusCode.ERROR
+    assert [e.name for e in s.events] == ["exception"]
+
+
+def test_stamp_error_opt_outs_skip_status_and_event():
+    engine, exporter = _engine()
+    span = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    stamp_error(span, SpanError("ProxyException", "boom", code="401"), record_event=False, set_status=False)
+    span.end()
+    (s,) = exporter.get_finished_spans()
+    assert s.attributes["error.type"] == "ProxyException"
+    assert s.attributes["litellm.provider.error.code"] == "401"
+    assert s.status.status_code is StatusCode.UNSET
+    assert s.events == ()
+
+
+def test_stamp_error_without_type_or_message_is_noop():
+    engine, exporter = _engine()
+    span = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    assert stamp_error(span, SpanError()) is None
+    span.end()
+    (s,) = exporter.get_finished_spans()
+    assert "error.type" not in s.attributes
+    assert s.status.status_code is StatusCode.UNSET
 
 
 def test_hierarchy_and_kinds_match_registry():

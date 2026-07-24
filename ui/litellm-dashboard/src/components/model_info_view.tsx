@@ -22,6 +22,7 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
+import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
@@ -42,7 +43,7 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { getProviderLogoAndName } from "./provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
@@ -57,18 +58,6 @@ interface ModelInfoViewProps {
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
-
-// The /model/info response redacts secrets by masking them (e.g. "sk-1****2345"),
-// not by removing them. The edit form must never echo a masked value back on save:
-// the backend would encrypt the asterisks and overwrite the real secret. A run of
-// 2+ mask chars only appears in masker output (real config — incl. wildcard model
-// names like "openai/*" — carries at most a single "*"), so this reliably detects a
-// redacted value without a provider-metadata lookup. API-key rotation goes through
-// UpdateModelCredentialsModal instead, which sends only the new key.
-const isMaskedSecret = (value: unknown): boolean => typeof value === "string" && /\*{2,}/.test(value);
-
-const stripMaskedSecrets = (params: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(params).filter(([, value]) => !isMaskedSecret(value)));
 
 const normalizeTierModels = (value: unknown): string[] => {
   if (Array.isArray(value)) return value;
@@ -671,30 +660,7 @@ export default function ModelInfoView({
               <Card>
                 <Text>Provider</Text>
                 <div className="mt-2 flex items-center space-x-2">
-                  {modelData.provider && (
-                    <img
-                      src={getProviderLogoAndName(modelData.provider).logo}
-                      alt={`${modelData.provider} logo`}
-                      className="w-4 h-4"
-                      onError={(e) => {
-                        const target = e.currentTarget as HTMLImageElement;
-                        const parent = target.parentElement;
-                        if (!parent || !parent.contains(target)) {
-                          return;
-                        }
-
-                        try {
-                          const fallbackDiv = document.createElement("div");
-                          fallbackDiv.className =
-                            "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                          fallbackDiv.textContent = modelData.provider?.charAt(0) || "-";
-                          parent.replaceChild(fallbackDiv, target);
-                        } catch (error) {
-                          console.error("Failed to replace provider logo fallback:", error);
-                        }
-                      }}
-                    />
-                  )}
+                  {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
                   <Title>{modelData.provider || "Not Set"}</Title>
                 </div>
               </Card>

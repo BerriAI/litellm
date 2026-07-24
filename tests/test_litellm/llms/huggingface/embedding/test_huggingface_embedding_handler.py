@@ -1,4 +1,3 @@
-import importlib
 import json
 import os
 import sys
@@ -16,22 +15,7 @@ MOCK_EMBEDDING_RESPONSE = [[0.1, 0.2, 0.3, 0.4, 0.5]]
 
 
 @pytest.fixture
-def reload_huggingface_modules():
-    """
-    Reload modules to ensure fresh references after conftest reloads litellm.
-    This ensures the HTTPHandler class being patched is the same one used by
-    the embedding handler during parallel test execution.
-    """
-    import litellm.llms.custom_httpx.http_handler as http_handler_module
-    import litellm.llms.huggingface.embedding.handler as hf_embedding_handler_module
-
-    importlib.reload(http_handler_module)
-    importlib.reload(hf_embedding_handler_module)
-    yield
-
-
-@pytest.fixture
-def mock_embedding_http_handler(reload_huggingface_modules):
+def mock_embedding_http_handler():
     """Fixture to mock the HTTP handler for embedding tests"""
     with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
         mock_response = MagicMock()
@@ -43,7 +27,7 @@ def mock_embedding_http_handler(reload_huggingface_modules):
 
 
 @pytest.fixture
-def mock_embedding_async_http_handler(reload_huggingface_modules):
+def mock_embedding_async_http_handler():
     """Fixture to mock the async HTTP handler for embedding tests"""
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -120,6 +104,20 @@ class TestHuggingFaceEmbedding:
         assert request_data["inputs"] == input_text
         assert response.usage.prompt_tokens > 0
         assert response.usage.total_tokens == response.usage.prompt_tokens
+
+    def test_model_name_with_https_substring_uses_api_base(self):
+        api_base = "https://legit.example/embed"
+
+        litellm.embedding(
+            model="huggingface/my-https-endpoint",
+            input=["hello world"],
+            input_type="embed",
+            api_base=api_base,
+        )
+
+        self.mock_http.assert_called_once()
+        called_url = self.mock_http.call_args[0][0]
+        assert called_url == api_base
 
     def test_embedding_with_sentence_similarity_task(self):
         """Test embedding when task type is sentence-similarity (requires 2+ sentences)"""

@@ -11,12 +11,14 @@ __all__ = ["ingest", "aingest", "query", "aquery"]
 
 import asyncio
 import contextvars
+from contextlib import contextmanager
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Optional,
     Tuple,
@@ -27,6 +29,9 @@ from typing import (
 import httpx
 
 import litellm
+from litellm._internal_context import is_internal_call
+from litellm.cost_calculator import vector_store_search_cost
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
@@ -188,6 +193,25 @@ async def aingest(
         )
 
 
+@contextmanager
+def _suppressed_sub_call_billing() -> Iterator[None]:
+    """
+    Suppress a sub-call's own billing event so the parent aquery event bills it.
+
+    Every suppressed sub-call's cost must be folded into the parent event:
+    into the response's hidden response_cost on the non-streaming path, or via
+    the logging object's additional_response_cost on the streaming path (the
+    streamed cost is computed from assembled chunks after this pipeline
+    returns, so there is no response object to fold into here).
+    """
+    previous = is_internal_call.get()
+    is_internal_call.set(True)
+    try:
+        yield
+    finally:
+        is_internal_call.set(previous)
+
+
 async def _execute_query_pipeline(
     model: str,
     messages: List[Any],
@@ -209,27 +233,46 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
-    search_response = await litellm.vector_stores.asearch(
-        vector_store_id=retrieval_config["vector_store_id"],
-        query=query_text,
-        max_num_results=retrieval_config.get("top_k", 10),
-        custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
-        **kwargs,
-    )
+    with _suppressed_sub_call_billing():
+        search_response = await litellm.vector_stores.asearch(
+            vector_store_id=retrieval_config["vector_store_id"],
+            query=query_text,
+            max_num_results=retrieval_config.get("top_k", 10),
+            custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
+            **kwargs,
+        )
+
+    search_provider = retrieval_config.get("custom_llm_provider", "openai")
+    try:
+        search_cost = sum(
+            vector_store_search_cost(
+                model=search_provider if "/" in search_provider else None,
+                custom_llm_provider=search_provider,
+                response=search_response,
+            )
+        )
+    except Exception:  # noqa: BLE001 - cost accounting must never break the query path
+        search_cost = 0.0
 
     rerank_response = None
+    rerank_cost = 0.0
     context_chunks = search_response.get("data", [])
 
     # 3. Optional rerank
     if rerank and rerank.get("enabled"):
         documents = RAGQuery.extract_documents_from_search(search_response)
         if documents:
-            rerank_response = await litellm.arerank(
-                model=rerank["model"],
-                query=query_text,
-                documents=documents,
-                top_n=rerank.get("top_n", 5),
-            )
+            with _suppressed_sub_call_billing():
+                rerank_response = await litellm.arerank(
+                    model=rerank["model"],
+                    query=query_text,
+                    documents=documents,
+                    top_n=rerank.get("top_n", 5),
+                )
+            rerank_hidden_params = getattr(rerank_response, "_hidden_params", None)
+            if isinstance(rerank_hidden_params, dict):
+                rerank_response_cost: float | None = rerank_hidden_params.get("response_cost")
+                rerank_cost = rerank_response_cost or 0.0
             context_chunks = RAGQuery.get_top_chunks_from_rerank(search_response, rerank_response)
 
     # 4. Build context message and call completion
@@ -237,28 +280,40 @@ async def _execute_query_pipeline(
     modified_messages = messages[:-1] + [context_message] + [messages[-1]]
 
     # Use router if available to properly resolve virtual model names
-    if router is not None:
-        response = await router.acompletion(
-            model=model,
-            messages=modified_messages,
-            stream=stream,
-            **kwargs,
-        )
-    else:
-        response = await litellm.acompletion(
-            model=model,
-            messages=modified_messages,
-            stream=stream,
-            **kwargs,
-        )
+    with _suppressed_sub_call_billing():
+        if router is not None:
+            response = await router.acompletion(
+                model=model,
+                messages=modified_messages,
+                stream=stream,
+                **kwargs,
+            )
+        else:
+            response = await litellm.acompletion(
+                model=model,
+                messages=modified_messages,
+                stream=stream,
+                **kwargs,
+            )
 
     # 5. Attach search results to response
+    sub_call_cost = search_cost + rerank_cost
     if not stream and isinstance(response, ModelResponse):
         response = RAGQuery.add_search_results_to_response(
             response=response,
             search_results=search_response,
             rerank_results=rerank_response,
         )
+        if sub_call_cost > 0:
+            hidden_params = getattr(response, "_hidden_params", None)
+            if isinstance(hidden_params, dict):
+                completion_response_cost: float | None = hidden_params.get("response_cost")
+                if completion_response_cost is not None:
+                    hidden_params["response_cost"] = completion_response_cost + sub_call_cost
+    elif sub_call_cost > 0:
+        logging_obj: object = kwargs.get("litellm_logging_obj")
+        if isinstance(logging_obj, LiteLLMLoggingObj):
+            logging_obj.model_call_details["additional_response_cost"] = sub_call_cost
 
     return response  # type: ignore[return-value]
 
