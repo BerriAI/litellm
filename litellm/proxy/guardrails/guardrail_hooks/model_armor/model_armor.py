@@ -432,7 +432,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         Override to store only the Model Armor API response, not the entire data dict.
         This prevents circular references in logging.
         """
-        metadata = request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
+        metadata = (request_data.get("metadata") or {}) if isinstance(request_data, dict) else {}
         guardrail_response = metadata.get("_model_armor_response", {})
 
         # Determine status – default to "success" but prefer the explicit value if present.
