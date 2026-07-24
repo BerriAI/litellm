@@ -838,7 +838,7 @@ def test_gpt_5_reasoning_streaming():
 def test_openai_gpt_5_codex_reasoning():
     litellm._turn_on_debug()
     completion_kwargs = {
-        "model": "gpt-5-codex",
+        "model": "gpt-5.3-codex",
         "messages": [
             {
                 "role": "system",
