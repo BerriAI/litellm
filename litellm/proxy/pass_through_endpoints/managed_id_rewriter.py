@@ -597,19 +597,11 @@ async def _mint_or_reuse_object(
             # Refresh the stored snapshot so DB-served list responses reflect
             # the batch's latest state (e.g. output_file_id / error_file_id that
             # were null at creation but populated once the batch completed).
-            from litellm.proxy.openai_files_endpoints.common_utils import (
-                merge_preserved_batch_attribution,
-                read_stored_batch_attribution,
-            )
-
             try:
                 await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": existing.unified_object_id},
                     data={
-                        "file_object": merge_preserved_batch_attribution(
-                            read_stored_batch_attribution(existing),
-                            json.dumps(body_snapshot),
-                        ),
+                        "file_object": json.dumps(body_snapshot),
                         "updated_by": user_api_key_dict.user_id,
                     },
                 )

@@ -3,17 +3,14 @@ Test cases for Vertex AI passthrough batch prediction functionality
 """
 
 import base64
-import json
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from datetime import datetime
-from typing import Dict, Any
 
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
 from litellm.types.utils import SpecialEnums
-from litellm.types.llms.openai import BatchJobStatus
 
 
 class TestVertexAIBatchPassthroughHandler:
@@ -351,6 +348,35 @@ class TestVertexAIBatchPassthroughHandler:
             assert call_kwargs["user_api_key_dict"].api_key == hashed_key
             assert call_kwargs["user_api_key_dict"].key_alias == "prod-batch-key"
             assert call_kwargs["request_tags"] == ["env:prod", "team:growth"]
+
+    def test_store_batch_managed_object_falls_back_to_key_tags(
+        self, mock_logging_obj, mock_managed_files_hook
+    ):
+        """A tagged key that sends no request tags: the key's own tags (exposed in-memory
+        as user_api_key_auth_metadata) are persisted, so the batch-cost row is still tagged."""
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+
+            VertexPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object={"id": "b1", "object": "batch", "status": "validating"},
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                litellm_params={
+                    "metadata": {
+                        "user_api_key": "a" * 64,
+                        "user_api_key_auth_metadata": {"tags": ["key-tag-a", "key-tag-b"]},
+                    }
+                },
+            )
+
+            call_kwargs = mock_managed_files_hook.store_unified_object_id.call_args[1]
+            assert call_kwargs["request_tags"] == ["key-tag-a", "key-tag-b"]
 
     def test_batch_cost_calculation_integration(self):
         """Single Vertex AI response → non-zero cost with correct token counts."""

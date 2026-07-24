@@ -610,8 +610,6 @@ def get_content_type_from_file_object(file_object: Optional[dict]) -> str:
 
     # Handle JSON string
     if isinstance(file_object, str):
-        import json
-
         try:
             file_object = json.loads(file_object)
         except json.JSONDecodeError:
@@ -950,7 +948,6 @@ async def get_batch_from_database(
         - db_batch_object: Raw database object (or None)
         - response_batch: Parsed LiteLLMBatch object (or None)
     """
-    import json
 
     from litellm.types.utils import LiteLLMBatch
 
@@ -974,7 +971,7 @@ async def get_batch_from_database(
             if isinstance(db_batch_object.file_object, str)
             else db_batch_object.file_object
         )
-        response = LiteLLMBatch(**strip_internal_batch_attribution(batch_data))
+        response = LiteLLMBatch(**batch_data)
         response.id = batch_id
 
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
@@ -987,61 +984,6 @@ async def get_batch_from_database(
     except Exception as e:
         verbose_proxy_logger.warning(f"Failed to retrieve batch from ManagedObjectTable: {e}, falling back to provider")
         return None, None
-
-
-def strip_internal_batch_attribution(file_object_data: dict) -> dict:
-    """Return a copy of a stored batch file_object with the internal attribution snapshot removed.
-
-    litellm_batch_attribution is persisted under metadata for cost attribution only; it carries the
-    creator's key hash, email, and aliases, so it must never surface in a batch returned to a caller
-    """
-    metadata = file_object_data.get("metadata")
-    if not isinstance(metadata, dict) or "litellm_batch_attribution" not in metadata:
-        return file_object_data
-    cleaned_metadata = {k: v for k, v in metadata.items() if k != "litellm_batch_attribution"}
-    return {**file_object_data, "metadata": cleaned_metadata or None}
-
-
-def read_stored_batch_attribution(db_batch_object) -> dict | None:
-    """Return the create-time litellm_batch_attribution snapshot stored on a managed object row.
-
-    The snapshot lives in the row's file_object jsonb (stored either as a JSON string or an
-    already-parsed dict); returns None when the row, its file_object, or the snapshot is absent
-    """
-    if db_batch_object is None:
-        return None
-    stored = getattr(db_batch_object, "file_object", None)
-    if isinstance(stored, str):
-        try:
-            stored = json.loads(stored)
-        except (ValueError, TypeError):
-            return None
-    if not isinstance(stored, dict):
-        return None
-    metadata = stored.get("metadata")
-    if not isinstance(metadata, dict):
-        return None
-    snapshot = metadata.get("litellm_batch_attribution")
-    return snapshot if isinstance(snapshot, dict) else None
-
-
-def merge_preserved_batch_attribution(stored_attribution: dict | None, file_object_json: str) -> str:
-    """Force the create-time litellm_batch_attribution snapshot back onto a re-stored batch file_object.
-
-    The snapshot is written once, at batch creation, and is the authoritative owner of the batch-cost
-    spend. Every later writer (status poll, retrieve, list refresh) rebuilds file_object from a
-    provider or caller response that either drops the snapshot or carries the polling caller's own
-    identity, so each re-store must restore the original; otherwise a poll re-attributes the spend to
-    whoever last touched the batch, or erases attribution entirely
-    """
-    if not stored_attribution:
-        return file_object_json
-    file_object_data = json.loads(file_object_json)
-    file_object_data["metadata"] = {
-        **(file_object_data.get("metadata") or {}),
-        "litellm_batch_attribution": stored_attribution,
-    }
-    return json.dumps(file_object_data)
 
 
 async def update_batch_in_database(
@@ -1104,13 +1046,9 @@ async def update_batch_in_database(
         # Normalize status for database storage
         db_status = response.status if response.status != "completed" else "complete"
 
-        file_object_json = merge_preserved_batch_attribution(
-            read_stored_batch_attribution(db_batch_object), response.model_dump_json()
-        )
-
         update_data: dict = {
             "status": db_status,
-            "file_object": file_object_json,
+            "file_object": response.model_dump_json(),
             "updated_at": litellm.utils.get_utc_datetime(),
         }
 

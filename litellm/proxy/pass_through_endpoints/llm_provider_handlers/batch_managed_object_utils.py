@@ -9,7 +9,7 @@ attribution a non-batch request receives.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.utils import LiteLLMBatch
@@ -27,18 +27,34 @@ class _StoreUnifiedObjectHook(Protocol):
         model_object_id: str,
         file_purpose: str,
         user_api_key_dict: "UserAPIKeyAuth",
-        request_tags: Optional[list[str]],
+        request_tags: list[str] | None,
     ) -> None: ...
 
 
-def _optional_str(value: object) -> Optional[str]:
+def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _optional_str_list(value: object) -> Optional[list[str]]:
+def _optional_str_list(value: object) -> list[str] | None:
     if isinstance(value, list):
         items = cast(list[object], value)  # cast-ok: isinstance-narrowed; element type unknown
         return [str(tag) for tag in items]
+    return None
+
+
+def _request_tags(request_metadata: dict[str, object]) -> list[str] | None:
+    """Tags for the batch-cost spend row: the request's own tags when it sent any,
+    otherwise the key's tags, which auth exposes in-memory as
+    user_api_key_auth_metadata (a tagged key does not put its tags in the
+    top-level metadata "tags" on the passthrough path)
+    """
+    tags = _optional_str_list(request_metadata.get("tags"))
+    if tags:
+        return tags
+    key_auth_metadata = request_metadata.get("user_api_key_auth_metadata")
+    if isinstance(key_auth_metadata, dict):
+        typed_key_auth_metadata = cast(dict[str, object], key_auth_metadata)  # cast-ok: isinstance-narrowed dict
+        return _optional_str_list(typed_key_auth_metadata.get("tags"))
     return None
 
 
@@ -85,7 +101,7 @@ def store_batch_managed_object(
                 model_object_id=model_object_id,
                 file_purpose="batch",
                 user_api_key_dict=user_api_key_dict,
-                request_tags=_optional_str_list(request_metadata.get("tags")),
+                request_tags=_request_tags(request_metadata),
             )
         )
 
