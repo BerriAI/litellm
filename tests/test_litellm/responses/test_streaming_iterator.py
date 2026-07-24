@@ -6,7 +6,7 @@ completion_start_time = end_time."""
 import json
 from datetime import datetime
 from typing import Optional
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -105,6 +105,34 @@ def _logging_obj_stub() -> Mock:
     logging_obj.completion_start_time = None
     logging_obj.model_call_details = {"litellm_params": {}}
     return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_aclose_releases_response():
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    iterator.response.aclose = AsyncMock()
+
+    await iterator.aclose()
+
+    iterator.response.aclose.assert_awaited_once()
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_aclose_marks_finished_when_close_fails():
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    iterator.response.aclose = AsyncMock(side_effect=RuntimeError("close failed"))
+
+    await iterator.aclose()
+
+    iterator.response.aclose.assert_awaited_once()
+    assert iterator.finished is True
 
 
 @pytest.mark.asyncio

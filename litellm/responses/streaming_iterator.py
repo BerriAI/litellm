@@ -9,6 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
 
+import anyio
 import httpx
 from openai._streaming import SSEDecoder
 
@@ -141,6 +142,18 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+
+    async def aclose(self) -> None:
+        with anyio.CancelScope(shield=True):
+            try:
+                await self.response.aclose()
+            except BaseException as e:
+                verbose_logger.debug(
+                    "BaseResponsesAPIStreamingIterator.aclose: error closing response: %s",
+                    e,
+                )
+            finally:
+                self.finished = True
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
