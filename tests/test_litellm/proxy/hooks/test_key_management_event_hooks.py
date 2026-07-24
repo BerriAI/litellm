@@ -155,6 +155,59 @@ class TestKeyManagementEventHooksIndependentOperations:
         assert email_called["called"] is True
 
 
+class TestKeyUpdateAuditLogDoesNotLeakRawKey:
+    """Regression tests for issue #31620 - raw API key leaked in AuditLog."""
+
+    @pytest.mark.asyncio
+    async def test_updated_hook_uses_hashed_token_and_hides_raw_key(self):
+        """
+        /key/update must reference the key by its hashed token in the audit log,
+        never the raw sk- value, in either object_id or updated_values.
+        """
+        import asyncio
+
+        from litellm.proxy._types import (
+            LiteLLM_VerificationToken,
+            UpdateKeyRequest,
+            UserAPIKeyAuth,
+        )
+
+        raw_key = "sk-super-secret-raw-key-should-never-be-logged"
+        hashed_token = "a" * 64
+
+        data = UpdateKeyRequest(key=raw_key, max_budget=2000.0)
+        existing_key_row = LiteLLM_VerificationToken(
+            token=hashed_token,
+            key_name="sk-...oged",
+            max_budget=100.0,
+        )
+
+        captured = {}
+
+        async def fake_create_audit_log_for_update(request_data):
+            captured["log"] = request_data
+
+        with (
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                side_effect=fake_create_audit_log_for_update,
+            ),
+            patch("litellm.store_audit_logs", True),
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response=existing_key_row,
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-admin", user_id="default_user_id"),
+            )
+            await asyncio.sleep(0.05)
+
+        log = captured["log"]
+        assert log.object_id == hashed_token
+        assert raw_key not in (log.object_id or "")
+        assert raw_key not in (log.updated_values or "")
+
+
 class TestRotateVirtualKeyInSecretManager:
     """Tests for _rotate_virtual_key_in_secret_manager with team_id support."""
 
