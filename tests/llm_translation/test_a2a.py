@@ -130,3 +130,38 @@ def test_a2a_completion_sync_streaming():
         pytest.skip(f"A2A agent not reachable at {api_base}: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_a2a_only_claims_stream():
+    """A2A has no sampling params, so it must not advertise any.
+
+    Claiming one suppresses the UnsupportedParamsError and the value is
+    dropped without telling the caller.
+    """
+    from litellm.llms.a2a.chat.transformation import A2AConfig
+
+    supported = A2AConfig().get_supported_openai_params("test-agent")
+    assert "stream" in supported
+    for param in ("temperature", "max_tokens", "top_p"):
+        assert param not in supported
+
+
+@pytest.mark.parametrize("param,value", [("temperature", 0.5), ("max_tokens", 100), ("top_p", 0.9)])
+def test_a2a_sampling_params_raise(param, value):
+    """Sampling params should surface an error rather than vanish."""
+    from litellm.utils import get_optional_params
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        get_optional_params(
+            model="test-agent", custom_llm_provider="a2a", **{param: value}
+        )
+
+
+def test_a2a_stream_still_maps():
+    """stream is the one real param, it must survive."""
+    from litellm.utils import get_optional_params
+
+    params = get_optional_params(
+        model="test-agent", custom_llm_provider="a2a", stream=True
+    )
+    assert params["stream"] is True

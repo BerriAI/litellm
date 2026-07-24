@@ -90,12 +90,16 @@ class A2AConfig(BaseConfig):
         return api_base, api_key, headers
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        """Return list of supported OpenAI parameters"""
+        """Return list of supported OpenAI parameters.
+
+        A2A has no sampling controls. SendMessageConfiguration carries
+        acceptedOutputModes, taskPushNotificationConfig, historyLength and
+        returnImmediately, nothing else, because the remote agent owns its own
+        model config. Only stream is real here: it picks message/stream over
+        message/send.
+        """
         return [
             "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
         ]
 
     def map_openai_params(
