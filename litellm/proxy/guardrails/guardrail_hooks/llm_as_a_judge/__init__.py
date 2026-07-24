@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import litellm
 from fastapi import HTTPException
@@ -29,6 +29,12 @@ Return ONLY valid JSON in this exact format:
 }"""
 
 _VALID_ON_FAILURE = frozenset({"block", "log"})
+
+
+def _default_router_provider() -> "Router | None":
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
 
 
 def _extract_text_from_content(content: Any) -> str:
@@ -95,7 +101,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         on_failure: Literal["block", "log"] = "block",
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None,
         default_on: bool = False,
-        llm_router: Optional["Router"] = None,
+        router_provider: "Callable[[], Router | None] | None" = None,
         **kwargs: Any,
     ) -> None:
         _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None
@@ -116,20 +122,11 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         self.criteria = criteria
         self.overall_threshold = overall_threshold
         self.on_failure = on_failure
-        self.llm_router = llm_router
+        self._router_provider = router_provider or _default_router_provider
 
     @classmethod
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
         return [GuardrailEventHooks.post_call]
-
-    def _get_completion_fn(self) -> Any:
-        """Route the judge call through the proxy Router when judge_model is a
-        configured deployment, so its credentials/provider resolve. Fall back to
-        the SDK for raw provider models resolved from the environment."""
-        router = self.llm_router
-        if router is not None and self.judge_model in router.get_model_names():
-            return router.acompletion
-        return litellm.acompletion
 
     async def _run_judge(
         self,
@@ -143,12 +140,23 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "content": _build_judge_prompt(self.criteria, messages, response_text),
             },
         ]
-        response = await self._get_completion_fn()(
-            model=self.judge_model,
-            messages=judge_messages,
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
+        router = self._router_provider()
+        if router is not None and router.get_model_list(model_name=self.judge_model):
+            response = await router.acompletion(
+                model=self.judge_model,
+                messages=judge_messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+                num_retries=0,
+                fallbacks=[],
+            )
+        else:
+            response = await litellm.acompletion(
+                model=self.judge_model,
+                messages=judge_messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
         raw = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
         return json.loads(raw)
 
@@ -242,7 +250,6 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
 def initialize_guardrail(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
-    llm_router: Optional["Router"] = None,
 ) -> LLMAsAJudgeGuardrail:
     guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
@@ -279,7 +286,6 @@ def initialize_guardrail(
         on_failure=on_failure,
         event_hook=event_hook,
         default_on=bool(_get_litellm_param(litellm_params, guardrail, "default_on", False)),
-        llm_router=llm_router,
     )
     litellm.logging_callback_manager.add_litellm_callback(instance)
     return instance

@@ -384,38 +384,36 @@ def _judge_guardrail(guardrail_id: str) -> Guardrail:
     )
 
 
-def _make_router(model_names):
-    from unittest.mock import MagicMock
-
-    router = MagicMock()
-    router.get_model_names.return_value = list(model_names)
-    return router
-
-
-def test_initialize_guardrail_passes_router_to_judge_from_db():
-    """A judge guardrail created/synced through a DB path must receive the active
-    Router so its proxy-only judge model resolves credentials (issue: UI-created
-    guardrails failed open because the Router was never wired in)."""
-    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeGuardrail
+def test_db_synced_judge_guardrail_uses_lazy_router_provider():
+    """A judge guardrail created/synced through a DB path must resolve the active
+    Router lazily at call time (issue: UI-created guardrails failed open because the
+    Router was captured at construction; a guardrail created before the Router
+    existed captured None and never recovered). Asserting the default provider is
+    wired guarantees the instance reads the live global rather than a stale value."""
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
+        LLMAsAJudgeGuardrail,
+        _default_router_provider,
+    )
 
     handler = InMemoryGuardrailHandler()
-    router = _make_router({"my-judge-alias"})
 
-    handler.sync_guardrail_from_db(_judge_guardrail("judge-db"), llm_router=router)
+    handler.sync_guardrail_from_db(_judge_guardrail("judge-db"))
 
     instance = handler.guardrail_id_to_custom_guardrail["judge-db"]
     assert isinstance(instance, LLMAsAJudgeGuardrail)
-    assert instance.llm_router is router
+    assert instance._router_provider is _default_router_provider
 
 
-def test_reinitialize_guardrail_forwards_router_to_judge():
-    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeGuardrail
+def test_reinitialized_judge_guardrail_uses_lazy_router_provider():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
+        LLMAsAJudgeGuardrail,
+        _default_router_provider,
+    )
 
     handler = InMemoryGuardrailHandler()
-    router = _make_router({"my-judge-alias"})
 
-    handler.reinitialize_guardrail(_judge_guardrail("judge-reinit"), source="db", llm_router=router)
+    handler.reinitialize_guardrail(_judge_guardrail("judge-reinit"), source="db")
 
     instance = handler.guardrail_id_to_custom_guardrail["judge-reinit"]
     assert isinstance(instance, LLMAsAJudgeGuardrail)
-    assert instance.llm_router is router
+    assert instance._router_provider is _default_router_provider

@@ -214,24 +214,53 @@ async def test_apply_guardrail_judge_error_fails_open(mock_completion):
 # ---------------------------------------------------------------------------
 
 
-def _make_router(model_names):
-    router = MagicMock()
-    router.get_model_names.return_value = list(model_names)
-    router.acompletion = AsyncMock(
-        return_value=MagicMock(
-            choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))]
-        )
-    )
+def _judge_response_mock() -> MagicMock:
+    return MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))])
+
+
+def _real_router(model_list, **router_kwargs):
+    """Build a real Router so the router-membership decision is exercised for
+    real (wildcards, model_group_alias, exact names), stubbing only the outbound
+    completion so no network call is made."""
+    from litellm import Router
+
+    router = Router(model_list=model_list, **router_kwargs)
+    router.acompletion = AsyncMock(return_value=_judge_response_mock())
     return router
 
 
+@pytest.mark.parametrize(
+    "model_list, router_kwargs, judge_model",
+    [
+        (
+            [{"model_name": "my-judge-alias", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            {},
+            "my-judge-alias",
+        ),
+        (
+            [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "sk-ant-test"}}],
+            {},
+            "anthropic/claude-sonnet-4-6",
+        ),
+        (
+            [{"model_name": "backing-group", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            {"model_group_alias": {"my-judge-alias": "backing-group"}},
+            "my-judge-alias",
+        ),
+    ],
+    ids=["plain-deployment", "wildcard-route", "model-group-alias"],
+)
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
-async def test_judge_call_routes_through_router_for_configured_model(mock_sdk_completion):
-    """A judge_model that is a configured proxy deployment must resolve its
-    credentials via the Router, not the SDK (which cannot see deployment creds)."""
-    router = _make_router({"my-judge-alias"})
-    guardrail = _make_guardrail(judge_model="my-judge-alias", llm_router=router)
+async def test_judge_routes_through_router_for_router_served_model(
+    mock_sdk_completion, model_list, router_kwargs, judge_model
+):
+    """Any judge_model the Router can serve must resolve its credentials via the
+    Router. Wildcard and alias shapes regress the naive `judge_model in
+    get_model_names()` check, which reports patterns/aliases literally and so
+    routes a servable model to the SDK, where deployment creds do not resolve."""
+    router = _real_router(model_list, **router_kwargs)
+    guardrail = _make_guardrail(judge_model=judge_model, router_provider=lambda: router)
     inputs = {"texts": ["good response"]}
     request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
 
@@ -239,20 +268,23 @@ async def test_judge_call_routes_through_router_for_configured_model(mock_sdk_co
 
     assert result is inputs
     router.acompletion.assert_awaited_once()
-    assert router.acompletion.await_args.kwargs["model"] == "my-judge-alias"
+    call_kwargs = router.acompletion.await_args.kwargs
+    assert call_kwargs["model"] == judge_model
+    assert call_kwargs["num_retries"] == 0
+    assert call_kwargs["fallbacks"] == []
     mock_sdk_completion.assert_not_called()
 
 
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
 async def test_judge_call_falls_back_to_sdk_when_model_not_in_router(mock_sdk_completion):
-    """A judge_model that is not a configured deployment (e.g. a raw provider
-    model resolved from the environment) must fall back to the SDK."""
-    mock_sdk_completion.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))]
+    """A judge_model the Router cannot serve (e.g. a raw provider model resolved
+    from the environment) must fall back to the SDK."""
+    mock_sdk_completion.return_value = _judge_response_mock()
+    router = _real_router(
+        [{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}]
     )
-    router = _make_router({"some-other-model"})
-    guardrail = _make_guardrail(judge_model="gpt-4o-mini", llm_router=router)
+    guardrail = _make_guardrail(judge_model="gpt-4o-mini", router_provider=lambda: router)
     inputs = {"texts": ["good response"]}
     request_data: dict = {"messages": [], "metadata": {}}
 
@@ -267,10 +299,8 @@ async def test_judge_call_falls_back_to_sdk_when_model_not_in_router(mock_sdk_co
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
 async def test_judge_call_uses_sdk_when_no_router(mock_sdk_completion):
-    mock_sdk_completion.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))]
-    )
-    guardrail = _make_guardrail(judge_model="gpt-4o-mini")
+    mock_sdk_completion.return_value = _judge_response_mock()
+    guardrail = _make_guardrail(judge_model="gpt-4o-mini", router_provider=lambda: None)
     inputs = {"texts": ["good response"]}
     request_data: dict = {"messages": [], "metadata": {}}
 
@@ -280,13 +310,47 @@ async def test_judge_call_uses_sdk_when_no_router(mock_sdk_completion):
     mock_sdk_completion.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_resolves_router_lazily_per_call(mock_sdk_completion):
+    """The Router is resolved at call time, not captured at construction. A
+    guardrail built before the proxy Router exists (provider returns None) starts
+    routing through the Router as soon as it is available, with no re-init. This
+    regresses the config-less DB-backed startup order where the guardrail was
+    created while the global Router was still None and then never recovered."""
+    mock_sdk_completion.return_value = _judge_response_mock()
+    holder: dict = {"router": None}
+    guardrail = _make_guardrail(judge_model="my-judge-alias", router_provider=lambda: holder["router"])
+
+    await guardrail.apply_guardrail({"texts": ["r"]}, {"messages": [], "metadata": {}}, "response")
+    mock_sdk_completion.assert_awaited_once()
+
+    holder["router"] = _real_router(
+        [{"model_name": "my-judge-alias", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}]
+    )
+    await guardrail.apply_guardrail({"texts": ["r"]}, {"messages": [], "metadata": {}}, "response")
+    holder["router"].acompletion.assert_awaited_once()
+    mock_sdk_completion.assert_awaited_once()
+
+
+def test_default_router_provider_reads_global_router():
+    """The default provider must read the live proxy global so the router is
+    resolved lazily rather than captured."""
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _default_router_provider
+
+    sentinel = object()
+    with patch("litellm.proxy.proxy_server.llm_router", sentinel):
+        assert _default_router_provider() is sentinel
+
+
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
-def test_initialize_guardrail_wires_llm_router(mock_mgr):
-    router = _make_router({"my-judge-alias"})
+def test_initialize_guardrail_uses_default_router_provider(mock_mgr):
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _default_router_provider
+
     lp = _make_litellm_params()
     g = _make_guardrail_dict(judge_model="my-judge-alias")
-    instance = initialize_guardrail(lp, g, router)
-    assert instance.llm_router is router
+    instance = initialize_guardrail(lp, g)
+    assert instance._router_provider is _default_router_provider
 
 
 @pytest.mark.asyncio
