@@ -1468,6 +1468,43 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 "content": [
                     {
                         "type": "tool_use",
+                        "id": "tool call#0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool call#0",
+                        "content": "ok",
+                    }
+                ],
+            },
+        ]
+        out = sanitize_tool_use_ids_in_anthropic_messages(msgs)
+        assert out[0]["content"][0]["id"] == "tool_call_0"
+        assert out[1]["content"][0]["tool_use_id"] == "tool_call_0"
+        assert msgs[0]["content"][0]["id"] == "tool call#0"
+
+    def test_sanitize_tool_use_ids_in_anthropic_messages_preserves_kimi_k2_ids(self):
+        """Kimi K2's ``functions.{name}:{index}`` ids must survive sanitization
+        unchanged: vLLM/SGLang's ``kimi_k2`` tool parser derives the next tool-call
+        index by parsing this exact format out of replayed history, so rewriting
+        it (e.g. to ``functions_Bash_0``) breaks tool calling on the next turn."""
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
                         "id": "functions.Bash:0",
                         "name": "Bash",
                         "input": {},
@@ -1486,9 +1523,9 @@ class TestAnthropicThinkingSignatureSelfHeal:
             },
         ]
         out = sanitize_tool_use_ids_in_anthropic_messages(msgs)
-        assert out[0]["content"][0]["id"] == "functions_Bash_0"
-        assert out[1]["content"][0]["tool_use_id"] == "functions_Bash_0"
-        assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+        assert out[0]["content"][0]["id"] == "functions.Bash:0"
+        assert out[1]["content"][0]["tool_use_id"] == "functions.Bash:0"
+        assert out[0] is msgs[0] and out[1] is msgs[1]
 
     def test_normalize_anthropic_tool_use_id_strips_thought_signature(self):
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1502,6 +1539,37 @@ class TestAnthropicThinkingSignatureSelfHeal:
             normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}")
             == base
         )
+
+    @pytest.mark.parametrize(
+        "kimi_id",
+        [
+            "functions.Bash:0",
+            "functions.Bash:12",
+            "functions.mcp__server__tool:3",
+        ],
+    )
+    def test_normalize_anthropic_tool_use_id_preserves_kimi_k2_format(self, kimi_id):
+        from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
+
+        assert normalize_anthropic_tool_use_id(kimi_id) == kimi_id
+
+    @pytest.mark.parametrize(
+        "near_miss_id,expected",
+        [
+            ("functions.Bash", "functions_Bash"),  # missing ":{index}" suffix
+            ("functions.Bash:", "functions_Bash_"),  # missing index digits
+            ("functions.Bash:x", "functions_Bash_x"),  # non-numeric index
+            ("function.Bash:0", "function_Bash_0"),  # missing trailing "s"
+        ],
+    )
+    def test_normalize_anthropic_tool_use_id_still_sanitizes_non_kimi_ids(
+        self, near_miss_id, expected
+    ):
+        """Ids that merely resemble Kimi's format but don't match it exactly
+        must still go through the normal character-sanitization path."""
+        from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
+
+        assert normalize_anthropic_tool_use_id(near_miss_id) == expected
 
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx

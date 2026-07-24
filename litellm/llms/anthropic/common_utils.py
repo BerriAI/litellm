@@ -1001,39 +1001,69 @@ def _is_empty_text_block(block: Any) -> bool:
     return not isinstance(text, str) or not text.strip()
 
 
-def normalize_anthropic_tool_use_id(raw_id: str) -> str:
+_KIMI_K2_TOOL_CALL_ID_PATTERN = re.compile(r"^functions\.[^:]+:\d+$")
+
+
+def is_anthropic_family_model(model: str) -> bool:
+    """
+    True for models that dispatch to a real Anthropic-compatible backend
+    (Anthropic API, Bedrock Claude, Vertex Claude), where a tool_use id must
+    satisfy Anthropic's literal ``^[a-zA-Z0-9_-]+$`` pattern or the request is
+    rejected outright.
+    """
+    model_lower = model.lower()
+    if "anthropic" in model_lower or "claude" in model_lower:
+        return True
+    return "arn:" in model_lower and ":bedrock:" in model_lower
+
+
+def normalize_anthropic_tool_use_id(raw_id: str, *, preserve_kimi_k2_ids: bool = True) -> str:
     """
     Normalize a tool_use / tool_result id for Anthropic's ``^[a-zA-Z0-9_-]+$``
     pattern.
 
     Strips Gemini thought-signature suffixes (``__thought__``) first, then
     replaces any remaining invalid characters with underscores.
+
+    ``preserve_kimi_k2_ids`` leaves Kimi K2's ``functions.{name}:{index}`` ids
+    untouched: vLLM's and SGLang's ``kimi_k2`` tool parsers, and Kimi's own
+    chat template, derive the next tool-call index by parsing that exact id
+    format out of replayed conversation history. Rewriting it (e.g. to
+    ``functions_Bash_0``) breaks that parsing on the model's next turn, which
+    silently drops the tool call instead of raising, so a Claude Code session
+    routed through Kimi stops mid-task with no visible error. Callers that
+    know the id is about to be replayed to a real Anthropic-compatible
+    backend (see ``is_anthropic_family_model``) should pass
+    ``preserve_kimi_k2_ids=False`` so the id is sanitized as usual -- real
+    Anthropic rejects ``functions.Bash:0`` regardless of its origin.
     """
+    if preserve_kimi_k2_ids and _KIMI_K2_TOOL_CALL_ID_PATTERN.match(raw_id):
+        return raw_id
     base_id = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in raw_id else raw_id
     sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
     return sanitized or "tool_use_id"
 
 
-def _sanitize_tool_use_id_content_block(block: Any) -> Any:
+def _sanitize_tool_use_id_content_block(block: Any, *, preserve_kimi_k2_ids: bool) -> Any:
     if not isinstance(block, dict):
         return block
     block_type = block.get("type")
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = normalize_anthropic_tool_use_id(raw_id, preserve_kimi_k2_ids=preserve_kimi_k2_ids)
             if normalized != raw_id:
                 return {**block, "id": normalized}
     elif block_type == "tool_result":
         raw_id = block.get("tool_use_id")
         if isinstance(raw_id, str):
-            normalized = normalize_anthropic_tool_use_id(raw_id)
+            normalized = normalize_anthropic_tool_use_id(raw_id, preserve_kimi_k2_ids=preserve_kimi_k2_ids)
             if normalized != raw_id:
                 return {**block, "tool_use_id": normalized}
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any], model: Optional[str] = None) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -1043,14 +1073,24 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
     conversation history containing ids like ``functions.Bash:0`` with ``.``
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
+
+    ``functions.{name}:{index}`` ids are preserved unless ``model`` resolves
+    to a real Anthropic-compatible backend (``is_anthropic_family_model``):
+    Kimi K2's own tool parser depends on that exact format surviving replay,
+    so mangling it on every dispatch (including back to Kimi itself) breaks
+    tool calling for the much more common same-provider case. See
+    ``normalize_anthropic_tool_use_id``.
     """
+    preserve_kimi_k2_ids = not (model is not None and is_anthropic_family_model(model))
     out: list[Any] = []
     for m in messages:
         if not isinstance(m, dict) or not isinstance(m.get("content"), list):
             out.append(m)
             continue
         content = m["content"]
-        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
+        new_content = [
+            _sanitize_tool_use_id_content_block(b, preserve_kimi_k2_ids=preserve_kimi_k2_ids) for b in content
+        ]
         if new_content == content:
             out.append(m)
         else:

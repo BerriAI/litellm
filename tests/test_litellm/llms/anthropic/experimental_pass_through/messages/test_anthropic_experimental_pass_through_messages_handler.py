@@ -147,6 +147,57 @@ async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
     assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_preserves_kimi_k2_tool_use_ids_for_non_anthropic_model():
+    """Kimi K2's ``functions.{name}:{index}`` tool_use ids must survive
+    dispatch unchanged when the destination is NOT a real Anthropic-family
+    backend. vLLM/SGLang's ``kimi_k2`` tool parser derives the next tool-call
+    index by parsing that exact format out of replayed history; mangling it
+    (e.g. to ``functions_Bash_0``) breaks tool calling on the model's next
+    turn, which surfaces as Claude Code silently stopping mid-task instead of
+    an explicit error. Contrast with
+    ``test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch``, which
+    covers the real-Anthropic-destination case where sanitization must still
+    happen."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "functions.Bash:0",
+                    "name": "Bash",
+                    "input": {},
+                }
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="moonshot/kimi-k2-0905-preview",
+            custom_llm_provider="moonshot",
+            api_key="k",
+        )
+
+    assert captured["messages"][0]["content"][0]["id"] == "functions.Bash:0"
+
+
 async def _async_return(value):
     return value
 
