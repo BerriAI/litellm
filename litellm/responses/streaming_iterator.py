@@ -9,7 +9,6 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
 
-import anyio
 import httpx
 from openai._streaming import SSEDecoder
 
@@ -144,16 +143,39 @@ class BaseResponsesAPIStreamingIterator:
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
 
     async def aclose(self) -> None:
-        with anyio.CancelScope(shield=True):
+        closer: asyncio.Task[None] = asyncio.ensure_future(self.response.aclose())
+        interrupted = False
+        try:
+            while not closer.done():
+                try:
+                    await asyncio.shield(closer)
+                except asyncio.CancelledError:
+                    if closer.cancelled():
+                        break
+                    interrupted = True
+                except BaseException:
+                    break
+        finally:
+            self.finished = True
+        error: Optional[BaseException] = None if closer.cancelled() else closer.exception()
+        if isinstance(error, RuntimeError):
             try:
-                await self.response.aclose()
-            except BaseException as e:
-                verbose_logger.debug(
-                    "BaseResponsesAPIStreamingIterator.aclose: error closing response: %s",
-                    e,
-                )
-            finally:
-                self.finished = True
+                self.response.close()
+                error = None
+            except Exception as sync_close_error:
+                error = sync_close_error
+        if error is not None:
+            verbose_logger.debug("BaseResponsesAPIStreamingIterator.aclose: error closing response: %s", error)
+        if interrupted:
+            raise asyncio.CancelledError
+
+    def close(self) -> None:
+        try:
+            self.response.close()
+        except Exception as e:
+            verbose_logger.debug("BaseResponsesAPIStreamingIterator.close: error closing response: %s", e)
+        finally:
+            self.finished = True
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -702,6 +724,8 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     async def __anext__(self) -> Any:
+        if self.finished:
+            raise StopAsyncIteration
         try:
             self._check_max_streaming_duration()
             while True:
@@ -784,6 +808,8 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     def __next__(self):
+        if self.finished:
+            raise StopIteration
         try:
             self._check_max_streaming_duration()
             while True:

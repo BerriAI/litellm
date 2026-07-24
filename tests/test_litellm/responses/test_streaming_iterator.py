@@ -3,6 +3,7 @@ completion_start_time on the first chunk so downstream TTFT consumers
 (Prometheus, OTEL, SpendLogs completionStartTime) do not fall back to
 completion_start_time = end_time."""
 
+import asyncio
 import json
 from datetime import datetime
 from typing import Optional
@@ -132,6 +133,103 @@ async def test_responses_streaming_aclose_marks_finished_when_close_fails():
     await iterator.aclose()
 
     iterator.response.aclose.assert_awaited_once()
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_aclose_finishes_cleanup_under_native_cancellation():
+    """A native ``asyncio.Task.cancel()`` mid-close must not abandon the httpx
+    connection: the inner ``response.aclose()`` still runs to completion, the
+    cancellation is honored (re-raised, not swallowed), and ``finished`` is set."""
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    inner_completed = False
+
+    async def blocking_aclose() -> None:
+        nonlocal inner_completed
+        started.set()
+        await release.wait()
+        inner_completed = True
+
+    iterator.response.aclose = blocking_aclose
+
+    task = asyncio.ensure_future(iterator.aclose())
+    await started.wait()
+    task.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert inner_completed is True
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_aclose_is_idempotent():
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    iterator.response.aclose = AsyncMock()
+
+    await iterator.aclose()
+    await iterator.aclose()
+
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_aclose_falls_back_to_sync_close_on_runtime_error():
+    """httpx raises ``RuntimeError`` when ``aclose()`` hits a sync stream; the
+    iterator must fall back to the sync ``close()`` so the connection is released."""
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    iterator.response.aclose = AsyncMock(
+        side_effect=RuntimeError("Attempted to call an async close on an sync stream.")
+    )
+    iterator.response.close = Mock()
+
+    await iterator.aclose()
+
+    iterator.response.close.assert_called_once()
+    assert iterator.finished is True
+
+
+@pytest.mark.asyncio
+async def test_responses_streaming_iteration_after_aclose_stops_without_failure():
+    """Iterating a closed stream must end cleanly with ``StopAsyncIteration``
+    instead of surfacing ``httpx.StreamClosed`` through the failure handler."""
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    iterator.response.aclose = AsyncMock()
+
+    await iterator.aclose()
+
+    with pytest.raises(StopAsyncIteration):
+        await iterator.__anext__()
+
+    assert iterator._failure_handled is False
+
+
+def test_sync_responses_streaming_close_releases_response():
+    iterator = _make_sync_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=_logging_obj_stub(),
+    )
+    iterator.response.close = Mock()
+
+    iterator.close()
+
+    iterator.response.close.assert_called_once()
     assert iterator.finished is True
 
 
