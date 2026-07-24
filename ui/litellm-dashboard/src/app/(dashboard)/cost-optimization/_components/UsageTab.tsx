@@ -1,34 +1,34 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Collapse } from "antd";
 
-import { AreaChart, DonutChart } from "@/components/shared/charts";
+import { AreaChart, BarChart, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { userDailyActivityCall } from "@/components/networking";
-import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
+import { getToolSpend, ToolSpendResponse } from "@/components/networking";
+import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles } from "@/utils/roles";
-import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
+import { buildDailyToolSeries, topToolsBySpend, usd } from "./costOptimizationUtils";
+import { DailyActivityRange } from "./useDailyActivityRange";
 
 interface UsageTabProps {
   accessToken: string | null;
-  userId: string | null;
-  userRole: string;
+  activity: DailyActivityRange;
 }
 
-type DateRange = { from?: Date; to?: Date };
-
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-
-const usd = (value: number): string => {
-  const decimals = value > 0 && value < 1 ? 4 : 2;
-  return `$${formatNumberWithCommas(value, decimals)}`;
+const EMPTY_TOOL_SPEND: ToolSpendResponse = {
+  by_tool: [],
+  daily: [],
+  total_spend: 0,
+  start_date: null,
+  end_date: null,
 };
 
 const shortDate = (iso: string): string =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
 const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
@@ -81,23 +81,33 @@ const SummaryCard = ({ label, value, hint }: { label: string; value: string; hin
   </Card>
 );
 
-const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) => {
-  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
-  const initialTo = useMemo(() => new Date(), []);
-  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
+const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
+  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
-  const isAdmin = all_admin_roles.includes(userRole);
-  const effectiveUserId = isAdmin ? null : userId;
 
-  const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
-    fetchFn: userDailyActivityCall,
-    args: [accessToken, startTime, endTime, effectiveUserId],
-    enabled: !!accessToken && !!startTime && !!endTime,
-  });
+  const toolSpendEnabled = !!accessToken && !!startTime && !!endTime;
+  const rangeKey = startTime && endTime ? `${isoDay(startTime)}|${isoDay(endTime)}` : "";
+  const [toolSpendState, setToolSpendState] = useState<{ key: string; data: ToolSpendResponse } | null>(null);
 
-  const results = data.results as DailyData[];
+  useEffect(() => {
+    if (!accessToken || !startTime || !endTime) return;
+    let cancelled = false;
+    getToolSpend(accessToken, isoDay(startTime), isoDay(endTime))
+      .then((res) => {
+        if (!cancelled) setToolSpendState({ key: rangeKey, data: res });
+      })
+      .catch(() => {
+        if (!cancelled) setToolSpendState({ key: rangeKey, data: EMPTY_TOOL_SPEND });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, startTime, endTime, rangeKey]);
+
+  const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
+  const toolSpendLoading = toolSpendEnabled && toolSpend === null;
 
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
@@ -123,11 +133,27 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) =>
     [compressionTotal, cachingTotal],
   );
 
+  const topTools = useMemo(() => topToolsBySpend(toolSpend?.by_tool ?? []), [toolSpend]);
+  const topToolNames = useMemo(() => topTools.map((t) => t.tool_name), [topTools]);
+  const topToolsChart = useMemo<Record<string, string | number>[]>(
+    () => topTools.map((t) => ({ tool_name: t.tool_name, spend: t.spend })),
+    [topTools],
+  );
+  const dailyToolSeries = useMemo(
+    () =>
+      buildDailyToolSeries(toolSpend?.daily ?? [], topToolNames).map((point) => ({
+        ...point,
+        date: shortDate(String(point.date)),
+      })),
+    [toolSpend, topToolNames],
+  );
+  const toolColors = useMemo(() => DEFAULT_COLOR_CYCLE.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
+
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <MethodologyNote />
-        <AdvancedDatePicker value={dateValue} onValueChange={(v) => setDateValue(v)} />
+        <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -177,6 +203,50 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, userId, userRole }) =>
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Spend by tool</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Spend on requests that called each tool (MCP and client-side tools). A request that used multiple tools
+            counts its full spend toward each, so this attributes rather than partitions spend.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {topTools.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              {toolSpendLoading ? "Loading..." : "No tool usage in this range."}
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div>
+                <p className="mb-2 text-sm font-medium text-muted-foreground">Total by tool</p>
+                <BarChart
+                  data={topToolsChart}
+                  index="tool_name"
+                  categories={["spend"]}
+                  colors={["emerald"]}
+                  layout="vertical"
+                  yAxisWidth={140}
+                  showLegend={false}
+                  valueFormatter={usd}
+                />
+              </div>
+              <div>
+                <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
+                <BarChart
+                  data={dailyToolSeries}
+                  index="date"
+                  categories={topToolNames}
+                  colors={toolColors}
+                  stack
+                  valueFormatter={usd}
+                />
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 };

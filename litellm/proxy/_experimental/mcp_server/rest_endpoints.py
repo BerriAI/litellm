@@ -230,16 +230,33 @@ if MCP_AVAILABLE:
                 return server_auth
         return mcp_auth_header
 
-    def _get_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
-        """Return the subset of *allowed_server_ids* whose servers use OAuth2 auth.
+    def _is_v1_resolved_oauth2_server(server: Optional[MCPServer]) -> bool:
+        """Whether this server's per-user OAuth2 token is still resolved by v1.
 
-        Used as a cheap pre-flight check to skip bulk credential fetching when no
-        OAuth2 servers are involved in the current request.
+        A server the v2 resolver owns reads its stored token from the resolver at connect
+        time and drops any Authorization built for it here, so the v1 lookup would be a DB
+        round-trip whose result is discarded. Mirrors the same guard on the protocol listing
+        path and in ``_resolve_oauth2_headers_for_tool_call``.
+        """
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+            to_server_spec,
+        )
+
+        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+            return False
+        return to_server_spec(server) is None
+
+    def _v1_resolved_oauth2_server_ids(allowed_server_ids: List[str]) -> Set[str]:
+        """Return the subset of *allowed_server_ids* whose per-user OAuth2 token is still
+        resolved by v1.
+
+        Used as a cheap pre-flight check to skip bulk credential fetching when no such
+        server is involved in the current request.
         """
         return {
             sid
             for sid in allowed_server_ids
-            if getattr(global_mcp_server_manager.get_mcp_server_by_id(sid), "auth_type", None) == MCPAuth.oauth2
+            if _is_v1_resolved_oauth2_server(global_mcp_server_manager.get_mcp_server_by_id(sid))
         }
 
     async def _get_user_oauth_extra_headers(
@@ -253,11 +270,13 @@ if MCP_AVAILABLE:
         the MCP server the same way the admin "Add MCP / Authorize and Fetch" flow does.
         Returns None for non-OAuth2 servers or when no credential is stored.
 
+        A server the v2 resolver owns is skipped; see ``_is_v1_resolved_oauth2_server``.
+
         Args:
             prefetched_creds: Optional dict keyed by server_id with credential payloads.
                               When provided, avoids a per-server DB round-trip.
         """
-        if getattr(server, "auth_type", None) != MCPAuth.oauth2:
+        if not _is_v1_resolved_oauth2_server(server):
             return None
         user_id = getattr(user_api_key_dict, "user_id", None)
         server_id = getattr(server, "server_id", None)
@@ -318,38 +337,6 @@ if MCP_AVAILABLE:
             return {c["server_id"]: c for c in creds if "server_id" in c}
         except Exception as e:
             verbose_logger.warning(f"_prefetch_user_oauth_creds: failed to prefetch for user={user_id}: {e}")
-            return {}
-
-    async def _get_bulk_user_oauth_headers(
-        user_api_key_dict: UserAPIKeyAuth,
-    ) -> Dict[str, Dict[str, str]]:
-        """
-        Fetch ALL OAuth2 credentials for the current user in a single DB query and
-        return a mapping of server_id → {"Authorization": "Bearer <token>"}.
-
-        This is the batch alternative to calling _get_user_oauth_extra_headers
-        per-server inside a loop (N+1 DB queries).
-        """
-        user_id = getattr(user_api_key_dict, "user_id", None)
-        if not user_id:
-            return {}
-        try:
-            from litellm.proxy._experimental.mcp_server.db import (
-                list_user_oauth_credentials,
-            )
-            from litellm.proxy.utils import get_prisma_client_or_throw
-
-            prisma_client = get_prisma_client_or_throw(
-                "Database not connected. Connect a database to use OAuth2 MCP tools."
-            )
-            creds = await list_user_oauth_credentials(prisma_client, user_id)
-            return {
-                c["server_id"]: {"Authorization": f"Bearer {c['access_token']}"}
-                for c in creds
-                if c.get("access_token") and c.get("server_id")
-            }
-        except Exception:
-            verbose_logger.debug("Failed to bulk-fetch OAuth credentials", exc_info=True)
             return {}
 
     def _create_tool_response_objects(tools, server: MCPServer):
@@ -825,7 +812,7 @@ if MCP_AVAILABLE:
                 # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
                 prefetched_oauth_creds = (
                     await _prefetch_user_oauth_creds(user_api_key_dict)
-                    if _get_oauth2_server_ids(allowed_server_ids)
+                    if _v1_resolved_oauth2_server_ids(allowed_server_ids)
                     else {}
                 )
 

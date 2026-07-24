@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, RerankResult
 from lifecycle import ResourceManager
@@ -56,7 +56,6 @@ class TestRerank:
     def test_bedrock_rerank_scores_top_n(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"e2e-bedrock-rerank-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
