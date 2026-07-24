@@ -1111,6 +1111,11 @@ def responses(
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(input)
+        input = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+            request_input=input,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         if custom_llm_provider is None:
