@@ -69,7 +69,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
         file_path = str(audio_file)
         with open(file_path, "rb") as f:
             file_content = f.read()
-        filename = file_path.split("/")[-1]
+        filename = os.path.basename(file_path)
     elif isinstance(audio_file, tuple):
         # Tuple format: (filename, content, content_type) or (filename, content)
         if len(audio_file) >= 2:
