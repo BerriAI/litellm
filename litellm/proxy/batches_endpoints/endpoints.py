@@ -51,13 +51,13 @@ async def _resolve_managed_input_file_storage_url(
 ) -> "str | None":
     """Resolve a managed (unified) input_file_id to its backend storage_url.
 
-    Returns None when the proxy has no database, no managed file row exists,
-    or the row has no storage_url; callers fall back to dispatching the
-    original id so the managed-files deployment hook can still map it via
-    model_file_id_mapping. Raises a 404 when the caller does not own the
-    managed file and a 503 when the lookup fails, so an unverifiable id is
-    never dispatched (the deployment hook maps ids from cache without
-    re-checking ownership).
+    Returns None only when the proxy has no database (nothing to resolve or
+    enforce against) or when an owned managed file has no storage_url yet
+    (legacy rows); callers fall back to dispatching the original id. Raises a
+    404 when the caller does not own the file or no row exists (an id that
+    cannot be verified must not be dispatched, since the managed-files
+    deployment hook maps ids from cache without re-checking ownership) and a
+    503 when the lookup itself fails.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -71,9 +71,7 @@ async def _resolve_managed_input_file_storage_url(
             status_code=503,
             detail={"error": "Unable to verify managed file access; please retry"},
         )
-    if db_file is None:
-        return None
-    if not can_access_resource(
+    if db_file is None or not can_access_resource(
         user_api_key_dict=user_api_key_dict,
         created_by=db_file.created_by,
         resource_team_id=db_file.team_id,
@@ -198,14 +196,6 @@ async def create_batch(
             model_from_file_id = decode_model_from_file_id(input_file_id)
             unified_file_id = _is_base64_encoded_unified_file_id(input_file_id)
 
-        if model_from_file_id is None and unified_file_id and input_file_id:
-            resolved_storage_url = await _resolve_managed_input_file_storage_url(
-                input_file_id=input_file_id,
-                user_api_key_dict=user_api_key_dict,
-            )
-            if resolved_storage_url is not None:
-                _create_batch_data["input_file_id"] = resolved_storage_url
-
         # SCENARIO 1: File ID is encoded with model info
         if model_from_file_id is not None and input_file_id:
             credentials = get_credentials_for_model(
@@ -254,7 +244,12 @@ async def create_batch(
 
             response.input_file_id = input_file_id
 
-        elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
+        elif (
+            litellm.enable_loadbalancing_on_batch_endpoints is True
+            and is_router_model
+            and router_model is not None
+            and not unified_file_id
+        ):
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -274,6 +269,19 @@ async def create_batch(
                 )
             model = target_model_names[0]
             _create_batch_data["model"] = model
+
+            # Resolve the opaque unified id to its real backend storage_url and
+            # enforce ownership before dispatch. Kept inside this branch (not
+            # hoisted above load balancing) so the load-balanced path keeps the
+            # original id for model_file_id_mapping deployment filtering, and so
+            # the response restore below still returns the unified id.
+            resolved_storage_url = await _resolve_managed_input_file_storage_url(
+                input_file_id=input_file_id,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if resolved_storage_url is not None:
+                _create_batch_data["input_file_id"] = resolved_storage_url
+
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,

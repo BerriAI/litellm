@@ -644,10 +644,12 @@ async def test_create__unified_file_id_db_error_fails_closed_503(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_loadbalanced_path_gets_resolved_id(harness):
-    """Resolution runs before dispatch branching, so the load-balanced router
-    branch also receives the resolved storage_url instead of the opaque
-    unified id."""
+async def test_create__unified_file_id_with_loadbalancing_uses_resolving_branch(harness):
+    """A unified file must not take the raw load-balanced dispatch branch even
+    when load balancing is enabled and a router model is present; it takes the
+    unified branch that resolves the storage_url and restores the response, so
+    the opaque id never reaches the provider and model_file_id_mapping (keyed on
+    the original id) is not clobbered on the load-balanced path."""
     set_body(
         harness,
         {
@@ -672,24 +674,29 @@ async def test_create__unified_file_id_loadbalanced_path_gets_resolved_id(harnes
     with (
         patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True),
         patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        await call_create(harness, user=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"))
+        resp = await call_create(harness, user=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"))
 
     assert harness.router_acreate.call_count == 1
+    # The resolving branch fired: model injected from the unified id, storage_url
+    # forwarded, response restored to the unified id (not the internal storage_url).
+    assert harness.router_kwargs()["model"] == "gemini-2.0"
     assert harness.router_kwargs()["input_file_id"] == fake_db_file.storage_url
+    assert resp.input_file_id == "litellm_proxy_unified_id"
+    assert resp._hidden_params["unified_file_id"] == "unified-xyz"
     harness.litellm_acreate.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_no_managed_file_record_falls_back_to_raw_id(
-    harness,
-):
-    """If there's no LiteLLM_ManagedFileTable row (or it has no storage_url),
-    fall back to dispatching the original id instead of raising: the
-    managed-files deployment hook can still map it via model_file_id_mapping,
-    and legacy rows without storage_url keep working."""
+async def test_create__unified_file_id_missing_row_fails_closed_404(harness):
+    """With a database present, a managed unified id that has no row cannot be
+    ownership-verified, so it fails closed with a 404 rather than dispatching
+    the opaque id. Dispatching it would both bypass the ownership gate (the
+    deployment hook maps cache-resident ids without re-checking) and hit the
+    Vertex publishers-segment IndexError this PR exists to prevent."""
     set_body(
         harness,
         {
@@ -710,7 +717,43 @@ async def test_create__unified_file_id_no_managed_file_record_falls_back_to_raw_
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        await call_create(harness)
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
+
+    assert exc.value.code == "404"
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_owned_legacy_row_without_storage_url_dispatches_raw(
+    harness,
+):
+    """An owned managed file whose row predates storage_url still dispatches the
+    original id (the managed-files deployment hook maps it); ownership is
+    verified, so this is not the fail-closed case."""
+    set_body(
+        harness,
+        {
+            "input_file_id": "litellm_proxy_unified_id",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    fake_db_file = MagicMock(storage_url=None, created_by="user-1", team_id=None)
+    find_first = AsyncMock(return_value=fake_db_file)
+    fake_repo_instance = MagicMock()
+    fake_repo_instance.table.find_first = find_first
+    fake_repo_cls = MagicMock(return_value=fake_repo_instance)
+
+    with (
+        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
+        patch.object(proxy_server, "prisma_client", MagicMock()),
+        patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
+    ):
+        await call_create(harness, user=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"))
 
     assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
 
