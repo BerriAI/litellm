@@ -4496,13 +4496,6 @@ class MCPServerManager:
         synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
 
         hook_result: dict[str, Any] = {}
-        # Hand the synthetic request dict back to call_tool: the parallel
-        # request limiter's pre-call hook stashes its slot acquisition into
-        # this dict's metadata channels, and no litellm completion callback
-        # ever fires for MCP tool calls — call_tool must explicitly release
-        # the slot when the tool call completes, or every MCP call leaks one
-        # max_parallel_requests slot until the key is fully locked out.
-        hook_result["_litellm_call_data"] = synthetic_llm_data
         try:
             # Use standard pre_call_hook
             modified_data = await proxy_logging_obj.pre_call_hook(
@@ -4510,6 +4503,16 @@ class MCPServerManager:
                 data=synthetic_llm_data,
                 call_type=CallTypes.call_mcp_tool.value,
             )
+            # Hand the request dict back to call_tool: the parallel request
+            # limiter's pre-call hook stashes its slot acquisition into this
+            # dict's metadata channels, and no litellm completion callback
+            # ever fires for MCP tool calls — call_tool must explicitly
+            # release the slot when the tool call completes, or every MCP
+            # call leaks one max_parallel_requests slot until the key is
+            # fully locked out. Captured from pre_call_hook's return value so
+            # the marker stays visible even if a callback ahead of the
+            # limiter replaced the dict object.
+            hook_result["_litellm_call_data"] = modified_data if modified_data is not None else synthetic_llm_data
             if modified_data:
                 # Convert response back to MCP format and apply modifications
                 modified_kwargs = proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)
@@ -5164,7 +5167,7 @@ class MCPServerManager:
         # must be released explicitly when the tool call finishes (success or
         # error) — otherwise every MCP call leaks one max_parallel_requests
         # slot and the key locks out after `limit` calls.
-        litellm_call_data: Optional[dict[str, Any]] = hook_result.pop("_litellm_call_data", None)
+        litellm_call_data: dict[str, Any] | None = hook_result.pop("_litellm_call_data", None)
 
         try:
             # Prepare tasks for during hooks
