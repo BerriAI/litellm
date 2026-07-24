@@ -357,7 +357,6 @@ class Logging(LiteLLMLoggingBaseClass):
         _sid = (kwargs or {}).get("litellm_session_id")
         self.litellm_session_id: str = str(_sid) if _sid else ""
         set_session_id(self.litellm_session_id)
-        self._correlation_context_restored = False
 
         self.function_id = function_id
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
@@ -2012,17 +2011,16 @@ class Logging(LiteLLMLoggingBaseClass):
         the nested call's trace_id/session_id instead of its own.
 
         Uses a plain set() of the captured pre-call value rather than
-        contextvars.Token-based reset(), since this handler can end up running
-        in a different asyncio Task/context than __init__ did (e.g. dispatched
-        via asyncio.create_task or the logging worker) - reset() only works in
-        the exact Context a Token was created in and raises otherwise.
-
-        Idempotent - safe to call from every terminal handler regardless of
-        which one ends up firing for this attempt.
+        contextvars.Token-based reset(), since this can end up called from a
+        different asyncio Task/context than __init__ ran in (e.g. the request
+        task's own wrapper() finally block, plus async_success_handler
+        dispatched separately via asyncio.create_task/the logging worker) -
+        reset() only works in the exact Context a Token was created in and
+        raises otherwise. Deliberately NOT idempotent/guarded: each distinct
+        Task that calls this needs its own restore to actually take effect in
+        that Task's view of the contextvars, so calling it multiple times
+        (once per Task involved in this attempt) is required, not just safe.
         """
-        if self._correlation_context_restored:
-            return
-        self._correlation_context_restored = True
         set_trace_id(self._pre_call_trace_id)
         set_session_id(self._pre_call_session_id)
 

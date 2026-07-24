@@ -655,10 +655,14 @@ def test_restore_correlation_context_resets_to_pre_call_value():
         session_id_var.set("")
 
 
-def test_restore_correlation_context_is_idempotent():
-    """Calling _restore_correlation_context() more than once must not raise,
-    since success_handler/failure_handler could both end up calling it for the
-    same instance in edge cases."""
+def test_restore_correlation_context_safe_to_call_repeatedly():
+    """Calling _restore_correlation_context() more than once must not raise.
+
+    It's deliberately NOT guarded against repeat calls: wrapper()'s finally
+    block and a terminal handler (success_handler/failure_handler) can both
+    end up calling it for the same instance, potentially from different
+    asyncio Tasks - each call needs to take effect in its own Task's view of
+    the contextvars, so repeat calls are expected, not just tolerated."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     log_obj = Logging(
@@ -742,6 +746,33 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
 
         assert trace_in_child == "outer-trace-cross-task"
         assert session_in_child == "outer-session-cross-task"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_restores_originating_task_context_after_success(monkeypatch):
+    """A successful acompletion() dispatches async_success_handler via
+    asyncio.create_task + the global logging worker - a different Task than the
+    one running acompletion() itself (this test's own task). That handler's own
+    restore only fixes up the detached child task it runs in; wrapper_async's own
+    finally block (in litellm/utils.py) must separately restore the *originating*
+    task's trace_id/session_id, since nothing else does.
+    """
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace-wrapper-test")
+    session_id_var.set("outer-session-wrapper-test")
+    try:
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            litellm_session_id="mock-call-session",
+            num_retries=0,
+        )
+        assert trace_id_var.get() == "outer-trace-wrapper-test"
+        assert session_id_var.get() == "outer-session-wrapper-test"
     finally:
         trace_id_var.set("")
         session_id_var.set("")

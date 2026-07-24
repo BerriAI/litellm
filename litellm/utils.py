@@ -1254,6 +1254,20 @@ def client(original_function):
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):
+        # Restore trace_id/session_id contextvars to their pre-call value once this
+        # call (in this task/thread) is fully done - see request_correlation_in_logs.
+        # _wrapper_body rebinds its own local `kwargs` name via function_setup(), so
+        # a dict-identity trick doesn't work here; it stashes logging_obj into this
+        # holder directly instead.
+        _correlation_logging_obj_holder: dict = {}
+        try:
+            return _wrapper_body(args, kwargs, _correlation_logging_obj_holder)
+        finally:
+            _correlation_logging_obj = _correlation_logging_obj_holder.get("logging_obj")
+            if _correlation_logging_obj is not None:
+                _correlation_logging_obj._restore_correlation_context()
+
+    def _wrapper_body(args, kwargs, _correlation_logging_obj_holder):
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type = original_function.__name__
@@ -1297,6 +1311,7 @@ def client(original_function):
         try:
             if logging_obj is None:
                 logging_obj, kwargs = function_setup(original_function.__name__, rules_obj, start_time, *args, **kwargs)
+            _correlation_logging_obj_holder["logging_obj"] = logging_obj
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
@@ -1556,6 +1571,20 @@ def client(original_function):
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
+        # Restore trace_id/session_id contextvars to their pre-call value once this
+        # call (in this task) is fully done - see request_correlation_in_logs.
+        # _wrapper_async_body rebinds its own local `kwargs` name via
+        # function_setup(), so a dict-identity trick doesn't work here; it
+        # stashes logging_obj into this holder directly instead.
+        _correlation_logging_obj_holder: dict = {}
+        try:
+            return await _wrapper_async_body(args, kwargs, _correlation_logging_obj_holder)
+        finally:
+            _correlation_logging_obj = _correlation_logging_obj_holder.get("logging_obj")
+            if _correlation_logging_obj is not None:
+                _correlation_logging_obj._restore_correlation_context()
+
+    async def _wrapper_async_body(args, kwargs, _correlation_logging_obj_holder):
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
         result = None
@@ -1583,6 +1612,7 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            _correlation_logging_obj_holder["logging_obj"] = logging_obj
 
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:

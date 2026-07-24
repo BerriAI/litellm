@@ -3272,7 +3272,6 @@ async def test_async_failure_handler_runs_callbacks_and_restores_correlation_con
             )
 
         dummy_logger.async_log_failure_event.assert_called_once()
-        assert logging_obj._correlation_context_restored is True
         assert trace_id_var.get() == logging_obj._pre_call_trace_id
         assert session_id_var.get() == logging_obj._pre_call_session_id
         assert trace_id_var.get() != "mutated-during-call"
