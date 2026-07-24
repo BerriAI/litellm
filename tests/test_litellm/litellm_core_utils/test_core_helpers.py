@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    safe_deep_copy,
 )
 
 
@@ -201,3 +202,30 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+def test_safe_deep_copy_survives_concurrent_key_insertion():
+    data = {}
+
+    class _InsertsKeyOnDeepcopy:
+        def __deepcopy__(self, memo):
+            data[f"late-{len(data)}"] = "added-mid-iteration"
+            return self
+
+    for i in range(5):
+        data[f"item-{i}"] = _InsertsKeyOnDeepcopy()
+
+    result = safe_deep_copy(data)
+
+    for i in range(5):
+        assert f"item-{i}" in result
+
+
+def test_safe_deep_copy_preserves_otel_span_roundtrip():
+    span = object()
+    data = {"metadata": {"litellm_parent_otel_span": span, "user": "x"}}
+
+    result = safe_deep_copy(data)
+
+    assert data["metadata"]["litellm_parent_otel_span"] is span
+    assert result["metadata"]["user"] == "x"
