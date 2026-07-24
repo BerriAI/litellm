@@ -1276,6 +1276,17 @@ def test_keepalive_seconds_in_all_litellm_params():
     assert "keepalive_seconds" in all_litellm_params
 
 
+def test_allow_client_keepalive_override_in_all_litellm_params():
+    """allow_client_keepalive_override is a deployment-only control flag: if it's
+    missing from all_litellm_params, it leaks straight through into the actual
+    provider API call as an unrecognized field and gets rejected (confirmed live
+    against the real Anthropic API, which returns 'Extra inputs are not
+    permitted')."""
+    from litellm.types.utils import all_litellm_params
+
+    assert "allow_client_keepalive_override" in all_litellm_params
+
+
 @pytest.mark.asyncio
 async def test_async_data_generator_emits_ping_heartbeat(monkeypatch):
     """When keepalive_seconds is set on a deployment that allows client override,
