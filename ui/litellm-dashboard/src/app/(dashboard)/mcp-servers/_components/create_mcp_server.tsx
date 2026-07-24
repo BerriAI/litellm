@@ -441,6 +441,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         oauth_passthrough: oauthPassthroughRaw,
         dcr_bridge: dcrBridgeRaw,
         token_validation_json: rawTokenValidationJson,
+        mcp_info_metadata_json: rawMcpInfoMetadataJson,
         ...restValues
       } = values;
 
@@ -524,6 +525,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
       }
 
+      let customMcpInfo: Record<string, unknown> = {};
+      if (rawMcpInfoMetadataJson && rawMcpInfoMetadataJson.trim() !== "") {
+        try {
+          customMcpInfo = JSON.parse(rawMcpInfoMetadataJson);
+        } catch {
+          NotificationsManager.fromBackend("Invalid JSON in MCP Info Metadata");
+          setIsLoading(false);
+          return;
+        }
+      }
+
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -531,6 +543,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // Remove the raw stdio_config field as we've extracted its components
         stdio_config: undefined,
         mcp_info: {
+          ...customMcpInfo,
           server_name: restValues.server_name || restValues.url,
           description: restValues.description,
           logo_url: logoUrl || undefined,
@@ -882,6 +895,40 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             >
               <TextInput
                 placeholder="Brief description of what this server does"
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Metadata (JSON)
+                  <Tooltip title="Optional free-form JSON stored on the server's mcp_info. Use it for arbitrary metadata such as the owning team or cost center.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="mcp_info_metadata_json"
+              rules={[
+                {
+                  validator: (_: unknown, value: string) => {
+                    if (!value || value.trim() === "") return Promise.resolve();
+                    try {
+                      const parsed = JSON.parse(value);
+                      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+                        return Promise.reject(new Error("Must be a JSON object"));
+                      }
+                      return Promise.resolve();
+                    } catch {
+                      return Promise.reject(new Error("Must be valid JSON"));
+                    }
+                  },
+                },
+              ]}
+            >
+              <Input.TextArea
+                placeholder={'{\n  "owning_team": "platform",\n  "cost_center": "1234"\n}'}
+                rows={4}
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
             </Form.Item>

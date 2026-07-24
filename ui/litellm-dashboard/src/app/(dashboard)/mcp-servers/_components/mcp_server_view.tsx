@@ -8,7 +8,7 @@ import { MCPToolsViewer } from ".";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { getSecureItem } from "@/utils/secureStorage";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
-import { getMaskedAndFullUrl } from "./utils";
+import { getMaskedAndFullUrl, extractCustomMcpInfo } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { Button as AntdButton } from "antd";
@@ -69,6 +69,9 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
   const urlValue = mcpServer.url ?? "";
   const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
+
+  const customMcpInfo = extractCustomMcpInfo(mcpServer.mcp_info as Record<string, unknown> | null | undefined);
+  const hasCustomMcpInfo = Object.keys(customMcpInfo).length > 0;
 
   const renderUrlWithToggle = (url: string | null | undefined, showFull: boolean) => {
     if (!url) return "—";
@@ -258,6 +261,18 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <Text className="text-sm font-medium text-gray-500">Description</Text>
                     <div className="col-span-2 text-sm text-gray-900">
                       {mcpServer.description || <span className="text-gray-400">—</span>}
+                    </div>
+                  </div>
+                  <div className="py-3 grid grid-cols-3 gap-4">
+                    <Text className="text-sm font-medium text-gray-500">Metadata</Text>
+                    <div className="col-span-2 text-sm text-gray-900">
+                      {hasCustomMcpInfo ? (
+                        <pre className="text-xs bg-gray-50 border border-gray-200 rounded-md p-3 overflow-auto whitespace-pre-wrap break-all">
+                          {JSON.stringify(customMcpInfo, null, 2)}
+                        </pre>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </div>
                   </div>
                   <div className="py-3 grid grid-cols-3 gap-4">

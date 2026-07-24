@@ -86,6 +86,30 @@ export const normalizeEnvVars = (list: unknown): MCPEnvVar[] => {
   return out;
 };
 
+export const MCP_INFO_RESERVED_KEYS = [
+  "server_name",
+  "description",
+  "logo_url",
+  "mcp_server_cost_info",
+  "tool_allowlist_enforced",
+] as const;
+
+export const extractCustomMcpInfo = (info: Record<string, unknown> | null | undefined): Record<string, unknown> => {
+  if (!info || typeof info !== "object") return {};
+  const reserved = new Set<string>(MCP_INFO_RESERVED_KEYS);
+  return Object.fromEntries(Object.entries(info).filter(([key]) => !reserved.has(key)));
+};
+
+export const serializeCustomMcpInfo = (info: Record<string, unknown> | null | undefined): string => {
+  const custom = extractCustomMcpInfo(info);
+  if (Object.keys(custom).length === 0) return "";
+  try {
+    return JSON.stringify(custom, null, 2);
+  } catch {
+    return "";
+  }
+};
+
 /** Normalize tool override maps from API/DB (dict or JSON string) for form state. */
 export const normalizeToolOverrideMap = (
   value: Record<string, string> | string | null | undefined,

@@ -2118,3 +2118,85 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
     expect(payload.dcr_bridge).toBe(true);
   });
 });
+
+describe("CreateMCPServer mcp_info metadata", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const createdServer = {
+    server_id: "new-metadata-server",
+    server_name: "Metadata_Server",
+    alias: "Metadata_Server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "none",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+  };
+
+  async function setupHttpServerForm() {
+    render(<CreateMCPServer {...defaultProps} />);
+    await selectAntOption("Transport Type", "Streamable HTTP");
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+    });
+    const nameInput = document.getElementById("server_name") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "Metadata_Server" } });
+    });
+    const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+    await act(async () => {
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+    });
+    await selectAntOption("Authentication", "None");
+  }
+
+  it("merges free-form mcp_info metadata JSON into the mcp_info payload", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+    await setupHttpServerForm();
+
+    const metadataTextarea = document.getElementById("mcp_info_metadata_json") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.change(metadataTextarea, {
+        target: { value: '{"owning_team": "platform", "cost_center": "1234"}' },
+      });
+    });
+
+    const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+
+    await waitFor(() => {
+      expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+    expect(payload.mcp_info.owning_team).toBe("platform");
+    expect(payload.mcp_info.cost_center).toBe("1234");
+    expect(payload.mcp_info.server_name).toBe("Metadata_Server");
+  });
+
+  it("blocks submit and does not call the API when mcp_info metadata JSON is invalid", async () => {
+    vi.mocked(networking.createMCPServer).mockResolvedValue(createdServer);
+    await setupHttpServerForm();
+
+    const metadataTextarea = document.getElementById("mcp_info_metadata_json") as HTMLTextAreaElement;
+    await act(async () => {
+      fireEvent.change(metadataTextarea, { target: { value: "{not valid json" } });
+    });
+
+    const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Must be valid JSON")).toBeInTheDocument();
+    });
+    expect(networking.createMCPServer).not.toHaveBeenCalled();
+  });
+});

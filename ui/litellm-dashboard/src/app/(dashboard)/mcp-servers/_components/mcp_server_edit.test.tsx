@@ -2156,3 +2156,70 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
     expect(payload.dcr_bridge).toBe(true);
   });
 });
+
+describe("MCPServerEdit (mcp_info metadata)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const serverWithMetadata = {
+    ...interactiveOAuthServer,
+    auth_type: "none",
+    mcp_info: { server_name: "OAuthServer", owning_team: "platform", cost_center: "1234" },
+  };
+
+  it("pre-populates the metadata textarea with custom mcp_info keys and strips reserved keys", async () => {
+    render(
+      <MCPServerEdit
+        mcpServer={serverWithMetadata}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      const textarea = document.getElementById("mcp_info_metadata_json") as HTMLTextAreaElement;
+      expect(textarea).not.toBeNull();
+      expect(JSON.parse(textarea.value)).toEqual({ owning_team: "platform", cost_center: "1234" });
+    });
+  });
+
+  it("merges edited metadata into mcp_info on save and drops removed keys", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(serverWithMetadata);
+
+    render(
+      <MCPServerEdit
+        mcpServer={serverWithMetadata}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    let textarea: HTMLTextAreaElement | null = null;
+    await waitFor(() => {
+      textarea = document.getElementById("mcp_info_metadata_json") as HTMLTextAreaElement;
+      expect(textarea).not.toBeNull();
+    });
+    await act(async () => {
+      fireEvent.change(textarea!, { target: { value: '{"owning_team": "search"}' } });
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.mcp_info.owning_team).toBe("search");
+    expect(payload.mcp_info.cost_center).toBeUndefined();
+    expect(payload.mcp_info.server_name).toBe("OAuthServer");
+  });
+});

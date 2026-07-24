@@ -42,6 +42,7 @@ import {
   validateMCPServerName,
   normalizeEnvVars,
   normalizeToolOverrideMap,
+  serializeCustomMcpInfo,
   TOOL_DISPLAY_NAME_PATTERN,
 } from "./utils";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -280,6 +281,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer.env]);
 
+  const initialMcpInfoMetadata = React.useMemo(() => serializeCustomMcpInfo(mcpServer.mcp_info), [mcpServer.mcp_info]);
+
   // If server has spec_path, show it as "openapi" transport in the UI
   const effectiveTransport = React.useMemo(() => {
     if (mcpServer.spec_path && mcpServer.transport !== "stdio") {
@@ -300,8 +303,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
+      mcp_info_metadata_json: initialMcpInfoMetadata || undefined,
     }),
-    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvVars, initialEnvJson],
+    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvVars, initialEnvJson, initialMcpInfoMetadata],
   );
 
   // antd applies `initialValues` only at first mount. When the server loads after
@@ -694,6 +698,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         oauth_passthrough: oauthPassthroughRaw,
         dcr_bridge: dcrBridgeRaw,
         token_validation_json: rawTokenValidationJson,
+        mcp_info_metadata_json: rawMcpInfoMetadataJson,
         ...restValues
       } = values;
 
@@ -829,6 +834,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         }
       }
 
+      let customMcpInfo: Record<string, unknown> = {};
+      if (rawMcpInfoMetadataJson && rawMcpInfoMetadataJson.trim() !== "") {
+        try {
+          customMcpInfo = JSON.parse(rawMcpInfoMetadataJson);
+        } catch {
+          NotificationsManager.fromBackend("Invalid JSON in MCP Info Metadata");
+          return;
+        }
+      }
+
       // Prepare the payload with cost configuration and permission fields
       const mcpInfoServerName =
         restValues.server_name ||
@@ -856,7 +871,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           : {}),
         server_id: mcpServer.server_id,
         mcp_info: {
-          ...(mcpServer.mcp_info ?? {}),
+          ...customMcpInfo,
           server_name: mcpInfoServerName,
           description: restValues.description,
           logo_url: logoUrl || undefined,
@@ -1033,6 +1048,39 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             </Form.Item>
             <Form.Item label="Description" name="description">
               <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
+            </Form.Item>
+            <Form.Item
+              label={
+                <span className="flex items-center">
+                  Metadata (JSON)
+                  <Tooltip title="Optional free-form JSON stored on the server's mcp_info. Use it for arbitrary metadata such as the owning team or cost center.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="mcp_info_metadata_json"
+              rules={[
+                {
+                  validator: (_: unknown, value: string) => {
+                    if (!value || value.trim() === "") return Promise.resolve();
+                    try {
+                      const parsed = JSON.parse(value);
+                      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+                        return Promise.reject(new Error("Must be a JSON object"));
+                      }
+                      return Promise.resolve();
+                    } catch {
+                      return Promise.reject(new Error("Must be valid JSON"));
+                    }
+                  },
+                },
+              ]}
+            >
+              <Input.TextArea
+                rows={4}
+                placeholder={'{\n  "owning_team": "platform",\n  "cost_center": "1234"\n}'}
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
             </Form.Item>
             <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
