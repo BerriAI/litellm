@@ -5971,6 +5971,8 @@ def embedding(
     mock_response: Optional[List[float]] = kwargs.get("mock_response", None)  # type: ignore
     azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
     aembedding: Optional[bool] = kwargs.get("aembedding", None)
+    if isinstance(encoding_format, list):
+        encoding_format = encoding_format[0] if encoding_format else None
     extra_headers = kwargs.get("extra_headers", None)
     headers = kwargs.get("headers", None) or extra_headers
     if headers is None:
