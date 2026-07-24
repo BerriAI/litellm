@@ -8629,6 +8629,7 @@ async def model_list(
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
+        resolve_deployment_provider,
     )
 
     # Validate scope parameter if provided
@@ -8703,9 +8704,10 @@ async def model_list(
         # public name is what the client sees as the model id.
         model_data = []
         for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+            deployment = llm_router.get_deployment_by_model_group_name(lookup_id) if llm_router is not None else None
             model_info = create_model_info_response(
                 model_id=lookup_id,
-                provider="openai",
+                provider=resolve_deployment_provider(deployment),
                 include_metadata=include_metadata or False,
                 fallback_type=fallback_type,
                 llm_router=llm_router,
@@ -8743,9 +8745,10 @@ async def model_list(
     # public name is what the client sees as the model id.
     model_data = []
     for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+        deployment = llm_router.get_deployment_by_model_group_name(lookup_id) if llm_router is not None else None
         model_info = create_model_info_response(
             model_id=lookup_id,
-            provider="openai",
+            provider=resolve_deployment_provider(deployment),
             include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
@@ -8795,6 +8798,7 @@ async def model_info(
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
+        resolve_deployment_provider,
         validate_model_access,
     )
 
@@ -8845,7 +8849,7 @@ async def model_info(
         )
 
     # Use the actual litellm model from the deployment to get provider info
-    _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
+    provider = resolve_deployment_provider(deployment)
 
     response_id = internal_to_public.get(resolved_model_id, model_id)
     return create_model_info_response(
