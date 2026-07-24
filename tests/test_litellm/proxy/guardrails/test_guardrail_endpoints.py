@@ -1047,7 +1047,7 @@ async def test_patch_guardrail_endpoint(
         mock_guardrail_registry.update_guardrail_in_db.assert_called_once()
 
         mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
-            guardrail=mocker.ANY
+            guardrail=mocker.ANY, llm_router=mocker.ANY
         )
 
         if scenario == "success_sync_fails":
