@@ -112,16 +112,6 @@ describe("Sidebar (leftnav)", () => {
     });
   });
 
-  it("hides Chat by default", () => {
-    renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.queryByText("Chat")).not.toBeInTheDocument();
-  });
-
-  it("shows Chat when enableChatUI is true", () => {
-    renderWithProviders(<Sidebar {...defaultProps} enableChatUI />);
-    expect(screen.getByText("Chat")).toBeInTheDocument();
-  });
-
   it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 

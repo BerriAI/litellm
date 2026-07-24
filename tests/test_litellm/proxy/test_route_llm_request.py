@@ -382,8 +382,8 @@ async def test_route_request_with_router_settings_override():
             "num_retries": 5,
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
-            # These settings should be ignored (not in per_request_settings list)
             "routing_strategy": "least-busy",
+            # This setting should be ignored (not in per_request_settings list)
             "model_group_alias": {"alias": "real_model"},
         },
     }
@@ -400,8 +400,8 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["num_retries"] == 5
     assert call_kwargs["timeout"] == 30
     assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    assert call_kwargs["routing_strategy"] == "least-busy"
     # Verify unsupported settings were NOT merged
-    assert "routing_strategy" not in call_kwargs
     assert "model_group_alias" not in call_kwargs
     # Verify router_settings_override was removed from data
     assert "router_settings_override" not in call_kwargs
@@ -819,3 +819,71 @@ async def test_route_request_realtime_transcription_session_resolves_credentials
         )
 
     assert mock_handler.call_args.kwargs["api_key"] == "transcription-key"
+
+
+@pytest.mark.asyncio
+async def test_route_request_merges_enable_tag_filtering_from_override():
+    """Key/team router_settings carry enable_tag_filtering; the override
+    whitelist must forward it to the router call or the team's tag-routing
+    toggle saved in the UI is silently ignored at request time."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "enable_tag_filtering": True,
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["enable_tag_filtering"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_request_strips_client_supplied_enable_tag_filtering():
+    """enable_tag_filtering influences deployment selection and is only
+    trusted when it comes from key/team router_settings via
+    router_settings_override. A caller putting it in the request body must
+    not reach the router with it."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "enable_tag_filtering": True,
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert "enable_tag_filtering" not in call_kwargs
+    assert "enable_tag_filtering" not in data
+
+
+@pytest.mark.asyncio
+async def test_route_request_override_enable_tag_filtering_beats_body_value():
+    """A client-sent enable_tag_filtering must not shadow the key/team
+    setting: the body copy is stripped first, so the override value is the
+    one the router sees."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "enable_tag_filtering": False,
+        "router_settings_override": {
+            "enable_tag_filtering": True,
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert call_kwargs["enable_tag_filtering"] is True

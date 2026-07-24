@@ -38,6 +38,7 @@ from litellm import (
 )
 from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
 from litellm.exceptions import (
+    BudgetExceededError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -1452,6 +1453,9 @@ class Logging(LiteLLMLoggingBaseClass):
             response_cost = litellm.response_cost_calculator(**response_cost_calculator_kwargs)
 
             verbose_logger.debug(f"response_cost: {response_cost}")
+            additional_response_cost: object = self.model_call_details.get("additional_response_cost")
+            if isinstance(additional_response_cost, (int, float)) and additional_response_cost > 0:
+                return (response_cost or 0.0) + additional_response_cost
             return response_cost
         except Exception as e:  # error calculating cost
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -1530,6 +1534,9 @@ class Logging(LiteLLMLoggingBaseClass):
             and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
             and litellm_params.get(CallTypes.atranscription.value, False) is not True
             and litellm_params.get(CallTypes.allm_passthrough_route.value, False) is not True
+            and litellm_params.get(CallTypes.aanthropic_messages.value, False) is not True
+            and litellm_params.get(CallTypes.agenerate_content.value, False) is not True
+            and litellm_params.get(CallTypes.agenerate_content_stream.value, False) is not True
         )
 
     def _is_assembled_stream_success(self, result=None) -> bool:
@@ -1604,6 +1611,35 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             **kwargs,
         )
+
+    async def dispatch_failure_handlers(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        prefer_async_handlers: bool = False,
+    ) -> None:
+        """Route failure logging to async and/or sync handlers for this request.
+
+        Mirrors ``dispatch_success_handlers``: the sync ``failure_handler`` never runs
+        concurrently with ``async_failure_handler`` on the shared logging object, so the
+        two paths cannot mutate it at the same time. ``prefer_async_handlers`` only
+        bypasses the sync-SDK-only shortcut (e.g. ``async for`` on a stream from
+        ``completion()``); legacy string callbacks still run via
+        ``executor.submit(failure_handler)`` when configured.
+        """
+        litellm_params = self.model_call_details.get("litellm_params", {}) or {}
+        sync_sdk = self._is_sync_litellm_request(litellm_params)
+        passthrough = self.call_type == CallTypes.pass_through.value
+        if sync_sdk and not prefer_async_handlers and not passthrough:
+            self.failure_handler(exception, traceback_exception)
+            return
+
+        await self.async_failure_handler(exception, traceback_exception)
+
+        if not self._should_run_sync_failure_callbacks_for_async_calls():
+            return
+
+        executor.submit(self.failure_handler, exception, traceback_exception)
 
     def should_run_logging(
         self,
@@ -3068,6 +3104,24 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_success_callbacks = self._remove_internal_custom_logger_callbacks(_combined_sync_callbacks)
         _filtered_success_callbacks = self._remove_internal_litellm_callbacks(_filtered_success_callbacks)
         return len(_filtered_success_callbacks) > 0
+
+    def _should_run_sync_failure_callbacks_for_async_calls(self) -> bool:
+        """
+        Returns:
+            - bool: True if sync failure callbacks should be run for async calls. eg. `langfuse`, `s3`
+
+        Mirrors ``_should_run_sync_callbacks_for_async_calls`` but reads the failure
+        callback lists. Gating the legacy sync ``failure_handler`` on the success lists
+        would drop sync failure callbacks for any caller that configures only failure
+        callbacks, so streaming errors would be logged nowhere.
+        """
+        _combined_sync_callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_failure_callbacks,
+            global_callbacks=litellm.failure_callback,
+        )
+        _filtered_failure_callbacks = self._remove_internal_custom_logger_callbacks(_combined_sync_callbacks)
+        _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
+        return len(_filtered_failure_callbacks) > 0
 
     def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
         if dynamic_success_callbacks is None:
@@ -4597,6 +4651,10 @@ class StandardLoggingPayloadSetup:
             user_api_key_spend=None,
             user_api_key_max_budget=None,
             user_api_key_budget_reset_at=None,
+            user_api_key_user_spend=None,
+            user_api_key_user_max_budget=None,
+            user_api_key_team_spend=None,
+            user_api_key_team_max_budget=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
             user_api_key_org_alias=None,
@@ -4943,6 +5001,7 @@ class StandardLoggingPayloadSetup:
 
         rate_limit_category = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
+        budget_error = original_exception if isinstance(original_exception, BudgetExceededError) else None
 
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
@@ -4952,6 +5011,10 @@ class StandardLoggingPayloadSetup:
             error_message=error_message,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
+            error_budget_entity_type=budget_error.entity_type if budget_error else None,
+            error_budget_entity_id=budget_error.entity_id if budget_error else None,
+            error_budget_limit=budget_error.max_budget if budget_error else None,
+            error_budget_spend=budget_error.current_cost if budget_error else None,
         )
 
     @staticmethod
@@ -5428,6 +5491,10 @@ def get_standard_logging_metadata(
         user_api_key_spend=None,
         user_api_key_max_budget=None,
         user_api_key_budget_reset_at=None,
+        user_api_key_user_spend=None,
+        user_api_key_user_max_budget=None,
+        user_api_key_team_spend=None,
+        user_api_key_team_max_budget=None,
         user_api_key_team_id=None,
         user_api_key_org_id=None,
         user_api_key_org_alias=None,
@@ -5527,6 +5594,10 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         user_api_key_team_id=str("test_team"),
         user_api_key_user_id=str("test_user"),
         user_api_key_team_alias=str("test_team_alias"),
+        user_api_key_user_spend=None,
+        user_api_key_user_max_budget=None,
+        user_api_key_team_spend=None,
+        user_api_key_team_max_budget=None,
         user_api_key_org_id=None,
         spend_logs_metadata=None,
         requester_ip_address=str("127.0.0.1"),

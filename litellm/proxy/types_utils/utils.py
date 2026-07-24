@@ -34,16 +34,12 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         module_name = ".".join(parts[:-1])
         instance_name = parts[-1]
 
-        # If config_file_path is provided, use it to determine the module spec and load the module
+        module_file_path = None
         if config_file_path is not None:
             directory = os.path.dirname(config_file_path)
-            module_file_path = os.path.join(directory, *module_name.split("."))
-            module_file_path += ".py"
+            module_file_path = os.path.join(directory, *module_name.split(".")) + ".py"
 
-            # Check if the file exists before trying to load it
-            if not os.path.exists(module_file_path):
-                raise ImportError(f"Could not find module file {module_file_path}")
-
+        if module_file_path is not None and os.path.exists(module_file_path):
             spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
             if spec is None:
                 raise ImportError(f"Could not find a module specification for {module_file_path}")
@@ -52,7 +48,6 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
                 raise ImportError(f"Could not find a module loader for {module_file_path}")
             spec.loader.exec_module(module)  # type: ignore
         else:
-            # Dynamically import the module
             module = importlib.import_module(module_name)
 
         # Get the instance from the module

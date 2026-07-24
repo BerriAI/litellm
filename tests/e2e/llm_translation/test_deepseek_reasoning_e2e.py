@@ -33,11 +33,11 @@ PROMPT = "What is 17 + 26? Answer with just the number."
 
 def _register_reasoner(client: PassthroughClient, resources: ResourceManager) -> str:
     model = f"e2e-deepseek-reasoner-{unique_marker()}"
-    model_id = client.gateway.create_model(
+    model_id = client.proxy.create_model(
         model,
         LiteLLMParamsBody(model=REASONER, api_key="os.environ/DEEPSEEK_API_KEY"),
     )
-    resources.defer(lambda: client.gateway.delete_model(model_id))
+    resources.defer(lambda: client.proxy.delete_model(model_id))
     return model
 
 
@@ -56,7 +56,7 @@ class TestDeepSeekReasoningDisable:
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,
@@ -78,7 +78,7 @@ class TestDeepSeekReasoningDisable:
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,
@@ -100,7 +100,7 @@ class TestDeepSeekReasoningDisable:
         key = resources.key()
 
         response = unwrap(
-            client.gateway.chat(
+            client.proxy.chat(
                 key,
                 ChatBody(
                     model=model,

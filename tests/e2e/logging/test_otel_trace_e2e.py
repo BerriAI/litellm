@@ -18,15 +18,14 @@ destination's own query API - never proxy-side "export succeeded" logs).
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import NoBody, StreamingResponse, require_successful_call
+from e2e_http import NoBody
 from lifecycle import ResourceManager
-from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient
+from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok
 from models import LiteLLMParamsBody
 from otel_client import JaegerSpan, JaegerTrace, OtelReader
 
@@ -49,7 +48,7 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the OTEL v2 logger among its active
     callbacks, so a missing/failed destination config fails here, before any
     traffic-based assertion can time out confusingly."""
-    result = client.gateway.probe("/health/readiness/details", params=NoBody())
+    result = client.proxy.probe("/health/readiness/details", params=NoBody())
     assert result.status_code == 200, (
         f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
     )
@@ -58,22 +57,6 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
         f"the proxy must report the {OTEL_V2_LOGGER_NAME} callback active "
         f"(LITELLM_OTEL_V2 + arize_phoenix preset in the compose config); got: {details.success_callbacks}"
     )
-
-
-def _first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> StreamingResponse:
-    """First successful call on a fresh key. A fresh key may briefly 401 until
-    the data plane's auth cache picks it up, so retry on 401 to a deadline; a
-    401 is rejected before the LLM call so it exports no gen-AI span and cannot
-    contaminate the trace assertions. Any other failure is behavior under test
-    and fails hard."""
-    deadline = time.monotonic() + client.gateway.poll_timeout
-    while True:
-        outcome = send()
-        if outcome.ok:
-            return outcome
-        if outcome.status_code != 401 or time.monotonic() >= deadline:
-            require_successful_call(outcome)
-        time.sleep(client.gateway.poll_interval)
 
 
 def _parent_ids(span_id: str, trace: JaegerTrace) -> list[str]:
@@ -160,6 +143,56 @@ def _tag(span: JaegerSpan, key: str) -> str | int | float | bool | None:
         if tag.key == key:
             return tag.value
     return None
+
+
+#: The v2 gen-AI span attribute recording time-to-first-token for streamed
+#: calls: seconds from the upstream request being issued to the first streamed
+#: chunk (stamped only for streaming; added in #32236).
+TTFT_TAG = "gen_ai.response.time_to_first_chunk"
+
+
+def _assert_real_ttft(hits: list[JaegerTrace], *, genai_span: str) -> None:
+    """The enforced behavior: the streamed call's single gen-AI span records a
+    TTFT that is a real measurement - present, numeric, positive, and strictly
+    less than the span's own total duration. A TTFT of zero, or one at/above
+    the full span duration, is a clock artifact rather than first-token
+    latency."""
+    assert hits, (
+        "no trace for this call arrived at the destination within the deadline "
+        "(nothing tagged with its call id was found)"
+    )
+    assert len(hits) == 1, (
+        f"expected exactly ONE trace for the call, got {len(hits)}: "
+        f"{[(t.trace_id, t.span_names()) for t in hits]}"
+    )
+    trace = hits[0]
+    spans = [span for span in trace.spans if span.operation_name == genai_span]
+    assert len(spans) == 1, (
+        f"a streamed call must produce exactly ONE gen-AI span, got {len(spans)}; "
+        f"spans: {trace.span_names()}"
+    )
+    span = spans[0]
+
+    value = _tag(span, TTFT_TAG)
+    assert value is not None, (
+        f"the gen-AI span must record {TTFT_TAG} for a streamed call; "
+        f"tags present: {sorted(tag.key for tag in span.tags)}"
+    )
+    assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+        f"{TTFT_TAG} must be numeric seconds, got {value!r}"
+    )
+    ttft_seconds = float(value)
+    duration_seconds = span.duration / 1_000_000
+
+    assert ttft_seconds > 0, (
+        f"TTFT must be a real positive latency, got {ttft_seconds!r} - zero or negative "
+        "means it was computed from missing/backfilled timestamps, not the first chunk"
+    )
+    assert ttft_seconds < duration_seconds, (
+        f"TTFT ({ttft_seconds:.6f}s) must be strictly less than the gen-AI span's total "
+        f"duration ({duration_seconds:.6f}s) - the first chunk arrives before the stream "
+        "finishes, so a TTFT at or above the span duration is not a first-token measurement"
+    )
 
 
 #: The attribute contract a failed call's gen-AI span must carry (LIT-4179), as
@@ -253,7 +286,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client, lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
         )
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
@@ -286,7 +319,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client, lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
         )
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
@@ -319,7 +352,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}"),
         )
@@ -360,7 +393,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", stream=True, max_tokens=16),
         )
@@ -416,7 +449,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16, stream=True),
         )
@@ -474,7 +507,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = _first_ok(
+        outcome = first_ok(
             client,
             lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}", stream=True),
         )
@@ -509,6 +542,134 @@ class TestOtelTraceCompleteness:
             f"the spend row must be attributed to the responses call type, got {spend_row.call_type!r}"
         )
 
+    @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["chat_completions"])
+    def test_chat_completions_stream_records_real_ttft(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A successful streamed `/chat/completions` request should record a
+        real time-to-first-token on its gen-AI span: the
+        `gen_ai.response.time_to_first_chunk` attribute, in seconds.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * The TTFT attribute is present and numeric.
+        * Its value is positive and strictly less than the gen-AI span's own
+          total duration.
+        """
+        route = "/chat/completions"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-ttft-chat-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = first_ok(
+            client,
+            lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", stream=True, max_tokens=16),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+        assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
+        assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
+
+        genai_span = f"chat {MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_real_ttft(hits, genai_span=genai_span)
+
+    @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["messages"])
+    def test_messages_stream_records_real_ttft(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A successful streamed `/v1/messages` request should record a real
+        time-to-first-token on its gen-AI span: the
+        `gen_ai.response.time_to_first_chunk` attribute, in seconds.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * The TTFT attribute is present and numeric.
+        * Its value is positive and strictly less than the gen-AI span's own
+          total duration.
+        """
+        route = "/v1/messages"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(f"otel-ttft-messages-{unique_marker()}", models=[MODEL])
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = first_ok(
+            client,
+            lambda: client.messages_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16, stream=True),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+        assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
+        assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
+
+        genai_span = f"chat {MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_real_ttft(hits, genai_span=genai_span)
+
+    @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["responses"])
+    def test_responses_stream_records_real_ttft(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A successful streamed `/v1/responses` request should record a real
+        time-to-first-token on its gen-AI span: the
+        `gen_ai.response.time_to_first_chunk` attribute, in seconds.
+
+        The test therefore confirms that:
+
+        * The response actually streams.
+        * Exactly one gen-AI span is created for the request.
+        * The TTFT attribute is present and numeric.
+        * Its value is positive and strictly less than the gen-AI span's own
+          total duration.
+        """
+        route = "/v1/responses"
+        _assert_otel_destination_configured(client)
+
+        key = client.key_with_alias(
+            f"otel-ttft-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL]
+        )
+        resources.defer(lambda: client.delete_key(key))
+
+        marker = unique_marker()
+        outcome = first_ok(
+            client,
+            lambda: client.responses_raw(key, CHEAP_OPENAI_MODEL, f"reply with one word {marker}", stream=True),
+        )
+        assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
+        assert outcome.is_streaming, f"response must be an event stream, got content-type {outcome.content_type!r}"
+        assert outcome.chunks > 0, "the stream must deliver at least one event"
+        assert outcome.stream_error is None, (
+            f"the stream carried an upstream error event despite the 200: {outcome.stream_error}"
+        )
+
+        genai_span = f"chat {CHEAP_OPENAI_MODEL}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span, require_cost_span=False),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_real_ttft(hits, genai_span=genai_span)
+
     @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["chat_completions"])
     def test_failed_chat_completions_error_span_attributes(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
@@ -537,13 +698,13 @@ class TestOtelTraceCompleteness:
         key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
         resources.defer(lambda: client.delete_key(key))
 
-        deadline = time.monotonic() + client.gateway.poll_timeout
+        deadline = time.monotonic() + client.proxy.poll_timeout
         while True:
             outcome = client.chat_raw(key, model_name, "trigger an upstream auth failure", max_tokens=16)
             assert not outcome.ok, "the call must fail; the deployment's upstream key is invalid"
             if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
                 break
-            time.sleep(client.gateway.poll_interval)
+            time.sleep(client.proxy.poll_interval)
         assert "AnthropicException" in outcome.body, (
             "never saw the upstream provider failure before the deadline; the key may still be "
             f"propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"

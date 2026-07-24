@@ -1820,7 +1820,7 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
 
     # Verify the auto-router was added to the router's auto_routers dict
     assert "test-auto-router" in router.auto_routers
-    assert router.auto_routers["test-auto-router"] == mock_auto_router_instance
+    assert router.auto_routers["test-auto-router"][0].strategy == mock_auto_router_instance
 
 
 @patch("litellm.router_strategy.auto_router.auto_router.AutoRouter")
@@ -1833,7 +1833,11 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     mock_auto_router.return_value = mock_auto_router_instance
 
     # Add an existing auto-router
-    router.auto_routers["test-auto-router"] = mock_auto_router_instance
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    router.auto_routers["test-auto-router"] = [
+        TaggedPreRoutingStrategy(tags=(), strategy=mock_auto_router_instance)
+    ]
 
     # Try to add another auto-router with the same name
     litellm_params = LiteLLM_Params(
@@ -1849,7 +1853,7 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
     )
 
     with pytest.raises(
-        ValueError, match="Auto-router deployment test-auto-router already exists"
+        ValueError, match="Auto-router deployment test-auto-router with tags .* already exists"
     ):
         router.init_auto_router_deployment(deployment)
 

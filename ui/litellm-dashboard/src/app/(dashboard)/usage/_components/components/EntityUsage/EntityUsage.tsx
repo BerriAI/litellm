@@ -38,7 +38,7 @@ import {
   teamDailyActivityCall,
   userDailyActivityCall,
 } from "@/components/networking";
-import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
 import {
   BreakdownMetrics,
@@ -774,24 +774,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                               <TableRow key={provider.provider}>
                                 <TableCell>
                                   <div className="flex items-center space-x-2">
-                                    {provider.provider && (
-                                      <img
-                                        src={getProviderLogoAndName(provider.provider).logo}
-                                        alt={`${provider.provider} logo`}
-                                        className="w-4 h-4"
-                                        onError={(e) => {
-                                          const target = e.target as HTMLImageElement;
-                                          const parent = target.parentElement;
-                                          if (parent) {
-                                            const fallbackDiv = document.createElement("div");
-                                            fallbackDiv.className =
-                                              "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                            fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
-                                            parent.replaceChild(fallbackDiv, target);
-                                          }
-                                        }}
-                                      />
-                                    )}
+                                    {provider.provider && <Logo provider={provider.provider} className="w-4 h-4" />}
                                     <span>{provider.provider}</span>
                                   </div>
                                 </TableCell>

@@ -3,7 +3,8 @@ import { TextInput, Icon, Text } from "@tremor/react";
 import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
 import { SimpleTable } from "@/components/common_components/simple_table";
 import { MarginConfig } from "./types";
-import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 
 interface ProviderMarginTableProps {
   marginConfig: MarginConfig;
@@ -96,8 +97,8 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
     .sort((a, b) => {
       if (a.provider === "global") return -1;
       if (b.provider === "global") return 1;
-      const displayA = getProviderDisplayInfo(a.provider).displayName;
-      const displayB = getProviderDisplayInfo(b.provider).displayName;
+      const displayA = getProviderLogoAndName(a.provider).displayName;
+      const displayB = getProviderLogoAndName(b.provider).displayName;
       return displayA.localeCompare(displayB);
     });
 
@@ -115,17 +116,10 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
                 </div>
               );
             }
-            const { displayName, logo } = getProviderDisplayInfo(row.provider);
+            const { displayName } = getProviderLogoAndName(row.provider);
             return (
               <div className="flex items-center space-x-2">
-                {logo && (
-                  <img
-                    src={logo}
-                    alt={`${displayName} logo`}
-                    className="w-5 h-5"
-                    onError={(e) => handleImageError(e, displayName)}
-                  />
-                )}
+                <Logo provider={row.provider} label={displayName} className="w-5 h-5" />
                 <span className="font-medium">{displayName}</span>
               </div>
             );
@@ -186,7 +180,7 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
         {
           header: "Actions",
           cell: (row) => {
-            const displayName = row.provider === "global" ? "Global" : getProviderDisplayInfo(row.provider).displayName;
+            const displayName = row.provider === "global" ? "Global" : getProviderLogoAndName(row.provider).displayName;
             return (
               <Icon
                 icon={TrashIcon}

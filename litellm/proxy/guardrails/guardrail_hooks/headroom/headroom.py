@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 import litellm
 from httpx import Response as HttpxResponse
+from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from typing_extensions import TypeGuard
 
 from litellm._logging import verbose_proxy_logger
@@ -487,7 +488,7 @@ class HeadroomGuardrail(CustomGuardrail):
             guardrail_json_response=stats,
             request_data=request_data,
             guardrail_status="success",
-            guardrail_provider="headroom",
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
             start_time=start_time,
             end_time=end_time,
             duration=end_time - start_time,

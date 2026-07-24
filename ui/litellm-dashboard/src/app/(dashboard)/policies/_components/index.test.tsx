@@ -56,21 +56,6 @@ vi.mock("./impact_popover", () => ({
   default: () => <button type="button" aria-label="View blast radius" />,
 }));
 
-vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() {
-    return null;
-  },
-  SwitchVerticalIcon: function SwitchVerticalIcon() {
-    return null;
-  },
-  ChevronUpIcon: function ChevronUpIcon() {
-    return null;
-  },
-  ChevronDownIcon: function ChevronDownIcon() {
-    return null;
-  },
-}));
-
 vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
   return {
@@ -95,8 +80,6 @@ vi.mock("@tremor/react", async (importOriginal) => {
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked),
         className,
       }),
-    Icon: ({ icon: _IconComp, onClick, className }: any) =>
-      React.createElement("button", { type: "button", onClick, className }, "TrashIcon"),
   };
 });
 
@@ -163,7 +146,8 @@ describe("PoliciesPanel attachment delete", () => {
       expect(screen.getByText("test-policy")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(screen.getByTestId(`attachment-actions-${EXPECTED_ATTACHMENT_ID}`));
+    await user.click(await screen.findByTestId("attachment-action-delete"));
 
     const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
     expect(within(dialog).getByText(/Are you sure you want to delete this attachment/i)).toBeInTheDocument();
@@ -195,7 +179,8 @@ describe("PoliciesPanel attachment delete", () => {
       expect(screen.getByText("test-policy")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(screen.getByTestId(`attachment-actions-${EXPECTED_ATTACHMENT_ID}`));
+    await user.click(await screen.findByTestId("attachment-action-delete"));
     const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
 
     const deleteButton = within(dialog).getByRole("button", { name: /^delete$/i });
