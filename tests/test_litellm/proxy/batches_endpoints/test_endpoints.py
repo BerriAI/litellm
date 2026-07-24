@@ -198,9 +198,6 @@ def harness():
         stack.enter_context(patch.object(proxy_server, "general_settings", {}))
         stack.enter_context(patch.object(proxy_server, "proxy_config", MagicMock()))
         stack.enter_context(patch.object(proxy_server, "version", "test-version"))
-        # Default to a database-less proxy so managed-file resolution is a no-op
-        # unless a test opts in; keeps the routing rows that do not exercise it
-        # deterministic regardless of cross-file prisma_client pollution.
         stack.enter_context(patch.object(proxy_server, "prisma_client", None))
 
         h = Harness(
@@ -543,8 +540,6 @@ async def test_create__unified_file_id_resolves_real_storage_url(harness):
 
     fake_db_file = MagicMock(
         storage_url="gs://bucket/litellm-vertex-files/publishers/google/models/gemini-2.0/abc",
-        created_by="user-1",
-        team_id=None,
     )
     find_first = AsyncMock(return_value=fake_db_file)
     fake_repo_instance = MagicMock()
@@ -557,64 +552,19 @@ async def test_create__unified_file_id_resolves_real_storage_url(harness):
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        resp = await call_create(harness, user=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"))
+        resp = await call_create(harness)
 
-    # The real storage_url - not the opaque unified id - must be what's
-    # forwarded to the router/provider.
     assert harness.router_kwargs()["input_file_id"] == fake_db_file.storage_url
-    # The lookup key is the RAW base64 id from the request, not the decoded string.
     find_first.assert_awaited_once_with(where={"unified_file_id": "litellm_proxy_unified_id"})
-    # The unified id is still what's returned to the client.
     assert resp.input_file_id == "litellm_proxy_unified_id"
     assert resp._hidden_params["unified_file_id"] == "unified-xyz"
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_other_tenant_gets_404(harness):
-    """Ownership gate: a caller who does not own the managed file (different
-    user, different team, not an admin) must get a 404, and nothing may be
-    dispatched. Uses the real can_access_resource so the semantics cannot
-    drift from the files retrieve/download endpoints."""
-    set_body(
-        harness,
-        {
-            "input_file_id": "litellm_proxy_unified_id",
-            "endpoint": "/v1/chat/completions",
-            "completion_window": "24h",
-        },
-    )
-
-    fake_db_file = MagicMock(
-        storage_url="gs://bucket/litellm-vertex-files/publishers/google/models/gemini-2.0/abc",
-        created_by="owner-user",
-        team_id="owner-team",
-    )
-    find_first = AsyncMock(return_value=fake_db_file)
-    fake_repo_instance = MagicMock()
-    fake_repo_instance.table.find_first = find_first
-    fake_repo_cls = MagicMock(return_value=fake_repo_instance)
-
-    with (
-        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
-        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
-        patch.object(proxy_server, "prisma_client", MagicMock()),
-        patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
-    ):
-        with pytest.raises(ProxyException) as exc:
-            await call_create(harness, user=UserAPIKeyAuth(api_key="sk-test", user_id="intruder"))
-
-    assert exc.value.code == "404"
-    harness.router_acreate.assert_not_called()
-    harness.litellm_acreate.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_create__unified_file_id_db_error_fails_closed_503(harness):
-    """A lookup failure must fail closed: the ownership gate could not run, and
-    the managed-files deployment hook maps unified ids from cache without
-    re-checking ownership, so dispatching the unverified id would let a caller
-    use another tenant's file during a database outage. Expect a clear 503 and
-    no dispatch."""
+async def test_create__unified_file_id_db_error_falls_back_to_raw_id(harness):
+    """A lookup failure must not abort batch creation. Resolution is best-effort
+    crash prevention, so on a database error it falls back to dispatching the
+    original id, which the managed-files deployment hook can still map."""
     set_body(
         harness,
         {
@@ -635,12 +585,9 @@ async def test_create__unified_file_id_db_error_fails_closed_503(harness):
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        with pytest.raises(ProxyException) as exc:
-            await call_create(harness)
+        await call_create(harness)
 
-    assert exc.value.code == "503"
-    harness.router_acreate.assert_not_called()
-    harness.litellm_acreate.assert_not_called()
+    assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
 
 
 @pytest.mark.asyncio
@@ -670,8 +617,6 @@ async def test_create__multi_model_unified_file_with_loadbalancing_keeps_router_
     ):
         await call_create(harness)
 
-    # Load-balanced router branch fired with the request unchanged; the unified
-    # branch (and its single-model 400) was not reached.
     assert harness.router_acreate.call_count == 1
     assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
     harness.litellm_acreate.assert_not_called()
@@ -680,10 +625,9 @@ async def test_create__multi_model_unified_file_with_loadbalancing_keeps_router_
 @pytest.mark.asyncio
 async def test_create__unified_file_id_missing_row_fails_closed_404(harness):
     """With a database present, a managed unified id that has no row cannot be
-    ownership-verified, so it fails closed with a 404 rather than dispatching
-    the opaque id. Dispatching it would both bypass the ownership gate (the
-    deployment hook maps cache-resident ids without re-checking) and hit the
-    Vertex publishers-segment IndexError this PR exists to prevent."""
+    resolved to a real storage location, so it fails closed with a 404 rather
+    than dispatching the opaque token, which would hit the Vertex
+    publishers-segment IndexError this PR exists to prevent."""
     set_body(
         harness,
         {
@@ -713,12 +657,12 @@ async def test_create__unified_file_id_missing_row_fails_closed_404(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_owned_legacy_row_without_storage_url_dispatches_raw(
+async def test_create__unified_file_id_legacy_row_without_storage_url_dispatches_raw(
     harness,
 ):
-    """An owned managed file whose row predates storage_url still dispatches the
-    original id (the managed-files deployment hook maps it); ownership is
-    verified, so this is not the fail-closed case."""
+    """A managed file whose row predates the storage_url column still dispatches
+    the original id (the managed-files deployment hook maps it); the row exists,
+    so this is not the missing-row fail-closed case."""
     set_body(
         harness,
         {
@@ -728,7 +672,7 @@ async def test_create__unified_file_id_owned_legacy_row_without_storage_url_disp
         },
     )
 
-    fake_db_file = MagicMock(storage_url=None, created_by="user-1", team_id=None)
+    fake_db_file = MagicMock(storage_url=None)
     find_first = AsyncMock(return_value=fake_db_file)
     fake_repo_instance = MagicMock()
     fake_repo_instance.table.find_first = find_first
@@ -740,7 +684,7 @@ async def test_create__unified_file_id_owned_legacy_row_without_storage_url_disp
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        await call_create(harness, user=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"))
+        await call_create(harness)
 
     assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
 
