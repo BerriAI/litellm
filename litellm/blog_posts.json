@@ -1,6 +1,12 @@
 {
   "posts": [
     {
+      "title": "Introducing LiteLLM's Cost Optimization Dashboard",
+      "description": "See savings from prompt compression, prompt caching, and auto routing in one dashboard, with more optimization insights planned over time. Available in LiteLLM v1.95.x, with the dev release available Tuesday, July 21.",
+      "date": "2026-07-21",
+      "url": "https://docs.litellm.ai/blog/cost_optimization_dashboard"
+    },
+    {
       "title": "Realtime WebRTC HTTP Endpoints",
       "description": "Use the LiteLLM proxy to route OpenAI-style WebRTC realtime via HTTP: client_secrets and SDP exchange.",
       "date": "2026-03-12",
