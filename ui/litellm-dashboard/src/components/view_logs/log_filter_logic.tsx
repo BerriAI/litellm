@@ -44,6 +44,18 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
 };
 
+export interface LogsWindow {
+  start_date: string;
+  end_date: string;
+}
+
+export const formatLogsWindow = (startTime: string, endTime: string, isCustomDate: boolean): LogsWindow => ({
+  start_date: moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss"),
+  end_date: isCustomDate
+    ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+    : moment().utc().format("YYYY-MM-DD HH:mm:ss"),
+});
+
 export const LIVE_TAIL_INTERVAL_MS = 15000;
 
 export const getLiveTailRefetchInterval = (isLiveTail: boolean, pageIndex: number): number | false =>
@@ -119,17 +131,14 @@ export function useLogFilterLogic({
         };
       }
 
-      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
-      const formattedEndTime = isCustomDate
-        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
-        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+      const window = formatLogsWindow(startTime, endTime, isCustomDate);
 
       const userIdFilter = getFilterValue(columnFilters, LOG_FILTER_IDS.USER_ID);
 
       return await uiSpendLogsCall({
         accessToken,
-        start_date: formattedStartTime,
-        end_date: formattedEndTime,
+        start_date: window.start_date,
+        end_date: window.end_date,
         page: pagination.pageIndex + 1,
         page_size: pageSize,
         params: {

@@ -21,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type { Team } from "../key_team_helpers/key_list";
 import { ERROR_CODE_OPTIONS } from "./constants";
-import { LOG_FILTER_IDS } from "./log_filter_logic";
+import { LOG_FILTER_IDS, type LogsWindow } from "./log_filter_logic";
 
 const ALL_VALUE = "all";
 const PAGE_SIZE = 50;
@@ -144,9 +144,18 @@ function ModelFilterField({ value, onChange }: { value: string; onChange: (value
   );
 }
 
-function EndUserFilterField({ value, onChange }: { value: string; onChange: (value: string | undefined) => void }) {
+function EndUserFilterField({
+  value,
+  onChange,
+  logsWindow,
+}: {
+  value: string;
+  onChange: (value: string | undefined) => void;
+  logsWindow: LogsWindow;
+}) {
   const [search, setSearch] = useState("");
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteEndUserAliases(
+    logsWindow,
     PAGE_SIZE,
     emptyToUndefined(search),
   );
@@ -174,7 +183,7 @@ function EndUserFilterField({ value, onChange }: { value: string; onChange: (val
         isLoading={isLoading}
         isFetchingNextPage={isFetchingNextPage}
         placeholder="Search an end user"
-        emptyText="No end users found"
+        emptyText="No end users in this time range"
       />
     </DataTableFilterField>
   );
@@ -233,9 +242,10 @@ interface RequestLogsFiltersProps {
   get: (columnId: string) => unknown;
   set: (columnId: string, value: unknown) => void;
   teams: Team[];
+  logsWindow: LogsWindow;
 }
 
-export function RequestLogsFilters({ get, set, teams }: RequestLogsFiltersProps) {
+export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsFiltersProps) {
   const valueOf = (id: string): string => asString(get(id));
   const setter = (id: string) => (next: string | undefined) => set(id, next);
 
@@ -269,7 +279,11 @@ export function RequestLogsFilters({ get, set, teams }: RequestLogsFiltersProps)
         teamId={valueOf(LOG_FILTER_IDS.TEAM_ID)}
       />
 
-      <EndUserFilterField value={valueOf(LOG_FILTER_IDS.END_USER)} onChange={setter(LOG_FILTER_IDS.END_USER)} />
+      <EndUserFilterField
+        value={valueOf(LOG_FILTER_IDS.END_USER)}
+        onChange={setter(LOG_FILTER_IDS.END_USER)}
+        logsWindow={logsWindow}
+      />
 
       <ErrorCodeFilterField value={valueOf(LOG_FILTER_IDS.ERROR_CODE)} onChange={setter(LOG_FILTER_IDS.ERROR_CODE)} />
 
