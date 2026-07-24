@@ -768,7 +768,10 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
+                # Shallow-copy so the trailing "pass additional kwargs" loop
+                # below can never mutate the caller's original input_schema.
+                # See #34510.
+                function_chunk["parameters"] = dict(tool["input_schema"] or {})  # type: ignore
             if "description" in tool:
                 function_chunk["description"] = tool["description"]  # type: ignore
 
