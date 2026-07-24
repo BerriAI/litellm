@@ -54,6 +54,14 @@ class HealthCheckHelpers:
             1. `tags`: This helps identify health check calls in the DB.
             2. `user_api_key_auth`: This helps identify health check calls in the DB.
                 We need this since the DB requires an API Key to track a log in the SpendLogs Table
+            3. `no-log`: Health checks are infrastructure probes, not user
+                traffic, so their requests must not be routed through user
+                logging integrations. Without this, a deployment whose host is
+                offline emits a full connection-error traceback through the
+                logging callbacks on every poll cycle (see issue #34281).
+                `no-log` skips those user callbacks while proxy cost/DB
+                callbacks still run (see Logging.should_run_callback), so
+                health state is still recorded.
         """
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -61,6 +69,7 @@ class HealthCheckHelpers:
         _metadata_variable_name = "litellm_metadata"
         litellm_metadata = HealthCheckHelpers._get_metadata_for_health_check_call()
         model_params[_metadata_variable_name] = litellm_metadata
+        model_params["no-log"] = True
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=model_params,
             user_api_key_dict=UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth(),

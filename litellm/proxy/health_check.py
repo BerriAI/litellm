@@ -9,6 +9,7 @@ import time
 from collections.abc import Mapping
 from typing import List, Optional
 
+import httpx
 import litellm
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,152 @@ def _clean_endpoint_data(endpoint_data: dict, details: Optional[bool] = True):
         if details is not False
         else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
     )
+
+
+# ---------------------------------------------------------------------------
+# Deployment reachability state tracking (issue #34281)
+#
+# A deployment whose host is offline used to emit a full stack trace on every
+# background health-check poll. We track reachability per deployment id and log
+# a single line when the state changes: one WARNING on healthy -> unhealthy and
+# one INFO on unhealthy -> healthy. A still-unhealthy deployment is not re-logged
+# every cycle, so an ad-hoc host that is offline by design stays quiet until it
+# recovers.
+# ---------------------------------------------------------------------------
+
+# deployment_id -> {"reachable": bool, "since": float, "last_logged": float}
+_deployment_reachability_state: dict = {}
+
+# Re-emit a one-line "still unreachable" WARNING at most once per this many
+# seconds while a deployment stays down. 0 (default) means log on transition
+# only. Override via ``litellm.health_check_unreachable_relog_seconds``.
+_DEFAULT_UNREACHABLE_RELOG_SECONDS = 0.0
+
+
+def _health_unreachable_relog_seconds() -> float:
+    value = getattr(litellm, "health_check_unreachable_relog_seconds", None)
+    if value is None:
+        return _DEFAULT_UNREACHABLE_RELOG_SECONDS
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return _DEFAULT_UNREACHABLE_RELOG_SECONDS
+
+
+def _deployment_label(endpoint: dict) -> str:
+    """Human-readable identifier for a deployment in health-check logs."""
+    model = endpoint.get("model") or endpoint.get("model_name") or endpoint.get("model_id") or "unknown"
+    api_base = endpoint.get("api_base")
+    return f"{model} ({api_base})" if api_base else str(model)
+
+
+def _short_error(exc: BaseException | None) -> str:
+    """First line of an exception, bounded, for a single-line health log."""
+    if exc is None:
+        return "unknown error"
+    text = str(exc).strip()
+    if not text:
+        return exc.__class__.__name__
+    return text.splitlines()[0][:200]
+
+
+def _is_transport_error(exc: BaseException | None) -> bool:
+    """
+    True when the failure means the provider is unreachable (connection refused,
+    DNS failure, TLS error, timeout) rather than a real error returned by the
+    provider. An unreachable host is a degraded state, so we log it as a concise
+    WARNING; a real provider error keeps its full detail.
+    """
+    if exc is None:
+        return False
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError, httpx.TransportError)):
+        return True
+    for attr in ("APIConnectionError", "Timeout", "ServiceUnavailableError"):
+        litellm_exc = getattr(litellm, attr, None)
+        if litellm_exc is not None and isinstance(exc, litellm_exc):
+            return True
+    text = f"{exc.__class__.__name__} {exc}".lower()
+    return any(
+        signature in text
+        for signature in (
+            "connection refused",
+            "connect call failed",
+            "cannot connect",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "network is unreachable",
+            "no route to host",
+            "timed out",
+            "timeout",
+        )
+    )
+
+
+def _log_deployment_health_transitions(
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+    exceptions_by_model_id: dict,
+) -> None:
+    """
+    Log one line per deployment reachability transition instead of a stack trace
+    per poll cycle. Intended for the background health loop. Never raises.
+    """
+    now = time.monotonic()
+    relog_seconds = _health_unreachable_relog_seconds()
+
+    for endpoint in healthy_endpoints:
+        model_id = endpoint.get("model_id")
+        if not model_id:
+            continue
+        previous = _deployment_reachability_state.get(model_id)
+        if previous is not None and not previous.get("reachable", True):
+            logger.info(
+                "health_check: deployment %s is reachable again",
+                _deployment_label(endpoint),
+            )
+        _deployment_reachability_state[model_id] = {
+            "reachable": True,
+            "since": now,
+            "last_logged": now,
+        }
+
+    for endpoint in unhealthy_endpoints:
+        model_id = endpoint.get("model_id")
+        if not model_id:
+            continue
+        exc = exceptions_by_model_id.get(model_id)
+        previous = _deployment_reachability_state.get(model_id)
+        is_transition = previous is None or previous.get("reachable", True)
+
+        if is_transition:
+            if _is_transport_error(exc):
+                logger.warning(
+                    "health_check: deployment %s is unreachable (%s); suppressing per-cycle logs until it recovers",
+                    _deployment_label(endpoint),
+                    _short_error(exc),
+                )
+            else:
+                logger.warning(
+                    "health_check: deployment %s failed its health check: %s",
+                    _deployment_label(endpoint),
+                    _short_error(exc),
+                )
+            _deployment_reachability_state[model_id] = {
+                "reachable": False,
+                "since": now,
+                "last_logged": now,
+            }
+        else:
+            last_logged = previous.get("last_logged", previous.get("since", now))
+            if relog_seconds and (now - last_logged) >= relog_seconds:
+                logger.warning(
+                    "health_check: deployment %s still unreachable after %.0fs",
+                    _deployment_label(endpoint),
+                    now - previous.get("since", now),
+                )
+                previous["last_logged"] = now
+            previous["reachable"] = False
+            _deployment_reachability_state[model_id] = previous
 
 
 def health_check_filter_kwargs_from_general_settings(
@@ -647,5 +794,15 @@ async def perform_health_check(
             threading.active_count(),
             _rss_mb_for_log(),
         )
+
+    # Emit one log line per reachability transition (down/up) for the recurring
+    # background poll, instead of a stack trace per cycle (issue #34281). Gated
+    # to the background loop so an on-demand /health call does not mutate the
+    # shared reachability state. Never allowed to break the health cycle.
+    if source == "proxy_background_loop":
+        try:
+            _log_deployment_health_transitions(healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("health_check: transition logging failed", exc_info=True)
 
     return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
