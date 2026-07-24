@@ -4,6 +4,7 @@ from typing import Any, Iterator, List, Literal, Optional, Tuple
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import _parse_prompt_tokens_details
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import token_counter
@@ -501,6 +502,8 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
             reasoning_content=None,
         )
     _usage_dict = response_body.get("usage", None) or {}
+    if ResponseAPILoggingUtils._is_response_api_usage(_usage_dict):
+        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_dict)
     usage: Usage = Usage(**_usage_dict)
     return usage
 

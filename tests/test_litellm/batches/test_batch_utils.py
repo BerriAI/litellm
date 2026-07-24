@@ -121,6 +121,32 @@ def test_get_usage_from_response_body_missing_is_zero():
     )
 
 
+def test_get_usage_from_response_body_responses_api_shape():
+    """/v1/responses batch output rows report usage as input_tokens/output_tokens
+    (not prompt_tokens/completion_tokens); this must still map to prompt/completion
+    so spend logs record real token counts instead of zeros."""
+    usage = bu._get_batch_job_usage_from_response_body(
+        {
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 7,
+                "total_tokens": 19,
+                "input_tokens_details": {"cached_tokens": 4},
+                "output_tokens_details": {"reasoning_tokens": 3},
+            }
+        }
+    )
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        12,
+        7,
+        19,
+    )
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 4
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 3
+
+
 # =========================================================================== #
 # _get_file_content_as_dictionary  (JSONL parsing)
 # =========================================================================== #
