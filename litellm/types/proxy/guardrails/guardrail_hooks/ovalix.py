@@ -30,6 +30,14 @@ class OvalixGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="Post-checkpoint ID for the Ovalix Tracker service.",
     )
+    file_checkpoint_id: str | None = Field(
+        default=None,
+        description="File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).",
+    )
+    enable_routing_cache: bool | None = Field(
+        default=None,
+        description="Cache discovery-mode routing resolution per api-key alias for 1 hour. Default on.",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
