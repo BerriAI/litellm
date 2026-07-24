@@ -109,6 +109,143 @@ def test_get_logging_payload_does_not_map_missing_or_zero_cached_tokens(prompt_t
     assert "cache_read_input_tokens" not in additional_usage_values
 
 
+def test_get_logging_payload_maps_openai_cache_write_tokens_to_cache_creation_input_tokens():
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=2,
+            total_tokens=1002,
+            prompt_tokens_details={"cached_tokens": 0, "cache_write_tokens": 800},
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 800
+    assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 800
+
+
+def test_get_logging_payload_preserves_anthropic_cache_creation_input_tokens():
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=2,
+            total_tokens=1002,
+            cache_creation_input_tokens=300,
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 300
+
+
+@pytest.mark.parametrize(
+    "prompt_tokens_details",
+    [None, {"cached_tokens": 100}, {"cached_tokens": 100, "cache_write_tokens": 0}],
+)
+def test_get_logging_payload_does_not_map_missing_or_zero_cache_write_tokens(prompt_tokens_details):
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+            prompt_tokens_details=prompt_tokens_details,
+        )
+    )
+
+    assert "cache_creation_input_tokens" not in additional_usage_values
+
+
+def _make_standard_logging_payload_with_usage_object(usage_object: dict) -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id="test-id-responses",
+        call_type="responses",
+        stream=False,
+        response_cost=0.02,
+        status="success",
+        total_tokens=1010,
+        prompt_tokens=1000,
+        completion_tokens=10,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=None,
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-5.6", model_map_value=None),
+        model="gpt-5.6",
+        model_id="model-123",
+        model_group="openai",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+            user_api_key_end_user_id=None,
+            usage_object=usage_object,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address=None,
+        messages=[],
+        response={},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.02",
+            litellm_overhead_time_ms=None,
+            additional_headers=None,
+            batch_models=None,
+            litellm_model_name=None,
+            usage_object=None,
+        ),
+    )
+
+
+def test_get_logging_payload_maps_responses_api_cache_write_tokens_from_usage_object():
+    """Responses API (/v1/responses) usage is not chat-Usage-shaped, so
+    additional_usage_values can't derive cache tokens from response_obj.usage.
+    The Admin UI Logs "Cache Creation Tokens" row reads
+    additional_usage_values.cache_creation_input_tokens, so it must be filled
+    from the normalized standard_logging usage_object (LIT-4633)."""
+    standard_logging_payload = _make_standard_logging_payload_with_usage_object(
+        usage_object={
+            "prompt_tokens": 1000,
+            "completion_tokens": 10,
+            "total_tokens": 1010,
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 800, "cache_creation_tokens": 800},
+        }
+    )
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-5.6",
+            "call_type": "responses",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj={
+            "id": "resp-test",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 10,
+                "total_tokens": 1010,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 800},
+            },
+        },
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    additional_usage_values = json.loads(payload["metadata"])["additional_usage_values"]
+    assert additional_usage_values["cache_creation_input_tokens"] == 800
+
+
 def test_sanitize_request_body_for_spend_logs_payload_basic():
     request_body = {
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
