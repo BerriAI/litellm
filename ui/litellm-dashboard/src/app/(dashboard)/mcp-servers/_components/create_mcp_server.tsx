@@ -1072,7 +1072,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     children: (
                       <>
                         <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
-                          <Select placeholder="Select auth type" className="rounded-lg" size="large">
+                          <Select placeholder="Select auth type" className="rounded-lg" size="large" virtual={false}>
                             <Select.Option value="none">None</Select.Option>
                             <Select.Option value="api_key">API Key</Select.Option>
                             <Select.Option value="bearer_token">Bearer Token</Select.Option>

@@ -1108,7 +1108,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             {!isStdioTransport && (
               <>
                 <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
-                  <Select>
+                  <Select virtual={false}>
                     <Select.Option value="none">None</Select.Option>
                     <Select.Option value="api_key">API Key</Select.Option>
                     <Select.Option value="bearer_token">Bearer Token</Select.Option>
