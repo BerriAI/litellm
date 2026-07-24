@@ -3147,3 +3147,29 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_tools_to_openai_does_not_mutate_input_schema():
+    """The caller's input_schema must not be mutated: extra top-level tool keys
+    (e.g. computer-tool display_* kwargs) are merged into the OpenAI parameters
+    but must never leak back into the source tool dict, which callers reuse."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    input_schema = {"type": "object", "properties": {"action": {"type": "string"}}}
+    tool = {
+        "name": "computer",
+        "type": "computer_20241022",
+        "input_schema": input_schema,
+        "display_width_px": 1024,
+        "display_height_px": 768,
+    }
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=[tool])
+
+    params = new_tools[0]["function"]["parameters"]
+    # vendor kwargs land in the translated parameters ...
+    assert params["display_width_px"] == 1024
+    assert params["display_height_px"] == 768
+    # ... but the caller's schema is untouched
+    assert input_schema == {"type": "object", "properties": {"action": {"type": "string"}}}
+    assert "display_width_px" not in input_schema
+    assert tool["input_schema"] is input_schema
