@@ -321,6 +321,65 @@ def test_trigger_cooldown_uses_litellm_metadata_when_it_is_the_authoritative_buc
     assert call_kwargs["deployment"] == "batch-deployment"
 
 
+def test_trigger_cooldown_prefers_failed_deployment_id_over_metadata_buckets():
+    """Router._set_failed_deployment_id_on_exception() stamps the failed deployment's
+    id directly on the exception at the point of failure; that must win over both
+    metadata buckets since it can't be stale or forged the way a metadata bucket can."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("err")
+    exc.failed_deployment_id = "authoritative-dep"
+    kwargs = {
+        "metadata": {"model_info": {"id": "wrong-dep"}, "deployment_model_name": "gpt-4"},
+        "litellm_metadata": {"model_info": {"id": "also-wrong-dep"}, "deployment_model_name": "gpt-4"},
+    }
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
+    ) as mock_set:
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+    _, call_kwargs = mock_set.call_args
+    assert call_kwargs["deployment"] == "authoritative-dep"
+
+
+def test_trigger_cooldown_falls_back_to_metadata_when_failed_deployment_id_absent():
+    """Reproduces the exact scenario Greptile flagged: a generic-API-call fallback
+    where the router writes the current attempt into litellm_metadata, but a stale
+    "metadata" bucket also carries the marker (e.g. left over from an earlier call
+    type in the same kwargs). Before Router._ageneric_api_call_with_fallbacks_helper
+    stamped failed_deployment_id, this fell back to metadata-bucket parsing, which
+    would have picked the stale "metadata" entry. With failed_deployment_id now
+    stamped for that call path, this case shouldn't arise in practice; this test
+    covers the fallback lookup's own behavior when the exception genuinely has no
+    failed_deployment_id (e.g. a call path that doesn't stamp it)."""
+    router = MagicMock()
+    router.cooldown_time = 60
+    router.get_model_info.return_value = None
+
+    exc = RuntimeError("err")
+    kwargs = {
+        "metadata": {"model_info": {"id": "stale-dep"}, "deployment_model_name": "gpt-4"},
+        "litellm_metadata": {"model_info": {"id": "current-dep"}, "deployment_model_name": "gpt-4"},
+    }
+
+    with patch(
+        "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments"
+    ) as mock_set:
+        _trigger_cooldown_for_failed_deployment(
+            litellm_router=router, kwargs=kwargs, exception=exc
+        )
+
+    _, call_kwargs = mock_set.call_args
+    # Documents existing metadata-bucket-priority behavior (prefers "metadata" first
+    # when both carry the marker) for call paths where failed_deployment_id isn't set.
+    assert call_kwargs["deployment"] == "stale-dep"
+
+
 @pytest.mark.asyncio
 async def test_run_async_fallback_triggers_cooldown_when_logging_obj_has_logged():
     router = MagicMock()

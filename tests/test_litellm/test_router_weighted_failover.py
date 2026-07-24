@@ -101,6 +101,34 @@ def test_set_failed_deployment_id_on_exception():
 
 
 @pytest.mark.asyncio
+async def test_ageneric_api_call_with_fallbacks_helper_stamps_failed_deployment_id():
+    """_ageneric_api_call_with_fallbacks_helper must stamp failed_deployment_id on a
+    failure, same as _completion/_acompletion, so callers identifying the failed
+    deployment (cooldown, weighted failover) work for this call type too instead of
+    depending on which metadata bucket ("metadata" vs "litellm_metadata") it uses."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    async def _failing_original_function(**kwargs):
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="test-model",
+            original_generic_function=_failing_original_function,
+        )
+
+    assert getattr(exc_info.value, "failed_deployment_id", None) == "dep-a"
+
+
+@pytest.mark.asyncio
 async def test_maybe_run_weighted_failover_returns_none_without_failed_id():
     router = Router(
         model_list=[

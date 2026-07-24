@@ -53,9 +53,16 @@ def _trigger_cooldown_for_failed_deployment(
     fallback deployment is evaluated for cooldown regardless.
     """
     try:
-        metadata = _router_authored_metadata(kwargs)
-        model_info = metadata.get("model_info") or {}
-        deployment_id: str | None = model_info.get("id") if isinstance(model_info, dict) else None
+        # Router._set_failed_deployment_id_on_exception() stamps the failed deployment's
+        # id directly on the exception at the exact point of failure, so it's immune to
+        # metadata-bucket ambiguity (a caller can't forge it, and it doesn't depend on
+        # which of "metadata"/"litellm_metadata" the current call type happens to use).
+        # Fall back to metadata inspection only for call paths that don't stamp it yet.
+        deployment_id: str | None = getattr(exception, "failed_deployment_id", None)
+        if deployment_id is None:
+            metadata = _router_authored_metadata(kwargs)
+            model_info = metadata.get("model_info") or {}
+            deployment_id = model_info.get("id") if isinstance(model_info, dict) else None
 
         if deployment_id is None:
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no deployment_id in metadata")
