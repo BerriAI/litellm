@@ -878,6 +878,12 @@ def test_streaming_completion_does_not_reset_context_before_iteration(monkeypatc
 
         for _ in response:
             pass
+
+        # Once the stream is genuinely exhausted, the *consuming* thread's
+        # context (this test's own) must be restored - not just some detached
+        # executor-thread context the terminal success_handler happens to run in.
+        assert session_id_var.get() == "outer-session-stream"
+        assert trace_id_var.get() == "outer-trace-stream"
     finally:
         trace_id_var.set("")
         session_id_var.set("")
@@ -902,6 +908,12 @@ async def test_async_streaming_completion_does_not_reset_context_before_iteratio
 
         async for _ in response:
             pass
+
+        # Once the stream is genuinely exhausted, the *consuming* task's own
+        # context must be restored - async_success_handler's own dispatch (via
+        # asyncio.create_task) only fixes up its own detached task, not this one.
+        assert session_id_var.get() == "outer-session-async-stream"
+        assert trace_id_var.get() == "outer-trace-async-stream"
     finally:
         trace_id_var.set("")
         session_id_var.set("")
@@ -966,3 +978,47 @@ def test_stream_wrapper_del_never_raises_with_broken_logging_obj():
         logging_obj=ExplodingLogging(),
     )
     wrapper.__del__()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
+    """Explicit early termination (aclose(), e.g. on client disconnect or a
+    router fallback aborting an in-progress stream) must restore the caller's
+    correlation context too - not just __del__'s best-effort GC-timed fallback,
+    since aclose() is normally called deterministically by the consumer/
+    framework, unlike __del__."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-aclose")
+    session_id_var.set("outer-session-aclose")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="aclose-call",
+            function_id="fn-aclose",
+            kwargs={"litellm_session_id": "aclose-session"},
+        )
+
+        async def _empty_aiter():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_empty_aiter(),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "aclose-session"
+
+        await wrapper.aclose()
+
+        assert trace_id_var.get() == "outer-trace-aclose"
+        assert session_id_var.get() == "outer-session-aclose"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

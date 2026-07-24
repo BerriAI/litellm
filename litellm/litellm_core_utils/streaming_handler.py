@@ -213,19 +213,20 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
-    def __del__(self) -> None:
-        """Best-effort correlation-context cleanup for an abandoned stream.
+    def _restore_consumer_correlation_context(self) -> None:
+        """Restore trace_id/session_id in the *consuming* thread/task/context.
 
-        wrapper()/wrapper_async() deliberately skip restoring trace_id/session_id
-        when they return a stream, so log lines emitted while the caller iterates
-        it still carry this call's ids (see request_correlation_in_logs). If the
-        caller never fully consumes the stream - stops early, drops the
-        reference, cancels it - the terminal handler that normally does the
-        restore never fires. This is a best-effort fallback, not a guarantee:
-        __del__ timing is unpredictable (delayed by cyclic GC, not guaranteed at
-        interpreter shutdown, and may run on a different thread), so this can
-        only reduce how long the leak persists, not eliminate it. Never let a
-        finalizer raise.
+        wrapper()/wrapper_async() deliberately skip restoring correlation context
+        when they return a stream, so log lines emitted while the caller
+        iterates it still carry this call's ids (see request_correlation_in_logs).
+        But the terminal success/failure handlers this stream dispatches to
+        finish the job run on a *different* Task/thread (asyncio.create_task,
+        threading.Thread, or the shared executor) - restoring there fixes up
+        that detached context, not the one actually running the caller's
+        `for`/`async for` loop. Call this at every point control genuinely
+        returns to that consuming context: natural exhaustion (StopIteration/
+        StopAsyncIteration), a raised failure, or explicit aclose(). Never let
+        this raise - it must not break the caller's actual stream handling.
         """
         try:
             logging_obj = getattr(self, "logging_obj", None)
@@ -236,7 +237,21 @@ class CustomStreamWrapper:
         except Exception:
             pass
 
+    def __del__(self) -> None:
+        """Best-effort correlation-context cleanup for an abandoned stream.
+
+        If the caller never fully consumes the stream - stops early, drops the
+        reference, cancels it - none of the exit points
+        _restore_consumer_correlation_context() is called from ever run. This
+        is a best-effort fallback, not a guarantee: __del__ timing is
+        unpredictable (delayed by cyclic GC, not guaranteed at interpreter
+        shutdown, and may run on a different thread), so this can only reduce
+        how long the leak persists, not eliminate it.
+        """
+        self._restore_consumer_correlation_context()
+
     async def aclose(self):
+        self._restore_consumer_correlation_context()
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
             self.completion_stream = None
@@ -1862,6 +1877,7 @@ class CustomStreamWrapper:
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
+                self._restore_consumer_correlation_context()
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
@@ -2106,6 +2122,7 @@ class CustomStreamWrapper:
                     )
                 )
 
+            self._restore_consumer_correlation_context()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
@@ -2159,6 +2176,7 @@ class CustomStreamWrapper:
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
         """
+        self._restore_consumer_correlation_context()
         from litellm.exceptions import MidStreamFallbackError
 
         # Map to OpenAI exception format
