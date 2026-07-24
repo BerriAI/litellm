@@ -7734,6 +7734,51 @@ class Router:
             TaggedPreRoutingStrategy(tags=tags, strategy=strategy),
         ]
 
+    @staticmethod
+    def _unregister_pre_routing_strategy(
+        registry: dict[str, list[TaggedPreRoutingStrategy[_PreRoutingStrategyT]]],
+        model_name: str,
+        tags: tuple[str, ...],
+    ) -> bool:
+        """Drop the strategy registered for this exact (model_name, tags) pair, leaving
+        strategies registered under the same name with different tags in place. Returns
+        whether anything was actually dropped."""
+        existing = registry.get(model_name, [])
+        remaining = [entry for entry in existing if entry.tags != tags]
+        if len(remaining) == len(existing):
+            return False
+        if remaining:
+            registry[model_name] = remaining
+        else:
+            registry.pop(model_name, None)
+        return True
+
+    def _unregister_pre_routing_strategy_for_deployment(self, deployment: Deployment) -> None:
+        """
+        Release the pre-routing strategy a deployment holds, so removing it from the
+        model_list also frees its (model_name, tags) slot.
+
+        Without this, re-adding the deployment (an edit arriving via upsert_deployment,
+        or a router recreated under a name that was deleted earlier) hits the
+        "already exists" guard in `_register_pre_routing_strategy`, which
+        `ignore_invalid_deployments` swallows - the deployment then silently never
+        makes it back into the model_list.
+
+        Released from every registry rather than the first match, because registration is
+        one-to-many: a complexity router configured with `adaptive` is also registered in
+        `adaptive_routers` under the same (model_name, tags) by the deferred finalize pass.
+        Guarded on the auto_router/ prefix so removing a *regular* deployment can't evict a
+        router that merely shares its model_name.
+        """
+        if not deployment.litellm_params.model.startswith("auto_router/"):
+            return
+        model_name = deployment.model_name
+        tags = self._deployment_tags(deployment)
+        for registry in (self.auto_routers, self.complexity_routers, self.quality_routers):
+            self._unregister_pre_routing_strategy(registry, model_name, tags)
+        if self._unregister_pre_routing_strategy(self.adaptive_routers, model_name, tags):
+            self._sync_adaptive_router_hooks()
+
     def _finalize_adaptive_router_if_configured(self) -> None:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
@@ -7778,6 +7823,16 @@ class Router:
                         *self.adaptive_routers.get(model_name, []),
                         TaggedPreRoutingStrategy(tags=tagged.tags, strategy=adaptive_router),
                     ]
+
+        self._sync_adaptive_router_hooks()
+
+    def _sync_adaptive_router_hooks(self) -> None:
+        """Rebuild the AdaptiveRouterPostCallHook set so it is exactly one hook per
+        currently registered adaptive router. Run at every point the adaptive registry
+        changes, otherwise a released router keeps recording turns through its hook."""
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
 
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook):
             litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
@@ -8401,13 +8456,27 @@ class Router:
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
 
+                # Free the outgoing deployment's pre-routing strategy slot (keyed by the
+                # OLD model_name/tags) before the re-add below re-registers it.
+                self._unregister_pre_routing_strategy_for_deployment(deployment=_deployment_on_router)
+
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
+            # add_deployment() builds every strategy EXCEPT the adaptive one, which
+            # set_model_list() defers until the whole model_list is visible. Re-run that
+            # deferred pass so an adaptive router whose slot was just released above is
+            # rebuilt rather than left unregistered.
+            if self._is_adaptive_router_deployment(litellm_params=deployment.litellm_params) or (
+                _deployment_on_router is not None
+                and self._is_adaptive_router_deployment(litellm_params=_deployment_on_router.litellm_params)
+            ):
+                self._finalize_adaptive_router_if_configured()
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.debug(
-                    f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
+                verbose_router_logger.warning(
+                    f"Error upserting deployment {deployment.model_name} (id={deployment.model_info.id}): {e}. "
+                    "Dropping it and continuing with other deployments."
                 )
                 return None
             else:
@@ -8428,8 +8497,14 @@ class Router:
 
         try:
             if deployment_idx is not None:
+                try:
+                    deployment_to_remove = self.get_deployment(model_id=id)
+                except Exception:
+                    deployment_to_remove = None
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
+                if deployment_to_remove is not None:
+                    self._unregister_pre_routing_strategy_for_deployment(deployment=deployment_to_remove)
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
