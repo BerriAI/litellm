@@ -810,3 +810,97 @@ def test_function_setup_failure_after_logging_construction_restores_context(monk
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_function_setup_failure_log_line_shows_outer_not_doomed_ids(monkeypatch):
+    """The 'Error in function_setup' diagnostic log line itself must be stamped
+    with the outer/pre-call correlation ids, not the doomed call's own ids -
+    restoring context must happen *before* logging the exception, not after,
+    since the failed call never produces a usable logging object for anything
+    else to be attributed to."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("simulated failure after Logging() construction")
+
+    monkeypatch.setattr(Logging, "update_environment_variables", _boom)
+
+    lg, cap = _make_capture_logger("test.function_setup_failure_log_order")
+    # verbose_logger is a distinct, module-level logger from our throwaway one -
+    # temporarily attach the same capture handler so we see its own emitted record.
+    verbose_logger.addHandler(cap)
+    try:
+        trace_id_var.set("outer-trace")
+        session_id_var.set("outer-session")
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="Hello there!",
+                litellm_session_id="doomed-call-session",
+                num_retries=0,
+            )
+        setup_failure_records = [r for r in cap.records if "Error in function_setup" in r.get("message", "")]
+        assert len(setup_failure_records) == 1
+        record = setup_failure_records[0]
+        assert record.get("session_id") == "outer-session"
+        assert record.get("trace_id") == "outer-trace"
+    finally:
+        verbose_logger.removeHandler(cap)
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_streaming_completion_does_not_reset_context_before_iteration(monkeypatch):
+    """wrapper() must not restore the originating thread's correlation context
+    the instant a streaming completion() call returns a lazy CustomStreamWrapper -
+    the caller hasn't started iterating it yet, and log lines emitted while doing
+    so (in the same thread) should still show this call's own ids, not whatever
+    was ambient before the call."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace-stream")
+    session_id_var.set("outer-session-stream")
+    try:
+        response = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            stream=True,
+            litellm_session_id="streaming-call-session",
+            num_retries=0,
+        )
+        # The call returned a lazy stream; nothing has been iterated yet, but
+        # this call's own ids must still be the ambient ones right now.
+        assert session_id_var.get() == "streaming-call-session"
+
+        for _ in response:
+            pass
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_completion_does_not_reset_context_before_iteration(monkeypatch):
+    """Same as above for wrapper_async()/acompletion()."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    trace_id_var.set("outer-trace-async-stream")
+    session_id_var.set("outer-session-async-stream")
+    try:
+        response = await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            stream=True,
+            litellm_session_id="async-streaming-call-session",
+            num_retries=0,
+        )
+        assert session_id_var.get() == "async-streaming-call-session"
+
+        async for _ in response:
+            pass
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")

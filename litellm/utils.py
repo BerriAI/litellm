@@ -724,6 +724,22 @@ def _restore_correlation_context_if_supported(logging_obj: Any) -> None:
         restore()
 
 
+def _is_streaming_response_for_correlation(result: Any) -> bool:
+    """True if `result` is a lazy stream wrapper rather than an already-complete response.
+
+    wrapper()/wrapper_async() must NOT restore the originating task's
+    trace_id/session_id as soon as a streaming call returns this: the caller is
+    about to iterate it over however many subsequent lines of their own code,
+    and those log lines should still show this call's ids, not the pre-call
+    ones. The corresponding terminal handler (async_success_handler, dispatched
+    once the full stream is actually assembled) is what restores it once
+    streaming genuinely finishes.
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    return isinstance(result, CustomStreamWrapper)
+
+
 def function_setup(
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -1053,14 +1069,17 @@ def function_setup(
         )
         return logging_obj, kwargs
     except Exception as e:
-        verbose_logger.exception("litellm.utils.py::function_setup() - [Non-Blocking] Error in function_setup")
         # If Logging() was constructed above before this failed, its __init__ already
-        # mutated trace_id_var/session_id_var - restore them here since we're about to
-        # raise without ever returning logging_obj to the caller's wrapper()/
-        # wrapper_async(), which would otherwise be the one doing this restore.
+        # mutated trace_id_var/session_id_var - restore them *before* logging the
+        # exception below, since we're about to raise without ever returning
+        # logging_obj to the caller's wrapper()/wrapper_async() (which would
+        # otherwise be the one doing this restore). Restoring first means this
+        # diagnostic log line itself doesn't get stamped with a call's ids when
+        # that call never actually produced a usable logging object.
         _logging_obj_for_correlation_cleanup = locals().get("logging_obj")
         if _logging_obj_for_correlation_cleanup is not None:
             _restore_correlation_context_if_supported(_logging_obj_for_correlation_cleanup)
+        verbose_logger.exception("litellm.utils.py::function_setup() - [Non-Blocking] Error in function_setup")
         raise e
 
 
@@ -1280,11 +1299,16 @@ def client(original_function):
         # a dict-identity trick doesn't work here; it stashes logging_obj into this
         # holder directly instead.
         _correlation_logging_obj_holder: dict = {}
+        _correlation_result_holder: dict = {}
         try:
-            return _wrapper_body(args, kwargs, _correlation_logging_obj_holder)
+            result = _wrapper_body(args, kwargs, _correlation_logging_obj_holder)
+            _correlation_result_holder["result"] = result
+            return result
         finally:
             _correlation_logging_obj = _correlation_logging_obj_holder.get("logging_obj")
-            if _correlation_logging_obj is not None:
+            if _correlation_logging_obj is not None and not _is_streaming_response_for_correlation(
+                _correlation_result_holder.get("result")
+            ):
                 _restore_correlation_context_if_supported(_correlation_logging_obj)
 
     def _wrapper_body(args, kwargs, _correlation_logging_obj_holder):
@@ -1597,11 +1621,16 @@ def client(original_function):
         # function_setup(), so a dict-identity trick doesn't work here; it
         # stashes logging_obj into this holder directly instead.
         _correlation_logging_obj_holder: dict = {}
+        _correlation_result_holder: dict = {}
         try:
-            return await _wrapper_async_body(args, kwargs, _correlation_logging_obj_holder)
+            result = await _wrapper_async_body(args, kwargs, _correlation_logging_obj_holder)
+            _correlation_result_holder["result"] = result
+            return result
         finally:
             _correlation_logging_obj = _correlation_logging_obj_holder.get("logging_obj")
-            if _correlation_logging_obj is not None:
+            if _correlation_logging_obj is not None and not _is_streaming_response_for_correlation(
+                _correlation_result_holder.get("result")
+            ):
                 _restore_correlation_context_if_supported(_correlation_logging_obj)
 
     async def _wrapper_async_body(args, kwargs, _correlation_logging_obj_holder):
