@@ -3681,12 +3681,6 @@ async def test_pre_call_hook_skips_chat_traffic_when_configured_for_pre_mcp_call
 
 
 def test_process_response_with_none_metadata_does_not_crash():
-    """Regression: batch routes normalize ``data["metadata"]`` to ``None`` (present key,
-    ``None`` value), so ``request_data.get("metadata", {})`` returns ``None`` and the
-    post_call ``_process_response`` used to raise ``'NoneType' object has no attribute 'get'``
-    (issue #34390, a v1.93.0 regression that 500'd every ``/v1/batches`` create with a
-    ``post_call`` Model Armor guardrail).
-    """
     guardrail = _make_guardrail()
     response = {"id": "batch_123", "status": "validating"}
     request_data = {"model": "gemini-2.5-flash", "metadata": None}
