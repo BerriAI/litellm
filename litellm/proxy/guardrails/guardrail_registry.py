@@ -384,6 +384,23 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
 
+def _resolve_env_references(litellm_params: LitellmParams) -> LitellmParams:
+    """Expand every ``os.environ/NAME`` reference in a guardrail's litellm_params.
+
+    Only ``api_key`` and ``api_base`` used to be expanded, so a guardrail
+    configured with e.g. ``aws_region_name: os.environ/AWS_REGION`` handed boto3
+    the literal string and failed with "Invalid AWS region format". A name that
+    resolves to nothing becomes None rather than the string "None", so the
+    downstream client falls back to its own credential chain.
+    """
+    resolved = {
+        name: get_secret(value)
+        for name, value in litellm_params.model_dump().items()
+        if isinstance(value, str) and value.startswith("os.environ/")
+    }
+    return litellm_params.model_copy(update=resolved) if resolved else litellm_params
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -442,11 +459,7 @@ class InMemoryGuardrailHandler:
             lakera_category_thresholds = LakeraCategoryThresholds(**litellm_params_data["category_thresholds"])
             litellm_params.category_thresholds = lakera_category_thresholds
 
-        if litellm_params.api_key and litellm_params.api_key.startswith("os.environ/"):
-            litellm_params.api_key = str(get_secret(litellm_params.api_key))
-
-        if litellm_params.api_base and litellm_params.api_base.startswith("os.environ/"):
-            litellm_params.api_base = str(get_secret(litellm_params.api_base))
+        litellm_params = _resolve_env_references(litellm_params)
 
         guardrail_type = litellm_params.guardrail
 
