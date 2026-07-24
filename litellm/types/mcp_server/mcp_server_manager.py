@@ -163,6 +163,15 @@ class MCPServer(BaseModel):
     allow_elicitation: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    def __repr__(self) -> str:
+        return (
+            f"MCPServer(server_id={self.server_id!r}, name={self.name!r}, "
+            f"transport={self.transport!r}, auth_type={self.auth_type!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
     @property
     def has_client_credentials(self) -> bool:
         """True if this server should use the OAuth2 client_credentials (M2M) flow.
