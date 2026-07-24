@@ -455,6 +455,19 @@ class TestCueGroupingAlignment:
         assert "Guten" not in result
         assert "00:00:00,000 --> 00:00:00,600" in result
 
+    def test_should_split_before_word_whose_end_crosses_duration_cap(self):
+        from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
+
+        tokens = [{"text": " hm", "start_ms": i * 650, "end_ms": i * 650 + 600} for i in range(10)] + [
+            {"text": " boom", "start_ms": 6900, "end_ms": 7600}
+        ]
+        result = render_soniox_tokens_as_srt(tokens)
+        cues = result.strip().split("\n\n")
+        assert len(cues) == 2
+        assert "00:00:00,000 --> 00:00:06,450" in cues[0]
+        assert "00:00:06,900 --> 00:00:07,600" in cues[1]
+        assert cues[1].endswith("boom")
+
     def test_should_keep_untimestamped_word_in_cue(self):
         from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
 
