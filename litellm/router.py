@@ -7447,6 +7447,77 @@ class Router:
                 if backend_value is not None:
                     model_info[field] = backend_value
 
+    @staticmethod
+    def _backfill_cost_fields_from_canonical(
+        model_info_dict: dict,
+        litellm_params: dict,
+    ) -> None:
+        """Backfill missing CustomPricingLiteLLMParams fields in a
+        deployment-UUID model_cost entry from the canonical static
+        litellm.model_cost entry for the bare model name.
+
+        The dashboard /model/new form only exposes input_cost_per_token
+        and output_cost_per_token. Without this backfill, deployments
+        added via the dashboard end up registered under their UUID with
+        cache_*_input_token_cost = None, and the cost calculator's
+        custom-pricing path silently drops cache token charges.
+
+        Complements ``_inherit_builtin_cache_pricing`` above, which only
+        runs once a user has set ``input_cost_per_token`` and only fills
+        the 5 cache fields. This helper always runs and fills every
+        CustomPricingLiteLLMParams field, covering the dashboard
+        zero-cost-fields path.
+
+        User-supplied values always win. Only known models are eligible
+        (those that have a static model_cost entry); custom in-house
+        models with no static entry pass through unchanged. Mutates
+        ``model_info_dict`` in place.
+
+        Backfill is also skipped when the deployment opted out of custom
+        pricing entirely; i.e. neither input_cost_per_token nor
+        output_cost_per_token is set on the UUID entry. The cost
+        calculator's per-request custom-pricing path expects those
+        deployments to fall back to the model-name pricing slot rather
+        than carrying synthesized rates that mask `register_model` overrides.
+        """
+        model_param = litellm_params.get("model")
+        if not model_param:
+            return
+        # Skip when no base pricing is configured: this deployment is not
+        # opted into custom pricing, so synthesizing cache rates from the
+        # canonical entry would mask the per-request `register_model` path
+        # the cost calculator falls back to.
+        if (
+            model_info_dict.get("input_cost_per_token") is None
+            and model_info_dict.get("output_cost_per_token") is None
+        ):
+            return
+        # litellm.model_cost keys are mostly bare (e.g. "claude-3-opus-20240229")
+        # while `litellm_params.model` carries the user-facing
+        # `<provider>/<model>` shape (e.g. "anthropic/claude-3-opus-20240229").
+        # Try the raw value first to cover entries that DO keep the slash
+        # (bedrock uses a `.` separator already, but some "provider/model"
+        # keys exist for non-OpenAI shapes); fall back to the
+        # `get_llm_provider` split, which is the same canonical normalization
+        # used by `get_model_info` and the cost calculator.
+        canonical = litellm.model_cost.get(model_param)
+        if canonical is None:
+            try:
+                bare_model_name, _, _, _ = get_llm_provider(model=model_param)
+                if bare_model_name and bare_model_name != model_param:
+                    canonical = litellm.model_cost.get(bare_model_name)
+            except Exception:
+                # Don't let an unknown-provider parsing exception break
+                # deployment creation. No canonical -> no backfill.
+                pass
+        if not canonical:
+            return
+        for field in CustomPricingLiteLLMParams.model_fields.keys():
+            if model_info_dict.get(field) is None:
+                value = canonical.get(field)
+                if value is not None:
+                    model_info_dict[field] = value
+
     def _create_deployment(
         self,
         deployment_info: dict,
@@ -7481,6 +7552,15 @@ class Router:
                     backend_model=deployment.litellm_params.model,
                     custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 )
+            # Backfill any remaining missing cost fields from the canonical
+            # static entry for the bare model name. User-supplied values
+            # and the cache backfill above always win; this only fills
+            # slots that are still None (e.g. dashboard-added deployments
+            # where the user set no cost fields).
+            self._backfill_cost_fields_from_canonical(
+                model_info_dict=_model_info,
+                litellm_params=_litellm_params,
+            )
 
             ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
             model_id = deployment.model_info.id
@@ -8198,6 +8278,14 @@ class Router:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 _model_info_dict[field] = field_value
+        # Backfill any missing cost fields from the canonical static entry
+        # for the bare model name. User-supplied values above always win;
+        # this only fills slots the user didn't touch (e.g. cache rate
+        # fields the /model/new dashboard form doesn't expose).
+        self._backfill_cost_fields_from_canonical(
+            model_info_dict=_model_info_dict,
+            litellm_params=deployment.litellm_params.model_dump(),
+        )
 
         if _model_info_dict.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
