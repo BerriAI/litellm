@@ -824,6 +824,7 @@ async def _auto_register_jwt_mapping(
     if auto_registered_key is not None:
         auto_registered_key.org_id = org_id
         auto_registered_key.end_user_id = end_user_id
+        auto_registered_key.api_key = auto_registered_key.token
     return auto_registered_key
 
 
