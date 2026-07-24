@@ -257,6 +257,39 @@ def test_initialize_loggers_with_handler_sets_propagate_false():
         ), f"Logger {logger.name} has propagate set to {logger.propagate}, expected False"
 
 
+def test_print_verbose_emits_debug_record_without_set_verbose():
+    """Regression for #32318.
+
+    print_verbose in litellm/_logging.py only wrote to stdout when
+    litellm.set_verbose was True and never routed through verbose_logger, so
+    cache/debug logs were suppressed when only LITELLM_LOG=DEBUG (logger at DEBUG)
+    was set. It must emit a DEBUG record through verbose_logger regardless of
+    set_verbose.
+    """
+    import litellm._logging as _logging_module
+
+    records: List[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _Capture()
+    verbose_logger.addHandler(handler)
+    prev_level = verbose_logger.level
+    prev_set_verbose = _logging_module.set_verbose
+    verbose_logger.setLevel(logging.DEBUG)
+    _logging_module.set_verbose = False
+    try:
+        _logging_module.print_verbose("cache debug marker 32318")
+    finally:
+        verbose_logger.removeHandler(handler)
+        verbose_logger.setLevel(prev_level)
+        _logging_module.set_verbose = prev_set_verbose
+
+    assert any("cache debug marker 32318" in record.getMessage() for record in records)
+
+
 @pytest.mark.asyncio
 async def test_cache_hit_includes_custom_llm_provider():
     """
