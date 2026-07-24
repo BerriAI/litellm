@@ -352,7 +352,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         This prevents circular references in logging.
         """
         # Retrieve the Model Armor response & status stored on the per-request `metadata` object.
-        metadata = request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
+        metadata = (request_data.get("metadata") or {}) if isinstance(request_data, dict) else {}
 
         guardrail_response = metadata.get("_model_armor_response", {})
 
