@@ -101,6 +101,25 @@ class ExceptionCheckers:
         return False
 
     @staticmethod
+    def is_error_str_connection_error(error_str: object) -> bool:
+        if not isinstance(error_str, str):
+            return False
+        _error_str_lower = error_str.lower()
+        known_exception_substrings = (
+            "connection error",
+            "connection refused",
+            "connecterror",
+            "connect timeout",
+            "connecttimeout",
+            "name or service not known",
+            "nodename nor servname provided",
+            "temporary failure in name resolution",
+            "network is unreachable",
+            "failed to establish a new connection",
+        )
+        return any(substring in _error_str_lower for substring in known_exception_substrings)
+
+    @staticmethod
     def is_azure_content_policy_violation_error(error_str: str) -> bool:
         """
         Check if an error string indicates a content policy violation error.
@@ -388,6 +407,16 @@ def _map_openai_exception(
             model=model,
             request=_request,
             litellm_debug_info=extra_information,
+        )
+    elif ExceptionCheckers.is_error_str_connection_error(error_str) and getattr(
+        original_exception, "status_code", None
+    ) in (None, 500):
+        raise APIConnectionError(
+            message=f"APIConnectionError: {exception_provider} - {message}",
+            llm_provider=custom_llm_provider,
+            model=model,
+            litellm_debug_info=extra_information,
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 400:
@@ -740,6 +769,15 @@ def _map_openai_like_exception(
             message=f"{custom_llm_provider.capitalize()}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
             llm_provider=custom_llm_provider,
             model=model,
+        )
+    elif ExceptionCheckers.is_error_str_connection_error(error_str) and getattr(
+        original_exception, "status_code", None
+    ) in (None, 500):
+        raise APIConnectionError(
+            message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
+            llm_provider=custom_llm_provider,
+            model=model,
+            litellm_debug_info=extra_information,
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 500:
@@ -1964,7 +2002,9 @@ def _map_azure_exception(
             litellm_debug_info=extra_information,
             response=getattr(original_exception, "response", None),
         )
-    elif "Connection error" in error_str:
+    elif ExceptionCheckers.is_error_str_connection_error(error_str) and getattr(
+        original_exception, "status_code", None
+    ) in (None, 500):
         raise APIConnectionError(
             message=f"{exception_provider} APIConnectionError - {message}",
             llm_provider=custom_llm_provider,
