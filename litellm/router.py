@@ -210,6 +210,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import (
+    _ABOVE_THRESHOLD_COST_KEY,
     CustomStreamWrapper,
     EmbeddingResponse,
     ModelResponse,
@@ -267,6 +268,16 @@ def _cost_value_as_float(value: Union[str, int, float, None]) -> Optional[float]
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _copy_custom_pricing_fields(
+    model_info: Dict[str, Any],
+    litellm_params: LiteLLM_Params,
+) -> None:
+    """Copy declared and arbitrary threshold pricing into a model-cost entry."""
+    for field, value in litellm_params.model_dump(exclude_none=True).items():
+        if field in CustomPricingLiteLLMParams.model_fields or _ABOVE_THRESHOLD_COST_KEY.search(field) is not None:
+            model_info[field] = value
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
@@ -7471,9 +7482,10 @@ class Router:
                 litellm_params=litellm_params,
                 model_info=_model_info,
             )
-            for field in CustomPricingLiteLLMParams.model_fields.keys():
-                if deployment.litellm_params.get(field) is not None:
-                    _model_info[field] = deployment.litellm_params[field]
+            _copy_custom_pricing_fields(
+                model_info=_model_info,
+                litellm_params=deployment.litellm_params,
+            )
 
             if _model_info.get("input_cost_per_token") is not None:
                 Router._inherit_builtin_cache_pricing(
@@ -8194,10 +8206,10 @@ class Router:
         self._add_deployment(deployment=deployment)
 
         _model_info_dict: dict = deployment.model_info.model_dump(exclude_none=True)
-        for field in CustomPricingLiteLLMParams.model_fields.keys():
-            field_value = deployment.litellm_params.get(field)
-            if field_value is not None:
-                _model_info_dict[field] = field_value
+        _copy_custom_pricing_fields(
+            model_info=_model_info_dict,
+            litellm_params=deployment.litellm_params,
+        )
 
         if _model_info_dict.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(

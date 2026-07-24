@@ -944,3 +944,117 @@ def test_wildcard_zero_cost_request_does_not_poison_named_deployment_pricing():
         assert named_cost == pytest.approx(10 * builtin_input_cost)
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_router_registers_arbitrary_above_threshold_pricing_from_litellm_params():
+    """Regression for #34378.
+
+    Arbitrary *_above_<N>_tokens pricing fields accepted in litellm_params
+    must be registered under the deployment model ID.
+    """
+    backend_model = "openai/gpt-4o-mini"
+    model_id = "router-custom-above-32k-pricing-34378"
+    shared_keys = ("gpt-4o-mini", backend_model)
+
+    original_entries = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, model_id)
+    }
+
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "custom-above-32k-model",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                        "input_cost_per_token": 1e-6,
+                        "output_cost_per_token": 2e-6,
+                        "input_cost_per_token_above_32k_tokens": 9e-6,
+                        "output_cost_per_token_above_32k_tokens": 18e-6,
+                        "cache_read_input_token_cost_above_32k_tokens": 4e-6,
+                    },
+                    "model_info": {
+                        "id": model_id,
+                    },
+                }
+            ]
+        )
+
+        registered = litellm.model_cost.get(model_id)
+        assert registered is not None
+
+        assert registered["input_cost_per_token"] == 1e-6
+        assert registered["output_cost_per_token"] == 2e-6
+        assert registered["input_cost_per_token_above_32k_tokens"] == 9e-6
+        assert registered["output_cost_per_token_above_32k_tokens"] == 18e-6
+        assert registered["cache_read_input_token_cost_above_32k_tokens"] == 4e-6
+
+        from litellm.litellm_core_utils.llm_cost_calc.utils import (
+            generic_cost_per_token,
+        )
+        from litellm.types.utils import Usage
+
+        prompt_tokens = 40_000
+        completion_tokens = 1_000
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model_id,
+            usage=usage,
+            custom_llm_provider="openai",
+        )
+
+        assert prompt_cost == pytest.approx(9e-6 * prompt_tokens)
+        assert completion_cost == pytest.approx(18e-6 * completion_tokens)
+    finally:
+        _restore_model_cost_entries(original_entries)
+
+
+def test_add_deployment_registers_arbitrary_above_threshold_pricing():
+    """Dynamic add_deployment must preserve arbitrary pricing thresholds."""
+    backend_model = "openai/gpt-4o-mini"
+    model_id = "add-deployment-custom-above-32k-pricing-34378"
+    shared_keys = ("gpt-4o-mini", backend_model)
+
+    original_entries = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, model_id)
+    }
+
+    try:
+        router = Router(model_list=[])
+        router.add_deployment(
+            deployment=Deployment(
+                model_name="dynamic-custom-above-32k-model",
+                litellm_params=LiteLLM_Params(
+                    model=backend_model,
+                    api_key="fake-key",
+                    input_cost_per_token=1e-6,
+                    output_cost_per_token=2e-6,
+                    input_cost_per_token_above_32k_tokens=9e-6,
+                    output_cost_per_token_above_32k_tokens=18e-6,
+                    cache_read_input_token_cost_above_32k_tokens=4e-6,
+                ),
+                model_info=ModelInfo(id=model_id),
+            )
+        )
+
+        registered = litellm.model_cost.get(model_id)
+        assert registered is not None
+        assert registered["input_cost_per_token_above_32k_tokens"] == 9e-6
+        assert registered["output_cost_per_token_above_32k_tokens"] == 18e-6
+        assert registered["cache_read_input_token_cost_above_32k_tokens"] == 4e-6
+
+        for shared_key in shared_keys:
+            shared_entry = litellm.model_cost.get(shared_key) or {}
+            assert "input_cost_per_token_above_32k_tokens" not in shared_entry
+            assert "output_cost_per_token_above_32k_tokens" not in shared_entry
+            assert "cache_read_input_token_cost_above_32k_tokens" not in shared_entry
+    finally:
+        _restore_model_cost_entries(original_entries)
