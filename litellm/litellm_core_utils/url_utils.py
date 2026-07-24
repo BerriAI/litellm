@@ -21,7 +21,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
@@ -374,6 +374,34 @@ def _extract_redirect_url(response: Any, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
+_SENSITIVE_REDIRECT_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
+
+
+def _same_origin(first_url: str, second_url: str) -> bool:
+    """Return True when both URLs share scheme, host, and effective port."""
+    first = urlparse(first_url)
+    second = urlparse(second_url)
+    first_port = first.port if first.port is not None else _default_port_for_scheme(first.scheme)
+    second_port = second.port if second.port is not None else _default_port_for_scheme(second.scheme)
+    return (
+        first.scheme == second.scheme
+        and _normalize_host(first.hostname or "") == _normalize_host(second.hostname or "")
+        and first_port == second_port
+    )
+
+
+def _headers_for_next_hop(headers: Dict[str, str], current_url: str, next_url: str) -> Dict[str, str]:
+    """Drop credential-bearing headers when a redirect crosses origins.
+
+    Mirrors httpx's own redirect handling, which strips ``Authorization`` and
+    similar headers on cross-origin hops so a redirect can't exfiltrate the
+    caller's credentials to a different host.
+    """
+    if _same_origin(current_url, next_url):
+        return headers
+    return {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_REDIRECT_HEADERS}
+
+
 def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
@@ -434,4 +462,38 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so
         # relative Location headers keep the original hostname.
         url = _extract_redirect_url(response, url)
+    raise SSRFError("Too many redirects")
+
+
+async def async_safe_request(client: Any, method: str, url: str, **kwargs: Any) -> Any:
+    """Method-generic async version of ``safe_get`` with SSRF protection.
+
+    ``client`` must be an ``httpx.AsyncClient`` (exposing ``request``), not a
+    LiteLLM handler, because per-hop redirect control requires disabling the
+    client's default redirect following on every method. Each redirect hop is
+    validated, the connection is made to the validated IP with the original
+    Host header, and redirects are never auto-followed.
+
+    When ``litellm.user_url_validation`` is False, validation is bypassed and
+    this delegates to ``client.request(method, url, follow_redirects=True)``.
+    """
+    if not getattr(litellm, "user_url_validation", True):
+        kwargs.setdefault("follow_redirects", True)
+        return await client.request(method, url, **kwargs)
+    kwargs.pop("follow_redirects", None)
+    caller_headers = kwargs.pop("headers", None) or {}
+    for _ in range(_MAX_REDIRECTS):
+        validated_url, original_host = validate_url(url)
+        response = await client.request(
+            method,
+            validated_url,
+            headers={**caller_headers, "Host": original_host},
+            follow_redirects=False,
+            **kwargs,
+        )
+        if not response.is_redirect:
+            return response
+        next_url = _extract_redirect_url(response, url)
+        caller_headers = _headers_for_next_hop(caller_headers, url, next_url)
+        url = next_url
     raise SSRFError("Too many redirects")
