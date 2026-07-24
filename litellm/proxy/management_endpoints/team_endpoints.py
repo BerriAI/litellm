@@ -99,6 +99,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
+from litellm.proxy.management_helpers.audit_logs import audit_logs_enabled
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -1253,7 +1254,7 @@ async def new_team(
         )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if audit_logs_enabled() is True:
             _updated_values = complete_team_data.json(exclude_none=True)
 
             _updated_values = json.dumps(_updated_values, default=str)
@@ -1913,7 +1914,7 @@ async def update_team(
         )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if audit_logs_enabled() is True:
             await _create_team_update_audit_log(
                 existing_team_row=existing_team_row,
                 updated_kv=updated_kv,
@@ -3171,7 +3172,7 @@ async def delete_team(
 
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-    if litellm.store_audit_logs is True:
+    if audit_logs_enabled() is True:
         # make an audit log for each team deleted
         for team_id in data.team_ids:
             team_row: Optional[LiteLLM_TeamTable] = await prisma_client.get_data(  # type: ignore

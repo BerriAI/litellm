@@ -13,12 +13,14 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
+from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, UserAPIKeyAuth
 from litellm.proxy.management_helpers.audit_logs import (
     _audit_log_task_done_callback,
     _build_audit_log_payload,
     _dispatch_audit_log_to_callbacks,
+    audit_logs_enabled,
     create_audit_log_for_update,
+    get_audit_log_changed_by,
 )
 from litellm.types.utils import StandardAuditLogPayload
 
@@ -177,7 +179,7 @@ class TestCreateAuditLogForUpdateWithCallbacks:
             mock_logger.async_log_audit_log_event.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_no_dispatch_when_not_premium(self):
+    async def test_dispatches_and_writes_when_not_premium(self):
         mock_logger = MagicMock(spec=CustomLogger)
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
@@ -185,12 +187,16 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         with (
             patch("litellm.proxy.proxy_server.premium_user", False),
             patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         ):
+            mock_prisma.db.litellm_auditlog.create = AsyncMock()
+
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
             await asyncio.sleep(0.1)
 
-            mock_logger.async_log_audit_log_event.assert_not_called()
+            mock_prisma.db.litellm_auditlog.create.assert_called_once()
+            mock_logger.async_log_audit_log_event.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_no_dispatch_when_store_audit_logs_false(self):
@@ -282,6 +288,48 @@ class TestAuditLogTaskDoneCallback:
         ) as mock_logger:
             _audit_log_task_done_callback(mock_task)
             mock_logger.error.assert_not_called()
+
+
+class TestAuditLogCompatibility:
+    def test_audit_logs_enabled_honors_env_var(self, monkeypatch):
+        monkeypatch.setattr(litellm, "store_audit_logs", False)
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", "true")
+
+        assert audit_logs_enabled() is True
+
+    def test_changed_by_prefers_email_without_allowed_header(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="user-123",
+            user_email="admin@example.com",
+            metadata={},
+            team_metadata={},
+        )
+
+        assert (
+            get_audit_log_changed_by(
+                litellm_changed_by="forged-admin",
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name="proxy-admin",
+            )
+            == "admin@example.com"
+        )
+
+    def test_changed_by_uses_allowed_header_when_opted_in(self):
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="user-123",
+            user_email="admin@example.com",
+            metadata={"allow_litellm_changed_by_header": True},
+            team_metadata={},
+        )
+
+        assert (
+            get_audit_log_changed_by(
+                litellm_changed_by="ops-on-call",
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name="proxy-admin",
+            )
+            == "ops-on-call"
+        )
 
 
 class TestS3LoggerAuditLogEvent:
@@ -424,7 +472,6 @@ class TestS3AuditCallbackParamsDecoupling:
     def test_empty_dict_opts_in(self):
         """`s3_audit_callback_params = {}` is opt-in (truthy-by-presence) and
         produces a separate instance with no bucket configured (env/IAM-only)."""
-        from litellm.integrations.s3_v2 import S3Logger
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )

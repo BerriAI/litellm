@@ -40,6 +40,7 @@ class KeyManagementEventHooks:
         - Storing Generated Key in DB
         """
         from litellm.proxy.management_helpers.audit_logs import (
+            audit_logs_enabled,
             create_audit_log_for_update,
             get_audit_log_changed_by,
         )
@@ -53,7 +54,7 @@ class KeyManagementEventHooks:
                 verbose_proxy_logger.warning(f"Failed to send key created email: {e}")
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if audit_logs_enabled() is True:
             _updated_values = response.model_dump_json(exclude_none=True)
             asyncio.create_task(
                 create_audit_log_for_update(
@@ -100,13 +101,14 @@ class KeyManagementEventHooks:
         - Storing Audit Logs for key update
         """
         from litellm.proxy.management_helpers.audit_logs import (
+            audit_logs_enabled,
             create_audit_log_for_update,
             get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if audit_logs_enabled() is True:
             _updated_values = json.dumps(data.json(exclude_none=True), default=str)
 
             _before_value = existing_key_row.json(exclude_none=True)
@@ -141,6 +143,7 @@ class KeyManagementEventHooks:
         litellm_changed_by: Optional[str] = None,
     ):
         from litellm.proxy.management_helpers.audit_logs import (
+            audit_logs_enabled,
             create_audit_log_for_update,
             get_audit_log_changed_by,
         )
@@ -179,7 +182,7 @@ class KeyManagementEventHooks:
             verbose_proxy_logger.warning(f"Failed to send key rotated email: {e}")
 
         # store the audit log
-        if litellm.store_audit_logs is True and existing_key_row.token is not None:
+        if audit_logs_enabled() is True and existing_key_row.token is not None:
             asyncio.create_task(
                 create_audit_log_for_update(
                     request_data=LiteLLM_AuditLogs(
@@ -215,6 +218,7 @@ class KeyManagementEventHooks:
         - Storing Audit Logs for key deletion
         """
         from litellm.proxy.management_helpers.audit_logs import (
+            audit_logs_enabled,
             create_audit_log_for_update,
             get_audit_log_changed_by,
         )
@@ -222,7 +226,7 @@ class KeyManagementEventHooks:
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if litellm.store_audit_logs is True and data.keys is not None:
+        if audit_logs_enabled() is True and data.keys is not None:
             # make an audit log for each key deleted
             for key in keys_being_deleted:
                 if key.token is None:

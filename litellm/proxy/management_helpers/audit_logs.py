@@ -43,7 +43,13 @@ def get_audit_log_changed_by(
 ) -> Optional[str]:
     if litellm_changed_by and _allows_litellm_changed_by_header(user_api_key_dict):
         return litellm_changed_by
-    return user_api_key_dict.user_id or litellm_proxy_admin_name
+    return user_api_key_dict.user_email or user_api_key_dict.user_id or litellm_proxy_admin_name
+
+
+def audit_logs_enabled() -> bool:
+    from litellm.secret_managers.main import get_secret_bool
+
+    return bool(litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS"))
 
 
 def _resolve_audit_log_callback(name: str) -> Optional[CustomLogger]:
@@ -165,11 +171,7 @@ async def create_object_audit_log(
     - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
     - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
     """
-    from litellm.secret_managers.main import get_secret_bool
-
-    _store_audit_logs: Optional[bool] = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
-
-    if _store_audit_logs is not True:
+    if audit_logs_enabled() is not True:
         return
 
     _changed_by = get_audit_log_changed_by(
@@ -197,16 +199,10 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     """
     Create an audit log for an object.
     """
-    from litellm.secret_managers.main import get_secret_bool
-
-    _store_audit_logs: Optional[bool] = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
-    if _store_audit_logs is not True:
+    if audit_logs_enabled() is not True:
         return
 
-    from litellm.proxy.proxy_server import premium_user, prisma_client
-
-    if premium_user is not True:
-        return
+    from litellm.proxy.proxy_server import prisma_client
 
     verbose_proxy_logger.debug("creating audit log for %s", request_data)
 

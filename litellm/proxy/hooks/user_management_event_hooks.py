@@ -23,7 +23,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.management_helpers.audit_logs import (
+    audit_logs_enabled,
+    create_audit_log_for_update,
+)
 from litellm.repositories.user_repository import UserRepository
 
 
@@ -183,7 +186,7 @@ class UserManagementEventHooks:
         - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
         - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
         """
-        if not litellm.store_audit_logs:
+        if not audit_logs_enabled():
             return
 
         from litellm.proxy.management_helpers.audit_logs import (

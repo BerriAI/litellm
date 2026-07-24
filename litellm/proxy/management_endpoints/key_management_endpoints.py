@@ -5928,6 +5928,7 @@ async def block_key(
     Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can block keys.
     """
     from litellm.proxy.management_helpers.audit_logs import (
+        audit_logs_enabled,
         get_audit_log_changed_by,
     )
     from litellm.proxy.proxy_server import (
@@ -5973,7 +5974,7 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if audit_logs_enabled() is True:
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -6039,6 +6040,7 @@ async def unblock_key(
     Note: This is an admin-only endpoint. Only proxy admins, team admins, or org admins can unblock keys.
     """
     from litellm.proxy.management_helpers.audit_logs import (
+        audit_logs_enabled,
         get_audit_log_changed_by,
     )
     from litellm.proxy.proxy_server import (
@@ -6084,7 +6086,7 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if audit_logs_enabled() is True:
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
