@@ -7692,15 +7692,15 @@ def _keepalive_from_deployment_config(request_data: dict[str, Any], response: An
             return getattr(deployment.litellm_params, "keepalive_seconds", None)
 
     # No model_id to pin down which deployment actually served this stream: only
-    # trust the fallback when every deployment under this model_name agrees, so we
-    # never apply one deployment's interval (or disable) to another's stream.
-    configured_values = {
-        raw
+    # trust the fallback when every deployment under this model_name agrees,
+    # including deployments that leave keepalive_seconds unset (None), so an
+    # unconfigured deployment never inherits a sibling's configured interval.
+    values = {
+        (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")
         for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or []
-        if (raw := (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")) is not None
     }
-    if len(configured_values) == 1:
-        return configured_values.pop()
+    if len(values) == 1:
+        return values.pop()
     return None
 
 
