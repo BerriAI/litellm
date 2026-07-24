@@ -1002,7 +1002,7 @@ def strip_internal_batch_attribution(file_object_data: dict) -> dict:
     return {**file_object_data, "metadata": cleaned_metadata or None}
 
 
-def read_stored_batch_attribution(db_batch_object) -> Optional[dict]:
+def read_stored_batch_attribution(db_batch_object) -> dict | None:
     """Return the create-time litellm_batch_attribution snapshot stored on a managed object row.
 
     The snapshot lives in the row's file_object jsonb (stored either as a JSON string or an
