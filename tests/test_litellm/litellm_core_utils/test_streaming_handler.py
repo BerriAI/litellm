@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
+    _SyncToAsyncQueueIterator,
 )
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -3355,3 +3356,182 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
         if chunk.choices and chunk.choices[0].finish_reason
     ]
     assert fabricated_finish_reasons == []
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_delivers_items_in_order():
+    items = [1, 2, 3, 4, 5]
+    wrapper = _SyncToAsyncQueueIterator(iter(items))
+    received = []
+    try:
+        while True:
+            received.append(await wrapper.__anext__())
+    except StopAsyncIteration:
+        pass
+    assert received == items
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_raises_stop_async_iteration_when_exhausted():
+    wrapper = _SyncToAsyncQueueIterator(iter([42]))
+    assert await wrapper.__anext__() == 42
+    with pytest.raises(StopAsyncIteration):
+        await wrapper.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_propagates_sync_iterator_exceptions():
+    def _exploding_iter():
+        yield 1
+        raise ValueError("upstream failure")
+
+    wrapper = _SyncToAsyncQueueIterator(_exploding_iter())
+    assert await wrapper.__anext__() == 1
+    with pytest.raises(ValueError, match="upstream failure"):
+        await wrapper.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_does_not_block_event_loop():
+    class SlowIter:
+        def __init__(self):
+            self._done = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._done:
+                raise StopIteration
+            self._done = True
+            time.sleep(0.2)  # simulate blocking I/O
+            return "chunk"
+
+    wrapper = _SyncToAsyncQueueIterator(SlowIter())
+    tick_ran = asyncio.Event()
+
+    async def background_tick():
+        await asyncio.sleep(0.05)
+        tick_ran.set()
+
+    start = asyncio.get_event_loop().time()
+    item, _ = await asyncio.gather(wrapper.__anext__(), background_tick())
+    elapsed = asyncio.get_event_loop().time() - start
+
+    assert item == "chunk"
+    assert tick_ran.is_set(), "Background coroutine never ran — event loop was blocked"
+    assert elapsed < 0.4, f"Took too long ({elapsed:.2f}s), event loop likely blocked"
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_bedrock_path_uses_queue_iterator(
+    logging_obj: Logging,
+):
+    class FakeSyncIter:
+        def __init__(self, chunks):
+            self._it = iter(chunks)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._it)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-bedrock-test",
+        created=int(time.time()),
+        model="test-model",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="hello",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields={},
+        usage=None,
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=FakeSyncIter([chunk]),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    try:
+        while True:
+            await wrapper.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    assert isinstance(wrapper.completion_stream, _SyncToAsyncQueueIterator)
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_closes_upgraded_sync_iterator(
+    logging_obj: Logging,
+):
+    close_calls = []
+
+    class FakeSyncIter:
+        def __init__(self, chunks):
+            self._it = iter(chunks)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._it)
+
+        def close(self):
+            close_calls.append(True)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-bedrock-test-close",
+        created=int(time.time()),
+        model="test-model",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="hello",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields={},
+        usage=None,
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=FakeSyncIter([chunk, chunk, chunk]),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    await wrapper.__anext__()
+    assert isinstance(wrapper.completion_stream, _SyncToAsyncQueueIterator)
+
+    await wrapper.aclose()
+
+    assert close_calls == [True]
