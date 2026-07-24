@@ -1815,12 +1815,22 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # ``_handle_failure``) and re-reads the (mutating) entry list
             # each time. Dedupe at entry granularity so a single real
             # guardrail invocation produces exactly one span per handler.
+            #
+            # ``guardrail_mode`` is user-configured and may be a list
+            # (e.g. ``mode: ["pre_call", "post_call"]``); ``_emit_once``
+            # requires hashable scope parts, so normalize lists to tuples.
+            guardrail_mode = guardrail_information.get("guardrail_mode")
+            hashable_guardrail_mode: Any = (
+                tuple(guardrail_mode)
+                if isinstance(guardrail_mode, list)
+                else guardrail_mode
+            )
             if not self._emit_once(
                 kwargs,
                 "guardrail",
                 guardrail_information.get("guardrail_name"),
                 start_time_float,
-                guardrail_information.get("guardrail_mode"),
+                hashable_guardrail_mode,
             ):
                 continue
 
