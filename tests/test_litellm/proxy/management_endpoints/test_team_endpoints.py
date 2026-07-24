@@ -5188,6 +5188,36 @@ async def test_update_team_budget_duration_rearm_blocked_for_org_scoped_team_adm
         assert "budget_duration" in str(exc_info.value.message).lower()
 
 
+def test_check_team_budget_window_rearm_authority_allows_noop_resend():
+    """A non-admin re-sending the same active budget_duration is not a re-arm
+    (window not newly armed), so the guard must return without raising."""
+    from datetime import timedelta
+
+    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _check_team_budget_window_rearm_authority,
+    )
+
+    non_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"
+    )
+    existing_team_row = MagicMock(
+        budget_duration="30d",
+        budget_reset_at=datetime.now(timezone.utc) + timedelta(days=15),
+    )
+    data = UpdateTeamRequest(team_id="t1", budget_duration="30d")
+
+    # Same active duration -> not newly armed -> no raise (returns None).
+    assert (
+        _check_team_budget_window_rearm_authority(
+            data=data,
+            user_api_key_dict=non_admin,
+            existing_team_row=existing_team_row,
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
     """
