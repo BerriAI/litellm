@@ -92,6 +92,10 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - functions parameter is not supported (use tools instead)
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
+
+        Reasoning models (kimi-k3, ...) expose a top-level `reasoning_effort`
+        field to control the thinking budget, so advertise it for them.
+        https://platform.kimi.ai/docs/pricing/chat-k3
         """
         excluded_params: List[str] = ["functions"]
 
@@ -100,10 +104,10 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             excluded_params.extend(["tools", "tool_choice"])
 
         base_openai_params = super().get_supported_openai_params(model=model)
-        final_params: List[str] = []
-        for param in base_openai_params:
-            if param not in excluded_params:
-                final_params.append(param)
+        final_params = [p for p in base_openai_params if p not in excluded_params]
+
+        if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+            final_params = [*final_params, "reasoning_effort"]
 
         return final_params
 

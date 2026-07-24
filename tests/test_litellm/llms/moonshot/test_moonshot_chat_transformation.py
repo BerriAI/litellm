@@ -63,6 +63,61 @@ class TestMoonshotConfig:
         # Should NOT include functions (not supported by Moonshot AI)
         assert "functions" not in supported_params
 
+    def test_reasoning_effort_supported_for_reasoning_models(self):
+        """Reasoning models (kimi-k3) expose a top-level reasoning_effort control,
+        so it must be advertised as a supported OpenAI param for them."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            assert "reasoning_effort" in config.get_supported_openai_params("kimi-k3")
+
+    def test_reasoning_effort_not_supported_for_non_reasoning_models(self):
+        """Non-reasoning Moonshot models must not advertise reasoning_effort."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=False,
+        ):
+            assert "reasoning_effort" not in config.get_supported_openai_params("moonshot-v1-8k")
+
+    def test_reasoning_effort_passed_through_for_reasoning_models(self):
+        """reasoning_effort should be forwarded to the request body for reasoning models."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "max"},
+                optional_params={},
+                model="kimi-k3",
+                drop_params=False,
+            )
+
+        assert result.get("reasoning_effort") == "max"
+
+    def test_reasoning_effort_dropped_for_non_reasoning_models(self):
+        """reasoning_effort must not leak into requests for non-reasoning models."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=False,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "max"},
+                optional_params={},
+                model="moonshot-v1-8k",
+                drop_params=True,
+            )
+
+        assert "reasoning_effort" not in result
+
     def test_map_openai_params_excludes_functions(self):
         """Test that functions parameter is not mapped"""
         config = MoonshotChatConfig()
@@ -744,6 +799,46 @@ class TestKimiK26ModelRegistry:
         assert model_info["litellm_provider"] == "moonshot"
 
 
+class TestKimiK3ModelRegistry:
+    """Tests that kimi-k3 is correctly registered in the model registry."""
+
+    @pytest.fixture(autouse=True)
+    def model_cost_map(self):
+        """Load directly from the bundled backup so tests don't depend on remote fetch."""
+        return GetModelCostMap.load_local_model_cost_map()
+
+    def test_kimi_k3_in_model_cost_map(self, model_cost_map):
+        """kimi-k3 should be present in the model cost map."""
+        assert "moonshot/kimi-k3" in model_cost_map, "moonshot/kimi-k3 not found in model_cost"
+
+    def test_kimi_k3_pricing(self, model_cost_map):
+        """kimi-k3 pricing should match official Kimi API rates."""
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info["input_cost_per_token"] == pytest.approx(3e-06)
+        assert model_info["output_cost_per_token"] == pytest.approx(1.5e-05)
+        assert model_info["cache_read_input_token_cost"] == pytest.approx(3e-07)
+
+    def test_kimi_k3_context_window(self, model_cost_map):
+        """kimi-k3 should have a 1M (1048576 token) context window."""
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info["max_input_tokens"] == 1048576
+        assert model_info["max_tokens"] == 1048576
+
+    def test_kimi_k3_capabilities(self, model_cost_map):
+        """kimi-k3 should support function calling, vision, tool choice, reasoning, and json schema."""
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info.get("supports_function_calling") is True
+        assert model_info.get("supports_tool_choice") is True
+        assert model_info.get("supports_vision") is True
+        assert model_info.get("supports_reasoning") is True
+        assert model_info.get("supports_response_schema") is True
+
+    def test_kimi_k3_provider(self, model_cost_map):
+        """kimi-k3 should be assigned to the moonshot provider."""
+        model_info = model_cost_map["moonshot/kimi-k3"]
+        assert model_info["litellm_provider"] == "moonshot"
+
+
 class TestMoonshotResponseSchemaSupport:
     """Every model currently live on api.moonshot.ai supports json_schema
     response_format, which gates discovery via litellm.responses(). The flag
@@ -752,6 +847,7 @@ class TestMoonshotResponseSchemaSupport:
     LIVE_MODELS = [
         "moonshot/kimi-k2.5",
         "moonshot/kimi-k2.6",
+        "moonshot/kimi-k3",
         "moonshot/moonshot-v1-8k",
         "moonshot/moonshot-v1-32k",
         "moonshot/moonshot-v1-128k",
