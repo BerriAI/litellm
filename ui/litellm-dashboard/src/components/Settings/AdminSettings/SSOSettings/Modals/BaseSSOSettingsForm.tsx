@@ -4,6 +4,7 @@ import { TextInput } from "@tremor/react";
 import { Checkbox, Form, Input, Select } from "antd";
 import React from "react";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
+import { Logo } from "@/components/molecules/logo/Logo";
 
 export interface BaseSSOSettingsFormProps {
   form: any; // Replace with proper Form type if available
@@ -17,6 +18,7 @@ export interface SSOProviderConfig {
     label: string;
     name: string;
     placeholder?: string;
+    required?: boolean;
   }>;
 }
 
@@ -51,6 +53,7 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_authorization_endpoint: "GENERIC_AUTHORIZATION_ENDPOINT",
       generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
+      generic_scope: "GENERIC_SCOPE",
     },
     fields: [
       { label: "Generic Client ID", name: "generic_client_id" },
@@ -66,6 +69,7 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
         name: "generic_userinfo_endpoint",
         placeholder: "https://your-domain/userinfo",
       },
+      { label: "Scopes", name: "generic_scope", placeholder: "openid email profile", required: false },
     ],
   },
   generic: {
@@ -75,6 +79,7 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_authorization_endpoint: "GENERIC_AUTHORIZATION_ENDPOINT",
       generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
+      generic_scope: "GENERIC_SCOPE",
     },
     fields: [
       { label: "Generic Client ID", name: "generic_client_id" },
@@ -82,6 +87,7 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       { label: "Authorization Endpoint", name: "generic_authorization_endpoint" },
       { label: "Token Endpoint", name: "generic_token_endpoint" },
       { label: "Userinfo Endpoint", name: "generic_userinfo_endpoint" },
+      { label: "Scopes", name: "generic_scope", placeholder: "openid email profile", required: false },
     ],
   },
 };
@@ -96,7 +102,7 @@ export const renderProviderFields = (provider: string) => {
       key={field.name}
       label={field.label}
       name={field.name}
-      rules={[{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }]}
+      rules={[{ required: field.required !== false, message: `Please enter the ${field.label.toLowerCase()}` }]}
     >
       {field.name.includes("client") ? <Input.Password /> : <TextInput placeholder={field.placeholder} />}
     </Form.Item>
@@ -117,10 +123,10 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
               <Select.Option key={value} value={value}>
                 <div style={{ display: "flex", alignItems: "center", padding: "4px 0" }}>
                   {logo && (
-                    <img
+                    <Logo
                       src={logo}
-                      alt={value}
-                      style={{ height: 24, width: 24, marginRight: 12, objectFit: "contain" }}
+                      label={ssoProviderDisplayNames[value] || value}
+                      className="h-6 w-6 mr-3 object-contain"
                     />
                   )}
                   <span>

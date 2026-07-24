@@ -44,6 +44,7 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  PiggyBank,
   PlayCircle,
   Route,
   ScrollText,
@@ -181,6 +182,13 @@ const menuGroups: MenuGroup[] = [
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "Usage",
       },
+      {
+        key: "cost-optimization",
+        page: "cost-optimization",
+        icon: <PiggyBank {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+        label: "Cost Optimization",
+      },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {
         key: "guardrails-monitor",
@@ -236,7 +244,13 @@ const menuGroups: MenuGroup[] = [
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
-      { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
+      {
+        key: "caching",
+        page: "caching",
+        label: "Response Cache",
+        icon: <Database {...ICON} />,
+        roles: all_admin_roles,
+      },
       {
         key: "experimental",
         page: "experimental",

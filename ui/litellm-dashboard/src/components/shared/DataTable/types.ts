@@ -6,6 +6,7 @@ import type {
   PaginationState,
   Row,
   RowData,
+  RowSelectionState,
   SortingState,
   Table,
   VisibilityState,
@@ -58,6 +59,10 @@ export interface DataTableProps<TData extends RowData, TValue> {
   renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
   expanded?: ExpandedState;
   onExpandedChange?: OnChangeFn<ExpandedState>;
+
+  enableRowSelection?: boolean | ((row: Row<TData>) => boolean);
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>;
 
   onRowClick?: (row: TData) => void;
 

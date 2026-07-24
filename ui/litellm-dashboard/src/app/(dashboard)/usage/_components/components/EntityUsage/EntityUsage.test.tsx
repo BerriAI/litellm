@@ -765,4 +765,37 @@ describe("EntityUsage", () => {
     });
     expect(screen.queryByText(userUuid)).not.toBeInTheDocument();
   });
+
+  it("renders the provider spend table logo from the bundled provider map", async () => {
+    render(<EntityUsage {...defaultProps} />);
+
+    const logo = await screen.findByAltText("openai logo");
+    expect(logo.getAttribute("src")).toContain("openai_small");
+  });
+
+  it("renders a letter avatar instead of an img for an unknown provider slug", async () => {
+    const spendDataUnknownProvider = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            providers: {
+              "zzz-internal": mockSpendData.results[0].breakdown.providers.openai,
+            },
+          },
+        },
+      ],
+    };
+    mockTagDailyActivityCall.mockResolvedValue(spendDataUnknownProvider);
+
+    render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("zzz-internal").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByAltText("zzz-internal logo")).not.toBeInTheDocument();
+    expect(screen.getByText("z")).toBeInTheDocument();
+  });
 });

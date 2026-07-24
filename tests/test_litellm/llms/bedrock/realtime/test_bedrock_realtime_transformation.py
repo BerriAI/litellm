@@ -403,8 +403,9 @@ class TestBedrockRealtimeResponseCreate:
 class TestBedrockRealtimeResponseTransformation:
     """Test suite for response transformation"""
 
-    def test_transform_session_start_response(self):
-        """Test sessionStart response transformation"""
+    def test_bedrock_session_start_does_not_emit_duplicate_session_created(self):
+        """A Bedrock output sessionStart must not forward a second session.created to the
+        client; session.created is sent exactly once on connect (LIT-4655)"""
         config = BedrockRealtimeConfig()
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_123"
@@ -428,10 +429,8 @@ class TestBedrockRealtimeResponseTransformation:
             },
         )
 
-        assert len(result["response"]) == 1
-        assert result["response"][0]["type"] == "session.created"
-        assert result["response"][0]["session"]["id"] == "trace_123"
-        assert "model" in result["response"][0]["session"]
+        assert result["response"] == []
+        assert result["session_configuration_request"] == json.dumps({"configured": True})
 
     def test_transform_text_output_response(self):
         """Test textOutput response transformation"""
@@ -787,6 +786,48 @@ class TestBedrockRealtimeResponseTransformation:
         # Check all response_ids are the same
         response_ids = [event["response_id"] for event in all_events if "response_id" in event]
         assert len(set(response_ids)) == 1, "Response IDs should be consistent"
+
+
+class TestBedrockRealtimeSessionEvents:
+    """session.created / session.updated builders produce spec-shaped events (LIT-4655)"""
+
+    @staticmethod
+    def _logging():
+        from types import SimpleNamespace
+
+        return SimpleNamespace(litellm_trace_id="trace_123")
+
+    def test_session_created_event_shape(self):
+        event = BedrockRealtimeConfig().session_created_event("amazon.nova-sonic-v1:0", self._logging())
+        assert event["type"] == "session.created"
+        assert event["session"]["id"] == "trace_123"
+        assert event["session"]["model"] == "amazon.nova-sonic-v1:0"
+        assert event["session"]["modalities"] == ["text", "audio"]
+        assert event["event_id"]
+
+    def test_session_updated_event_shape(self):
+        event = BedrockRealtimeConfig().session_updated_event("amazon.nova-sonic-v1:0", self._logging())
+        assert event["type"] == "session.updated"
+        assert event["session"]["id"] == "trace_123"
+        assert event["session"]["model"] == "amazon.nova-sonic-v1:0"
+        assert event["event_id"]
+
+    def test_created_and_updated_have_distinct_event_ids(self):
+        config = BedrockRealtimeConfig()
+        logging_obj = self._logging()
+        created = config.session_created_event("amazon.nova-sonic-v1:0", logging_obj)
+        updated = config.session_updated_event("amazon.nova-sonic-v1:0", logging_obj)
+        assert created["event_id"] != updated["event_id"]
+
+    def test_session_updated_reflects_requested_modalities(self):
+        event = BedrockRealtimeConfig().session_updated_event(
+            "amazon.nova-sonic-v1:0", self._logging(), modalities=["text"]
+        )
+        assert event["session"]["modalities"] == ["text"]
+
+    def test_session_updated_defaults_modalities_when_unspecified(self):
+        event = BedrockRealtimeConfig().session_updated_event("amazon.nova-sonic-v1:0", self._logging())
+        assert event["session"]["modalities"] == ["text", "audio"]
 
 
 if __name__ == "__main__":

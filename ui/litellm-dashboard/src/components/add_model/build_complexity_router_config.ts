@@ -21,6 +21,7 @@ export interface BuildComplexityRouterConfigParams {
   adaptiveWeights: AdaptiveRouterWeights;
   tierDistancePenalty: number;
   adaptiveEligible: AdaptiveEligible;
+  returnRawModelName: boolean;
 }
 
 export interface ComplexityRouterConfigPayload {
@@ -37,6 +38,7 @@ export interface ComplexityRouterConfigPayload {
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
+  return_raw_model_name?: boolean;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -76,6 +78,7 @@ export const buildComplexityRouterConfig = ({
   adaptiveWeights,
   tierDistancePenalty,
   adaptiveEligible,
+  returnRawModelName,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   // Trim keywords and drop empty ones; drop any rule left with no keywords. Clicking
@@ -104,5 +107,6 @@ export const buildComplexityRouterConfig = ({
       ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
       adaptive_eligible: adaptiveEligible,
     }),
+    ...(returnRawModelName && { return_raw_model_name: true }),
   };
 };

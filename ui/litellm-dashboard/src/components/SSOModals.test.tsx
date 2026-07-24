@@ -462,6 +462,7 @@ describe("SSOModals", () => {
         generic_authorization_endpoint: null,
         generic_token_endpoint: null,
         generic_userinfo_endpoint: null,
+        generic_scope: null,
         proxy_base_url: null,
         user_email: null,
         sso_provider: null,
@@ -471,5 +472,44 @@ describe("SSOModals", () => {
 
     expect(NotificationsManager.success).toHaveBeenCalledWith("SSO settings cleared successfully");
     expect(mockHandleAddSSOOk).toHaveBeenCalled();
+  });
+
+  it("renders provider logos in the SSO provider dropdown", async () => {
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      return (
+        <SSOModals
+          isAddSSOModalVisible={true}
+          isInstructionsModalVisible={false}
+          handleAddSSOOk={() => {}}
+          handleAddSSOCancel={() => {}}
+          handleShowInstructions={() => {}}
+          handleInstructionsOk={() => {}}
+          handleInstructionsCancel={() => {}}
+          form={form}
+          accessToken={null}
+          ssoConfigured={false}
+        />
+      );
+    };
+
+    render(<TestWrapper />);
+
+    fireEvent.mouseDown(screen.getByLabelText("SSO Provider"));
+
+    await waitFor(() => {
+      expect(screen.getAllByAltText("Google SSO logo").length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getAllByAltText("Google SSO logo")[0]).toHaveAttribute("src", expect.stringContaining("google.svg"));
+    expect(screen.getAllByAltText("Microsoft SSO logo")[0]).toHaveAttribute(
+      "src",
+      expect.stringContaining("microsoft_azure.svg"),
+    );
+    expect(screen.getAllByAltText("Okta / Auth0 SSO logo")[0]).toHaveAttribute(
+      "src",
+      expect.stringContaining("https://www.okta.com/"),
+    );
+    expect(screen.queryByAltText("Generic SSO logo")).not.toBeInTheDocument();
   });
 });

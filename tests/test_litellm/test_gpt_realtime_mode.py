@@ -68,8 +68,16 @@ def test_realtime_only_gpt_4o_models_are_mode_realtime(model):
     assert _load_cost_map()[model]["mode"] == "realtime"
 
 
-def test_get_model_info_reports_realtime_mode():
-    assert litellm.get_model_info("gpt-realtime-mini")["mode"] == "realtime"
+def test_get_model_info_reports_realtime_mode(monkeypatch):
+    """get_model_info must resolve the retag against the bundled cost map, not the
+    hosted map fetched from main, which lags this repo until the next promotion."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    try:
+        assert litellm.get_model_info("gpt-realtime-mini")["mode"] == "realtime"
+    finally:
+        litellm.get_model_info.cache_clear()
 
 
 def test_backup_matches_main_for_realtime_models():

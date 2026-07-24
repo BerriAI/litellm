@@ -47,12 +47,15 @@ LlmRoute = Literal[
     "bedrock_converse",
     "bedrock_invoke",
     "cohere",
+    "gemini",
+    "hosted_vllm",
     "openai",
     "together_ai",
     "vertex",
 ]
 
 LlmCapability = Literal[
+    "assume_role",
     "basic",
     "count_tokens",
     "long_context_1m",
