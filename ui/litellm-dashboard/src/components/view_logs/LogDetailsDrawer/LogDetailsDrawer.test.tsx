@@ -124,6 +124,30 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
   });
 });
 
+describe("LogDetailsDrawer without a resolved log", () => {
+  const renderDrawer = (props: { logEntry: LogEntry | null; logEntryLoading?: boolean }) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <LogDetailsDrawer open onClose={() => {}} accessToken="token" {...props} />
+      </QueryClientProvider>,
+    );
+  };
+
+  it("explains why the details are missing instead of rendering nothing", () => {
+    renderDrawer({ logEntry: null });
+
+    expect(screen.getByText(/Log details are unavailable for this request/i)).toBeDefined();
+  });
+
+  it("shows a spinner while the log is still being fetched", () => {
+    renderDrawer({ logEntry: null, logEntryLoading: true });
+
+    expect(document.body.querySelector(".ant-spin")).not.toBeNull();
+    expect(screen.queryByText(/Log details are unavailable for this request/i)).toBeNull();
+  });
+});
+
 describe("LogDetailsDrawer session sidebar auto-router icon", () => {
   const routedSessionLogs = [
     makeLog({ request_id: "routed", model: "claude-opus-4-8", model_group: "smart-router" }),
