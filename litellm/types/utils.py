@@ -1534,14 +1534,27 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: Optional[float] = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    cache_write_tokens: Optional[int] = None
+    """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
+
     cache_creation_tokens: Optional[int] = None
-    """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
+    """Number of cache creation tokens sent to the model. Anthropic/Bedrock naming; kept in sync with cache_write_tokens (assigning either mirrors to the other)."""
 
     cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    def __setattr__(self, name: str, value: object) -> None:
+        super().__setattr__(name, value)
+        if name == "cache_write_tokens":
+            super().__setattr__("cache_creation_tokens", value)
+        elif name == "cache_creation_tokens":
+            super().__setattr__("cache_write_tokens", value)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.cache_write_tokens = (
+            self.cache_write_tokens if self.cache_write_tokens is not None else self.cache_creation_tokens
+        )
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -1554,6 +1567,8 @@ class PromptTokensDetailsWrapper(
             del self.web_search_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
+        if self.cache_write_tokens is None:
+            del self.cache_write_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
@@ -1662,10 +1677,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
             if _prompt_tokens_details is None:
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cache_creation_tokens=params["cache_creation_input_tokens"]
+                    cache_write_tokens=params["cache_creation_input_tokens"]
                 )
             else:
-                _prompt_tokens_details.cache_creation_tokens = params["cache_creation_input_tokens"]
+                _prompt_tokens_details.cache_write_tokens = params["cache_creation_input_tokens"]
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
