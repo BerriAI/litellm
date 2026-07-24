@@ -48,7 +48,7 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIMixin, FireworksAIException
+from ..common_utils import FireworksAIMixin, FireworksAIException, resolve_fireworks_resource_name
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -471,11 +471,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if not model.startswith("accounts/") and "#" not in model:
-            if model.endswith("-fast"):
-                model = f"accounts/fireworks/routers/{model}"
-            else:
-                model = f"accounts/fireworks/models/{model}"
+        model = resolve_fireworks_resource_name(model)
         messages = self._transform_messages_helper(messages=messages, model=model, litellm_params=litellm_params)
         if "tools" in optional_params and optional_params["tools"] is not None:
             tools = self._transform_tools(tools=optional_params["tools"])

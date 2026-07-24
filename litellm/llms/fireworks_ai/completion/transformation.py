@@ -4,7 +4,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 
 from ...base_llm.completion.transformation import BaseTextCompletionConfig
 from ...openai.completion.utils import _transform_prompt
-from ..common_utils import FireworksAIMixin
+from ..common_utils import FireworksAIMixin, resolve_fireworks_resource_name
 
 
 class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig):
@@ -50,11 +50,8 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
     ) -> dict:
         prompt = _transform_prompt(messages=messages)
 
-        if not model.startswith("accounts/") and "#" not in model:
-            model = f"accounts/fireworks/models/{model}"
-
         data = {
-            "model": model,
+            "model": resolve_fireworks_resource_name(model),
             "prompt": prompt,
             **optional_params,
         }

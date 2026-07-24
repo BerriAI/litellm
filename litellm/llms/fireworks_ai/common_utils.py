@@ -29,6 +29,17 @@ def get_fireworks_session_id(litellm_params: dict) -> str | None:
     return None
 
 
+def resolve_fireworks_resource_name(model: str) -> str:
+    stripped = model[len("fireworks_ai/") :] if model.startswith("fireworks_ai/") else model
+    if stripped.startswith("accounts/") or "#" in stripped:
+        return stripped
+    if stripped.startswith("routers/") or stripped.startswith("models/"):
+        return f"accounts/fireworks/{stripped}"
+    if stripped.endswith("-fast"):
+        return f"accounts/fireworks/routers/{stripped}"
+    return f"accounts/fireworks/models/{stripped}"
+
+
 class FireworksAIMixin:
     """
     Common Base Config functions across Fireworks AI Endpoints
