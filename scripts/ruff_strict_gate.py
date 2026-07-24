@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
@@ -48,6 +49,10 @@ def _run(cmd: list, cwd: Path = REPO_ROOT) -> str:
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"{cmd[0]} exited {proc.returncode}")
     return proc.stdout
+
+
+def _merge_base(base: str) -> str:
+    return _run(["git", "merge-base", base, "HEAD"]).strip() or base
 
 
 def _ruff_json(cwd: Path, config: Path) -> list:
@@ -101,6 +106,16 @@ def over_ceiling(head: dict, budget: dict) -> frozenset:
     )
 
 
+def is_vacuous_run(
+    counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
+) -> bool:
+    """True when nothing was counted but the budget expects violations -- the
+    signature of a scan that crashed or whose output failed to parse. Without
+    this guard an empty head scan would clear every limit and pass silently,
+    and an empty base scan would make every head violation look freshly added."""
+    return not counts and any(spec["limit"] for spec in budget.values())
+
+
 def evaluate(head: dict, base: dict, budget: dict) -> list:
     breaches = []
     for rule, spec in budget.items():
@@ -128,15 +143,37 @@ def introduced(violations: list, changed: dict) -> list:
     return [v for v in violations if v.line in changed.get(v.file, set())]
 
 
-def cmd_check(base: str) -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = head_violations()
+def cmd_check(
+    base: str,
+    violations: Callable[[], list] = head_violations,
+    base_counts_for: Callable[[str], dict] = base_counts,
+    merge_base: Callable[[str], str] = _merge_base,
+    budget_path: Path = BUDGET_PATH,
+) -> None:
+    budget = json.loads(budget_path.read_text())
+    head = violations()
     head_counts = count_by_rule(head)
+    if is_vacuous_run(head_counts, budget):
+        expected = sum(spec["limit"] for spec in budget.values())
+        print(
+            f"FAIL: ruff reported no strict-rule violations, but {budget_path.name} "
+            f"allows up to ~{expected}. The scan almost certainly crashed or emitted "
+            f"nothing; refusing to certify a vacuous run."
+        )
+        raise SystemExit(1)
     if not over_ceiling(head_counts, budget):
         print(f"OK: every strict rule is within its codebase ceiling (base {base})")
         return
-    base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
-    breaches = evaluate(head_counts, base_counts(base_point), budget)
+    base_point = merge_base(base)
+    base_totals = base_counts_for(base_point)
+    if is_vacuous_run(base_totals, budget):
+        print(
+            f"FAIL: ruff reported no strict-rule violations for the base tree at "
+            f"{base_point[:12]}, so every rule would look freshly added. The base scan "
+            f"almost certainly crashed; refusing to blame this change for it."
+        )
+        raise SystemExit(1)
+    breaches = evaluate(head_counts, base_totals, budget)
     if not breaches:
         print(f"OK: every strict rule is within its codebase ceiling (base {base})")
         return
@@ -182,7 +219,7 @@ def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
     fixes tighten its own ceilings by exactly what they cleared since it diverged.
     """
     budget = json.loads(BUDGET_PATH.read_text())
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    base_point = _merge_base(base_ref)
     updated = ratcheted_budget(
         budget, count_by_rule(head_violations()), base_counts(base_point)
     )

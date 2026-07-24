@@ -110,3 +110,73 @@ def test_over_ceiling_ignores_rules_missing_from_the_budget():
 def test_over_ceiling_is_independent_across_rules():
     budget = {**rule("ANN001", 150), **rule("C901", 10)}
     assert gate.over_ceiling({"ANN001": 130, "C901": 11}, budget) == frozenset({"C901"})
+
+
+def test_no_violations_against_a_nonempty_budget_is_vacuous():
+    assert gate.is_vacuous_run({}, rule("ANN001", 110)) is True
+
+
+def test_genuine_zero_counts_are_not_vacuous():
+    assert gate.is_vacuous_run({}, {}) is False
+    assert gate.is_vacuous_run({}, rule("ANN001", 0)) is False
+    assert gate.is_vacuous_run({"ANN001": 1}, rule("ANN001", 110)) is False
+
+
+def _violations(code, count):
+    return [Violation("litellm/a.py", line, code) for line in range(1, count + 1)]
+
+
+def _raise_if_called(*args):
+    raise AssertionError("must not be called")
+
+
+def _budget_file(tmp_path, limit):
+    path = tmp_path / "budget.json"
+    path.write_text(f'{{"ANN001": {{"limit": {limit}}}}}')
+    return path
+
+
+def test_check_rejects_a_vacuous_head_scan(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        gate.cmd_check(
+            "origin/main",
+            violations=lambda: [],
+            base_counts_for=_raise_if_called,
+            merge_base=_raise_if_called,
+            budget_path=_budget_file(tmp_path, 110),
+        )
+    assert "vacuous" in capsys.readouterr().out
+
+
+def test_check_within_ceiling_skips_the_base_scan(tmp_path, capsys):
+    gate.cmd_check(
+        "origin/main",
+        violations=lambda: _violations("ANN001", 3),
+        base_counts_for=_raise_if_called,
+        merge_base=_raise_if_called,
+        budget_path=_budget_file(tmp_path, 110),
+    )
+    assert capsys.readouterr().out.startswith("OK")
+
+
+def test_check_refuses_to_blame_the_change_for_a_vacuous_base_scan(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        gate.cmd_check(
+            "origin/main",
+            violations=lambda: _violations("ANN001", 3),
+            base_counts_for=lambda ref: {},
+            merge_base=lambda base: "a" * 40,
+            budget_path=_budget_file(tmp_path, 2),
+        )
+    assert "refusing to blame" in capsys.readouterr().out
+
+
+def test_check_spares_a_bystander_whose_base_matches_head(tmp_path, capsys):
+    gate.cmd_check(
+        "origin/main",
+        violations=lambda: _violations("ANN001", 3),
+        base_counts_for=lambda ref: {"ANN001": 3},
+        merge_base=lambda base: "a" * 40,
+        budget_path=_budget_file(tmp_path, 2),
+    )
+    assert capsys.readouterr().out.startswith("OK")

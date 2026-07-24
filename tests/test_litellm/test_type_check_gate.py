@@ -1,6 +1,9 @@
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "type_check_gate.py"
 _spec = importlib.util.spec_from_file_location("type_check_gate", _MODULE_PATH)
@@ -163,8 +166,6 @@ def test_update_clamps_a_limit_at_zero_never_negative():
 
 
 def test_malformed_basedpyright_json_exits_loudly_not_as_zero_errors():
-    import pytest
-
     with pytest.raises(SystemExit):
         gate.count_basedpyright("startup warning\n{not json")
 
@@ -287,3 +288,121 @@ def test_an_empty_base_pass_is_never_cached(tmp_path):
     assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=crashed) == {}
     assert calls == ["abc123", "abc123"]
     assert list(tmp_path.iterdir()) == []
+
+
+def _proc(returncode, stdout="", stderr=""):
+    return subprocess.CompletedProcess(["basedpyright"], returncode, stdout, stderr)
+
+
+@pytest.mark.parametrize("code", [0, 1])
+def test_base_pass_accepts_clean_and_errorful_exit_codes_without_retry(code):
+    calls = []
+
+    def run():
+        calls.append(code)
+        return _proc(code, stdout="{}")
+
+    assert gate.run_base_pass(run).returncode == code
+    assert calls == [code]
+
+
+@pytest.mark.parametrize("code", [2, 137, -9])
+def test_base_pass_retries_after_a_crash_and_reports_the_evidence(code, capsys):
+    procs = iter([_proc(code, stderr="node blew up"), _proc(0, stdout="{}")])
+    assert gate.run_base_pass(lambda: next(procs)).returncode == 0
+    err = capsys.readouterr().err
+    assert f"exited {code}" in err
+    assert "node blew up" in err
+
+
+def test_base_pass_that_keeps_crashing_exits_loudly_not_as_zero_counts(capsys):
+    attempts = []
+
+    def crash():
+        attempts.append(1)
+        return _proc(134, stderr="JavaScript heap out of memory")
+
+    with pytest.raises(SystemExit):
+        gate.run_base_pass(crash)
+    assert len(attempts) == gate.BASE_PASS_ATTEMPTS
+    err = capsys.readouterr().err
+    assert err.count("exited 134") == gate.BASE_PASS_ATTEMPTS
+    assert "JavaScript heap out of memory" in err
+
+
+def _payload(rule, count):
+    return json.dumps(
+        {
+            "generalDiagnostics": [
+                _bpr(f"{ROOT}/litellm/x.py", "error", rule) for _ in range(count)
+            ]
+        }
+    )
+
+
+def _raise_if_called(*args):
+    raise AssertionError("must not be called")
+
+
+def _budget_file(tmp_path, limit):
+    path = tmp_path / "budget.json"
+    path.write_text(json.dumps({"reportAny": {"limit": limit}}))
+    return path
+
+
+def test_check_rejects_a_vacuous_head_run_before_touching_the_base(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        gate.cmd_check(
+            "origin/main",
+            head_payload=lambda: "",
+            base_counts_for=_raise_if_called,
+            merge_base=_raise_if_called,
+            budget_path=_budget_file(tmp_path, 5),
+        )
+    assert "vacuous" in capsys.readouterr().out
+
+
+def test_check_within_limits_passes_without_a_base_pass(tmp_path, capsys):
+    gate.cmd_check(
+        "origin/main",
+        head_payload=lambda: _payload("reportAny", 3),
+        base_counts_for=_raise_if_called,
+        merge_base=_raise_if_called,
+        budget_path=_budget_file(tmp_path, 5),
+    )
+    assert capsys.readouterr().out.startswith("OK")
+
+
+def test_check_refuses_to_blame_the_change_for_a_vacuous_base_pass(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        gate.cmd_check(
+            "origin/main",
+            head_payload=lambda: _payload("reportAny", 6),
+            base_counts_for=lambda ref: {},
+            merge_base=lambda base: "a" * 40,
+            budget_path=_budget_file(tmp_path, 5),
+        )
+    assert "refusing to blame" in capsys.readouterr().out
+
+
+def test_check_spares_a_bystander_whose_base_matches_head(tmp_path, capsys):
+    gate.cmd_check(
+        "origin/main",
+        head_payload=lambda: _payload("reportAny", 6),
+        base_counts_for=lambda ref: {"reportAny": 6},
+        merge_base=lambda base: "a" * 40,
+        budget_path=_budget_file(tmp_path, 5),
+    )
+    assert capsys.readouterr().out.startswith("OK")
+
+
+def test_check_fails_a_change_that_grew_a_rule_past_its_limit(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        gate.cmd_check(
+            "origin/main",
+            head_payload=lambda: _payload("reportAny", 6),
+            base_counts_for=lambda ref: {"reportAny": 4},
+            merge_base=lambda base: "a" * 40,
+            budget_path=_budget_file(tmp_path, 5),
+        )
+    assert "BREACHED RULES" in capsys.readouterr().out
