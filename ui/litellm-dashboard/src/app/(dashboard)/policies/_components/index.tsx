@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Alert } from "antd";
 
@@ -66,6 +66,13 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   const [loadedTemplates, setLoadedTemplates] = useState<any[]>([]);
   const [templateQueue, setTemplateQueue] = useState<any[]>([]);
   const [templateQueueProgress, setTemplateQueueProgress] = useState<{ current: number; total: number } | null>(null);
+  const templateQueueTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (templateQueueTimerRef.current !== null) clearTimeout(templateQueueTimerRef.current);
+    };
+  }, []);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -338,7 +345,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         setTemplateQueue(remaining);
         setTemplateQueueProgress((prev) => (prev ? { ...prev, current: prev.current + 1 } : null));
         // Small delay so user can see the success message
-        setTimeout(() => handleUseTemplate(nextTemplate), 500);
+        templateQueueTimerRef.current = setTimeout(() => handleUseTemplate(nextTemplate), 500);
       } else {
         setTemplateQueueProgress(null);
       }

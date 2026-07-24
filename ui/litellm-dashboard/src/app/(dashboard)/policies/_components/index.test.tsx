@@ -104,7 +104,12 @@ vi.mock("./add_policy_form", () => ({
 
 vi.mock("./guardrail_selection_modal", () => ({
   __esModule: true,
-  default: () => null,
+  default: ({ visible, onConfirm }: { visible: boolean; onConfirm: (defs: unknown[]) => void }) =>
+    visible ? (
+      <button type="button" data-testid="guardrail-selection-confirm" onClick={() => onConfirm([])}>
+        confirm guardrails
+      </button>
+    ) : null,
 }));
 
 vi.mock("./template_parameter_modal", () => ({
@@ -114,7 +119,20 @@ vi.mock("./template_parameter_modal", () => ({
 
 vi.mock("./ai_suggestion_modal", () => ({
   __esModule: true,
-  default: () => null,
+  default: ({ onSelectTemplates }: { onSelectTemplates: (templates: unknown[]) => void }) => (
+    <button
+      type="button"
+      data-testid="ai-suggestion-select-two"
+      onClick={() =>
+        onSelectTemplates([
+          { id: "tmpl-1", guardrailDefinitions: [] },
+          { id: "tmpl-2", guardrailDefinitions: [] },
+        ])
+      }
+    >
+      select two templates
+    </button>
+  ),
 }));
 
 vi.mock("./policy_test_panel", () => ({
@@ -194,5 +212,32 @@ describe("PoliciesPanel attachment delete", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("PoliciesPanel template queue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("stops processing queued templates after unmount", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderWithProviders(<PoliciesPanel accessToken="test-token" userRole="Admin" />);
+
+    await user.click(await screen.findByTestId("ai-suggestion-select-two"));
+
+    const callsAfterFirstTemplate = networkingMocks.getGuardrailsList.mock.calls.length;
+    await user.click(await screen.findByTestId("guardrail-selection-confirm"));
+
+    await waitFor(() => {
+      expect(networkingMocks.getGuardrailsList.mock.calls.length).toBe(callsAfterFirstTemplate + 1);
+    });
+
+    const callsBeforeUnmount = networkingMocks.getGuardrailsList.mock.calls.length;
+    unmount();
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    expect(networkingMocks.getGuardrailsList.mock.calls.length).toBe(callsBeforeUnmount);
   });
 });
