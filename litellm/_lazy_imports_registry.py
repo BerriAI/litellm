@@ -306,6 +306,7 @@ LLM_CONFIG_NAMES = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "DashScopeChatConfig",
+    "XiaomiMiMoChatConfig",
     "ModelScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
@@ -1159,6 +1160,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
+    ),
+    "XiaomiMiMoChatConfig": (
+        ".llms.xiaomi_mimo.chat.transformation",
+        "XiaomiMiMoChatConfig",
     ),
     "GDCGeminiConfig": (
         ".llms.gdc.chat.transformation",
