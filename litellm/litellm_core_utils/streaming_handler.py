@@ -65,18 +65,19 @@ _GCHUNK_FIELDS: frozenset = frozenset(GChunk.__annotations__)
 
 
 class _SyncToAsyncQueueIterator:
-    __slots__ = ("_sync_iter", "_queue", "_thread", "_loop", "_exhausted", "_closed")
+    __slots__ = ("_sync_iter", "_queue", "_loop", "_exhausted", "_closed", "_done")
 
     def __init__(self, sync_iter: Any) -> None:
         from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
+        from litellm.litellm_core_utils.thread_pool_executor import executor
 
         self._sync_iter = sync_iter
         self._loop = asyncio.get_running_loop()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
         self._exhausted = False
-        self._closed = False
-        self._thread = threading.Thread(target=self._producer, daemon=True)
-        self._thread.start()
+        self._closed = threading.Event()
+        self._done = threading.Event()
+        executor.submit(self._producer)
 
     def _producer(self) -> None:
         def _put(item: Any) -> None:
@@ -90,14 +91,20 @@ class _SyncToAsyncQueueIterator:
 
         try:
             for item in self._sync_iter:
-                if self._closed:
+                if self._closed.is_set():
                     break
                 _put(item)
         except Exception as exc:
-            if not self._closed:
+            if not self._closed.is_set():
                 _put(exc)
         finally:
+            if self._closed.is_set() and hasattr(self._sync_iter, "close"):
+                try:
+                    self._sync_iter.close()
+                except Exception:
+                    pass
             _put(_SYNC_ITER_EXHAUSTED)
+            self._done.set()
 
     async def __anext__(self) -> Any:
         if self._exhausted:
@@ -111,10 +118,9 @@ class _SyncToAsyncQueueIterator:
         return item
 
     async def aclose(self) -> None:
-        self._closed = True
         self._exhausted = True
-        if hasattr(self._sync_iter, "close"):
-            self._sync_iter.close()
+        self._closed.set()
+        await asyncio.to_thread(self._done.wait, 5)
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()

@@ -10,6 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 import asyncio
+import threading
 import traceback
 from typing import Optional
 
@@ -3535,3 +3536,33 @@ async def test_custom_stream_wrapper_aclose_closes_upgraded_sync_iterator(
     await wrapper.aclose()
 
     assert close_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_aclose_while_producer_blocked_in_next():
+    close_calls = []
+    release_producer = threading.Event()
+
+    class SlowSyncIter:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            release_producer.wait(timeout=2)
+            return "chunk"
+
+        def close(self):
+            close_calls.append(threading.current_thread())
+
+    wrapper = _SyncToAsyncQueueIterator(SlowSyncIter())
+
+    close_task = asyncio.create_task(wrapper.aclose())
+    await asyncio.sleep(0.05)
+    release_producer.set()
+    await close_task
+
+    assert len(close_calls) == 1
+    assert close_calls[0] is not threading.current_thread(), (
+        "close() must run on the producer thread, not the event-loop thread, "
+        "to avoid 'generator already executing' when the producer is mid-next()"
+    )
