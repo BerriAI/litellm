@@ -3356,6 +3356,67 @@ async def test_call_mcp_tool_user_unauthorized_access():
 
 
 @pytest.mark.asyncio
+async def test_call_mcp_tool_403_does_not_leak_credentials():
+    """Regression: 403 error must not expose authentication_token or other secrets.
+
+    See https://github.com/BerriAI/litellm/issues/29936
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-basic",
+    )
+
+    # Create server objects with credential fields that must NOT appear in error
+    allowed_server_obj = MagicMock()
+    allowed_server_obj.name = "allowed_server"
+    allowed_server_obj.server_id = "allowed_server"
+    allowed_server_obj.authentication_token = "secret-token-value-for-test"
+    allowed_server_obj.client_secret = "oauth-secret-value-for-test"
+    allowed_server_obj.allowed_tools = None
+    allowed_server_obj.disallowed_tools = None
+    allowed_server_obj.auth_type = None
+    allowed_server_obj.extra_headers = None
+
+    def mock_get_server_by_id(server_id):
+        if server_id == "allowed_server":
+            return allowed_server_obj
+        return None
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=["allowed_server"]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
+            side_effect=mock_get_server_by_id,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name="restricted_server-send_email",
+                arguments={"to": "test@example.com", "subject": "Test", "body": "Test"},
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+            )
+
+        detail = exc_info.value.detail
+        assert exc_info.value.status_code == 403
+        assert "User not allowed to call this tool" in detail
+        # Credentials must not leak in error detail
+        assert "secret-token-value-for-test" not in detail
+        assert "oauth-secret-value-for-test" not in detail
+        # Server names should still be present
+        assert "allowed_server" in detail
+
+
+@pytest.mark.asyncio
 async def test_list_tools_filters_by_key_team_permissions():
     """Test that list_tools filters tools based on key/team mcp_tool_permissions"""
     try:
