@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
+    filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -26,6 +27,61 @@ from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
 class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
+
+
+# Fields that only ever appear at the top level of a chat message and are
+# removed with a plain ``pop``. ``thinking_blocks`` and ``reasoning_content``
+# are output-only reasoning fields; the Fireworks backend accepts
+# ``reasoning_content`` on input, but the direct ``fireworks_ai`` provider
+# strips ``thinking_blocks`` and Azure AI Foundry fronts multiple backends, so
+# drop both as a defensive default for a generic multi-backend provider.
+_TOP_LEVEL_OUTPUT_ONLY_FIELDS: tuple[str, ...] = (
+    "thinking_blocks",
+    "reasoning_content",
+)
+
+# Fields that can nest inside a message (e.g. inside ``tool_calls[].function``
+# or content blocks) and must be removed recursively. ``cache_control`` is an
+# Anthropic prompt-caching annotation; ``provider_specific_fields`` carries
+# Anthropic thought signatures and is attached by the Anthropic
+# ``/v1/messages`` adapter at ``tool_calls[].function.provider_specific_fields``
+# (``adapters/transformation.py``), so a top-level ``pop`` misses it and
+# strict upstreams still reject it with
+# ``Extra inputs are not permitted, field:
+# 'messages[n].tool_calls[m].function.provider_specific_fields'``.
+_RECURSIVELY_STRIPPED_FIELDS: tuple[str, ...] = (
+    "cache_control",
+    "provider_specific_fields",
+)
+
+
+def _strip_unsupported_message_fields(message: AllMessageValues) -> None:
+    """Remove input-forbidden fields from a chat message before it is sent to
+    an Azure AI Foundry hosted model.
+
+    Azure AI Foundry fronts many OpenAI-compatible backends (Fireworks,
+    Mistral, xAI, ...) whose chat-message schemas set ``additionalProperties:
+    false``. LiteLLM-internal / output-only fields that the Anthropic
+    ``/v1/messages`` adapter attaches when replaying assistant turns from an
+    Anthropic-format client (e.g. Claude Code) are not part of that schema and
+    trigger ``400 Extra inputs are not permitted, field:
+    'messages[n].<field>'``. Top-level output-only fields are popped; fields
+    that can nest (``cache_control``, and ``provider_specific_fields`` which
+    the adapter attaches inside ``tool_calls[].function``) are stripped
+    recursively so nested tool-call signatures are removed too.
+    """
+    m = cast(dict, message)  # cast-ok: AllMessageValues is a union of TypedDicts; pop/strip need a mutable mapping
+    for field in _RECURSIVELY_STRIPPED_FIELDS:
+        filter_value_from_dict(m, field)
+    for field in _TOP_LEVEL_OUTPUT_ONLY_FIELDS:
+        value = m.pop(field, None)
+        if field == "reasoning_content" and value:
+            verbose_logger.debug(
+                "azure_ai: dropped non-empty 'reasoning_content' from a replayed "
+                "message; some Azure AI Foundry backends accept it on input, but it "
+                "is dropped as a defensive default for a generic multi-backend "
+                "provider."
+            )
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -171,6 +227,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             2. If message contains an image or audio, send as is (user-intended)
         """
         for message in messages:
+            _strip_unsupported_message_fields(message)
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue
