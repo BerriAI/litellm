@@ -88,7 +88,7 @@ class KeyManagementEventHooks:
     @staticmethod
     async def async_key_updated_hook(
         data: UpdateKeyRequest,
-        existing_key_row: Any,
+        existing_key_row: LiteLLM_VerificationToken,
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: Optional[str] = None,
@@ -107,7 +107,7 @@ class KeyManagementEventHooks:
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(data.json(exclude_none=True), default=str)
+            _updated_values = json.dumps(data.json(exclude_none=True, exclude={"key"}), default=str)
 
             _before_value = existing_key_row.json(exclude_none=True)
             _before_value = json.dumps(_before_value, default=str)
@@ -124,7 +124,7 @@ class KeyManagementEventHooks:
                         ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=data.key,
+                        object_id=existing_key_row.token or "",
                         action="updated",
                         updated_values=_updated_values,
                         before_value=_before_value,
