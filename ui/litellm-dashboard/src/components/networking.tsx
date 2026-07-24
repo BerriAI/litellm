@@ -7625,7 +7625,7 @@ export interface HourlySavingsResponse {
   buckets: HourlySavingsBucket[];
   start_date: string;
   end_date: string;
-  utc_offset_minutes: number;
+  timezone: string;
   spend_logs_disabled: boolean;
 }
 
@@ -7633,11 +7633,11 @@ export const getHourlySavings = async (
   accessToken: string,
   startDate: string,
   endDate: string,
-  utcOffsetMinutes: number,
+  timeZone: string,
 ): Promise<HourlySavingsResponse> =>
   apiClient.get<HourlySavingsResponse>(`/v1/savings/hourly`, {
     accessToken,
-    query: { start_date: startDate, end_date: endDate, utc_offset_minutes: utcOffsetMinutes },
+    query: { start_date: startDate, end_date: endDate, timezone: timeZone },
   });
 
 export interface ToolPolicyOverrideRow {

@@ -101,7 +101,7 @@ const hourlyResponse = (
   buckets,
   start_date: "2026-07-23",
   end_date: "2026-07-23",
-  utc_offset_minutes: 0,
+  timezone: "UTC",
   spend_logs_disabled: spendLogsDisabled,
 });
 
@@ -231,7 +231,7 @@ describe("UsageTab", () => {
     expect(series[14]).toMatchObject({ date: "2pm", "Prompt caching": 2.25 });
   });
 
-  it("asks for the day on the viewer's own clock", async () => {
+  it("asks for the day on the viewer's own clock, by IANA zone so DST resolves per date", async () => {
     mockGetHourlySavings.mockResolvedValue(hourlyResponse(fullDayOfBuckets()));
     const oneDay = new Date(2026, 6, 23, 22, 45);
     renderWith([], { from: oneDay, to: oneDay });
@@ -241,7 +241,7 @@ describe("UsageTab", () => {
       "test-token",
       "2026-07-23",
       "2026-07-23",
-      -new Date().getTimezoneOffset(),
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
     );
   });
 

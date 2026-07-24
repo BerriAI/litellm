@@ -11,5 +11,5 @@ class HourlySavingsResponse(BaseModel):
     buckets: list[HourlySavingsBucket]
     start_date: str
     end_date: str
-    utc_offset_minutes: int
+    timezone: str
     spend_logs_disabled: bool

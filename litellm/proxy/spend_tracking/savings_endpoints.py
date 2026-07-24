@@ -8,6 +8,13 @@ The daily rollup tables (`LiteLLM_DailyUserSpend` and friends) are keyed by a
 recomputes the same two savings drivers straight from `LiteLLM_SpendLogs` at
 hour granularity, using the same extraction rules the daily writer uses, so the
 hourly buckets for a day sum to that day's rollup row.
+
+Buckets land on the caller's clock. The caller passes an IANA timezone name
+(e.g. ``America/Los_Angeles``) rather than a fixed UTC offset, so Postgres
+resolves the offset that was actually in effect at each request's own instant.
+A fixed offset would misplace any historical day whose daylight-saving offset
+differs from today's, and no single offset can be right for a range that
+straddles a DST transition.
 """
 
 from datetime import datetime, timedelta
@@ -29,21 +36,58 @@ router = APIRouter()
 
 MAX_HOURLY_SPAN_DAYS = 7
 
+# Postgres is the single timezone authority: it converts each UTC-stored
+# `startTime` to the caller's local wall clock with `AT TIME ZONE $3` (which
+# honours DST per instant), derives the UTC scan window from the local day
+# bounds the same way (kept sargable — the tz expressions fold to constants, so
+# the `startTime` index still drives the scan), and emits one zero row per hour
+# in the window via `generate_series` so quiet hours plot as $0 instead of a
+# gap. Walking the spine in UTC and labelling in local time is what makes it
+# DST-correct: a spring-forward day yields 23 labels, a fall-back day 24.
 _HOURLY_SAVINGS_QUERY = f"""
 SELECT
-    to_char(
-        date_trunc('hour', sl."startTime" + make_interval(mins => $3::int)),
-        'YYYY-MM-DD"T"HH24:00'
-    ) AS bucket_start,
-    sl.model AS model,
-    sl.custom_llm_provider AS custom_llm_provider,
-    SUM({CACHE_READ_INPUT_TOKENS_SQL})::bigint AS cache_read_input_tokens,
-    SUM({COMPRESSION_SAVED_TOKENS_SQL})::bigint AS compression_saved_tokens
-FROM "LiteLLM_SpendLogs" sl
-WHERE sl."startTime" >= $1::timestamp
-  AND sl."startTime" < $2::timestamp
-GROUP BY bucket_start, sl.model, sl.custom_llm_provider
+    bucket_start,
+    model,
+    custom_llm_provider,
+    SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
+    SUM(compression_saved_tokens)::bigint AS compression_saved_tokens
+FROM (
+    SELECT
+        to_char(
+            date_trunc('hour', (sl."startTime" AT TIME ZONE 'UTC') AT TIME ZONE $3::text),
+            'YYYY-MM-DD"T"HH24:00'
+        ) AS bucket_start,
+        sl.model AS model,
+        sl.custom_llm_provider AS custom_llm_provider,
+        {CACHE_READ_INPUT_TOKENS_SQL} AS cache_read_input_tokens,
+        {COMPRESSION_SAVED_TOKENS_SQL} AS compression_saved_tokens
+    FROM "LiteLLM_SpendLogs" sl
+    WHERE sl."startTime" >= (($1::timestamp AT TIME ZONE $3::text) AT TIME ZONE 'UTC')
+      AND sl."startTime" <  (($2::timestamp AT TIME ZONE $3::text) AT TIME ZONE 'UTC')
+
+    UNION ALL
+
+    SELECT
+        to_char(
+            date_trunc('hour', (hour_start AT TIME ZONE 'UTC') AT TIME ZONE $3::text),
+            'YYYY-MM-DD"T"HH24:00'
+        ) AS bucket_start,
+        NULL AS model,
+        NULL AS custom_llm_provider,
+        0 AS cache_read_input_tokens,
+        0 AS compression_saved_tokens
+    FROM generate_series(
+        ($1::timestamp AT TIME ZONE $3::text) AT TIME ZONE 'UTC',
+        (($2::timestamp AT TIME ZONE $3::text) AT TIME ZONE 'UTC') - interval '1 hour',
+        interval '1 hour'
+    ) AS hour_start
+) buckets
+GROUP BY bucket_start, model, custom_llm_provider
 """
+
+# Validated against the same catalog Postgres buckets with, so a name it accepts
+# here is a name `AT TIME ZONE` will accept in the query above.
+_TIMEZONE_EXISTS_QUERY = "SELECT EXISTS (SELECT 1 FROM pg_timezone_names WHERE name = $1) AS ok"
 
 
 class _HourlySavingsRow(BaseModel):
@@ -54,7 +98,12 @@ class _HourlySavingsRow(BaseModel):
     compression_saved_tokens: int
 
 
+class _TimezoneExistsRow(BaseModel):
+    ok: bool
+
+
 _HOURLY_SAVINGS_ROWS = TypeAdapter(list[_HourlySavingsRow])
+_TIMEZONE_EXISTS_ROWS = TypeAdapter(list[_TimezoneExistsRow])
 
 
 def _parse_day(value: str) -> datetime:
@@ -64,21 +113,13 @@ def _parse_day(value: str) -> datetime:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {value}. Expected: 'YYYY-MM-DD'")
 
 
-def _bucket_label(moment: datetime) -> str:
-    return moment.strftime("%Y-%m-%dT%H:00")
-
-
-def hour_bucket_labels(local_start: datetime, local_end_exclusive: datetime) -> tuple[str, ...]:
-    """Every hour in the requested window, so quiet hours plot as $0 instead of a gap."""
-    hours = int((local_end_exclusive - local_start).total_seconds() // 3600)
-    return tuple(_bucket_label(local_start + timedelta(hours=index)) for index in range(hours))
-
-
-def build_hourly_buckets(rows: list[_HourlySavingsRow], bucket_labels: tuple[str, ...]) -> list[HourlySavingsBucket]:
+def build_hourly_buckets(rows: list[_HourlySavingsRow]) -> list[HourlySavingsBucket]:
     """
     Price each (hour, model, provider) group and fold the groups into one series
     per hour. Pricing cannot happen before this point: the rows are grouped by
     model precisely because `compute_savings_spend` needs the model's own rates.
+    Every hour in the window is already present, including the empty ones, via
+    the query's zero-row spine, so the hour labels come straight from the rows.
     """
     priced = sorted(
         (
@@ -95,16 +136,16 @@ def build_hourly_buckets(rows: list[_HourlySavingsRow], bucket_labels: tuple[str
         ),
         key=itemgetter(0),
     )
-    by_bucket: dict[str, tuple[SavingsSpend, ...]] = {
-        label: tuple(spend for _, spend in group) for label, group in groupby(priced, key=itemgetter(0))
-    }
+    grouped: list[tuple[str, tuple[SavingsSpend, ...]]] = [
+        (label, tuple(spend for _, spend in group)) for label, group in groupby(priced, key=itemgetter(0))
+    ]
     return [
         HourlySavingsBucket(
             bucket_start=label,
-            compression_savings_spend=sum(spend.compression for spend in by_bucket.get(label, ())),
-            prompt_caching_savings_spend=sum(spend.prompt_caching for spend in by_bucket.get(label, ())),
+            compression_savings_spend=sum(spend.compression for spend in spends),
+            prompt_caching_savings_spend=sum(spend.prompt_caching for spend in spends),
         )
-        for label in bucket_labels
+        for label, spends in grouped
     ]
 
 
@@ -116,16 +157,14 @@ def build_hourly_buckets(rows: list[_HourlySavingsRow], bucket_labels: tuple[str
 )
 async def get_hourly_savings(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    start_date: Annotated[str, Query(description="YYYY-MM-DD, read in the caller's local timezone")],
-    end_date: Annotated[str, Query(description="YYYY-MM-DD, inclusive, read in the caller's local timezone")],
-    utc_offset_minutes: Annotated[
-        int,
+    start_date: Annotated[str, Query(description="YYYY-MM-DD, read in the caller's timezone")],
+    end_date: Annotated[str, Query(description="YYYY-MM-DD, inclusive, read in the caller's timezone")],
+    timezone: Annotated[
+        str,
         Query(
-            ge=-1440,
-            le=1440,
-            description="Caller's offset from UTC, so hours land on the caller's clock. -new Date().getTimezoneOffset()",
+            description="IANA timezone name, so hours land on the caller's clock. Intl...resolvedOptions().timeZone",
         ),
-    ] = 0,
+    ] = "UTC",
 ):
     """
     Prompt-caching and compression savings bucketed by hour, for the Cost
@@ -133,9 +172,11 @@ async def get_hourly_savings(
 
     Aggregated in Postgres over `LiteLLM_SpendLogs` and priced per model here,
     because token counts cannot be priced once they have been summed across
-    models. Every hour in the window is returned, including the empty ones.
-    Capped at `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily
-    rollup, which needs no raw-log scan.
+    models. Buckets are on the caller's clock via the IANA `timezone`, so
+    historical days carry the offset that was in effect then rather than
+    today's. Every hour in the window is returned, including empty ones. Capped
+    at `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily rollup,
+    which needs no raw-log scan.
     """
     from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
@@ -161,27 +202,29 @@ async def get_hourly_savings(
             detail=f"Hourly savings are capped at {MAX_HOURLY_SPAN_DAYS} days; use the daily rollup for longer ranges",
         )
 
-    bucket_labels = hour_bucket_labels(local_start, local_end_exclusive)
     if disable_spend_logs:
         return HourlySavingsResponse(
-            buckets=build_hourly_buckets([], bucket_labels),
+            buckets=[],
             start_date=start_date,
             end_date=end_date,
-            utc_offset_minutes=utc_offset_minutes,
+            timezone=timezone,
             spend_logs_disabled=True,
         )
 
-    offset = timedelta(minutes=utc_offset_minutes)
+    tz_rows = _TIMEZONE_EXISTS_ROWS.validate_python(await prisma_client.db.query_raw(_TIMEZONE_EXISTS_QUERY, timezone))
+    if not tz_rows or not tz_rows[0].ok:
+        raise HTTPException(status_code=400, detail=f"Unknown timezone: {timezone}")
+
     rows = await prisma_client.db.query_raw(
         _HOURLY_SAVINGS_QUERY,
-        (local_start - offset).isoformat(),
-        (local_end_exclusive - offset).isoformat(),
-        utc_offset_minutes,
+        local_start.isoformat(),
+        local_end_exclusive.isoformat(),
+        timezone,
     )
     return HourlySavingsResponse(
-        buckets=build_hourly_buckets(_HOURLY_SAVINGS_ROWS.validate_python(rows or []), bucket_labels),
+        buckets=build_hourly_buckets(_HOURLY_SAVINGS_ROWS.validate_python(rows or [])),
         start_date=start_date,
         end_date=end_date,
-        utc_offset_minutes=utc_offset_minutes,
+        timezone=timezone,
         spend_logs_disabled=False,
     )

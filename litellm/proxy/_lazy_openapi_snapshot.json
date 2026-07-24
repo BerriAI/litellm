@@ -23898,16 +23898,16 @@
               "title": "Start Date",
               "type": "string"
             },
-            "utc_offset_minutes": {
-              "title": "Utc Offset Minutes",
-              "type": "integer"
+            "timezone": {
+              "title": "Timezone",
+              "type": "string"
             }
           },
           "required": [
             "buckets",
             "start_date",
             "end_date",
-            "utc_offset_minutes",
+            "timezone",
             "spend_logs_disabled"
           ],
           "title": "HourlySavingsResponse",
@@ -23958,43 +23958,41 @@
     "paths": {
       "/v1/savings/hourly": {
         "get": {
-          "description": "Prompt-caching and compression savings bucketed by hour, for the Cost\nOptimization dashboard's short date ranges.\n\nAggregated in Postgres over `LiteLLM_SpendLogs` and priced per model here,\nbecause token counts cannot be priced once they have been summed across\nmodels. Every hour in the window is returned, including the empty ones.\nCapped at `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily\nrollup, which needs no raw-log scan.",
+          "description": "Prompt-caching and compression savings bucketed by hour, for the Cost\nOptimization dashboard's short date ranges.\n\nAggregated in Postgres over `LiteLLM_SpendLogs` and priced per model here,\nbecause token counts cannot be priced once they have been summed across\nmodels. Buckets are on the caller's clock via the IANA `timezone`, so\nhistorical days carry the offset that was in effect then rather than\ntoday's. Every hour in the window is returned, including empty ones. Capped\nat `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily rollup,\nwhich needs no raw-log scan.",
           "operationId": "get_hourly_savings_v1_savings_hourly_get",
           "parameters": [
             {
-              "description": "YYYY-MM-DD, read in the caller's local timezone",
+              "description": "YYYY-MM-DD, read in the caller's timezone",
               "in": "query",
               "name": "start_date",
               "required": true,
               "schema": {
-                "description": "YYYY-MM-DD, read in the caller's local timezone",
+                "description": "YYYY-MM-DD, read in the caller's timezone",
                 "title": "Start Date",
                 "type": "string"
               }
             },
             {
-              "description": "YYYY-MM-DD, inclusive, read in the caller's local timezone",
+              "description": "YYYY-MM-DD, inclusive, read in the caller's timezone",
               "in": "query",
               "name": "end_date",
               "required": true,
               "schema": {
-                "description": "YYYY-MM-DD, inclusive, read in the caller's local timezone",
+                "description": "YYYY-MM-DD, inclusive, read in the caller's timezone",
                 "title": "End Date",
                 "type": "string"
               }
             },
             {
-              "description": "Caller's offset from UTC, so hours land on the caller's clock. -new Date().getTimezoneOffset()",
+              "description": "IANA timezone name, so hours land on the caller's clock. Intl...resolvedOptions().timeZone",
               "in": "query",
-              "name": "utc_offset_minutes",
+              "name": "timezone",
               "required": false,
               "schema": {
-                "default": 0,
-                "description": "Caller's offset from UTC, so hours land on the caller's clock. -new Date().getTimezoneOffset()",
-                "maximum": 1440,
-                "minimum": -1440,
-                "title": "Utc Offset Minutes",
-                "type": "integer"
+                "default": "UTC",
+                "description": "IANA timezone name, so hours land on the caller's clock. Intl...resolvedOptions().timeZone",
+                "title": "Timezone",
+                "type": "string"
               }
             }
           ],

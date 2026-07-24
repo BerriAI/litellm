@@ -17427,9 +17427,11 @@ export interface paths {
          *
          *     Aggregated in Postgres over `LiteLLM_SpendLogs` and priced per model here,
          *     because token counts cannot be priced once they have been summed across
-         *     models. Every hour in the window is returned, including the empty ones.
-         *     Capped at `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily
-         *     rollup, which needs no raw-log scan.
+         *     models. Buckets are on the caller's clock via the IANA `timezone`, so
+         *     historical days carry the offset that was in effect then rather than
+         *     today's. Every hour in the window is returned, including empty ones. Capped
+         *     at `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily rollup,
+         *     which needs no raw-log scan.
          */
         get: operations["get_hourly_savings_v1_savings_hourly_get"];
         put?: never;
@@ -24524,8 +24526,8 @@ export interface components {
             spend_logs_disabled: boolean;
             /** Start Date */
             start_date: string;
-            /** Utc Offset Minutes */
-            utc_offset_minutes: number;
+            /** Timezone */
+            timezone: string;
         };
         /** Hyperparameters */
         Hyperparameters: {
@@ -55874,12 +55876,12 @@ export interface operations {
     get_hourly_savings_v1_savings_hourly_get: {
         parameters: {
             query: {
-                /** @description YYYY-MM-DD, read in the caller's local timezone */
+                /** @description YYYY-MM-DD, read in the caller's timezone */
                 start_date: string;
-                /** @description YYYY-MM-DD, inclusive, read in the caller's local timezone */
+                /** @description YYYY-MM-DD, inclusive, read in the caller's timezone */
                 end_date: string;
-                /** @description Caller's offset from UTC, so hours land on the caller's clock. -new Date().getTimezoneOffset() */
-                utc_offset_minutes?: number;
+                /** @description IANA timezone name, so hours land on the caller's clock. Intl...resolvedOptions().timeZone */
+                timezone?: string;
             };
             header?: never;
             path?: never;

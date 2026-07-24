@@ -23,7 +23,7 @@ export const useHourlySavings = (
   useEffect(() => {
     if (!eligible || !accessToken || !from || !to) return;
     let cancelled = false;
-    getHourlySavings(accessToken, localIsoDay(from), localIsoDay(to), -new Date().getTimezoneOffset())
+    getHourlySavings(accessToken, localIsoDay(from), localIsoDay(to), Intl.DateTimeFormat().resolvedOptions().timeZone)
       .then((data) => {
         if (!cancelled) setState({ key: rangeKey, data });
       })

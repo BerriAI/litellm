@@ -1,6 +1,5 @@
 import os
 import sys
-from datetime import datetime
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -13,33 +12,39 @@ from litellm.proxy.spend_tracking.savings_endpoints import (
     _HourlySavingsRow,
     build_hourly_buckets,
     get_hourly_savings,
-    hour_bucket_labels,
 )
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test")
 
 
 class FakeDB:
-    def __init__(self, rows):
+    def __init__(self, rows, timezone_known=True):
         self._rows = rows
+        self._timezone_known = timezone_known
         self.calls = []
 
     async def query_raw(self, query, *params):
         self.calls.append((query, params))
+        if "pg_timezone_names" in query:
+            return [{"ok": self._timezone_known}]
         return self._rows
+
+    @property
+    def savings_call(self):
+        return next((c for c in self.calls if "LiteLLM_SpendLogs" in c[0]), None)
 
 
 class FakePrismaClient:
-    def __init__(self, rows=()):
-        self.db = FakeDB(list(rows))
+    def __init__(self, rows=(), timezone_known=True):
+        self.db = FakeDB(list(rows), timezone_known=timezone_known)
 
 
 @pytest.fixture
 def proxy_state(monkeypatch):
     from litellm.proxy import proxy_server
 
-    def _apply(rows=(), disable_spend_logs=False):
-        client = FakePrismaClient(rows)
+    def _apply(rows=(), disable_spend_logs=False, timezone_known=True):
+        client = FakePrismaClient(rows, timezone_known=timezone_known)
         monkeypatch.setattr(proxy_server, "prisma_client", client, raising=False)
         monkeypatch.setattr(proxy_server, "disable_spend_logs", disable_spend_logs, raising=False)
         return client
@@ -54,45 +59,39 @@ def _anthropic_costs(model: str) -> tuple[float, float]:
     return input_cost, cache_read_cost
 
 
-def _row(bucket: str, model: str = "claude-sonnet-5", cache_read: int = 0, compression: int = 0) -> _HourlySavingsRow:
+def _row(bucket: str, model: str | None = "claude-sonnet-5", cache_read: int = 0, compression: int = 0):
     return _HourlySavingsRow(
         bucket_start=bucket,
         model=model,
-        custom_llm_provider="anthropic",
+        custom_llm_provider="anthropic" if model else None,
         cache_read_input_tokens=cache_read,
         compression_saved_tokens=compression,
     )
 
 
-def test_hour_bucket_labels_covers_every_hour_of_a_single_day():
-    labels = hour_bucket_labels(datetime(2026, 7, 23), datetime(2026, 7, 24))
-    assert len(labels) == 24
-    assert labels[0] == "2026-07-23T00:00"
-    assert labels[13] == "2026-07-23T13:00"
-    assert labels[-1] == "2026-07-23T23:00"
+def _spine(*hours: int):
+    return [_row(f"2026-07-23T{h:02d}:00", model=None) for h in hours]
 
 
-def test_hour_bucket_labels_spans_multiple_days():
-    labels = hour_bucket_labels(datetime(2026, 7, 23), datetime(2026, 7, 25))
-    assert len(labels) == 48
-    assert labels[24] == "2026-07-24T00:00"
+def test_labels_and_order_come_from_the_zero_row_spine():
+    buckets = build_hourly_buckets([*_spine(*range(24)), _row("2026-07-23T09:00", cache_read=8200)])
 
-
-def test_quiet_hours_are_zero_filled_rather_than_dropped():
-    labels = hour_bucket_labels(datetime(2026, 7, 23), datetime(2026, 7, 24))
-    buckets = build_hourly_buckets([_row("2026-07-23T09:00", cache_read=8200)], labels)
-
-    assert [b.bucket_start for b in buckets] == list(labels)
+    assert [b.bucket_start for b in buckets] == [f"2026-07-23T{h:02d}:00" for h in range(24)]
     assert buckets[9].prompt_caching_savings_spend > 0
     assert all(b.prompt_caching_savings_spend == 0.0 for i, b in enumerate(buckets) if i != 9)
 
 
+def test_a_short_dst_day_keeps_whatever_hours_the_spine_carries():
+    # A spring-forward day is 23 hours: the query's spine simply omits the
+    # missing local hour, and the folded series follows it without inventing one.
+    hours = [h for h in range(24) if h != 2]
+    buckets = build_hourly_buckets(_spine(*hours))
+
+    assert len(buckets) == 23
+    assert "2026-07-23T02:00" not in [b.bucket_start for b in buckets]
+
+
 def test_savings_priced_per_model_before_being_summed_into_an_hour():
-    """
-    The two models in this hour have different input rates, so pricing the
-    summed tokens at either single rate gives the wrong answer. This is why the
-    SQL groups by model and the dollars are computed here.
-    """
     sonnet_input, sonnet_cache_read = _anthropic_costs("claude-sonnet-5")
     opus_input, opus_cache_read = _anthropic_costs("claude-opus-4-6")
     assert sonnet_input != opus_input
@@ -101,8 +100,7 @@ def test_savings_priced_per_model_before_being_summed_into_an_hour():
         [
             _row("2026-07-23T09:00", model="claude-sonnet-5", cache_read=10_000),
             _row("2026-07-23T09:00", model="claude-opus-4-6", cache_read=10_000),
-        ],
-        ("2026-07-23T09:00",),
+        ]
     )
 
     expected = 10_000 * (sonnet_input - sonnet_cache_read) + 10_000 * (opus_input - opus_cache_read)
@@ -112,12 +110,24 @@ def test_savings_priced_per_model_before_being_summed_into_an_hour():
 
 def test_both_drivers_are_reported_separately():
     input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
-    buckets = build_hourly_buckets(
-        [_row("2026-07-23T09:00", cache_read=8200, compression=4389)],
-        ("2026-07-23T09:00",),
-    )
+    buckets = build_hourly_buckets([_row("2026-07-23T09:00", cache_read=8200, compression=4389)])
     assert buckets[0].compression_savings_spend == pytest.approx(4389 * input_cost)
     assert buckets[0].prompt_caching_savings_spend == pytest.approx(8200 * (input_cost - cache_read_cost))
+
+
+def test_an_empty_spine_hour_prices_to_zero_not_an_error():
+    buckets = build_hourly_buckets(_spine(0))
+    assert buckets == [HourlyBucket(0.0, 0.0)]
+
+
+def HourlyBucket(compression, caching):
+    from litellm.types.savings import HourlySavingsBucket
+
+    return HourlySavingsBucket(
+        bucket_start="2026-07-23T00:00",
+        compression_savings_spend=compression,
+        prompt_caching_savings_spend=caching,
+    )
 
 
 @pytest.mark.asyncio
@@ -158,34 +168,44 @@ async def test_unparseable_date_is_refused(proxy_state):
 
 
 @pytest.mark.asyncio
-async def test_utc_offset_shifts_the_scanned_window_but_not_the_labels(proxy_state):
+async def test_unknown_timezone_is_refused_before_the_savings_query(proxy_state):
+    client = proxy_state(timezone_known=False)
+    with pytest.raises(HTTPException) as exc:
+        await get_hourly_savings(
+            user_api_key_dict=ADMIN, start_date="2026-07-23", end_date="2026-07-23", timezone="Mars/Olympus_Mons"
+        )
+    assert exc.value.status_code == 400
+    assert client.db.savings_call is None
+
+
+@pytest.mark.asyncio
+async def test_the_local_day_and_timezone_are_handed_to_postgres_verbatim(proxy_state):
     client = proxy_state(rows=[])
     response = await get_hourly_savings(
         user_api_key_dict=ADMIN,
         start_date="2026-07-23",
         end_date="2026-07-23",
-        utc_offset_minutes=-420,
+        timezone="America/Los_Angeles",
     )
 
-    _, params = client.db.calls[0]
-    # 00:00 local on the US west coast is 07:00 UTC the same day.
-    assert params[0] == "2026-07-23T07:00:00"
-    assert params[1] == "2026-07-24T07:00:00"
-    assert params[2] == -420
-    # Buckets stay on the caller's clock, so midnight is midnight.
-    assert response.buckets[0].bucket_start == "2026-07-23T00:00"
-    assert len(response.buckets) == 24
+    # The endpoint passes the local day bounds and the zone; Postgres resolves
+    # the DST-correct UTC window, so the offset is never computed in Python.
+    _, params = client.db.savings_call
+    assert params == ("2026-07-23T00:00:00", "2026-07-24T00:00:00", "America/Los_Angeles")
+    assert response.timezone == "America/Los_Angeles"
 
 
 @pytest.mark.asyncio
-async def test_disabled_spend_logs_is_reported_instead_of_charting_zeroes(proxy_state):
+async def test_disabled_spend_logs_is_reported_without_touching_the_database(proxy_state):
     client = proxy_state(rows=[_row("2026-07-23T09:00", cache_read=8200)], disable_spend_logs=True)
-    response = await get_hourly_savings(user_api_key_dict=ADMIN, start_date="2026-07-23", end_date="2026-07-23")
+    response = await get_hourly_savings(
+        user_api_key_dict=ADMIN, start_date="2026-07-23", end_date="2026-07-23", timezone="America/Los_Angeles"
+    )
 
     assert response.spend_logs_disabled is True
+    assert response.timezone == "America/Los_Angeles"
     assert client.db.calls == []
-    assert len(response.buckets) == 24
-    assert all(b.prompt_caching_savings_spend == 0.0 for b in response.buckets)
+    assert response.buckets == []
 
 
 @pytest.mark.asyncio
@@ -193,16 +213,29 @@ async def test_rows_from_the_database_are_priced_into_the_response(proxy_state):
     input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
     proxy_state(
         rows=[
+            *[
+                {
+                    "bucket_start": f"2026-07-23T{h:02d}:00",
+                    "model": None,
+                    "custom_llm_provider": None,
+                    "cache_read_input_tokens": 0,
+                    "compression_saved_tokens": 0,
+                }
+                for h in range(24)
+            ],
             {
                 "bucket_start": "2026-07-23T09:00",
                 "model": "claude-sonnet-5",
                 "custom_llm_provider": "anthropic",
                 "cache_read_input_tokens": 8200,
                 "compression_saved_tokens": 0,
-            }
+            },
         ]
     )
-    response = await get_hourly_savings(user_api_key_dict=ADMIN, start_date="2026-07-23", end_date="2026-07-23")
+    response = await get_hourly_savings(
+        user_api_key_dict=ADMIN, start_date="2026-07-23", end_date="2026-07-23", timezone="America/Los_Angeles"
+    )
 
     assert response.spend_logs_disabled is False
+    assert len(response.buckets) == 24
     assert response.buckets[9].prompt_caching_savings_spend == pytest.approx(8200 * (input_cost - cache_read_cost))
