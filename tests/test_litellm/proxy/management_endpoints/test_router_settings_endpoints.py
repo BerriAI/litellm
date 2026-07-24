@@ -89,6 +89,10 @@ class TestRouterSettingsEndpoints:
                 "models": ["latency-model"],
                 "routing_strategy": "latency-based-routing",
                 "routing_strategy_args": {},
+                "allowed_fails": None,
+                "allowed_fails_policy": None,
+                "cooldown_time": None,
+                "enable_health_check_routing": None,
             }
         ]
         llm_router = Router(

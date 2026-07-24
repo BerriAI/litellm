@@ -177,9 +177,11 @@ def _should_cooldown_deployment(
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
         is_single_deployment_model_group = True
+    model_name = litellm_router_instance._model_name_for_deployment_id(deployment)
     if (
-        litellm_router_instance.allowed_fails_policy is None
-        and _is_allowed_fails_set_on_router(litellm_router_instance=litellm_router_instance) is False
+        litellm_router_instance._resolve_allowed_fails_policy(model_name) is None
+        and _is_allowed_fails_set_on_router(litellm_router_instance=litellm_router_instance, model_name=model_name)
+        is False
     ):
         num_successes_this_minute = get_deployment_successes_for_current_minute(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
@@ -372,13 +374,12 @@ def should_cooldown_based_on_allowed_fails_policy(
     - True if fails exceed the allowed limit (should cooldown)
     - False if fails are within the allowed limit (should not cooldown)
     """
-    allowed_fails = (
-        litellm_router_instance.get_allowed_fails_from_policy(
-            exception=original_exception,
-        )
-        or litellm_router_instance.allowed_fails
-    )
-    cooldown_time = litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
+    model_name = litellm_router_instance._model_name_for_deployment_id(deployment)
+    allowed_fails = litellm_router_instance.get_allowed_fails_from_policy(
+        exception=original_exception,
+        model_name=model_name,
+    ) or litellm_router_instance._resolve_allowed_fails(model_name)
+    cooldown_time = litellm_router_instance._resolve_cooldown_time(model_name) or DEFAULT_COOLDOWN_TIME_SECONDS
 
     current_fails = litellm_router_instance.failed_calls.get_cache(key=deployment) or 0
     updated_fails = current_fails + 1
@@ -393,17 +394,20 @@ def should_cooldown_based_on_allowed_fails_policy(
 
 def _is_allowed_fails_set_on_router(
     litellm_router_instance: LitellmRouter,
+    model_name: str | None = None,
 ) -> bool:
     """
-    Check if Router.allowed_fails is set or is Non-default Value
+    Check if the resolved allowed_fails (per-group override or Router.allowed_fails)
+    is set or is a Non-default Value
 
     Returns:
-    - True if Router.allowed_fails is set or is Non-default Value
-    - False if Router.allowed_fails is None or is Default Value
+    - True if the resolved allowed_fails is set or is Non-default Value
+    - False if it is None or is the Default Value
     """
-    if litellm_router_instance.allowed_fails is None:
+    allowed_fails = litellm_router_instance._resolve_allowed_fails(model_name)
+    if allowed_fails is None:
         return False
-    if litellm_router_instance.allowed_fails != litellm.allowed_fails:
+    if allowed_fails != litellm.allowed_fails:
         return True
     return False
 
