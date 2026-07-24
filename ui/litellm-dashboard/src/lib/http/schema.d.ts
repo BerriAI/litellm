@@ -466,21 +466,37 @@ export interface paths {
         /**
          * Anthropic Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
+         *
+         *     When ``anthropic_router`` is configured in litellm_config.yaml, resolves
+         *     the request model to a backend via glob matching and forwards with
+         *     automatic health-aware failover across multiple backends.
          */
         get: operations["anthropic_proxy_route_anthropic__endpoint__get"];
         /**
          * Anthropic Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
+         *
+         *     When ``anthropic_router`` is configured in litellm_config.yaml, resolves
+         *     the request model to a backend via glob matching and forwards with
+         *     automatic health-aware failover across multiple backends.
          */
         put: operations["anthropic_proxy_route_anthropic__endpoint__put"];
         /**
          * Anthropic Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
+         *
+         *     When ``anthropic_router`` is configured in litellm_config.yaml, resolves
+         *     the request model to a backend via glob matching and forwards with
+         *     automatic health-aware failover across multiple backends.
          */
         post: operations["anthropic_proxy_route_anthropic__endpoint__post"];
         /**
          * Anthropic Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
+         *
+         *     When ``anthropic_router`` is configured in litellm_config.yaml, resolves
+         *     the request model to a backend via glob matching and forwards with
+         *     automatic health-aware failover across multiple backends.
          */
         delete: operations["anthropic_proxy_route_anthropic__endpoint__delete"];
         options?: never;
@@ -488,6 +504,10 @@ export interface paths {
         /**
          * Anthropic Proxy Route
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
+         *
+         *     When ``anthropic_router`` is configured in litellm_config.yaml, resolves
+         *     the request model to a backend via glob matching and forwards with
+         *     automatic health-aware failover across multiple backends.
          */
         patch: operations["anthropic_proxy_route_anthropic__endpoint__patch"];
         trace?: never;

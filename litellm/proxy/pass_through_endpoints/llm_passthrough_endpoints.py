@@ -9,10 +9,16 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
+
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.anthropic_routing_handler import (
+        AnthropicRouter,
+        Backend,
+    )
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, status
 from fastapi.responses import StreamingResponse
 from starlette.websockets import WebSocketState
 
@@ -42,10 +48,6 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     websocket_passthrough_request,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
-    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
-)
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
@@ -53,6 +55,10 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+)
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -569,7 +575,26 @@ async def anthropic_proxy_route(
 ):
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
+
+    When ``anthropic_router`` is configured in litellm_config.yaml, resolves
+    the request model to a backend via glob matching and forwards with
+    automatic health-aware failover across multiple backends.
     """
+    from litellm.llms.anthropic.anthropic_routing_handler import (
+        get_anthropic_router,
+    )
+
+    router = get_anthropic_router()
+    if router is not None:
+        return await _route_anthropic_with_multi_backend(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            router=router,
+        )
+
+    # --- Default single-backend behaviour (unchanged) ---
     base_target_url = os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -609,6 +634,155 @@ async def anthropic_proxy_route(
     )
 
     return received_value
+
+
+async def _route_anthropic_with_multi_backend(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    router: "AnthropicRouter",
+) -> Response:
+    """Forward an Anthropic request through the multi-backend router.
+
+    Resolves the model to an ordered list of backends, tries each in
+    sequence, and returns the first successful response.  Streaming
+    requests are forwarded to the first healthy backend only (failover
+    mid-stream is not possible).
+
+    When all backends are exhausted, returns a 502 with a descriptive
+    error body.
+    """
+    from litellm.llms.anthropic.anthropic_routing_handler import (
+        extract_model_from_body,
+    )
+
+    # Read and cache the request body so the passthrough pipeline can re-read it
+    body: bytes = await request.body()
+    model: str = extract_model_from_body(body)
+    backends = router.resolve(model)
+
+    if not backends:
+        verbose_proxy_logger.warning("anthropic_router: no route matched model=%s", model)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": {
+                    "type": "router_error",
+                    "message": f"No backend configured for model '{model}'.",
+                }
+            },
+        )
+
+    encoded_endpoint: str = httpx.URL(endpoint).path
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    is_streaming = await is_streaming_request_fn(request)
+    last_error: str | None = None
+
+    for backend in backends:
+        target_url = f"{backend.url.rstrip('/')}{encoded_endpoint}"
+
+        verbose_proxy_logger.debug(
+            "anthropic_router: trying backend=%s url=%s model=%s",
+            backend.name,
+            target_url,
+            model,
+        )
+
+        # Build the endpoint function for this backend (outside try/except —
+        # errors here are programming errors, not backend failures).
+        auth_header = _build_backend_auth_header(backend)
+        endpoint_func = create_pass_through_route(
+            endpoint=endpoint,
+            target=target_url,
+            custom_headers=auth_header,
+            # forward_headers_from_request only dedups request headers whose
+            # name matches a key in custom_headers (e.g. "x-api-key"). For
+            # api-key backends the client's own "Authorization" header is not
+            # in that set, so _forward_headers=True would leak the caller's
+            # LiteLLM key to every configured external backend. Keep this
+            # False; x-pass- prefixed headers still forward regardless.
+            _forward_headers=False,
+            is_streaming_request=is_streaming,
+            custom_llm_provider="anthropic",
+        )
+
+        try:
+            received_value = await endpoint_func(
+                request,
+                fastapi_response,
+                user_api_key_dict,
+            )
+
+            # Success — record and return
+            router.health.record_success(backend.name)
+            return received_value
+
+        except ProxyException as e:
+            last_error = getattr(e, "message", str(e))
+            verbose_proxy_logger.warning(
+                "anthropic_router: backend=%s failed with ProxyException: %s",
+                backend.name,
+                last_error,
+            )
+            router.health.record_failure(backend.name)
+
+            # If this was a streaming request, we can't retry — the SSE
+            # stream may have already started sending to the client.
+            if is_streaming:
+                verbose_proxy_logger.warning(
+                    "anthropic_router: streaming request failed on backend=%s — cannot failover mid-stream",
+                    backend.name,
+                )
+                raise
+
+        except Exception as e:
+            last_error = str(e)
+            verbose_proxy_logger.warning(
+                "anthropic_router: backend=%s failed unexpectedly: %s",
+                backend.name,
+                last_error,
+            )
+            router.health.record_failure(backend.name)
+
+            if is_streaming:
+                raise
+
+    # All backends exhausted
+    verbose_proxy_logger.error(
+        "anthropic_router: all %d backend(s) exhausted for model=%s",
+        len(backends),
+        model,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail={
+            "error": {
+                "type": "router_error",
+                "message": (f"All backends for model '{model}' are unavailable. Last error: {last_error}"),
+            }
+        },
+    )
+
+
+def _build_backend_auth_header(backend: "Backend") -> dict[str, str]:
+    """Build the auth header dict for a backend config.
+
+    Reads the credential from the environment variable named in
+    ``backend.auth.key_env`` (supports ``os.environ/…`` syntax via
+    LiteLLM's secret manager).
+    """
+    from litellm.llms.anthropic.anthropic_routing_handler import (
+        AnthropicProxy,
+    )
+
+    key = AnthropicProxy._resolve_credential(backend.auth.key_env)
+    if backend.auth.type == "api-key":
+        return {"x-api-key": key}
+    else:
+        return {"Authorization": f"Bearer {key}"}
 
 
 # Bedrock endpoint actions - consolidated list used for model extraction and streaming detection
@@ -753,7 +927,7 @@ async def handle_bedrock_passthrough_router_model(
 
     # Use the common processing path (same as non-router models)
     # This ensures all metadata, hooks, and logging are properly initialized
-    data: Dict[str, Any] = {}
+    data: dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
     data["model"] = model
@@ -797,8 +971,8 @@ async def handle_bedrock_count_tokens(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_body: Dict[str, Any],
-) -> Dict[str, Any]:
+    request_body: dict[str, Any],
+) -> dict[str, Any]:
     """
     Handle AWS Bedrock CountTokens API requests.
 
@@ -945,7 +1119,7 @@ async def bedrock_llm_proxy_route(
     # Fall back to existing implementation for direct Bedrock models
     verbose_proxy_logger.debug(f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'")
 
-    data: Dict[str, Any] = {}
+    data: dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
 
     data["method"] = request.method
@@ -1078,7 +1252,7 @@ def _resolve_vertex_model_from_router(
     endpoint: str,
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-) -> Tuple[str, str, Optional[str], Optional[str]]:
+) -> tuple[str, str, Optional[str], Optional[str]]:
     """
     Resolve Vertex AI model configuration from router.
 
@@ -1488,7 +1662,7 @@ def _override_vertex_params_from_router_credentials(
     router_credentials: Optional[Any],
     vertex_project: Optional[str],
     vertex_location: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str]]:
     """
     Override vertex_project and vertex_location with values from router_credentials if available.
 
@@ -1545,7 +1719,7 @@ async def _prepare_vertex_auth_headers(
     vertex_location: Optional[str],
     base_target_url: Optional[str],
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
-) -> Tuple[dict, Optional[str], bool, Optional[str], Optional[str]]:
+) -> tuple[dict, Optional[str], bool, Optional[str], Optional[str]]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
 
