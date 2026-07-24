@@ -809,3 +809,36 @@ class TestMistralStripsOutputOnlyFields:
             )
 
         assert "reasoning_content" not in result[-1]
+
+
+def test_mistral_transform_messages_hoists_tool_message_image():
+    """Images inside role:"tool" messages must be moved to a following user
+    message (Mistral rejects/ignores non-text tool content), including when
+    Mistral's own _transform_messages override takes its image handling path."""
+    data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "image_url", "image_url": {"url": data_uri}}],
+            },
+        ],
+    )
+
+    result = MistralConfig()._transform_messages(messages=messages, model="mistral-medium-2508")
+
+    assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+    tool_message = result[2]
+    assert tool_message.get("tool_call_id") == "call_1"
+    assert isinstance(tool_message.get("content"), str)
+    assert result[3].get("content") == [{"type": "image_url", "image_url": {"url": data_uri}}]

@@ -31,7 +31,10 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_tool_call_names,
+    hoist_images_from_tool_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
@@ -349,6 +352,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
+        messages = hoist_images_from_tool_messages(messages)
 
         async def _async_transform():
             for message in messages:

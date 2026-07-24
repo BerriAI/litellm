@@ -10,10 +10,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
     get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    hoist_images_from_tool_messages,
     split_concatenated_json_objects,
     update_messages_with_model_file_ids,
 )
@@ -721,3 +723,146 @@ class TestUnpackLegacyDefs:
         out = unpack_legacy_defs(schema)
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
+
+
+DATA_URI_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+
+def _tool_msg(content, tool_call_id="call_1"):
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+
+
+def _assistant_tool_call_msg(*tool_call_ids):
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": tid, "type": "function", "function": {"name": "read_image", "arguments": "{}"}}
+            for tid in tool_call_ids
+        ],
+    }
+
+
+def test_hoist_images_from_tool_messages_bare_data_uri_string():
+    messages = [
+        {"role": "user", "content": "read the image"},
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg(DATA_URI_PNG),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert len(result) == 4
+    assert result[2]["role"] == "tool"
+    assert result[2]["tool_call_id"] == "call_1"
+    assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[3] == {
+        "role": "user",
+        "content": [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}],
+    }
+
+
+def test_hoist_images_from_tool_messages_structured_image_part():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert len(result) == 3
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2]["role"] == "user"
+    assert result[2]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg(
+            [
+                {"type": "text", "text": "screenshot follows"},
+                {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+            ]
+        ),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result[1]["content"] == [{"type": "text", "text": "screenshot follows"}]
+    assert result[2]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
+    messages = [
+        _assistant_tool_call_msg("call_1", "call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_1"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}}], tool_call_id="call_2"),
+        {"role": "assistant", "content": "looking"},
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    roles = [m["role"] for m in result]
+    assert roles == ["assistant", "tool", "tool", "user", "assistant"]
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[3]["content"] == [
+        {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
+    ]
+
+
+def test_hoist_images_from_tool_messages_does_not_hoist_bare_url_text():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("https://example.com/report.pdf"),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result == messages
+
+
+def test_hoist_images_from_tool_messages_does_not_hoist_non_image_data_uri():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("data:application/pdf;base64,JVBERi0xLjQ="),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result == messages
+
+
+def test_hoist_images_from_tool_messages_no_tool_messages_returns_input_unchanged():
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]},
+        {"role": "assistant", "content": "a cat"},
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result is messages
+
+
+def test_hoist_images_from_tool_messages_text_only_tool_message_unchanged():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("plain text result"),
+        _tool_msg([{"type": "text", "text": "another"}], tool_call_id="call_2"),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result == messages
+
+
+def test_hoist_images_from_tool_messages_does_not_mutate_input():
+    tool_message = _tool_msg(DATA_URI_PNG)
+    messages = [_assistant_tool_call_msg("call_1"), tool_message]
+
+    hoist_images_from_tool_messages(messages)
+
+    assert tool_message["content"] == DATA_URI_PNG
+    assert len(messages) == 2

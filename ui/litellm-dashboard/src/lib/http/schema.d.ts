@@ -22120,7 +22120,7 @@ export interface components {
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
             /** Content */
-            content: string | components["schemas"]["ChatCompletionTextObject"][];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"])[];
             /**
              * Role
              * @constant

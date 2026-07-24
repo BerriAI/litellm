@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    hoist_images_from_tool_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
@@ -236,6 +239,7 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        messages = hoist_images_from_tool_messages(messages)
         messages = convert_to_azure_openai_messages(messages)
         return {
             "model": model,

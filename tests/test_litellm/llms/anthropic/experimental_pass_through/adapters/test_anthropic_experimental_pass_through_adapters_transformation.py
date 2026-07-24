@@ -7,6 +7,9 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
@@ -16,6 +19,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     create_tool_name_mapping,
     truncate_tool_name,
 )
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
     AnthropicMessagesUserMessageParam,
@@ -943,10 +947,12 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_base64_image():
             break
 
     assert tool_message is not None, "Tool message not found in result"
-    # Tool messages in OpenAI format have string content (data URL), not list
-    assert isinstance(tool_message["content"], str)
-    assert tool_message["content"].startswith("data:image/jpeg;base64,")
-    assert "/9j/4AAQSkZJRgABAQAAAQABAAD" in tool_message["content"]
+    assert isinstance(tool_message["content"], list)
+    assert len(tool_message["content"]) == 1
+    image_part = tool_message["content"][0]
+    assert image_part["type"] == "image_url"
+    assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert "/9j/4AAQSkZJRgABAQAAAQABAAD" in image_part["image_url"]["url"]
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
@@ -999,10 +1005,12 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
             break
 
     assert tool_message is not None, "Tool message not found in result"
-    # Tool messages in OpenAI format have string content (URL), not list
-    assert isinstance(tool_message["content"], str)
+    assert isinstance(tool_message["content"], list)
+    assert len(tool_message["content"]) == 1
+    image_part = tool_message["content"][0]
+    assert image_part["type"] == "image_url"
     assert (
-        tool_message["content"]
+        image_part["image_url"]["url"]
         == "https://i0.wp.com/picjumbo.com/wp-content/uploads/amazing-stone-path-in-forest-free-image.jpg"
     )
 
@@ -3147,3 +3155,170 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+TOOL_RESULT_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+TOOL_RESULT_IMAGE_URL = "https://example.com/screenshot.png"
+
+
+def _anthropic_tool_use_turn(*tool_use_ids):
+    return AnthopicMessagesAssistantMessageParam(
+        role="assistant",
+        content=[
+            {"type": "tool_use", "id": tid, "name": "read_file", "input": {"path": "img.png"}}
+            for tid in tool_use_ids
+        ],
+    )
+
+
+def _anthropic_tool_result_turn(blocks_by_tool_use_id):
+    return AnthropicMessagesUserMessageParam(
+        role="user",
+        content=[
+            {"type": "tool_result", "tool_use_id": tid, "content": blocks}
+            for tid, blocks in blocks_by_tool_use_id.items()
+        ],
+    )
+
+
+def _base64_image_block():
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": TOOL_RESULT_IMAGE_B64},
+    }
+
+
+def _url_image_block():
+    return {"type": "image", "source": {"type": "url", "url": TOOL_RESULT_IMAGE_URL}}
+
+
+def _run_chat_completions_pipeline(anthropic_messages):
+    """Anthropic /v1/messages input -> chat adapter -> the OpenAI-compatible
+    message transformation every OpenAIGPTConfig-based provider runs."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    return OpenAIGPTConfig()._transform_messages(messages=translated, model="gpt-4o-mini")
+
+
+def _images_in_tool_messages(messages):
+    found = []
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.startswith("data:image"):
+            found.append(content)
+        elif isinstance(content, list):
+            found.extend(p for p in content if isinstance(p, dict) and p.get("type") == "image_url")
+    return found
+
+
+def _image_urls_in_user_messages(messages):
+    return [
+        part["image_url"]["url"]
+        for message in messages
+        if message.get("role") == "user" and isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    ]
+
+
+@pytest.mark.parametrize(
+    "image_block,expected_url_prefix",
+    [
+        (_base64_image_block(), "data:image/png;base64,"),
+        (_url_image_block(), TOOL_RESULT_IMAGE_URL),
+    ],
+    ids=["base64_source", "url_source"],
+)
+def test_tool_result_single_image_visible_after_openai_transform(image_block, expected_url_prefix):
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [image_block]}),
+        ]
+    )
+
+    assert _images_in_tool_messages(result) == []
+    user_image_urls = _image_urls_in_user_messages(result)
+    assert len(user_image_urls) == 1
+    assert user_image_urls[0].startswith(expected_url_prefix)
+
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "toolu_01"
+    assert tool_messages[0]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+
+
+def test_tool_result_text_and_image_visible_after_openai_transform():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {"toolu_01": [{"type": "text", "text": "screenshot saved"}, _base64_image_block()]}
+            ),
+        ]
+    )
+
+    assert _images_in_tool_messages(result) == []
+    assert len(_image_urls_in_user_messages(result)) == 1
+
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert tool_messages[0]["content"] == [{"type": "text", "text": "screenshot saved"}]
+
+
+def test_tool_result_two_images_visible_after_openai_transform():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_base64_image_block(), _base64_image_block()]}),
+        ]
+    )
+
+    assert _images_in_tool_messages(result) == []
+    assert len(_image_urls_in_user_messages(result)) == 2
+
+
+def test_tool_result_parallel_tool_calls_keep_tool_message_adjacency():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01", "toolu_02"),
+            _anthropic_tool_result_turn(
+                {"toolu_01": [_base64_image_block()], "toolu_02": [_url_image_block()]}
+            ),
+        ]
+    )
+
+    roles = [m.get("role") for m in result]
+    assert roles == ["assistant", "tool", "tool", "user"]
+    assert _images_in_tool_messages(result) == []
+    assert len(_image_urls_in_user_messages(result)) == 2
+
+
+def test_top_level_user_image_unchanged_by_openai_transform():
+    result = _run_chat_completions_pipeline(
+        [
+            AnthropicMessagesUserMessageParam(
+                role="user",
+                content=[{"type": "text", "text": "what is this"}, _base64_image_block()],
+            )
+        ]
+    )
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert len(_image_urls_in_user_messages(result)) == 1
+
+
+def test_tool_result_plain_text_unchanged_by_openai_transform():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [{"type": "text", "text": "42 files found"}]}),
+        ]
+    )
+
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == "42 files found"
+    assert _image_urls_in_user_messages(result) == []
