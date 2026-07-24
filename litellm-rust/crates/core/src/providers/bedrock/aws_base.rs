@@ -667,6 +667,33 @@ mod tests {
         assert!(!signed.contains_key("X-Amz-Security-Token"));
     }
 
+    #[test]
+    fn signing_without_session_token_matches_botocore_golden_vector() {
+        let (url, body, headers) = parity_inputs();
+        let credentials = Credentials::new(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+            None,
+            "test",
+        );
+        let signed = sign_bedrock_post(
+            &url,
+            &body,
+            &headers,
+            "us-east-1",
+            &credentials,
+            UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
+        )
+        .expect("golden signature");
+        assert_eq!(
+            signed.get("Authorization").map(String::as_str),
+            Some(
+                "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=e766315f418b03380fa8389c0fec1a8aee56feebd403d3fec6e4aff9987737e6"
+            )
+        );
+    }
+
     #[ignore]
     #[tokio::test]
     async fn live_bedrock_invoke_model_returns_200() -> Result<(), Box<dyn std::error::Error>> {
