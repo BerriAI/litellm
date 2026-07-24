@@ -3666,6 +3666,45 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
+def test_get_deployment_credentials_with_provider_includes_bedrock_batch_params():
+    """
+    Regression: the Bedrock batch/files params must survive the CredentialLiteLLMParams
+    filter. When they were dropped, model-routed POST /v1/batches failed with
+    "Set 'aws_batch_role_arn' in litellm_params or AWS_BATCH_ROLE_ARN env var" even
+    though the deployment declared it.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_region_name": "us-east-1",
+                    "s3_bucket_name": "my-input-bucket",
+                    "s3_output_bucket_name": "my-output-bucket",
+                    "s3_region_name": "us-west-2",
+                    "s3_encryption_key_id": "arn:aws:kms:us-east-1:123:key/abc",
+                    "aws_batch_role_arn": "arn:aws:iam::123:role/BedrockBatchRole",
+                    "bedrock_tags": [{"key": "team", "value": "platform"}],
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="bedrock-batch"
+    )
+
+    assert credentials is not None
+    assert credentials["s3_bucket_name"] == "my-input-bucket"
+    assert credentials["s3_output_bucket_name"] == "my-output-bucket"
+    assert credentials["s3_region_name"] == "us-west-2"
+    assert credentials["s3_encryption_key_id"] == "arn:aws:kms:us-east-1:123:key/abc"
+    assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/BedrockBatchRole"
+    assert credentials["bedrock_tags"] == [{"key": "team", "value": "platform"}]
+    assert credentials["custom_llm_provider"] == "bedrock"
+
+
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
     """
     Test that get_deployment_credentials_with_provider correctly resolves
