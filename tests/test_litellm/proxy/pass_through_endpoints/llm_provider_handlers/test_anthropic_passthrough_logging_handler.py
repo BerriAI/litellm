@@ -1939,6 +1939,42 @@ class TestAnthropicUsageOnlyFallback:
         assert usage.prompt_tokens_details.cached_tokens == 40
         assert usage.server_tool_use.web_search_requests == 2
 
+    def test_build_usage_only_recovers_cache_creation_from_message_delta(self):
+        # Bedrock Invoke reports the cache breakdown on the final chunk (the
+        # decoder lands invocationMetrics-derived usage on message_delta), while
+        # message_start carries no cache tokens. The fallback must recover both
+        # cache_read and cache_creation from the delta, not just cache_read.
+        chunks = [
+            _sse_bytes(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-3-5-sonnet-20241022",
+                        "usage": {"input_tokens": 5, "output_tokens": 1},
+                    },
+                }
+            ),
+            _sse_bytes(
+                {
+                    "type": "message_delta",
+                    "usage": {
+                        "output_tokens": 30,
+                        "cache_read_input_tokens": 4000,
+                        "cache_creation_input_tokens": 120,
+                    },
+                }
+            ),
+        ]
+        response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=chunks, model="claude-3-5-sonnet-20241022"
+        )
+        assert response is not None
+        usage = response.usage
+        assert usage._cache_read_input_tokens == 4000
+        assert usage._cache_creation_input_tokens == 120
+        # prompt_tokens must be cache-inclusive: input + cache_read + cache_creation
+        assert usage.prompt_tokens == 5 + 4000 + 120
+
     def test_build_usage_only_returns_none_without_usage_events(self):
         chunks = [_sse_bytes({"type": "content_block_delta", "delta": {"text": "hi"}})]
         assert (

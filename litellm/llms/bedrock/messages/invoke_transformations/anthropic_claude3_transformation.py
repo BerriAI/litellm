@@ -924,5 +924,13 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
                 anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics["inputTokenCount"]
             if "outputTokenCount" in amazon_bedrock_invocation_metrics:
                 anthropic_usage["output_tokens"] = amazon_bedrock_invocation_metrics["outputTokenCount"]
+            if "cacheReadInputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["cache_read_input_tokens"] = amazon_bedrock_invocation_metrics[
+                    "cacheReadInputTokenCount"
+                ]
+            if "cacheWriteInputTokenCount" in amazon_bedrock_invocation_metrics:
+                anthropic_usage["cache_creation_input_tokens"] = amazon_bedrock_invocation_metrics[
+                    "cacheWriteInputTokenCount"
+                ]
             chunk_data["usage"] = anthropic_usage
         return chunk_data

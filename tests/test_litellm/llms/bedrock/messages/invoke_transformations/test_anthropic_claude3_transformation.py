@@ -264,6 +264,103 @@ def test_chunk_parser_usage_transformation():
     assert parsed["usage"]["output_tokens"] == 5
 
 
+def test_chunk_parser_maps_cache_token_counts():
+    """Bedrock Invoke reports prompt-cache usage on the final chunk as
+    cacheReadInputTokenCount / cacheWriteInputTokenCount inside
+    amazon-bedrock-invocationMetrics. Map them onto the synthesized usage so
+    downstream cost tracking sees cached tokens instead of billing every
+    request as fresh input."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+    chunk = {
+        "type": "message_delta",
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 1,
+            "outputTokenCount": 162,
+            "cacheReadInputTokenCount": 421714,
+            "cacheWriteInputTokenCount": 1139,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert "amazon-bedrock-invocationMetrics" not in parsed
+    assert parsed["usage"]["input_tokens"] == 1
+    assert parsed["usage"]["output_tokens"] == 162
+    assert parsed["usage"]["cache_read_input_tokens"] == 421714
+    assert parsed["usage"]["cache_creation_input_tokens"] == 1139
+
+
+def test_chunk_parser_omits_cache_fields_when_absent():
+    """Cache fields stay absent on the synthesized usage when the
+    invocationMetrics block does not report them (no cache activity)."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0"
+    )
+
+    chunk = {
+        "type": "message_delta",
+        "amazon-bedrock-invocationMetrics": {
+            "inputTokenCount": 14,
+            "outputTokenCount": 67,
+        },
+    }
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"]["input_tokens"] == 14
+    assert parsed["usage"]["output_tokens"] == 67
+    assert "cache_read_input_tokens" not in parsed["usage"]
+    assert "cache_creation_input_tokens" not in parsed["usage"]
+
+
+@pytest.mark.parametrize(
+    "invocation_metrics, present_key, present_value, absent_key",
+    [
+        # cache hit: read tokens reported, no write
+        (
+            {"inputTokenCount": 2, "outputTokenCount": 9, "cacheReadInputTokenCount": 500},
+            "cache_read_input_tokens",
+            500,
+            "cache_creation_input_tokens",
+        ),
+        # cold request: write tokens reported, no read
+        (
+            {"inputTokenCount": 3, "outputTokenCount": 7, "cacheWriteInputTokenCount": 42},
+            "cache_creation_input_tokens",
+            42,
+            "cache_read_input_tokens",
+        ),
+        # zero-valued count is still mapped (membership check, not truthiness)
+        (
+            {"inputTokenCount": 4, "outputTokenCount": 8, "cacheReadInputTokenCount": 0},
+            "cache_read_input_tokens",
+            0,
+            "cache_creation_input_tokens",
+        ),
+    ],
+)
+def test_chunk_parser_maps_cache_fields_independently(invocation_metrics, present_key, present_value, absent_key):
+    """Each cache field maps on its own guard: a cache-read-only (hit) or
+    cache-write-only (cold) chunk maps the reported field without requiring
+    the other, and a zero count is preserved rather than dropped."""
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(
+        model="bedrock/invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+    chunk = {"type": "message_delta", "amazon-bedrock-invocationMetrics": invocation_metrics}
+
+    parsed = decoder._chunk_parser(chunk.copy())
+
+    assert parsed["usage"][present_key] == present_value
+    assert absent_key not in parsed["usage"]
+
+
 def test_remove_ttl_from_cache_control():
     """Ensure ttl field is removed from cache_control in messages."""
 
