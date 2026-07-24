@@ -4975,6 +4975,23 @@ class TestGatewayCreateInitializationOptions:
             _mcp_gateway_initialize_instructions.reset(instructions_token)
             _mcp_gateway_server_name.reset(server_name_token)
 
+    def test_advertises_dynamic_tool_and_resource_lists(self):
+        try:
+            from mcp.server.lowlevel.server import NotificationOptions
+
+            from litellm.proxy._experimental.mcp_server.server import server
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        opts = server.create_initialization_options(notification_options=NotificationOptions(prompts_changed=True))
+
+        assert opts.capabilities.tools is not None
+        assert opts.capabilities.tools.listChanged is True
+        assert opts.capabilities.resources is not None
+        assert opts.capabilities.resources.listChanged is True
+        assert opts.capabilities.prompts is not None
+        assert opts.capabilities.prompts.listChanged is True
+
     @pytest.mark.asyncio
     async def test_scoped_request_uses_configured_server_alias(self):
         try:
