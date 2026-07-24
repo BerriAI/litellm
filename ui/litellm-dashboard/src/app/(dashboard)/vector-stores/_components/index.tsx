@@ -17,6 +17,7 @@ import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 
 interface VectorStoreProps {
   accessToken: string | null;
@@ -35,6 +36,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
   const [editVectorStore, setEditVectorStore] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const { onTabChange, hasVisited } = useVisitedTabs("create");
 
   const fetchVectorStores = async () => {
     if (!accessToken) {
@@ -150,7 +152,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           You can use vector stores to store and retrieve LLM embeddings.
         </p>
 
-        <Tabs defaultValue="create">
+        <Tabs defaultValue="create" onValueChange={onTabChange}>
           <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
             <TabsTrigger value="create" className="flex-none rounded-none px-4 py-2">
               Create Vector Store
@@ -163,11 +165,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="create">
+          <TabsContent keepMounted={hasVisited("create")} value="create">
             <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
           </TabsContent>
 
-          <TabsContent value="manage">
+          <TabsContent keepMounted={hasVisited("manage")} value="manage">
             <Button className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
               + Add Vector Store
             </Button>
@@ -183,7 +185,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
             </div>
           </TabsContent>
 
-          <TabsContent value="test">
+          <TabsContent keepMounted={hasVisited("test")} value="test">
             <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
           </TabsContent>
         </Tabs>

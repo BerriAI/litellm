@@ -1,6 +1,7 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
+import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +10,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { createTeamAliasMap } from "@/utils/teamUtils";
-// MemberTable is shared with other routes and still consumes antd's column type.
 import type { ColumnsType } from "antd/es/table";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
@@ -53,6 +53,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
+  const { onTabChange, hasVisited } = useVisitedTabs(editOrg ? "settings" : "overview");
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
 
@@ -157,7 +158,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue={editOrg ? "settings" : "overview"} className="mb-4">
+      <Tabs defaultValue={editOrg ? "settings" : "overview"} onValueChange={onTabChange} className="mb-4">
         <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
@@ -170,7 +171,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="pt-4">
+        <TabsContent keepMounted={hasVisited("overview")} value="overview" className="pt-4">
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <Card>
               <CardContent>
@@ -252,7 +253,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           </div>
         </TabsContent>
 
-        <TabsContent value="members" className="pt-4">
+        <TabsContent keepMounted={hasVisited("members")} value="members" className="pt-4">
           <div className="space-y-4">
             <MemberTable
               members={(orgData.members || []).map((m) => ({
@@ -274,7 +275,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           </div>
         </TabsContent>
 
-        <TabsContent value="settings" className="pt-4">
+        <TabsContent keepMounted={hasVisited("settings")} value="settings" className="pt-4">
           <Card className="max-h-[65vh] overflow-y-auto">
             <CardContent>
               <div className="mb-4 flex items-center justify-between">
