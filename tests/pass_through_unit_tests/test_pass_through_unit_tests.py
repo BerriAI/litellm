@@ -34,6 +34,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _update_metadata_with_tags_in_header,
     HttpPassThroughEndpointHelpers,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -652,3 +653,74 @@ def test_custom_pricing_used_in_cost_calculation():
 
     print(f"Cache-aware cost: {cache_cost}")
     print("✅ Custom pricing parameters are correctly used in cost calculation")
+
+
+def test_update_metadata_with_tags_in_header_dedupes(mock_request):
+    """
+    Tags already present in metadata (or repeated across the two supported
+    headers) must not be duplicated - duplicated tags double-count the
+    request in per-tag spend tracking. Also guards the helper now running
+    twice per pass-through request (before pre-call hooks and again in
+    _init_kwargs_for_pass_through_endpoint).
+    """
+    request = mock_request(headers={"tags": "tag1,tag2", "x-litellm-tags": "tag2,tag3"})
+    metadata = {"tags": ["tag1"]}
+
+    result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
+
+    assert result["tags"] == ["tag1", "tag2", "tag3"]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_tags_visible_to_pre_call_hook(
+    mock_request, mock_user_api_key_dict
+):
+    """
+    Header tags (x-litellm-tags) must be visible to pre-call hooks on
+    pass-through endpoints, matching translated routes - so custom hooks and
+    guardrails can read request tags regardless of route family.
+    """
+    seen: dict = {}
+
+    original_pre_call_hook = ProxyLogging.pre_call_hook
+
+    async def spy_pre_call_hook(self, user_api_key_dict, data, call_type):
+        seen["tags"] = (data or {}).get("metadata", {}).get("tags")
+        seen["call_type"] = call_type
+        return data
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response._content = b'{"mock": "response"}'
+
+    async def mock_aread():
+        return mock_response._content
+
+    mock_response.aread = mock_aread
+
+    with (
+        patch.object(ProxyLogging, "pre_call_hook", new=spy_pre_call_hook),
+        patch(
+            "httpx.AsyncClient.send",
+            return_value=mock_response,
+        ),
+        patch(
+            "httpx.AsyncClient.request",
+            return_value=mock_response,
+        ),
+    ):
+        request = mock_request(
+            headers={"x-litellm-tags": "team:alpha,user:dev@example.com"},
+            method="POST",
+            request_body=athropic_request_body,
+        )
+        await pass_through_request(
+            request=request,
+            target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    assert seen["call_type"] == "pass_through_endpoint"
+    assert seen["tags"] == ["team:alpha", "user:dev@example.com"]

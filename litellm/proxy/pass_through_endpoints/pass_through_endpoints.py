@@ -901,6 +901,22 @@ async def pass_through_request(
             _parsed_body = {}
         _parsed_body["litellm_logging_obj"] = logging_obj
 
+        # Merge header tags ("tags" / "x-litellm-tags") into the body metadata
+        # BEFORE pre-call hooks run, so custom hooks and guardrails see request
+        # tags on pass-through routes just like they do on translated routes
+        # (where add_litellm_data_to_request performs this merge). Safe for the
+        # upstream provider: "metadata" is a litellm param, so
+        # _init_kwargs_for_pass_through_endpoint pops it from the body before
+        # the request is forwarded - and merges it into the logging metadata,
+        # which also preserves any tag mutations made by the hooks.
+        _existing_metadata = _parsed_body.get("metadata")
+        _metadata_with_tags = _update_metadata_with_tags_in_header(
+            request=request,
+            metadata=_existing_metadata if isinstance(_existing_metadata, dict) else {},
+        )
+        if _metadata_with_tags:
+            _parsed_body["metadata"] = _metadata_with_tags
+
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -1545,11 +1561,16 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     if _tags:
         tags_to_add.extend([tag.strip() for tag in _tags.split(",")])
 
-    # Only add tags key if there are tags to add
+    # Only add tags key if there are tags to add. Merge without duplicates:
+    # this helper can run twice for one request (once before pre-call hooks,
+    # once in _init_kwargs_for_pass_through_endpoint), and duplicated tags
+    # would double-count the request in per-tag spend tracking.
     if tags_to_add:
-        if "tags" not in metadata:
-            metadata["tags"] = []
-        metadata["tags"].extend(tags_to_add)
+        existing_tags = metadata.get("tags")
+        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=existing_tags if isinstance(existing_tags, list) else None,
+            tags_to_add=tags_to_add,
+        )
 
     return metadata
 
