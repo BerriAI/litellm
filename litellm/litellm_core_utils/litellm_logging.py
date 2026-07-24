@@ -3297,10 +3297,22 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
+        # The adapter path (generate_content_provider_config is None) routes
+        # through litellm.completion and hands us an already transformed
+        # generate_content dict with no raw httpx_response recorded. Fall back to
+        # that dict instead of crashing the logging worker (#30707); the native
+        # path still uses the raw httpx_response as before.
         httpx_response = self.model_call_details.get("httpx_response", None)
-        if httpx_response is None:
-            raise ValueError("Google GenAI Generate Content: httpx_response is None")
-        dict_result = httpx_response.json()
+        if httpx_response is not None and isinstance(httpx_response, httpx.Response):
+            dict_result = httpx_response.json()
+        elif isinstance(result, dict):
+            dict_result = result
+        else:
+            raise ValueError(
+                f"Google GenAI Generate Content: no valid httpx_response "
+                f"(got {type(httpx_response).__name__!r}) and result is not a dict "
+                f"(got {type(result).__name__!r}); cannot log response"
+            )
         result = litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),
