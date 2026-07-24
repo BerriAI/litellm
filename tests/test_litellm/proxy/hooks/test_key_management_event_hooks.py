@@ -4,6 +4,8 @@ Tests for KeyManagementEventHooks.
 Validates that email and secret manager operations are independent and non-blocking.
 """
 
+import asyncio
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -153,6 +155,92 @@ class TestKeyManagementEventHooksIndependentOperations:
 
         # Email should have been called despite secret manager failure
         assert email_called["called"] is True
+
+
+class TestKeyUpdatedHookAuditLog:
+    """Tests for async_key_updated_hook applied_values audit log merging."""
+
+    @pytest.mark.asyncio
+    async def test_audit_log_includes_applied_spend_reset_on_budget_window_rearm(self):
+        """Test that applied_values overrides/extends the audit log's updated_values."""
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        existing_key_row = LiteLLM_VerificationToken(
+            token="hashed_key",
+            key_alias="test-key-alias",
+        )
+        data = UpdateKeyRequest(key="sk-test", budget_duration="30d")
+        applied_values = {"spend": 0.0, "budget_duration": "30d"}
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "api-key-123"
+        mock_user_api_key_dict.user_id = "user-123"
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+                "admin",
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response=None,
+                user_api_key_dict=mock_user_api_key_dict,
+                applied_values=applied_values,
+            )
+            await asyncio.sleep(0)
+
+        mock_create_audit_log.assert_awaited_once()
+        request_data = mock_create_audit_log.call_args.kwargs["request_data"]
+        updated_values = json.loads(request_data.updated_values)
+        assert updated_values["spend"] == 0.0
+        assert updated_values["budget_duration"] == "30d"
+
+    @pytest.mark.asyncio
+    async def test_audit_log_falls_back_to_raw_request_when_no_applied_values(self):
+        """Test that omitting applied_values preserves the prior audit log behavior."""
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        existing_key_row = LiteLLM_VerificationToken(
+            token="hashed_key",
+            key_alias="test-key-alias",
+        )
+        data = UpdateKeyRequest(key="sk-test", max_budget=100.0)
+
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.api_key = "api-key-123"
+        mock_user_api_key_dict.user_id = "user-123"
+
+        with (
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name",
+                "admin",
+            ),
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response=None,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+            await asyncio.sleep(0)
+
+        mock_create_audit_log.assert_awaited_once()
+        request_data = mock_create_audit_log.call_args.kwargs["request_data"]
+        updated_values = json.loads(request_data.updated_values)
+        assert updated_values["max_budget"] == 100.0
+        assert "spend" not in updated_values
 
 
 class TestRotateVirtualKeyInSecretManager:

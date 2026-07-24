@@ -2238,6 +2238,7 @@ async def _process_single_key_update(
             response=response,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
+            applied_values=non_default_values,
         )
     )
 
@@ -2713,6 +2714,7 @@ async def update_key_fn(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 litellm_changed_by=litellm_changed_by,
+                applied_values=non_default_values,
             )
         )
 

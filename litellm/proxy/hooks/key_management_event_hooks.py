@@ -92,6 +92,7 @@ class KeyManagementEventHooks:
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: Optional[str] = None,
+        applied_values: dict | None = None,
     ):
         """
         Post /key/update processing hook
@@ -107,7 +108,10 @@ class KeyManagementEventHooks:
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
-            _updated_values = json.dumps(data.json(exclude_none=True), default=str)
+            _updated_values_dict = data.json(exclude_none=True)
+            if applied_values:
+                _updated_values_dict.update(applied_values)
+            _updated_values = json.dumps(_updated_values_dict, default=str)
 
             _before_value = existing_key_row.json(exclude_none=True)
             _before_value = json.dumps(_before_value, default=str)
