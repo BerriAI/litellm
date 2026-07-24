@@ -245,7 +245,8 @@ def _group_tokens_into_cues(
         subtitles never bridge pauses in speech,
       - adding the next word would exceed _CUE_MAX_CHARS of display width
         (~two subtitle lines; East-Asian wide characters count double), or
-      - the cue would span more than _CUE_MAX_DURATION_MS.
+      - adding the next word would make the cue span more than
+        _CUE_MAX_DURATION_MS.
     A cue also ends after sentence-final punctuation, which keeps cue breaks
     at natural seams. Cue timestamps come straight from token timestamps;
     words without timestamps stay attached to the surrounding cue.
@@ -280,8 +281,9 @@ def _group_tokens_into_cues(
             )
             gap_exceeded = start_ms is not None and cue_end is not None and (start_ms - cue_end) >= _CUE_GAP_MS
             chars_exceeded = _text_width(_cue_text(current)) + _text_width(word["text"]) > _CUE_MAX_CHARS
+            word_end = word["end_ms"] if word["end_ms"] is not None else start_ms
             duration_exceeded = (
-                start_ms is not None and cue_start is not None and (start_ms - cue_start) >= _CUE_MAX_DURATION_MS
+                word_end is not None and cue_start is not None and (word_end - cue_start) > _CUE_MAX_DURATION_MS
             )
             if speaker_changed or gap_exceeded or chars_exceeded or duration_exceeded:
                 _flush()
