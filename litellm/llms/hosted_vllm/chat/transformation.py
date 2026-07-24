@@ -28,6 +28,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
     ChatCompletionFileObject,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionVideoObject,
     ChatCompletionVideoUrlObject,
@@ -144,6 +146,21 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 return True
         return False
 
+    @staticmethod
+    def _convert_thinking_blocks_to_reasoning_content(
+        thinking_blocks: list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
+    ) -> str | None:
+        """
+        vLLM's OpenAI-compatible server expects prior reasoning to be passed back
+        via `reasoning_content` on assistant messages, not Anthropic-style
+        `thinking_blocks`. Redacted thinking blocks carry no plain text and are
+        skipped.
+        """
+        thinking_texts = [block.get("thinking", "") for block in thinking_blocks if block.get("type") == "thinking"]
+        if not thinking_texts:
+            return None
+        return "\n".join(thinking_texts)
+
     def _convert_file_to_video_url(self, content_item: ChatCompletionFileObject) -> ChatCompletionVideoObject:
         file = content_item.get("file", {})
         file_id = file.get("file_id")
@@ -174,12 +191,17 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks on assistant messages are removed, and content lists
-          are converted to strings for vLLM compatibility
+        - thinking_blocks on assistant messages are converted to `reasoning_content`
+          (vLLM's reasoning-parser convention) unless `reasoning_content` is already
+          set, and content lists are converted to strings for vLLM compatibility
         """
         for message in messages:
             if message["role"] == "assistant":
-                message.pop("thinking_blocks", None)
+                thinking_blocks = message.pop("thinking_blocks", None)
+                if thinking_blocks and not message.get("reasoning_content"):
+                    reasoning_content = self._convert_thinking_blocks_to_reasoning_content(thinking_blocks)
+                    if reasoning_content is not None:
+                        message["reasoning_content"] = reasoning_content
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []

@@ -186,8 +186,9 @@ def test_hosted_vllm_supports_thinking():
 
 def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     """
-    Test that thinking_blocks on assistant messages are removed and content
-    stays a string for vLLM compatibility.
+    Test that thinking_blocks on assistant messages are converted to
+    `reasoning_content` (vLLM's reasoning-parser field) and content stays a
+    string for vLLM compatibility.
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -223,12 +224,13 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Here is my answer."
     assert "thinking_blocks" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Let me reason about this..."
 
 
 def test_hosted_vllm_thinking_blocks_with_list_content():
     """
-    Test thinking_blocks are removed and assistant content list is converted
-    to a string.
+    Test thinking_blocks are converted to `reasoning_content` and assistant
+    content list is converted to a string.
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -260,6 +262,70 @@ def test_hosted_vllm_thinking_blocks_with_list_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Response text"
     assert "thinking_blocks" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Step 1 reasoning\nStep 2 reasoning"
+
+
+def test_hosted_vllm_redacted_thinking_blocks_have_no_reasoning_content():
+    """
+    Redacted thinking blocks carry no plain text, so no `reasoning_content`
+    should be synthesized from them.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Here is my answer.",
+            "thinking_blocks": [
+                {
+                    "type": "redacted_thinking",
+                    "data": "opaque-encrypted-data",
+                }
+            ],
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][0]
+    assert "thinking_blocks" not in assistant_msg
+    assert "reasoning_content" not in assistant_msg
+
+
+def test_hosted_vllm_existing_reasoning_content_is_not_overwritten():
+    """
+    If the caller already sent `reasoning_content` directly (e.g. an
+    OpenAI-compatible client round-tripping vLLM's own reasoning output),
+    thinking_blocks must not clobber it.
+    """
+    config = HostedVLLMChatConfig()
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Here is my answer.",
+            "reasoning_content": "Original reasoning from vLLM.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Some other reasoning",
+                    "signature": "sig1",
+                },
+            ],
+        },
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/llama-3.1-70b-instruct",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][0]
+    assert "thinking_blocks" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Original reasoning from vLLM."
 
 
 def test_hosted_vllm_assistant_structured_content_is_preserved():
