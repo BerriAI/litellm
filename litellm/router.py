@@ -10587,6 +10587,14 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
+        # An explicit order fallback is a hard retry constraint. Apply it before
+        # affinity so a stale pin cannot send the retry back to an earlier order.
+        _target_order = (request_kwargs or {}).pop("_target_order", None)
+        if _target_order is not None:
+            healthy_deployments = litellm.utils._get_order_filtered_deployments(
+                healthy_deployments, target_order=_target_order
+            )
+
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
             healthy_deployments=healthy_deployments,
@@ -10618,11 +10626,9 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
-        _target_order = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils._get_order_filtered_deployments(
-            cast(List[Dict], healthy_deployments), target_order=_target_order
-        )
+        ## DEFAULT ORDER FILTERING ## -> without a fallback target, return deployments with the lowest configured order
+        if _target_order is None:
+            healthy_deployments = litellm.utils._get_order_filtered_deployments(cast(list[dict], healthy_deployments))
 
         ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
         ## this request via weighted-failover. Always honored, regardless of the
