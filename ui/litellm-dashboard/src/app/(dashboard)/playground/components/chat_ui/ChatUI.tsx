@@ -48,6 +48,7 @@ import { Agent, fetchAvailableAgents } from "../../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIImageEditsRequest } from "../../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../../llm_calls/image_generation";
+import { makeOpenAIOcrRequest } from "../../llm_calls/OcrApi";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { makeInteractionsRequest } from "../../llm_calls/interactions_api";
 import A2AMetrics from "./A2AMetrics";
@@ -254,6 +255,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
   const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
+  const [uploadedOcrFile, setUploadedOcrFile] = useState<File | null>(null);
+  const [ocrFilePreviewUrl, setOcrFilePreviewUrl] = useState<string | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
@@ -565,8 +568,27 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(null);
   };
 
+  const handleOcrFileUpload = (file: File): false => {
+    setUploadedOcrFile(file);
+    setOcrFilePreviewUrl(file.type.startsWith("image/") ? URL.createObjectURL(file) : null);
+    return false;
+  };
+
+  const handleRemoveOcrFile = () => {
+    if (ocrFilePreviewUrl) {
+      URL.revokeObjectURL(ocrFilePreviewUrl);
+    }
+    setUploadedOcrFile(null);
+    setOcrFilePreviewUrl(null);
+  };
+
   const handleSendMessage = async () => {
-    if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION && endpointType !== EndpointType.MCP)
+    if (
+      inputMessage.trim() === "" &&
+      endpointType !== EndpointType.TRANSCRIPTION &&
+      endpointType !== EndpointType.MCP &&
+      endpointType !== EndpointType.OCR
+    )
       return;
 
     // For image edits, require both image and prompt
@@ -578,6 +600,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     // For audio transcriptions, require audio file
     if (endpointType === EndpointType.TRANSCRIPTION && !uploadedAudio) {
       NotificationsManager.fromBackend("Please upload an audio file for transcription");
+      return;
+    }
+
+    if (endpointType === EndpointType.OCR && !uploadedOcrFile) {
+      NotificationsManager.fromBackend("Please upload a document or image for OCR");
       return;
     }
 
@@ -638,6 +665,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       EndpointType.ANTHROPIC_MESSAGES,
       EndpointType.EMBEDDINGS,
       EndpointType.TRANSCRIPTION,
+      EndpointType.OCR,
       EndpointType.INTERACTIONS,
     ];
 
@@ -650,7 +678,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
+    const effectiveApiKey = (() => {
+      if (simplified) return accessToken;
+      if (apiKeySource === "session") return accessToken;
+      return apiKey;
+    })();
 
     if (!effectiveApiKey) {
       NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
@@ -713,6 +745,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
         ? `🎵 Audio file: ${uploadedAudio.name}\nPrompt: ${inputMessage}`
         : `🎵 Audio file: ${uploadedAudio.name}`;
       displayMessage = createDisplayMessage(audioMessage, false);
+    } else if (endpointType === EndpointType.OCR && uploadedOcrFile) {
+      displayMessage = createDisplayMessage(`OCR file: ${uploadedOcrFile.name}`, false);
     } else if (endpointType === EndpointType.MCP && selectedMCPDirectTool) {
       // For MCP direct mode, show tool name and arguments from form
       const mcpMessage = `🔧 MCP Tool: ${selectedMCPDirectTool}\nArguments: ${JSON.stringify(mcpToolArguments, null, 2)}`;
@@ -907,6 +941,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
               customProxyBaseUrl || undefined,
             );
           }
+        } else if (endpointType === EndpointType.OCR) {
+          if (uploadedOcrFile) {
+            await makeOpenAIOcrRequest({
+              file: uploadedOcrFile,
+              updateUI: (text, model) => updateTextUI("assistant", text, model),
+              selectedModel,
+              accessToken: effectiveApiKey,
+              tags: selectedTags,
+              signal,
+              customBaseUrl: customProxyBaseUrl || undefined,
+            });
+          }
         } else if (endpointType === EndpointType.INTERACTIONS) {
           await makeInteractionsRequest(
             inputMessage,
@@ -992,6 +1038,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (endpointType === EndpointType.TRANSCRIPTION && uploadedAudio) {
         handleRemoveAudio();
       }
+      if (endpointType === EndpointType.OCR && uploadedOcrFile) {
+        handleRemoveOcrFile();
+      }
     }
 
     setInputMessage("");
@@ -1003,6 +1052,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     handleRemoveResponsesImage();
     handleRemoveChatImage();
     handleRemoveAudio();
+    handleRemoveOcrFile();
     NotificationsManager.success("Chat history cleared.");
   };
 
@@ -1036,6 +1086,61 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
+
+  const getMcpServerSelectValue = () => {
+    if (endpointType !== EndpointType.MCP) {
+      return selectedMCPServers;
+    }
+    if (selectedMCPServers[0] !== "__all__" && selectedMCPServers.length === 1) {
+      return selectedMCPServers[0];
+    }
+    return undefined;
+  };
+
+  const getInputPlaceholder = () => {
+    const messageEndpoints = [
+      EndpointType.CHAT,
+      EndpointType.EMBEDDINGS,
+      EndpointType.RESPONSES,
+      EndpointType.ANTHROPIC_MESSAGES,
+      EndpointType.INTERACTIONS,
+    ];
+    if (messageEndpoints.includes(endpointType as EndpointType)) {
+      return "Type your message... (Shift+Enter for new line)";
+    }
+    if (endpointType === EndpointType.A2A_AGENTS) {
+      return "Send a message to the A2A agent...";
+    }
+    if (endpointType === EndpointType.IMAGE_EDITS) {
+      return "Describe how you want to edit the image...";
+    }
+    if (endpointType === EndpointType.SPEECH) {
+      return "Enter text to convert to speech...";
+    }
+    if (endpointType === EndpointType.TRANSCRIPTION) {
+      return "Optional: Add context or prompt for transcription...";
+    }
+    if (endpointType === EndpointType.OCR) {
+      return "Upload a document or image to run OCR";
+    }
+    return "Describe the image you want to generate...";
+  };
+
+  const isSendDisabled = () => {
+    if (isLoading) {
+      return true;
+    }
+    if (endpointType === EndpointType.MCP) {
+      return !(selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" && selectedMCPDirectTool);
+    }
+    if (endpointType === EndpointType.TRANSCRIPTION) {
+      return !uploadedAudio;
+    }
+    if (endpointType === EndpointType.OCR) {
+      return !uploadedOcrFile;
+    }
+    return !inputMessage.trim();
+  };
 
   return (
     <div className={`w-full bg-white ${simplified ? "h-full flex flex-col" : "p-4 pb-0"}`}>
@@ -1352,13 +1457,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     mode={endpointType === EndpointType.MCP ? undefined : "multiple"}
                     style={{ width: "100%" }}
                     placeholder={endpointType === EndpointType.MCP ? "Select MCP server" : "Select MCP servers"}
-                    value={
-                      endpointType === EndpointType.MCP
-                        ? selectedMCPServers[0] !== "__all__" && selectedMCPServers.length === 1
-                          ? selectedMCPServers[0]
-                          : undefined
-                        : selectedMCPServers
-                    }
+                    value={getMcpServerSelectValue()}
                     onChange={(value) => {
                       if (endpointType === EndpointType.MCP) {
                         const serverId = value as string | undefined;
@@ -1902,6 +2001,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     </div>
                   )}
 
+                  {endpointType === EndpointType.OCR && !uploadedOcrFile && (
+                    <div className="mb-4">
+                      <Dragger
+                        beforeUpload={handleOcrFileUpload}
+                        accept="image/*,application/pdf"
+                        showUploadList={false}
+                      >
+                        <p className="ant-upload-drag-icon">
+                          <FilePdfOutlined style={{ fontSize: "24px", color: "#666" }} />
+                        </p>
+                        <p className="ant-upload-text text-sm">Click or drag a document or image to upload</p>
+                        <p className="ant-upload-hint text-xs text-gray-500">Support for PDF and image files.</p>
+                      </Dragger>
+                    </div>
+                  )}
+
                   {/* Show file previews above input when files are uploaded */}
                   {endpointType === EndpointType.RESPONSES && responsesUploadedImage && (
                     <FilePreviewCard
@@ -1916,6 +2031,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       file={chatUploadedImage}
                       previewUrl={chatImagePreviewUrl}
                       onRemove={handleRemoveChatImage}
+                    />
+                  )}
+
+                  {endpointType === EndpointType.OCR && uploadedOcrFile && (
+                    <FilePreviewCard
+                      file={uploadedOcrFile}
+                      previewUrl={ocrFilePreviewUrl}
+                      onRemove={handleRemoveOcrFile}
                     />
                   )}
 
@@ -2067,24 +2190,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                           value={inputMessage}
                           onChange={(e) => setInputMessage(e.target.value)}
                           onKeyDown={handleKeyDown}
-                          placeholder={
-                            endpointType === EndpointType.CHAT ||
-                            endpointType === EndpointType.EMBEDDINGS ||
-                            endpointType === EndpointType.RESPONSES ||
-                            endpointType === EndpointType.ANTHROPIC_MESSAGES ||
-                            endpointType === EndpointType.INTERACTIONS
-                              ? "Type your message... (Shift+Enter for new line)"
-                              : endpointType === EndpointType.A2A_AGENTS
-                                ? "Send a message to the A2A agent..."
-                                : endpointType === EndpointType.IMAGE_EDITS
-                                  ? "Describe how you want to edit the image..."
-                                  : endpointType === EndpointType.SPEECH
-                                    ? "Enter text to convert to speech..."
-                                    : endpointType === EndpointType.TRANSCRIPTION
-                                      ? "Optional: Add context or prompt for transcription..."
-                                      : "Describe the image you want to generate..."
-                          }
-                          disabled={isLoading}
+                          placeholder={getInputPlaceholder()}
+                          disabled={isLoading || endpointType === EndpointType.OCR}
                           className="flex-1"
                           autoSize={{ minRows: 1, maxRows: 4 }}
                           style={{
@@ -2102,18 +2209,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {/* Right: send button - matching blue theme */}
                       <TremorButton
                         onClick={handleSendMessage}
-                        disabled={
-                          isLoading ||
-                          (endpointType === EndpointType.MCP
-                            ? !(
-                                selectedMCPServers.length === 1 &&
-                                selectedMCPServers[0] !== "__all__" &&
-                                selectedMCPDirectTool
-                              )
-                            : endpointType === EndpointType.TRANSCRIPTION
-                              ? !uploadedAudio
-                              : !inputMessage.trim())
-                        }
+                        disabled={isSendDisabled()}
                         className="shrink-0 ml-2 w-8! h-8! min-w-8! p-0! rounded-full! bg-blue-600! hover:bg-blue-700! disabled:bg-gray-300! border-none! text-white! disabled:text-gray-500! flex! items-center! justify-center!"
                       >
                         <ArrowUpOutlined style={{ fontSize: "14px" }} />
