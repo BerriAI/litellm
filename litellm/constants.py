@@ -1316,6 +1316,9 @@ STANDARD_CUSTOMER_ID_HEADERS = [
 MAX_SPENDLOG_ROWS_TO_QUERY = int(
     os.getenv("MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000)
 )  # if spendLogs has more than 1M rows, do not query the DB
+MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS = int(
+    os.getenv("MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS", 10_000)
+)  # hard cap on rows a UI filter dropdown may scan out of LiteLLM_SpendLogs
 DEFAULT_SOFT_BUDGET = float(
     os.getenv("DEFAULT_SOFT_BUDGET", 50.0)
 )  # by default all litellm proxy keys have a soft budget of 50.0
