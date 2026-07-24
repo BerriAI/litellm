@@ -983,33 +983,122 @@ async def test_iter_with_keepalive_cancel_on_early_close():
     await gen.aclose()
 
 
-def test_resolve_keepalive_seconds_request_value_wins(monkeypatch):
-    monkeypatch.setattr(ps, "llm_router", None)
-    result = _resolve_keepalive_seconds({"keepalive_seconds": 30}, response=None)
+def test_resolve_keepalive_seconds_client_value_ignored_without_override_permission(monkeypatch):
+    """keepalive_seconds is operator-only by default: a deployment that hasn't set
+    allow_client_keepalive_override must not let a client's request-level value
+    change its behavior at all, since that would let any authenticated client
+    unilaterally enable heartbeats (and the LB-idle-timeout evasion that comes
+    with them) for a deployment that never opted in."""
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = 15.0
+    deployment.litellm_params.allow_client_keepalive_override = False
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-locked"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model", "keepalive_seconds": 1}, response=response)
+    assert result == 15.0
+
+
+def test_resolve_keepalive_seconds_request_value_wins_when_override_allowed(monkeypatch):
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = None
+    deployment.litellm_params.allow_client_keepalive_override = True
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-opt-in"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model", "keepalive_seconds": 30}, response=response)
     assert result == 30.0
 
 
-def test_resolve_keepalive_seconds_explicit_zero_disables(monkeypatch):
-    monkeypatch.setattr(ps, "llm_router", None)
-    result = _resolve_keepalive_seconds({"keepalive_seconds": 0}, response=None)
+def test_resolve_keepalive_seconds_explicit_zero_disables_when_override_allowed(monkeypatch):
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = 20.0
+    deployment.litellm_params.allow_client_keepalive_override = True
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-opt-in"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model", "keepalive_seconds": 0}, response=response)
     assert result == 0.0
 
 
 def test_resolve_keepalive_seconds_clamps_below_minimum(monkeypatch):
-    monkeypatch.setattr(ps, "llm_router", None)
-    result = _resolve_keepalive_seconds({"keepalive_seconds": 0.001}, response=None)
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = None
+    deployment.litellm_params.allow_client_keepalive_override = True
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-opt-in"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model", "keepalive_seconds": 0.001}, response=response)
     assert result == _KEEPALIVE_MIN_SECONDS
 
 
 def test_resolve_keepalive_seconds_clamps_above_maximum(monkeypatch):
-    monkeypatch.setattr(ps, "llm_router", None)
-    result = _resolve_keepalive_seconds({"keepalive_seconds": 9999}, response=None)
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = None
+    deployment.litellm_params.allow_client_keepalive_override = True
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-opt-in"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model", "keepalive_seconds": 9999}, response=response)
     assert result == _KEEPALIVE_MAX_SECONDS
 
 
 def test_resolve_keepalive_seconds_non_numeric_returns_zero(monkeypatch):
-    monkeypatch.setattr(ps, "llm_router", None)
-    result = _resolve_keepalive_seconds({"keepalive_seconds": "not-a-number"}, response=None)
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = None
+    deployment.litellm_params.allow_client_keepalive_override = True
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-opt-in"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model", "keepalive_seconds": "not-a-number"}, response=response)
     assert result == 0.0
 
 
@@ -1023,11 +1112,14 @@ def test_resolve_keepalive_seconds_deployment_disable_cannot_be_overridden_by_re
     """A deployment that explicitly sets keepalive_seconds: 0 is a hard operator
     disable: an authenticated client must not be able to re-enable heartbeats for
     that deployment by passing a positive value in the request body, since that
-    would let a client evade the deployment's idle-timeout behavior at will."""
+    would let a client evade the deployment's idle-timeout behavior at will. This
+    holds even if the deployment also grants override permission, since an
+    explicit disable is a stronger, unconditional signal than an override grant."""
     from unittest.mock import MagicMock
 
     deployment = MagicMock()
     deployment.litellm_params.keepalive_seconds = 0
+    deployment.litellm_params.allow_client_keepalive_override = True
 
     router = MagicMock()
     router.get_deployment.return_value = deployment
@@ -1046,6 +1138,7 @@ def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
 
     deployment = MagicMock()
     deployment.litellm_params.keepalive_seconds = 45.0
+    deployment.litellm_params.allow_client_keepalive_override = True
 
     router = MagicMock()
     router.get_deployment.return_value = deployment
@@ -1056,7 +1149,7 @@ def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
     response._hidden_params = {"model_id": "deploy-abc"}
 
     result = _keepalive_from_deployment_config({"model": "my-model"}, response)
-    assert result == 45.0
+    assert result == ps._DeploymentKeepaliveConfig(keepalive_seconds=45.0, allow_client_override=True)
     router.get_deployment.assert_called_once_with(model_id="deploy-abc")
 
 
@@ -1100,7 +1193,7 @@ def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
     response._hidden_params = {}
 
     result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
-    assert result == 20.0
+    assert result == ps._DeploymentKeepaliveConfig(keepalive_seconds=20.0, allow_client_override=False)
     router.get_model_list.assert_called_once_with(model_name="slow-model")
 
 
@@ -1112,8 +1205,8 @@ def test_keepalive_from_deployment_config_fallback_by_name_agreeing_deployments(
     router = MagicMock()
     router.get_deployment.return_value = None
     router.get_model_list.return_value = [
-        {"litellm_params": {"keepalive_seconds": 20.0}},
-        {"litellm_params": {"keepalive_seconds": 20.0}},
+        {"litellm_params": {"keepalive_seconds": 20.0, "allow_client_keepalive_override": True}},
+        {"litellm_params": {"keepalive_seconds": 20.0, "allow_client_keepalive_override": True}},
     ]
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1122,7 +1215,7 @@ def test_keepalive_from_deployment_config_fallback_by_name_agreeing_deployments(
     response._hidden_params = {}
 
     result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
-    assert result == 20.0
+    assert result == ps._DeploymentKeepaliveConfig(keepalive_seconds=20.0, allow_client_override=True)
 
 
 def test_keepalive_from_deployment_config_fallback_by_name_conflicting_deployments(monkeypatch):
@@ -1185,11 +1278,18 @@ def test_keepalive_seconds_in_all_litellm_params():
 
 @pytest.mark.asyncio
 async def test_async_data_generator_emits_ping_heartbeat(monkeypatch):
-    """When keepalive_seconds is set, ': ping' frames appear during upstream stalls."""
+    """When keepalive_seconds is set on a deployment that allows client override,
+    ': ping' frames appear during upstream stalls."""
     import asyncio
+    from unittest.mock import MagicMock
 
     _patch_logging_flags(monkeypatch)
     monkeypatch.setattr(ps, "_KEEPALIVE_MIN_SECONDS", 0.05)
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [{"litellm_params": {"allow_client_keepalive_override": True}}]
+    monkeypatch.setattr(ps, "llm_router", router)
 
     async def _slow_response():
         yield _simple_chunk(content="hello")
