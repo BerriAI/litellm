@@ -269,6 +269,24 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const codeInterpreter = useCodeInterpreter();
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const ocrFilePreviewUrlRef = useRef<string | null>(null);
+
+  const revokeOcrFilePreviewUrl = () => {
+    if (ocrFilePreviewUrlRef.current) {
+      URL.revokeObjectURL(ocrFilePreviewUrlRef.current);
+    }
+    ocrFilePreviewUrlRef.current = null;
+    setOcrFilePreviewUrl(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (ocrFilePreviewUrlRef.current) {
+        URL.revokeObjectURL(ocrFilePreviewUrlRef.current);
+        ocrFilePreviewUrlRef.current = null;
+      }
+    };
+  }, []);
 
   // Fetch MCP servers and toolsets
   const loadMCPServers = async () => {
@@ -569,17 +587,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleOcrFileUpload = (file: File): false => {
+    revokeOcrFilePreviewUrl();
     setUploadedOcrFile(file);
-    setOcrFilePreviewUrl(file.type.startsWith("image/") ? URL.createObjectURL(file) : null);
+    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+    ocrFilePreviewUrlRef.current = previewUrl;
+    setOcrFilePreviewUrl(previewUrl);
     return false;
   };
 
   const handleRemoveOcrFile = () => {
-    if (ocrFilePreviewUrl) {
-      URL.revokeObjectURL(ocrFilePreviewUrl);
-    }
     setUploadedOcrFile(null);
-    setOcrFilePreviewUrl(null);
+    revokeOcrFilePreviewUrl();
   };
 
   const handleSendMessage = async () => {

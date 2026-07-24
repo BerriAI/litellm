@@ -375,6 +375,64 @@ describe("ChatUI", () => {
     expect(customProxyInput).toHaveValue(testProxyUrl);
   });
 
+  it("revokes the active OCR preview URL on unmount", async () => {
+    const createObjectURL = vi.fn(() => "blob:http://localhost/ocr-preview");
+    const revokeObjectURL = vi.fn();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+
+    const { getByText, unmount } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const endpointTypeText = getByText("Endpoint Type");
+    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector");
+    expect(endpointSelect).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.mouseDown(endpointSelect!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("/v1/ocr")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("/v1/ocr"));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Click or drag a document or image to upload")).toBeInTheDocument();
+    });
+
+    const uploadInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(uploadInput).not.toBeNull();
+
+    const imageFile = new File(["ocr"], "ocr.png", { type: "image/png" });
+    await act(async () => {
+      fireEvent.change(uploadInput!, { target: { files: [imageFile] } });
+    });
+
+    await waitFor(() => {
+      expect(createObjectURL).toHaveBeenCalledWith(imageFile);
+      expect(screen.getByAltText("Upload preview")).toBeInTheDocument();
+    });
+
+    unmount();
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:http://localhost/ocr-preview");
+  });
+
   it("should enable search functionality for MCP server selector", async () => {
     render(
       <ChatUI
