@@ -17,7 +17,9 @@ from litellm.types.utils import (
     Delta,
     LlmProviders,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
+    Usage,
 )
 from litellm.utils import (
     ProviderConfigManager,
@@ -32,6 +34,57 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_usage_openai_cache_write_tokens_populates_both_names():
+    """OpenAI reports cache-write tokens as prompt_tokens_details.cache_write_tokens.
+    The Usage constructor must expose it under both cache_write_tokens (canonical,
+    OpenAI naming) and cache_creation_tokens (legacy, Anthropic naming)."""
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details={"cached_tokens": 0, "cache_write_tokens": 800},
+    )
+    assert usage.prompt_tokens_details.cache_write_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 800
+
+
+def test_usage_anthropic_cache_creation_maps_to_cache_write_tokens():
+    """Anthropic/Bedrock report the top-level cache_creation_input_tokens field.
+    It must be normalized onto the OpenAI cache_write_tokens name as well as the
+    legacy cache_creation_tokens name."""
+    usage = Usage(
+        prompt_tokens=500,
+        completion_tokens=50,
+        total_tokens=550,
+        cache_creation_input_tokens=300,
+        cache_read_input_tokens=120,
+    )
+    assert usage.prompt_tokens_details.cache_write_tokens == 300
+    assert usage.prompt_tokens_details.cache_creation_tokens == 300
+    assert usage.prompt_tokens_details.cached_tokens == 120
+
+
+def test_prompt_tokens_details_no_cache_write_tokens_when_absent():
+    """A read-only cache hit (no cache write) must not surface cache-write fields."""
+    details = PromptTokensDetailsWrapper(cached_tokens=800)
+    assert details.cached_tokens == 800
+    assert not hasattr(details, "cache_write_tokens")
+    assert not hasattr(details, "cache_creation_tokens")
+
+
+def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment():
+    """Assigning either name after construction must mirror to the other, so a
+    caller that sets only one field can't leave the pair silently out of sync."""
+    details = PromptTokensDetailsWrapper(cache_write_tokens=100)
+    assert details.cache_write_tokens == details.cache_creation_tokens == 100
+
+    details.cache_write_tokens = 250
+    assert details.cache_write_tokens == details.cache_creation_tokens == 250
+
+    details.cache_creation_tokens = 375
+    assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
 
 @pytest.fixture
@@ -4317,7 +4370,7 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/glm-5p2",
         1.4e-06,
         4.4e-06,
-        2.6e-07,
+        1.4e-07,
         1048576,
         131072,
         False,

@@ -494,7 +494,14 @@ async def aresponses(
                 prompt_label=kwargs.get("prompt_label", None),
                 prompt_version=kwargs.get("prompt_version", None),
             )
-            input = cast(Union[str, ResponseInputParam], merged_input)
+            input = cast(
+                Union[str, ResponseInputParam],
+                ResponsesAPIRequestUtils.merge_prompt_management_input(
+                    original_input=input,
+                    client_input=client_input,
+                    merged_input=merged_input,
+                ),
+            )
             if model != original_model:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
             kwargs.pop("prompt_id", None)
@@ -609,7 +616,14 @@ def _apply_prompt_management_to_responses_call(
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
         )
-        input = cast(Union[str, ResponseInputParam], merged_input)
+        input = cast(
+            Union[str, ResponseInputParam],
+            ResponsesAPIRequestUtils.merge_prompt_management_input(
+                original_input=input,
+                client_input=client_input,
+                merged_input=merged_input,
+            ),
+        )
         local_vars["input"] = input
         local_vars["model"] = model
         if model != original_model:
@@ -1070,11 +1084,13 @@ def responses(
             )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -1896,11 +1912,13 @@ def compact_responses(
         )
 
         # Get optional parameters for the responses API
+        request_drop_params = kwargs.get("drop_params")
         responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=None,
+            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
         )
 
         # Pre Call logging

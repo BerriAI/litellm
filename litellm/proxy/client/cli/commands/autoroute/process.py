@@ -52,10 +52,17 @@ def missing_proxy_runtime_modules() -> tuple[str, ...]:
     return tuple(name for name in _PROXY_RUNTIME_MODULES if importlib.util.find_spec(name) is None)
 
 
-def allocate_free_port() -> int:
+DEFAULT_AUTOROUTE_PORT = 5483
+
+
+def is_port_available(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
 
 
 def launch_proxy(config_path: Path, port: int, log_path: Path) -> "subprocess.Popen[bytes]":
@@ -172,12 +179,13 @@ def stream_log(log_path: Path, stop_event: threading.Event) -> None:
 __all__ = [
     "AUTOROUTE_DIR",
     "CONFIG_PATH",
+    "DEFAULT_AUTOROUTE_PORT",
     "LOG_PATH",
     "PID_RECORD_PATH",
     "PidRecord",
     "ProcessLaunchError",
-    "allocate_free_port",
     "clear_pid_record",
+    "is_port_available",
     "is_running",
     "launch_proxy",
     "missing_proxy_runtime_modules",

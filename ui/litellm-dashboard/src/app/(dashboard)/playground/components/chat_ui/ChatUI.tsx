@@ -98,7 +98,12 @@ interface ChatUIProps {
   fixedModel?: string;
 }
 
-const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([EndpointType.CHAT, EndpointType.RESPONSES, EndpointType.MCP]);
+const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
+  EndpointType.CHAT,
+  EndpointType.RESPONSES,
+  EndpointType.MCP,
+  EndpointType.ANTHROPIC_MESSAGES,
+]);
 
 const CUSTOM_MODEL_DEBOUNCE_WAIT_MS = 500;
 
@@ -870,8 +875,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedPolicies.length > 0 ? selectedPolicies : undefined,
-            selectedMCPServers, // Pass the selected tools array
+            selectedMCPServers,
             customProxyBaseUrl || undefined,
+            mcpServers,
+            mcpServerToolRestrictions,
+            mcpToolsets,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(

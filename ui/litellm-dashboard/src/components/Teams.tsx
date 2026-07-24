@@ -1,5 +1,5 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import AvailableTeamsPanel from "@/components/team/available_teams";
+import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";

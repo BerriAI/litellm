@@ -311,6 +311,14 @@ class ComplexityRouterConfig(BaseModel):
         description="Default model to use if tier cannot be determined",
     )
 
+    return_raw_model_name: bool = Field(
+        default=False,
+        description=(
+            "Return the resolved raw model name in the response model field instead of "
+            "the client-requested complexity-router alias"
+        ),
+    )
+
     # Classifier strategy
     classifier_type: Literal["heuristic", "llm"] = Field(
         default="heuristic",

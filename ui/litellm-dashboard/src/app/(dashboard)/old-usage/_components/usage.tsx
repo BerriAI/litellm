@@ -1,40 +1,26 @@
-import {
-  BarChart,
-  BarList,
-  Card,
-  Title,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  TableCell,
-  TableBody,
-  Subtitle,
-} from "@tremor/react";
-
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "@/components/view_user_spend";
 import { ProxySettings } from "@/components/user_dashboard";
 import UsageDatePicker from "@/components/shared/usage_date_picker";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Grid,
-  Col,
-  Text,
-  TabPanel,
-  TabPanels,
-  TabGroup,
-  TabList,
-  Tab,
-  Select,
-  SelectItem,
-  DateRangePickerValue,
-  DonutChart,
-  AreaChart,
-  Button,
-  MultiSelect,
-  MultiSelectItem,
-} from "@tremor/react";
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+} from "@/components/ui/combobox";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AreaChart, BarChart, DonutChart } from "@/components/shared/charts";
 
 import {
   adminSpendLogsCall,
@@ -68,67 +54,39 @@ interface GlobalActivityData {
   daily_data: { date: string; api_requests: number; total_tokens: number }[];
 }
 
-type CustomTooltipTypeBar = {
-  payload: any;
-  active: boolean | undefined;
-  label: any;
-};
+type UsageDateRange = { from?: Date; to?: Date };
 
-const customTooltip = (props: CustomTooltipTypeBar) => {
-  const { payload, active } = props;
-  if (!active || !payload) return null;
+type TeamSpendTotal = { name: string; value: number };
 
-  const value = payload[0].payload;
-  const date = value["startTime"];
-  const model_values = value["models"];
-  const entries: [string, number][] = Object.entries(model_values).map(([key, value]) => [key, value as number]);
+type TagOption = { value: string; label: string; disabled: boolean };
 
-  entries.sort((a, b) => b[1] - a[1]);
-  const topEntries = entries.slice(0, 5);
-
-  return (
-    <div className="w-56 rounded-tremor-default border border-tremor-border bg-tremor-background p-2 text-tremor-default shadow-tremor-dropdown">
-      {date}
-      {topEntries.map(([key, value]) => (
-        <div key={key} className="flex flex-1 space-x-10">
-          <div className="p-2">
-            <p className="text-tremor-content text-xs">
-              {key}
-              {":"}
-              <span className="text-xs text-tremor-content-emphasis">
-                {" "}
-                {value ? `$${formatNumberWithCommas(value, 2)}` : ""}
-              </span>
-            </p>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
-  const spendKeys: { key: string; spend: unknown }[] = [];
-
-  data.forEach((dict) => {
-    Object.entries(dict).forEach(([key, value]) => {
-      if (key !== "spend" && key !== "startTime" && key !== "models" && key !== "users") {
-        spendKeys.push({ key, spend: value });
-      }
-    });
-  });
-
-  spendKeys.sort((a, b) => Number(b.spend) - Number(a.spend));
-
-  const topKeys = spendKeys.slice(0, 5).map((k) => k.key);
-  return topKeys;
-}
-type DataDict = { [key: string]: unknown };
-type UserData = { user_id: string; spend: number };
+const ALL_TAGS = "all-tags";
 
 const isAdminOrAdminViewer = (role: string | null): boolean => {
   if (role === null) return false;
   return role === "Admin" || role === "Admin Viewer";
+};
+
+const TeamSpendBarList: React.FC<{ data: TeamSpendTotal[] }> = ({ data }) => {
+  const max = Math.max(0, ...data.map((team) => team.value));
+
+  return (
+    <div className="flex flex-col gap-3">
+      {data.map((team) => (
+        <div key={team.name} className="flex items-center gap-4">
+          <p className="w-1/3 truncate text-sm text-foreground">{team.name}</p>
+          <Meter value={team.value} max={max === 0 ? 1 : max} className="flex-1">
+            <MeterTrack>
+              <MeterIndicator />
+            </MeterTrack>
+          </Meter>
+          <p className="w-24 shrink-0 text-right text-sm tabular-nums text-foreground">
+            {formatNumberWithCommas(team.value, 2)}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
 };
 
 const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, userID, keys, premiumUser }) => {
@@ -141,13 +99,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
   const [topTagsData, setTopTagsData] = useState<any[]>([]);
   const [allTagNames, setAllTagNames] = useState<string[]>([]);
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
-  const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<any[]>([]);
+  const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<TeamSpendTotal[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
   const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
-  const [selectedKeyID, setSelectedKeyID] = useState<string | null>("");
-  const [selectedTags, setSelectedTags] = useState<string[]>(["all-tags"]);
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+  const [selectedKeyToken, setSelectedKeyToken] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>([ALL_TAGS]);
+  const [dateValue, setDateValue] = useState<UsageDateRange>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
@@ -159,6 +117,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
+
+  const selectableKeys: { token: string; alias: string }[] = (keys ?? [])
+    .filter((key: any) => key && typeof key["key_alias"] === "string" && key["key_alias"].length > 0)
+    .map((key: any) => ({ token: String(key["token"]), alias: String(key["key_alias"]) }));
+
+  const tagOptions: TagOption[] = [
+    { value: ALL_TAGS, label: "All Tags", disabled: false },
+    ...allTagNames
+      .filter((tag) => tag !== ALL_TAGS)
+      .map((tag) => ({
+        value: tag,
+        label: premiumUser ? tag : `✨ ${tag} (Enterprise only Feature)`,
+        disabled: !premiumUser,
+      })),
+  ];
 
   function valueFormatterNumbers(number: number) {
     const formatter = new Intl.NumberFormat("en-US", {
@@ -405,7 +378,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
         setUniqueTeamIds(teamSpend.teams);
         return teamSpend.total_spend_per_team.map((tspt: any) => ({
           name: tspt["team_id"] || "",
-          value: formatNumberWithCommas(tspt["total_spend"] || 0, 2),
+          value: Number(tspt["total_spend"] || 0),
         }));
       },
       setTotalSpendPerTeam,
@@ -524,223 +497,252 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
   if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
     return (
-      <div style={{ width: "100%" }} className="p-8">
+      <div className="w-full p-8">
         <Card>
-          <Title>Database Query Limit Reached</Title>
-          <Text className="mt-4">
-            SpendLogs in DB has {proxySettings.NUM_SPEND_LOGS_ROWS} rows.
-            <br></br>
-            Please follow our guide to view usage when SpendLogs has more than 1M rows.
-          </Text>
-          <Button className="mt-4">
-            <a href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">
-              View Usage Guide
-            </a>
-          </Button>
+          <CardHeader>
+            <CardTitle>Database Query Limit Reached</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col items-start gap-4">
+            <p className="text-sm text-muted-foreground">
+              SpendLogs in DB has {proxySettings.NUM_SPEND_LOGS_ROWS} rows.
+              <br></br>
+              Please follow our guide to view usage when SpendLogs has more than 1M rows.
+            </p>
+            <Button
+              render={
+                <a href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank" rel="noreferrer">
+                  View Usage Guide
+                </a>
+              }
+            />
+          </CardContent>
         </Card>
       </div>
     );
   }
 
   return (
-    <div style={{ width: "100%" }} className="p-8">
-      <TabGroup>
-        <TabList className="mt-2">
-          <Tab>All Up</Tab>
+    <div className="w-full p-8">
+      <Tabs defaultValue="all-up">
+        <TabsList variant="line" className="mt-2">
+          <TabsTrigger value="all-up">All Up</TabsTrigger>
 
-          {isAdminOrAdminViewer(userRole) ? (
+          {isAdminOrAdminViewer(userRole) && (
             <>
-              <Tab>Team Based Usage</Tab>
-              <Tab>Customer Usage</Tab>
-              <Tab>Tag Based Usage</Tab>
-            </>
-          ) : (
-            <>
-              <div></div>
+              <TabsTrigger value="team-based-usage">Team Based Usage</TabsTrigger>
+              <TabsTrigger value="customer-usage">Customer Usage</TabsTrigger>
+              <TabsTrigger value="tag-based-usage">Tag Based Usage</TabsTrigger>
             </>
           )}
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <TabGroup>
-              <TabList variant="solid" className="mt-1">
-                <Tab>Cost</Tab>
-                <Tab>Activity</Tab>
-              </TabList>
-              <TabPanels>
-                <TabPanel>
-                  <Grid numItems={2} className="gap-2 h-screen w-full">
-                    <Col numColSpan={2}>
-                      <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
-                        Project Spend {new Date().toLocaleString("default", { month: "long" })} 1 -{" "}
-                        {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
-                      </Text>
-                      <ViewUserSpend userSpend={totalMonthlySpend} selectedTeam={null} userMaxBudget={null} />
-                    </Col>
-                    <Col numColSpan={2}>
-                      <Card>
-                        <Title>Monthly Spend</Title>
-                        <BarChart
-                          data={keySpendData}
+        </TabsList>
+
+        <TabsContent value="all-up">
+          <Tabs defaultValue="cost">
+            <TabsList className="mt-1">
+              <TabsTrigger value="cost">Cost</TabsTrigger>
+              <TabsTrigger value="activity">Activity</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="cost">
+              <div className="grid h-screen w-full grid-cols-2 gap-2">
+                <div className="col-span-2">
+                  <p className="mt-2 mb-2 text-lg text-muted-foreground">
+                    Project Spend {new Date().toLocaleString("default", { month: "long" })} 1 -{" "}
+                    {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()}
+                  </p>
+                  <ViewUserSpend userSpend={totalMonthlySpend} selectedTeam={null} userMaxBudget={null} />
+                </div>
+                <div className="col-span-2">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Monthly Spend</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <BarChart
+                        data={keySpendData}
+                        index="date"
+                        categories={["spend"]}
+                        colors={["cyan"]}
+                        valueFormatter={valueFormatter}
+                        yAxisWidth={100}
+                        tickGap={5}
+                      />
+                    </CardContent>
+                  </Card>
+                </div>
+                <div className="col-span-1">
+                  <Card className="h-full">
+                    <CardHeader>
+                      <CardTitle>Top Virtual Keys</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <TopKeyView topKeys={topKeys} teams={null} topKeysLimit={5} setTopKeysLimit={() => {}} />
+                    </CardContent>
+                  </Card>
+                </div>
+                <div className="col-span-1">
+                  <Card className="h-full">
+                    <CardHeader>
+                      <CardTitle>Top Models</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <BarChart
+                        className="mt-4 h-40"
+                        data={topModels}
+                        index="key"
+                        categories={["spend"]}
+                        colors={["cyan"]}
+                        yAxisWidth={200}
+                        layout="vertical"
+                        showXAxis={false}
+                        showLegend={false}
+                        valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                      />
+                    </CardContent>
+                  </Card>
+                </div>
+                <div className="col-span-1"></div>
+                <div className="col-span-2">
+                  <Card className="mb-2">
+                    <CardHeader>
+                      <CardTitle>Spend by Provider</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2">
+                        <div className="col-span-1">
+                          <DonutChart
+                            className="mt-4 h-40"
+                            variant="pie"
+                            data={spendByProvider}
+                            index="provider"
+                            category="spend"
+                            colors={["cyan"]}
+                            valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                          />
+                        </div>
+                        <div className="col-span-1">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Provider</TableHead>
+                                <TableHead>Spend</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {spendByProvider.map((provider) => (
+                                <TableRow key={provider.provider}>
+                                  <TableCell>{provider.provider}</TableCell>
+                                  <TableCell>
+                                    <MoneyCell value={provider.spend} decimals={2} />
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="activity">
+              <div className="grid h-[75vh] w-full grid-cols-1 gap-2">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>All Up</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2">
+                      <div>
+                        <p className="text-[15px] font-normal text-muted-foreground">
+                          API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
+                        </p>
+                        <AreaChart
+                          className="h-40"
+                          data={globalActivity.daily_data}
+                          valueFormatter={valueFormatterNumbers}
                           index="date"
-                          categories={["spend"]}
                           colors={["cyan"]}
-                          valueFormatter={valueFormatter}
-                          yAxisWidth={100}
-                          tickGap={5}
-                          // customTooltip={customTooltip}
+                          categories={["api_requests"]}
                         />
-                      </Card>
-                    </Col>
-                    <Col numColSpan={1}>
-                      <Card className="h-full">
-                        <Title>Top Virtual Keys</Title>
-                        <TopKeyView topKeys={topKeys} teams={null} topKeysLimit={5} setTopKeysLimit={() => {}} />
-                      </Card>
-                    </Col>
-                    <Col numColSpan={1}>
-                      <Card className="h-full">
-                        <Title>Top Models</Title>
+                      </div>
+                      <div>
+                        <p className="text-[15px] font-normal text-muted-foreground">
+                          Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
+                        </p>
                         <BarChart
-                          className="mt-4 h-40"
-                          data={topModels}
-                          index="key"
-                          categories={["spend"]}
+                          className="h-40"
+                          data={globalActivity.daily_data}
+                          valueFormatter={valueFormatterNumbers}
+                          index="date"
                           colors={["cyan"]}
-                          yAxisWidth={200}
-                          layout="vertical"
-                          showXAxis={false}
-                          showLegend={false}
-                          valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                          categories={["total_tokens"]}
                         />
-                      </Card>
-                    </Col>
-                    <Col numColSpan={1}></Col>
-                    <Col numColSpan={2}>
-                      <Card className="mb-2">
-                        <Title>Spend by Provider</Title>
-                        <>
-                          <Grid numItems={2}>
-                            <Col numColSpan={1}>
-                              <DonutChart
-                                className="mt-4 h-40"
-                                variant="pie"
-                                data={spendByProvider}
-                                index="provider"
-                                category="spend"
-                                colors={["cyan"]}
-                                valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                              />
-                            </Col>
-                            <Col numColSpan={1}>
-                              <Table>
-                                <TableHead>
-                                  <TableRow>
-                                    <TableHeaderCell>Provider</TableHeaderCell>
-                                    <TableHeaderCell>Spend</TableHeaderCell>
-                                  </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                  {spendByProvider.map((provider) => (
-                                    <TableRow key={provider.provider}>
-                                      <TableCell>{provider.provider}</TableCell>
-                                      <TableCell>
-                                        <MoneyCell value={provider.spend} decimals={2} />
-                                      </TableCell>
-                                    </TableRow>
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            </Col>
-                          </Grid>
-                        </>
-                      </Card>
-                    </Col>
-                  </Grid>
-                </TabPanel>
-                <TabPanel>
-                  <Grid numItems={1} className="gap-2 h-[75vh] w-full">
-                    <Card>
-                      <Title>All Up</Title>
-                      <Grid numItems={2}>
-                        <Col>
-                          <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452" }}>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {globalActivityPerModel.map((globalActivity, index) => (
+                  <Card key={index}>
+                    <CardHeader>
+                      <CardTitle>{globalActivity.model}</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2">
+                        <div>
+                          <p className="text-[15px] font-normal text-muted-foreground">
                             API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
-                          </Subtitle>
+                          </p>
                           <AreaChart
                             className="h-40"
                             data={globalActivity.daily_data}
-                            valueFormatter={valueFormatterNumbers}
                             index="date"
                             colors={["cyan"]}
                             categories={["api_requests"]}
+                            valueFormatter={valueFormatterNumbers}
                           />
-                        </Col>
-                        <Col>
-                          <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452" }}>
+                        </div>
+                        <div>
+                          <p className="text-[15px] font-normal text-muted-foreground">
                             Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
-                          </Subtitle>
+                          </p>
                           <BarChart
                             className="h-40"
                             data={globalActivity.daily_data}
-                            valueFormatter={valueFormatterNumbers}
                             index="date"
                             colors={["cyan"]}
                             categories={["total_tokens"]}
+                            valueFormatter={valueFormatterNumbers}
                           />
-                        </Col>
-                      </Grid>
-                    </Card>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </TabsContent>
+          </Tabs>
+        </TabsContent>
 
-                    <>
-                      {globalActivityPerModel.map((globalActivity, index) => (
-                        <Card key={index}>
-                          <Title>{globalActivity.model}</Title>
-                          <Grid numItems={2}>
-                            <Col>
-                              <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452" }}>
-                                API Requests {valueFormatterNumbers(globalActivity.sum_api_requests)}
-                              </Subtitle>
-                              <AreaChart
-                                className="h-40"
-                                data={globalActivity.daily_data}
-                                index="date"
-                                colors={["cyan"]}
-                                categories={["api_requests"]}
-                                valueFormatter={valueFormatterNumbers}
-                              />
-                            </Col>
-                            <Col>
-                              <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452" }}>
-                                Tokens {valueFormatterNumbers(globalActivity.sum_total_tokens)}
-                              </Subtitle>
-                              <BarChart
-                                className="h-40"
-                                data={globalActivity.daily_data}
-                                index="date"
-                                colors={["cyan"]}
-                                categories={["total_tokens"]}
-                                valueFormatter={valueFormatterNumbers}
-                              />
-                            </Col>
-                          </Grid>
-                        </Card>
-                      ))}
-                    </>
-                  </Grid>
-                </TabPanel>
-              </TabPanels>
-            </TabGroup>
-          </TabPanel>
-          <TabPanel>
-            <Grid numItems={2} className="gap-2 h-[75vh] w-full">
-              <Col numColSpan={2}>
-                <Card className="mb-2">
-                  <Title>Total Spend Per Team</Title>
-                  <BarList data={totalSpendPerTeam} />
-                </Card>
-                <Card>
-                  <Title>Daily Spend Per Team</Title>
+        <TabsContent value="team-based-usage">
+          <div className="grid h-[75vh] w-full grid-cols-2 gap-2">
+            <div className="col-span-2">
+              <Card className="mb-2">
+                <CardHeader>
+                  <CardTitle>Total Spend Per Team</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <TeamSpendBarList data={totalSpendPerTeam} />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Daily Spend Per Team</CardTitle>
+                </CardHeader>
+                <CardContent>
                   <BarChart
                     className="h-72"
                     data={teamSpendData}
@@ -750,178 +752,161 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                     yAxisWidth={80}
                     stack={true}
                   />
-                </Card>
-              </Col>
-              <Col numColSpan={2}></Col>
-            </Grid>
-          </TabPanel>
-          <TabPanel>
-            <p className="mb-2 text-gray-500 italic text-[12px]">
-              Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls{" "}
-              <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/users" target="_blank">
-                docs here
-              </a>
-            </p>
-            <Grid numItems={2}>
-              <Col>
-                <UsageDatePicker
-                  value={dateValue}
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateEndUserData(value.from, value.to, null);
-                  }}
-                />
-              </Col>
-              <Col>
-                <Text>Select Key</Text>
-                <Select defaultValue="all-keys">
-                  <SelectItem
-                    key="all-keys"
-                    value="all-keys"
-                    onClick={() => {
-                      updateEndUserData(dateValue.from, dateValue.to, null);
-                    }}
-                  >
-                    All Keys
-                  </SelectItem>
-                  {keys?.map((key: any, index: number) => {
-                    if (key && key["key_alias"] !== null && key["key_alias"].length > 0) {
-                      return (
-                        <SelectItem
-                          key={index}
-                          value={String(index)}
-                          onClick={() => {
-                            updateEndUserData(dateValue.from, dateValue.to, key["token"]);
-                          }}
-                        >
-                          {key["key_alias"]}
-                        </SelectItem>
-                      );
-                    }
-                    return null; // Add this line to handle the case when the condition is not met
-                  })}
-                </Select>
-              </Col>
-            </Grid>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
 
-            <Card className="mt-4">
-              <Table className="max-h-[70vh] min-h-[500px]">
-                <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>Customer</TableHeaderCell>
-                    <TableHeaderCell>Spend</TableHeaderCell>
-                    <TableHeaderCell>Total Events</TableHeaderCell>
-                  </TableRow>
-                </TableHead>
-
-                <TableBody>
-                  {topUsers?.map((user: any, index: number) => (
-                    <TableRow key={index}>
-                      <TableCell>{user.end_user}</TableCell>
-                      <TableCell>
-                        <MoneyCell value={user.total_spend} decimals={2} />
-                      </TableCell>
-                      <TableCell>{user.total_count}</TableCell>
-                    </TableRow>
+        <TabsContent value="customer-usage">
+          <p className="mb-2 text-[12px] text-muted-foreground italic">
+            Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls{" "}
+            <a
+              className="text-primary"
+              href="https://docs.litellm.ai/docs/proxy/users"
+              target="_blank"
+              rel="noreferrer"
+            >
+              docs here
+            </a>
+          </p>
+          <div className="grid grid-cols-2">
+            <div>
+              <UsageDatePicker
+                value={dateValue}
+                onValueChange={(value) => {
+                  setDateValue(value);
+                  updateEndUserData(value.from, value.to, null);
+                }}
+              />
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Select Key</p>
+              <Select
+                value={selectedKeyToken}
+                onValueChange={(value: string | null) => {
+                  setSelectedKeyToken(value);
+                  updateEndUserData(dateValue.from, dateValue.to, value);
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="All Keys">
+                    {(token: string | null) => selectableKeys.find((key) => key.token === token)?.alias ?? "All Keys"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={null}>All Keys</SelectItem>
+                  {selectableKeys.map((key) => (
+                    <SelectItem key={key.token} value={key.token}>
+                      {key.alias}
+                    </SelectItem>
                   ))}
-                </TableBody>
-              </Table>
-            </Card>
-          </TabPanel>
-          <TabPanel>
-            <Grid numItems={2}>
-              <Col numColSpan={1}>
-                <UsageDatePicker
-                  className="mb-4"
-                  value={dateValue}
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateTagSpendData(value.from, value.to);
-                  }}
-                />
-              </Col>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-              <Col>
-                {premiumUser ? (
-                  <div>
-                    <MultiSelect value={selectedTags} onValueChange={(value) => setSelectedTags(value as string[])}>
-                      <MultiSelectItem
-                        key={"all-tags"}
-                        value={"all-tags"}
-                        onClick={() => setSelectedTags(["all-tags"])}
-                      >
-                        All Tags
-                      </MultiSelectItem>
-                      {allTagNames &&
-                        allTagNames
-                          .filter((tag) => tag !== "all-tags")
-                          .map((tag: any, index: number) => {
-                            return (
-                              <MultiSelectItem key={tag} value={String(tag)}>
-                                {tag}
-                              </MultiSelectItem>
-                            );
-                          })}
-                    </MultiSelect>
-                  </div>
-                ) : (
-                  <div>
-                    <MultiSelect value={selectedTags} onValueChange={(value) => setSelectedTags(value as string[])}>
-                      <MultiSelectItem
-                        key={"all-tags"}
-                        value={"all-tags"}
-                        onClick={() => setSelectedTags(["all-tags"])}
-                      >
-                        All Tags
-                      </MultiSelectItem>
-                      {allTagNames &&
-                        allTagNames
-                          .filter((tag) => tag !== "all-tags")
-                          .map((tag: any, index: number) => {
-                            return (
-                              <SelectItem
-                                key={tag}
-                                value={String(tag)}
-                                // @ts-ignore
-                                disabled={true}
-                              >
-                                ✨ {tag} (Enterprise only Feature)
-                              </SelectItem>
-                            );
-                          })}
-                    </MultiSelect>
-                  </div>
-                )}
-              </Col>
-            </Grid>
-            <Grid numItems={2} className="gap-2 h-[75vh] w-full mb-4">
-              <Col numColSpan={2}>
-                <Card>
-                  <Title>Spend Per Tag</Title>
-                  <Text>
+          <Card className="mt-4">
+            <CardContent>
+              <div className="max-h-[70vh] min-h-[500px] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Spend</TableHead>
+                      <TableHead>Total Events</TableHead>
+                    </TableRow>
+                  </TableHeader>
+
+                  <TableBody>
+                    {topUsers?.map((user: any, index: number) => (
+                      <TableRow key={index}>
+                        <TableCell>{user.end_user}</TableCell>
+                        <TableCell>
+                          <MoneyCell value={user.total_spend} decimals={2} />
+                        </TableCell>
+                        <TableCell>{user.total_count}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="tag-based-usage">
+          <div className="grid grid-cols-2">
+            <div className="col-span-1">
+              <UsageDatePicker
+                className="mb-4"
+                value={dateValue}
+                onValueChange={(value) => {
+                  setDateValue(value);
+                  updateTagSpendData(value.from, value.to);
+                }}
+              />
+            </div>
+
+            <div>
+              <Combobox
+                multiple
+                items={tagOptions}
+                value={tagOptions.filter((option) => selectedTags.includes(option.value))}
+                onValueChange={(options: TagOption[]) => setSelectedTags(options.map((option) => option.value))}
+                isItemEqualToValue={(a: TagOption, b: TagOption) => a.value === b.value}
+                itemToStringLabel={(option: TagOption) => option.label}
+              >
+                <ComboboxChips>
+                  <ComboboxValue>
+                    {(options: TagOption[]) =>
+                      options.map((option) => (
+                        <ComboboxChip key={option.value} aria-label={option.label}>
+                          {option.label}
+                        </ComboboxChip>
+                      ))
+                    }
+                  </ComboboxValue>
+                  <ComboboxChipsInput placeholder="Select tags" className="border-0 bg-transparent" />
+                </ComboboxChips>
+                <ComboboxContent>
+                  <ComboboxEmpty>No tags found</ComboboxEmpty>
+                  <ComboboxList>
+                    {(option: TagOption) => (
+                      <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
+                        {option.label}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            </div>
+          </div>
+          <div className="mb-4 grid h-[75vh] w-full grid-cols-2 gap-2">
+            <div className="col-span-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Spend Per Tag</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-2">
+                  <p className="text-sm text-muted-foreground">
                     Get Started by Tracking cost per tag{" "}
                     <a
-                      className="text-blue-500"
+                      className="text-primary"
                       href="https://docs.litellm.ai/docs/proxy/cost_tracking"
                       target="_blank"
+                      rel="noreferrer"
                     >
                       here
                     </a>
-                  </Text>
-                  <BarChart
-                    className="h-72"
-                    data={topTagsData}
-                    index="name"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                  ></BarChart>
-                </Card>
-              </Col>
-              <Col numColSpan={2}></Col>
-            </Grid>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+                  </p>
+                  <BarChart className="h-72" data={topTagsData} index="name" categories={["spend"]} colors={["cyan"]} />
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

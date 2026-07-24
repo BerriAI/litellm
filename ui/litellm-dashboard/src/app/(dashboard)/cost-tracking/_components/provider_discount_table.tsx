@@ -3,7 +3,8 @@ import { TextInput, Icon, Text } from "@tremor/react";
 import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
 import { SimpleTable } from "@/components/common_components/simple_table";
 import { DiscountConfig } from "./types";
-import { getProviderDisplayInfo, handleImageError } from "./provider_display_helpers";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { Logo } from "@/components/molecules/logo/Logo";
 
 interface ProviderDiscountTableProps {
   discountConfig: DiscountConfig;
@@ -55,8 +56,8 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
   const data: ProviderDiscountRow[] = Object.entries(discountConfig)
     .map(([provider, discount]) => ({ provider, discount }))
     .sort((a, b) => {
-      const displayA = getProviderDisplayInfo(a.provider).displayName;
-      const displayB = getProviderDisplayInfo(b.provider).displayName;
+      const displayA = getProviderLogoAndName(a.provider).displayName;
+      const displayB = getProviderLogoAndName(b.provider).displayName;
       return displayA.localeCompare(displayB);
     });
 
@@ -67,17 +68,10 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
         {
           header: "Provider",
           cell: (row) => {
-            const { displayName, logo } = getProviderDisplayInfo(row.provider);
+            const { displayName } = getProviderLogoAndName(row.provider);
             return (
               <div className="flex items-center space-x-2">
-                {logo && (
-                  <img
-                    src={logo}
-                    alt={`${displayName} logo`}
-                    className="w-5 h-5"
-                    onError={(e) => handleImageError(e, displayName)}
-                  />
-                )}
+                <Logo provider={row.provider} label={displayName} className="w-5 h-5" />
                 <span className="font-medium">{displayName}</span>
               </div>
             );
@@ -129,7 +123,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
         {
           header: "Actions",
           cell: (row) => {
-            const { displayName } = getProviderDisplayInfo(row.provider);
+            const { displayName } = getProviderLogoAndName(row.provider);
             return (
               <Icon
                 icon={TrashIcon}

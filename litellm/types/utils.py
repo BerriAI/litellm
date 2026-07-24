@@ -5,6 +5,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    FrozenSet,
     List,
     Literal,
     Mapping,
@@ -93,7 +94,17 @@ class SafeAttributeModel:
     """
 
     def __delattr__(self, name):
+        # Dropping an unset optional field stored in __dict__ goes straight to
+        # object.__delattr__, skipping pydantic's __delattr__ whose per-call
+        # class getattr lookup and _check_frozen dominate response construction.
         try:
+            if (
+                name in type(self).__pydantic_fields__
+                and name in self.__dict__
+                and not type(self).model_config.get("frozen")
+            ):
+                object.__delattr__(self, name)
+                return
             super().__delattr__(name)
         except AttributeError:
             # noop if attribute does not exist
@@ -269,6 +280,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "realtime",
         ]
     ]
+    supported_endpoints: Optional[List[str]]
+    use_openai_responses_path: Optional[bool]
     tpm: Optional[int]
     rpm: Optional[int]
     provider_specific_entry: Optional[Dict[str, float]]
@@ -1271,6 +1284,19 @@ class Message(SafeAttributeModel, OpenAIObject):
 
 
 class Delta(SafeAttributeModel, OpenAIObject):
+    if TYPE_CHECKING:
+        # Stored in __pydantic_extra__ at runtime (extra='allow'), set directly in
+        # __init__ rather than via self.<attr> = .... Declared here only so type
+        # checkers still see them as attributes for consumers that read delta.content
+        # etc.; the runtime branch is skipped so pydantic does not treat them as fields.
+        content: Optional[str]
+        role: Optional[str]
+        function_call: Optional[FunctionCall]
+        tool_calls: Optional[List[ChatCompletionDeltaToolCall]]
+        audio: Optional[ChatCompletionAudioResponse]
+        images: Optional[List[ImageURLListItem]]
+        annotations: Optional[List[ChatCompletionAnnotation]]
+
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None
     reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
@@ -1299,14 +1325,55 @@ class Delta(SafeAttributeModel, OpenAIObject):
 
         super(Delta, self).__init__(**params)
         add_provider_specific_fields(self, params.get("provider_specific_fields", {}))
-        self.content = content
-        self.role = role
-        # Set default values and correct types
-        self.function_call: Optional[Union[FunctionCall, Any]] = None
-        self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
-        self.audio: Optional[ChatCompletionAudioResponse] = None
-        self.images: Optional[List[ImageURLListItem]] = None
-        self.annotations: Optional[List[ChatCompletionAnnotation]] = None
+
+        if function_call is not None and isinstance(function_call, dict):
+            function_call = FunctionCall(**function_call)
+
+        if tool_calls is not None and isinstance(tool_calls, list):
+            coerced_tool_calls: List[ChatCompletionDeltaToolCall] = []
+            current_index = 0
+            for tool_call in tool_calls:
+                if isinstance(tool_call, dict):
+                    if tool_call.get("index", None) is None:
+                        tool_call["index"] = current_index
+                        current_index += 1
+                    if tool_call.get("type", None) is None:
+                        tool_call["type"] = "function"
+                    coerced_tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    coerced_tool_calls.append(tool_call)
+            tool_calls = coerced_tool_calls
+
+        # Build the per-chunk state directly instead of round-tripping every
+        # field through pydantic's __setattr__/__delattr__ (the dominant
+        # streaming cost). These keys are not declared model fields, so they
+        # live in __pydantic_extra__; the slow path set each of content, role,
+        # function_call, tool_calls, audio, images and annotations (marking them
+        # in __pydantic_fields_set__) and then deleted the ones OpenAI omits.
+        extra = self.__pydantic_extra__
+        if extra is None:  # pragma: no cover - extra='allow' guarantees a dict
+            extra = self.__pydantic_extra__ = {}
+        fields_set = self.__pydantic_fields_set__
+        fields_set.update(
+            (
+                "content",
+                "role",
+                "function_call",
+                "tool_calls",
+                "audio",
+                "images",
+                "annotations",
+            )
+        )
+        extra["content"] = content
+        extra["role"] = role
+        extra["function_call"] = function_call
+        extra["tool_calls"] = tool_calls
+        extra["audio"] = audio
+        if images is not None and len(images) > 0:
+            extra["images"] = images
+        if annotations is not None:
+            extra["annotations"] = annotations
 
         if reasoning_content is not None:
             self.reasoning_content = reasoning_content
@@ -1326,39 +1393,6 @@ class Delta(SafeAttributeModel, OpenAIObject):
             # ensure default response matches OpenAI spec
             if hasattr(self, "reasoning_items"):
                 del self.reasoning_items
-
-        # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
-        if annotations is not None:
-            self.annotations = annotations
-        else:
-            del self.annotations
-
-        if images is not None and len(images) > 0:
-            self.images = images
-        else:
-            del self.images
-
-        if function_call is not None and isinstance(function_call, dict):
-            self.function_call = FunctionCall(**function_call)
-        else:
-            self.function_call = function_call
-        if tool_calls is not None and isinstance(tool_calls, list):
-            self.tool_calls = []
-            current_index = 0
-            for tool_call in tool_calls:
-                if isinstance(tool_call, dict):
-                    if tool_call.get("index", None) is None:
-                        tool_call["index"] = current_index
-                        current_index += 1
-                    if tool_call.get("type", None) is None:
-                        tool_call["type"] = "function"
-                    self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
-                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
-                    self.tool_calls.append(tool_call)
-        else:
-            self.tool_calls = tool_calls
-
-        self.audio = audio
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1500,14 +1534,27 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: Optional[float] = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    cache_write_tokens: Optional[int] = None
+    """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
+
     cache_creation_tokens: Optional[int] = None
-    """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
+    """Number of cache creation tokens sent to the model. Anthropic/Bedrock naming; kept in sync with cache_write_tokens (assigning either mirrors to the other)."""
 
     cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    def __setattr__(self, name: str, value: object) -> None:
+        super().__setattr__(name, value)
+        if name == "cache_write_tokens":
+            super().__setattr__("cache_creation_tokens", value)
+        elif name == "cache_creation_tokens":
+            super().__setattr__("cache_write_tokens", value)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.cache_write_tokens = (
+            self.cache_write_tokens if self.cache_write_tokens is not None else self.cache_creation_tokens
+        )
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
@@ -1520,6 +1567,8 @@ class PromptTokensDetailsWrapper(
             del self.web_search_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
+        if self.cache_write_tokens is None:
+            del self.cache_write_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
@@ -1628,10 +1677,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         if "cache_creation_input_tokens" in params and isinstance(params["cache_creation_input_tokens"], int):
             if _prompt_tokens_details is None:
                 _prompt_tokens_details = PromptTokensDetailsWrapper(
-                    cache_creation_tokens=params["cache_creation_input_tokens"]
+                    cache_write_tokens=params["cache_creation_input_tokens"]
                 )
             else:
-                _prompt_tokens_details.cache_creation_tokens = params["cache_creation_input_tokens"]
+                _prompt_tokens_details.cache_write_tokens = params["cache_creation_input_tokens"]
 
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
@@ -3110,6 +3159,21 @@ class CustomPricingLiteLLMParams(BaseModel):
         backend model. Full pricing stays under the deployment's unique model id.
         """
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
+
+
+SHARED_BACKEND_MODEL_INFO_FIELDS: FrozenSet[str] = frozenset(
+    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
+) - frozenset(CustomPricingLiteLLMParams.model_fields)
+
+
+def shared_backend_model_info(model_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the fields safe to register under a shared ``{provider}/{model}``
+    key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
+    per-deployment pricing overrides. Per-deployment metadata (``id``,
+    ``access_via_team_ids``, arbitrary custom keys) never belongs on the shared key;
+    it stays under the deployment's unique model id.
+    """
+    return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop
