@@ -38,7 +38,9 @@ def _optional_str(value: object) -> str | None:
 def _optional_str_list(value: object) -> list[str] | None:
     if isinstance(value, list):
         items = cast(list[object], value)  # cast-ok: isinstance-narrowed; element type unknown
-        return [str(tag) for tag in items]
+        # String-only, matching the auth-time tag semantics; a non-string tag is not
+        # budget-checked at auth, so coercing it here would attribute spend to an ungated tag
+        return [tag for tag in items if isinstance(tag, str)]
     return None
 
 
