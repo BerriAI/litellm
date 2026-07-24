@@ -12866,6 +12866,18 @@ async def model_info_v1(
     if litellm_model_id is not None:
         # user is trying to get specific model from litellm router
         deployment_info = llm_router.get_deployment(model_id=litellm_model_id)
+        if deployment_info is None and prisma_client is not None:
+            # Cache miss — model may have just been created and the router cache not yet
+            # updated on this pod (multi-replica eventual consistency). Reload from DB
+            # and retry once before returning a 400.
+            try:
+                await proxy_config.add_deployment(
+                    prisma_client=prisma_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                deployment_info = llm_router.get_deployment(model_id=litellm_model_id)
+            except Exception:
+                pass
         if deployment_info is None:
             raise HTTPException(
                 status_code=400,
