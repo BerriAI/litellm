@@ -1,3 +1,5 @@
+import { differenceInCalendarDays } from "date-fns";
+
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -149,3 +151,86 @@ const seedPoint = (date: string, toolNames: readonly string[]): DailyToolSpendPo
 
 export const topToolsBySpend = (byTool: readonly ToolSpendEntry[], limit = 8): ToolSpendEntry[] =>
   [...byTool].sort((a, b) => b.spend - a.spend).slice(0, limit);
+
+export const HOURLY_SAVINGS_MAX_SPAN_DAYS = 2;
+
+export const localIsoDay = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// Calendar days the range covers, inclusive of both ends. differenceInCalendarDays
+// compares local calendar dates, so a span that crosses a DST transition still
+// counts a whole day; subtracting raw millisecond timestamps would undercount a
+// 23-hour spring-forward day.
+export const spanInDays = (from: Date, to: Date): number => differenceInCalendarDays(to, from) + 1;
+
+/**
+ * The daily rollup is keyed by date, so a range this short plots as one or two
+ * points. Short ranges are served from spend logs at hour granularity instead.
+ */
+export const shouldUseHourlySavings = (from: Date | undefined, to: Date | undefined): boolean => {
+  if (!from || !to) return false;
+  const span = spanInDays(from, to);
+  return span >= 1 && span <= HOURLY_SAVINGS_MAX_SPAN_DAYS;
+};
+
+export type SavingsAccumulation = "cumulative" | "per-interval";
+
+// A type alias, not an interface: only aliases get the implicit index signature
+// that the chart wrappers' `Record<string, unknown>` datum bound requires.
+export type SavingsPoint = {
+  date: string;
+  Compression: number;
+  "Prompt caching": number;
+};
+
+export const SAVINGS_SERIES = ["Compression", "Prompt caching"] as const;
+
+/**
+ * Running total of each series across the selected window. The total restarts
+ * at the beginning of the range rather than carrying in earlier spend, which is
+ * what "running total saved, <range>" claims on the card.
+ */
+export const toCumulative = (points: readonly SavingsPoint[]): SavingsPoint[] =>
+  points.reduce<SavingsPoint[]>((acc, point) => {
+    const previous = acc[acc.length - 1];
+    return [
+      ...acc,
+      {
+        date: point.date,
+        Compression: (previous?.Compression ?? 0) + point.Compression,
+        "Prompt caching": (previous?.["Prompt caching"] ?? 0) + point["Prompt caching"],
+      },
+    ];
+  }, []);
+
+/** "Jul 16 – Jul 23", collapsing to a single date when the range is one day. */
+export const formatRangeLabel = (from: Date | undefined, to: Date | undefined): string => {
+  if (!from || !to) return "";
+  const short = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const start = short(from);
+  const end = short(to);
+  return start === end ? start : `${start} – ${end}`;
+};
+
+/**
+ * Dots mark each reading, as in the design. Past this many readings they crowd
+ * into a solid band and stop being readable, so the line carries it alone.
+ */
+export const MAX_POINTS_WITH_DOTS = 31;
+
+/**
+ * Buckets arrive as naive local wall-clock stamps ("2026-07-23T14:00"); they are
+ * already on the viewer's clock, so they are read apart rather than parsed as
+ * dates, which would re-apply a timezone shift.
+ */
+export const formatHourBucket = (bucketStart: string, withDate: boolean): string => {
+  const [date, time] = bucketStart.split("T");
+  const hour = Number(time?.slice(0, 2));
+  if (!date || Number.isNaN(hour)) return bucketStart;
+  const suffix = hour < 12 ? "am" : "pm";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  const clock = `${hour12}${suffix}`;
+  if (!withDate) return clock;
+  const [, month, day] = date.split("-");
+  return `${Number(month)}/${Number(day)} ${clock}`;
+};

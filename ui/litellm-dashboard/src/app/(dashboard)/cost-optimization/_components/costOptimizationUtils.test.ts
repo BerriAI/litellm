@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import type { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
-import { buildDailyToolSeries, computeCacheLeakage, isAnthropicModel, topToolsBySpend } from "./costOptimizationUtils";
+import {
+  buildDailyToolSeries,
+  computeCacheLeakage,
+  formatHourBucket,
+  formatRangeLabel,
+  isAnthropicModel,
+  localIsoDay,
+  shouldUseHourlySavings,
+  spanInDays,
+  toCumulative,
+  topToolsBySpend,
+} from "./costOptimizationUtils";
 
 const metrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
   spend: 0,
@@ -219,5 +230,113 @@ describe("topToolsBySpend", () => {
 
   it("sorts by spend descending and truncates to the limit", () => {
     expect(topToolsBySpend(byTool, 2).map((t) => t.tool_name)).toEqual(["b", "c"]);
+  });
+});
+
+describe("spanInDays", () => {
+  it("counts both endpoints, so one calendar day is a span of one", () => {
+    expect(spanInDays(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe(1);
+    expect(spanInDays(new Date(2026, 6, 23), new Date(2026, 6, 24))).toBe(2);
+    expect(spanInDays(new Date(2026, 6, 1), new Date(2026, 6, 31))).toBe(31);
+  });
+
+  it("ignores the time of day, so a range picked at 11pm is still one day", () => {
+    expect(spanInDays(new Date(2026, 6, 23, 0, 1), new Date(2026, 6, 23, 23, 59))).toBe(1);
+  });
+
+  it("counts a full day across a DST transition, not the 23 or 25 elapsed hours", () => {
+    // US spring-forward (Mar 8) and fall-back (Nov 1). Subtracting raw
+    // timestamps would read the short day as fewer than its calendar days and
+    // wrongly route a 3-day range to the hourly view.
+    expect(spanInDays(new Date(2026, 2, 8), new Date(2026, 2, 9))).toBe(2);
+    expect(spanInDays(new Date(2026, 2, 7), new Date(2026, 2, 9))).toBe(3);
+    expect(spanInDays(new Date(2026, 9, 31), new Date(2026, 10, 2))).toBe(3);
+  });
+});
+
+describe("shouldUseHourlySavings", () => {
+  it("switches to hours only for ranges the daily rollup renders as a dot", () => {
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe(true);
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), new Date(2026, 6, 24))).toBe(true);
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), new Date(2026, 6, 25))).toBe(false);
+  });
+
+  it("stays off until both ends of the range are picked", () => {
+    expect(shouldUseHourlySavings(undefined, new Date(2026, 6, 23))).toBe(false);
+    expect(shouldUseHourlySavings(new Date(2026, 6, 23), undefined)).toBe(false);
+  });
+});
+
+describe("localIsoDay", () => {
+  it("reads the date off the viewer's clock rather than shifting it to UTC", () => {
+    expect(localIsoDay(new Date(2026, 6, 23, 23, 30))).toBe("2026-07-23");
+    expect(localIsoDay(new Date(2026, 0, 5, 0, 30))).toBe("2026-01-05");
+  });
+});
+
+describe("formatHourBucket", () => {
+  it("reads midnight and noon as 12, not 0", () => {
+    expect(formatHourBucket("2026-07-23T00:00", false)).toBe("12am");
+    expect(formatHourBucket("2026-07-23T12:00", false)).toBe("12pm");
+  });
+
+  it("labels the rest of the day on a 12 hour clock", () => {
+    expect(formatHourBucket("2026-07-23T09:00", false)).toBe("9am");
+    expect(formatHourBucket("2026-07-23T14:00", false)).toBe("2pm");
+    expect(formatHourBucket("2026-07-23T23:00", false)).toBe("11pm");
+  });
+
+  it("prefixes the date when the range spans more than one day", () => {
+    expect(formatHourBucket("2026-07-03T14:00", true)).toBe("7/3 2pm");
+  });
+
+  it("passes an unrecognized bucket through instead of rendering NaN", () => {
+    expect(formatHourBucket("garbage", false)).toBe("garbage");
+  });
+});
+
+describe("toCumulative", () => {
+  const point = (date: string, compression: number, caching: number) => ({
+    date,
+    Compression: compression,
+    "Prompt caching": caching,
+  });
+
+  it("turns each reading into everything saved up to that point", () => {
+    const running = toCumulative([point("Jul 1", 1, 10), point("Jul 2", 2, 20), point("Jul 3", 3, 30)]);
+    expect(running.map((p) => p.Compression)).toEqual([1, 3, 6]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([10, 30, 60]);
+  });
+
+  it("accumulates each driver on its own, so one flat series cannot lift the other", () => {
+    const running = toCumulative([point("Jul 1", 0, 5), point("Jul 2", 0, 5)]);
+    expect(running.map((p) => p.Compression)).toEqual([0, 0]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([5, 10]);
+  });
+
+  it("never falls, even across a quiet interval", () => {
+    const running = toCumulative([point("Jul 1", 4, 0), point("Jul 2", 0, 0), point("Jul 3", 1, 0)]);
+    expect(running.map((p) => p.Compression)).toEqual([4, 4, 5]);
+  });
+
+  it("keeps the labels and length of the readings it was given", () => {
+    const running = toCumulative([point("9am", 1, 1), point("10am", 1, 1)]);
+    expect(running.map((p) => p.date)).toEqual(["9am", "10am"]);
+    expect(toCumulative([])).toEqual([]);
+  });
+});
+
+describe("formatRangeLabel", () => {
+  it("reads as a range across days", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 16), new Date(2026, 6, 23))).toBe("Jul 16 \u2013 Jul 23");
+  });
+
+  it("collapses to one date when both ends are the same day", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe("Jul 23");
+  });
+
+  it("is empty until both ends are picked", () => {
+    expect(formatRangeLabel(undefined, new Date(2026, 6, 23))).toBe("");
+    expect(formatRangeLabel(new Date(2026, 6, 23), undefined)).toBe("");
   });
 });

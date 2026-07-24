@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 import { userDailyActivityCall } from "@/components/networking";
 import { DailyData } from "@/components/UsagePage/types";
-import { all_admin_roles } from "@/utils/roles";
+import { all_admin_roles, isProxyAdminViewRole } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -18,6 +18,10 @@ export interface DailyActivityRange {
   results: DailyData[];
   loading: boolean;
   isFetchingMore: boolean;
+  // Whether the caller may read deployment-wide savings, i.e. the hourly
+  // endpoint, which refuses anything below proxy admin. Distinct from the
+  // all_admin_roles check that scopes the daily rollup below.
+  canViewGlobalSavings: boolean;
 }
 
 export const useDailyActivityRange = (
@@ -31,7 +35,8 @@ export const useDailyActivityRange = (
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
-  const effectiveUserId = all_admin_roles.includes(userRole) ? null : userId;
+  const isAdmin = all_admin_roles.includes(userRole);
+  const effectiveUserId = isAdmin ? null : userId;
 
   const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
     fetchFn: userDailyActivityCall,
@@ -45,5 +50,6 @@ export const useDailyActivityRange = (
     results: data.results as DailyData[],
     loading,
     isFetchingMore,
+    canViewGlobalSavings: isProxyAdminViewRole(userRole),
   };
 };

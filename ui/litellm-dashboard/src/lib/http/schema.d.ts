@@ -17413,6 +17413,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/savings/hourly": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Hourly Savings
+         * @description Prompt-caching and compression savings bucketed by hour, for the Cost
+         *     Optimization dashboard's short date ranges.
+         *
+         *     Aggregated in Postgres over `LiteLLM_SpendLogs` and priced per model here,
+         *     because token counts cannot be priced once they have been summed across
+         *     models. Buckets are on the caller's clock via the IANA `timezone`, so
+         *     historical days carry the offset that was in effect then rather than
+         *     today's. Every hour in the window is returned, including empty ones. Capped
+         *     at `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily rollup,
+         *     which needs no raw-log scan.
+         */
+        get: operations["get_hourly_savings_v1_savings_hourly_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/search": {
         parameters: {
             query?: never;
@@ -24477,6 +24506,28 @@ export interface components {
              * @description Token for Vault token-based authentication
              */
             vault_token?: string | null;
+        };
+        /** HourlySavingsBucket */
+        HourlySavingsBucket: {
+            /** Bucket Start */
+            bucket_start: string;
+            /** Compression Savings Spend */
+            compression_savings_spend: number;
+            /** Prompt Caching Savings Spend */
+            prompt_caching_savings_spend: number;
+        };
+        /** HourlySavingsResponse */
+        HourlySavingsResponse: {
+            /** Buckets */
+            buckets: components["schemas"]["HourlySavingsBucket"][];
+            /** End Date */
+            end_date: string;
+            /** Spend Logs Disabled */
+            spend_logs_disabled: boolean;
+            /** Start Date */
+            start_date: string;
+            /** Timezone */
+            timezone: string;
         };
         /** Hyperparameters */
         Hyperparameters: {
@@ -55809,6 +55860,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CallbackLogsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_hourly_savings_v1_savings_hourly_get: {
+        parameters: {
+            query: {
+                /** @description YYYY-MM-DD, read in the caller's timezone */
+                start_date: string;
+                /** @description YYYY-MM-DD, inclusive, read in the caller's timezone */
+                end_date: string;
+                /** @description IANA timezone name, so hours land on the caller's clock. Intl...resolvedOptions().timeZone */
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HourlySavingsResponse"];
                 };
             };
             /** @description Validation Error */

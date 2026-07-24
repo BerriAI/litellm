@@ -3,14 +3,28 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Collapse } from "antd";
 
-import { AreaChart, BarChart, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
+import { AreaChart, BarChart, CustomLegend, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
 import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { buildDailyToolSeries, topToolsBySpend, usd } from "./costOptimizationUtils";
+import {
+  buildDailyToolSeries,
+  formatHourBucket,
+  formatRangeLabel,
+  MAX_POINTS_WITH_DOTS,
+  SAVINGS_SERIES,
+  SavingsAccumulation,
+  SavingsPoint,
+  spanInDays,
+  toCumulative,
+  topToolsBySpend,
+  usd,
+} from "./costOptimizationUtils";
 import { DailyActivityRange } from "./useDailyActivityRange";
+import { useHourlySavings } from "./useHourlySavings";
 
 interface UsageTabProps {
   accessToken: string | null;
@@ -24,6 +38,8 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   start_date: null,
   end_date: null,
 };
+
+const SAVINGS_COLORS = ["emerald", "blue"] as const;
 
 const shortDate = (iso: string): string =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -82,7 +98,7 @@ const SummaryCard = ({ label, value, hint }: { label: string; value: string; hin
 );
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { dateValue, onDateChange, results, loading, isFetchingMore, canViewGlobalSavings } = activity;
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
@@ -114,15 +130,45 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
   const totalSaved = compressionTotal + cachingTotal;
 
+  const hourly = useHourlySavings(accessToken, startTime ?? undefined, endTime ?? undefined, canViewGlobalSavings);
+
+  const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
+
+  const perInterval = useMemo<SavingsPoint[]>(() => {
+    if (!hourly) {
+      // The daily rollup arrives newest first; sort on the raw ISO date so the
+      // axis reads oldest to newest and the running total accumulates forward
+      // in time rather than backward. Sort here, before shortDate() drops the
+      // year and makes the labels unsortable.
+      return [...results]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((d) => ({
+          date: shortDate(d.date),
+          Compression: compressionOf(d.metrics),
+          "Prompt caching": cachingOf(d.metrics),
+        }));
+    }
+    const withDate = !!startTime && !!endTime && spanInDays(startTime, endTime) > 1;
+    return hourly.buckets.map((b) => ({
+      date: formatHourBucket(b.bucket_start, withDate),
+      Compression: b.compression_savings_spend,
+      "Prompt caching": b.prompt_caching_savings_spend,
+    }));
+  }, [hourly, results, startTime, endTime]);
+
   const overTime = useMemo(
-    () =>
-      results.map((d) => ({
-        date: shortDate(d.date),
-        Compression: compressionOf(d.metrics),
-        "Prompt caching": cachingOf(d.metrics),
-      })),
-    [results],
+    () => (accumulation === "cumulative" ? toCumulative(perInterval) : perInterval),
+    [accumulation, perInterval],
   );
+
+  const intervalLabel = hourly ? "Per hour" : "Per day";
+  const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
+  const savingsSubtitle = [
+    accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
+    rangeLabel,
+  ]
+    .filter(Boolean)
+    .join(" \u00b7 ");
 
   const byDriver = useMemo(
     () =>
@@ -173,16 +219,44 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Savings over time</CardTitle>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle>Savings</CardTitle>
+                <p className="text-sm text-muted-foreground">{savingsSubtitle}</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
+                <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
+                  <TabsList>
+                    <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
+                    <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
-            <AreaChart
-              data={overTime}
-              index="date"
-              categories={["Compression", "Prompt caching"]}
-              colors={["emerald", "blue"]}
-              valueFormatter={usd}
-            />
+            {accumulation === "cumulative" ? (
+              <AreaChart
+                data={overTime}
+                index="date"
+                categories={SAVINGS_SERIES}
+                colors={SAVINGS_COLORS}
+                valueFormatter={usd}
+                showLegend={false}
+                showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
+              />
+            ) : (
+              <BarChart
+                data={overTime}
+                index="date"
+                categories={SAVINGS_SERIES}
+                colors={SAVINGS_COLORS}
+                stack
+                valueFormatter={usd}
+                showLegend={false}
+              />
+            )}
           </CardContent>
         </Card>
         <Card>

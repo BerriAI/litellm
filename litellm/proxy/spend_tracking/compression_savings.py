@@ -59,3 +59,51 @@ def extract_compression_saved_tokens(metadata: Mapping[str, object]) -> int:
     return _tokens_saved_from_stats(metadata.get("compression_savings")) + _headroom_saved_tokens(
         metadata.get("guardrail_information")
     )
+
+
+# Postgres twin of ``extract_compression_saved_tokens``, for aggregating saved
+# tokens without pulling every spend log into Python. Assumes the enclosing
+# query aliases "LiteLLM_SpendLogs" as ``sl``. The ``jsonb_typeof(...) =
+# 'number'`` guards mirror ``_saved_tokens_or_zero`` (non-numbers, including
+# JSON booleans, contribute 0 instead of raising a cast error) and the
+# ``jsonb_typeof`` switch on ``guardrail_information`` mirrors the bare-dict
+# normalization. Any change to the Python reader has to land here in the same
+# commit, or hourly savings will disagree with the daily rollup they are drawn
+# against.
+COMPRESSION_SAVED_TOKENS_SQL = """
+GREATEST(
+    trunc(
+        CASE
+            WHEN jsonb_typeof(sl.metadata -> 'compression_savings' -> 'tokens_saved') = 'number'
+            THEN (sl.metadata -> 'compression_savings' ->> 'tokens_saved')::numeric
+            ELSE 0
+        END
+    ),
+    0
+)
++ COALESCE(
+    (
+        SELECT SUM(
+            GREATEST(
+                trunc(
+                    CASE
+                        WHEN jsonb_typeof(entry -> 'guardrail_response' -> 'tokens_saved') = 'number'
+                        THEN (entry -> 'guardrail_response' ->> 'tokens_saved')::numeric
+                        ELSE 0
+                    END
+                ),
+                0
+            )
+        )
+        FROM jsonb_array_elements(
+            CASE jsonb_typeof(sl.metadata -> 'guardrail_information')
+                WHEN 'array' THEN sl.metadata -> 'guardrail_information'
+                WHEN 'object' THEN jsonb_build_array(sl.metadata -> 'guardrail_information')
+                ELSE '[]'::jsonb
+            END
+        ) AS entry
+        WHERE entry ->> 'guardrail_provider' = 'headroom'
+    ),
+    0
+)
+"""

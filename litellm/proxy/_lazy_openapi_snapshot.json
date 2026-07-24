@@ -23838,6 +23838,199 @@
       }
     }
   },
+  "savings": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "HourlySavingsBucket": {
+          "properties": {
+            "bucket_start": {
+              "title": "Bucket Start",
+              "type": "string"
+            },
+            "compression_savings_spend": {
+              "title": "Compression Savings Spend",
+              "type": "number"
+            },
+            "prompt_caching_savings_spend": {
+              "title": "Prompt Caching Savings Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "bucket_start",
+            "compression_savings_spend",
+            "prompt_caching_savings_spend"
+          ],
+          "title": "HourlySavingsBucket",
+          "type": "object"
+        },
+        "HourlySavingsResponse": {
+          "properties": {
+            "buckets": {
+              "items": {
+                "$ref": "#/components/schemas/HourlySavingsBucket"
+              },
+              "title": "Buckets",
+              "type": "array"
+            },
+            "end_date": {
+              "title": "End Date",
+              "type": "string"
+            },
+            "spend_logs_disabled": {
+              "title": "Spend Logs Disabled",
+              "type": "boolean"
+            },
+            "start_date": {
+              "title": "Start Date",
+              "type": "string"
+            },
+            "timezone": {
+              "title": "Timezone",
+              "type": "string"
+            }
+          },
+          "required": [
+            "buckets",
+            "start_date",
+            "end_date",
+            "timezone",
+            "spend_logs_disabled"
+          ],
+          "title": "HourlySavingsResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/v1/savings/hourly": {
+        "get": {
+          "description": "Prompt-caching and compression savings bucketed by hour, for the Cost\nOptimization dashboard's short date ranges.\n\nAggregated in Postgres over `LiteLLM_SpendLogs` and priced per model here,\nbecause token counts cannot be priced once they have been summed across\nmodels. Buckets are on the caller's clock via the IANA `timezone`, so\nhistorical days carry the offset that was in effect then rather than\ntoday's. Every hour in the window is returned, including empty ones. Capped\nat `MAX_HOURLY_SPAN_DAYS` days; longer ranges belong on the daily rollup,\nwhich needs no raw-log scan.",
+          "operationId": "get_hourly_savings_v1_savings_hourly_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD, read in the caller's timezone",
+              "in": "query",
+              "name": "start_date",
+              "required": true,
+              "schema": {
+                "description": "YYYY-MM-DD, read in the caller's timezone",
+                "title": "Start Date",
+                "type": "string"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD, inclusive, read in the caller's timezone",
+              "in": "query",
+              "name": "end_date",
+              "required": true,
+              "schema": {
+                "description": "YYYY-MM-DD, inclusive, read in the caller's timezone",
+                "title": "End Date",
+                "type": "string"
+              }
+            },
+            {
+              "description": "IANA timezone name, so hours land on the caller's clock. Intl...resolvedOptions().timeZone",
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "default": "UTC",
+                "description": "IANA timezone name, so hours land on the caller's clock. Intl...resolvedOptions().timeZone",
+                "title": "Timezone",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HourlySavingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Hourly Savings",
+          "tags": [
+            "savings"
+          ]
+        }
+      }
+    }
+  },
   "scim": {
     "components": {
       "schemas": {

@@ -33,6 +33,7 @@ describe("PromptCachingTab", () => {
       results: [],
       loading: false,
       isFetchingMore: false,
+      canViewGlobalSavings: true,
     };
     const { getByTestId } = render(<PromptCachingTab accessToken="test-token" activity={activity} />);
 

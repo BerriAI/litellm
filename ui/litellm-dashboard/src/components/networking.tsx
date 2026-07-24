@@ -7615,6 +7615,31 @@ export const getToolSpend = async (
     query: { start_date: startDate, end_date: endDate },
   });
 
+export interface HourlySavingsBucket {
+  bucket_start: string;
+  compression_savings_spend: number;
+  prompt_caching_savings_spend: number;
+}
+
+export interface HourlySavingsResponse {
+  buckets: HourlySavingsBucket[];
+  start_date: string;
+  end_date: string;
+  timezone: string;
+  spend_logs_disabled: boolean;
+}
+
+export const getHourlySavings = async (
+  accessToken: string,
+  startDate: string,
+  endDate: string,
+  timeZone: string,
+): Promise<HourlySavingsResponse> =>
+  apiClient.get<HourlySavingsResponse>(`/v1/savings/hourly`, {
+    accessToken,
+    query: { start_date: startDate, end_date: endDate, timezone: timeZone },
+  });
+
 export interface ToolPolicyOverrideRow {
   override_id: string;
   tool_name: string;

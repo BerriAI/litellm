@@ -68,6 +68,7 @@ const renderWith = (results: DailyData[]) =>
         results,
         loading: false,
         isFetchingMore: false,
+        canViewGlobalSavings: true,
       }}
     />,
   );
