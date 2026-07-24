@@ -265,6 +265,7 @@ model LiteLLM_UserTable {
     invitations_updated LiteLLM_InvitationLink[] @relation("UpdatedBy")
     invitations_user    LiteLLM_InvitationLink[] @relation("UserId")
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    public_relay_account LiteLLM_PublicRelayAccount?
 }
 
 model LiteLLM_ObjectPermissionTable {
@@ -1446,4 +1447,234 @@ model LiteLLM_WorkflowMessage {
 
   @@unique([run_id, sequence_number])
   @@index([run_id])
+}
+
+enum PublicRelayAccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum PublicRelayLedgerEntryType {
+  DEPOSIT
+  RESERVE
+  RELEASE
+  USAGE
+  REFUND
+  ADJUSTMENT
+  CHARGEBACK
+}
+
+enum PublicRelayReservationStatus {
+  OPEN
+  FINALIZED
+  RELEASED
+}
+
+enum PublicRelayPaymentStatus {
+  PENDING
+  PAID
+  REFUND_PENDING
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FAILED
+  DISPUTED
+}
+
+enum PublicRelayRefundStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model LiteLLM_PublicRelayAccount {
+  account_id       String                   @id @default(uuid())
+  user_id          String                   @unique
+  normalized_email String                   @unique
+  status           PublicRelayAccountStatus @default(ACTIVE)
+  email_verified_at DateTime
+  session_version  Int                      @default(0)
+  created_at       DateTime                 @default(now())
+  updated_at       DateTime                 @default(now()) @updatedAt
+
+  user             LiteLLM_UserTable        @relation(fields: [user_id], references: [user_id])
+  wallet           LiteLLM_PublicRelayWallet?
+  reservations     LiteLLM_PublicRelayReservation[]
+  charges          LiteLLM_PublicRelayRequestCharge[]
+  payments         LiteLLM_PublicRelayPayment[]
+  request_contents LiteLLM_PublicRelayRequestContent[]
+
+  @@index([status])
+  @@index([created_at])
+}
+
+model LiteLLM_PublicRelayWallet {
+  wallet_id        String   @id @default(uuid())
+  account_id       String   @unique
+  currency         String   @default("USD")
+  available_micros BigInt   @default(0)
+  reserved_micros  BigInt   @default(0)
+  debt_micros      BigInt   @default(0)
+  version           Int      @default(0)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @default(now()) @updatedAt
+
+  account          LiteLLM_PublicRelayAccount @relation(fields: [account_id], references: [account_id])
+  ledger_entries   LiteLLM_PublicRelayLedgerEntry[]
+  reservations     LiteLLM_PublicRelayReservation[]
+  payments         LiteLLM_PublicRelayPayment[]
+  refunds          LiteLLM_PublicRelayRefund[]
+}
+
+model LiteLLM_PublicRelayLedgerEntry {
+  entry_id              String                     @id @default(uuid())
+  wallet_id             String
+  entry_type            PublicRelayLedgerEntryType
+  amount_micros         BigInt
+  available_after_micros BigInt
+  reserved_after_micros BigInt
+  debt_after_micros     BigInt
+  idempotency_key       String                     @unique
+  request_id            String?
+  payment_id            String?
+  metadata              Json                       @default("{}")
+  created_at            DateTime                   @default(now())
+
+  wallet                LiteLLM_PublicRelayWallet  @relation(fields: [wallet_id], references: [wallet_id])
+
+  @@index([wallet_id, created_at])
+  @@index([request_id])
+  @@index([payment_id])
+}
+
+model LiteLLM_PublicRelayModelPrice {
+  price_id                         String   @id @default(uuid())
+  model_name                       String
+  version                          Int
+  input_micros_per_million         BigInt
+  cached_input_micros_per_million  BigInt?
+  output_micros_per_million        BigInt?
+  embedding_micros_per_million     BigInt?
+  default_max_output_tokens        Int      @default(4096)
+  max_output_tokens                Int      @default(4096)
+  enabled                          Boolean  @default(true)
+  effective_at                     DateTime @default(now())
+  created_at                       DateTime @default(now())
+  created_by                       String
+
+  reservations                     LiteLLM_PublicRelayReservation[]
+  charges                          LiteLLM_PublicRelayRequestCharge[]
+
+  @@unique([model_name, version])
+  @@index([model_name, enabled, effective_at])
+}
+
+model LiteLLM_PublicRelayReservation {
+  reservation_id    String                       @id @default(uuid())
+  request_id         String                       @unique
+  account_id         String
+  wallet_id          String
+  price_id           String
+  reserved_micros    BigInt
+  input_tokens       Int
+  max_output_tokens  Int
+  status              PublicRelayReservationStatus @default(OPEN)
+  expires_at          DateTime
+  created_at          DateTime                     @default(now())
+  updated_at          DateTime                     @default(now()) @updatedAt
+
+  account             LiteLLM_PublicRelayAccount    @relation(fields: [account_id], references: [account_id])
+  wallet              LiteLLM_PublicRelayWallet     @relation(fields: [wallet_id], references: [wallet_id])
+  price               LiteLLM_PublicRelayModelPrice @relation(fields: [price_id], references: [price_id])
+
+  @@index([status, expires_at])
+  @@index([account_id, created_at])
+}
+
+model LiteLLM_PublicRelayRequestCharge {
+  charge_id           String                       @id @default(uuid())
+  request_id           String                       @unique
+  account_id           String
+  price_id             String
+  input_tokens         Int
+  cached_input_tokens  Int                          @default(0)
+  output_tokens        Int                          @default(0)
+  charged_micros       BigInt
+  upstream_cost_micros BigInt
+  created_at           DateTime                     @default(now())
+
+  account              LiteLLM_PublicRelayAccount    @relation(fields: [account_id], references: [account_id])
+  price                LiteLLM_PublicRelayModelPrice @relation(fields: [price_id], references: [price_id])
+
+  @@index([account_id, created_at])
+}
+
+model LiteLLM_PublicRelayPayment {
+  payment_id              String                   @id @default(uuid())
+  account_id              String
+  wallet_id               String
+  amount_micros           BigInt
+  refunded_micros         BigInt                   @default(0)
+  currency                String                   @default("USD")
+  status                  PublicRelayPaymentStatus @default(PENDING)
+  stripe_checkout_session String?                  @unique
+  stripe_payment_intent   String?                  @unique
+  idempotency_key         String                   @unique
+  created_at              DateTime                 @default(now())
+  updated_at              DateTime                 @default(now()) @updatedAt
+
+  account                 LiteLLM_PublicRelayAccount @relation(fields: [account_id], references: [account_id])
+  wallet                  LiteLLM_PublicRelayWallet  @relation(fields: [wallet_id], references: [wallet_id])
+  refunds                 LiteLLM_PublicRelayRefund[]
+
+  @@index([account_id, created_at])
+  @@index([status])
+}
+
+model LiteLLM_PublicRelayRefund {
+  refund_id        String                  @id @default(uuid())
+  payment_id       String
+  wallet_id        String
+  amount_micros    BigInt
+  status           PublicRelayRefundStatus @default(PENDING)
+  stripe_refund_id String?                 @unique
+  idempotency_key  String                  @unique
+  reason           String
+  error            String?
+  created_at       DateTime                @default(now())
+  updated_at       DateTime                @default(now()) @updatedAt
+
+  payment          LiteLLM_PublicRelayPayment @relation(fields: [payment_id], references: [payment_id])
+  wallet           LiteLLM_PublicRelayWallet  @relation(fields: [wallet_id], references: [wallet_id])
+
+  @@index([payment_id, created_at])
+  @@index([status, updated_at])
+}
+
+model LiteLLM_PublicRelayStripeEvent {
+  event_id      String   @id
+  event_type    String
+  livemode      Boolean
+  payload       Json
+  processed_at  DateTime?
+  error         String?
+  created_at    DateTime @default(now())
+
+  @@index([event_type, created_at])
+}
+
+model LiteLLM_PublicRelayRequestContent {
+  content_id       String   @id @default(uuid())
+  request_id       String   @unique
+  account_id       String
+  key_version      Int
+  nonce_b64        String
+  ciphertext_b64   String
+  expires_at       DateTime
+  created_at       DateTime @default(now())
+
+  account          LiteLLM_PublicRelayAccount @relation(fields: [account_id], references: [account_id])
+
+  @@index([expires_at])
+  @@index([account_id, created_at])
 }

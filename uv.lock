@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-19T00:00:06.091071Z"
+exclude-newer = "2026-07-21T06:39:39.340051Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4155,6 +4155,7 @@ extra-proxy = [
     { name = "prisma" },
     { name = "redisvl" },
     { name = "resend" },
+    { name = "stripe" },
 ]
 google = [
     { name = "google-cloud-aiplatform" },
@@ -4403,6 +4404,7 @@ requires-dist = [
     { name = "soundfile", marker = "extra == 'proxy'", specifier = ">=0.12.1,<1.0" },
     { name = "soundfile", marker = "extra == 'stt-nvidia-riva'", specifier = ">=0.12.1" },
     { name = "starlette", marker = "extra == 'proxy'", specifier = ">=1.0.1,<2.0" },
+    { name = "stripe", marker = "extra == 'extra-proxy'", specifier = ">=14.3.0,<15.0" },
     { name = "tiktoken", specifier = ">=0.8.0,<1.0" },
     { name = "tokenizers", specifier = ">=0.21.0,<1.0" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
@@ -8942,6 +8944,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/eb/e3/7c1dc7381d9f8ab7d854328ebfa884e62cb3f3d8549ddfd37c7814f42afa/starlette-1.3.1.tar.gz", hash = "sha256:05d0213193f2fbaae60e2ecb593b4add4262ad4e46536b54abe36f11a71724e0", size = 2703240, upload-time = "2026-06-12T09:23:11.602Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/bb/2799cc2ede3ed41131f8975621e7213dfc7ef4acbbaadfa440f32500c370/starlette-1.3.1-py3-none-any.whl", hash = "sha256:c7372aae11c3c3f26a42df7bd626cec2f47d03483d261d369516a615a53714c6", size = 73632, upload-time = "2026-06-12T09:23:10.017Z" },
+]
+
+[[package]]
+name = "stripe"
+version = "14.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/63/01/59d92650146c6340e333c22b8a238561b022e8641ba255298dfe46b4137d/stripe-14.4.1.tar.gz", hash = "sha256:e3eecfb336819326cd2ab9a93f98eb01b49c4d4d93c9d167a52a68ab99c19a88", size = 1473321, upload-time = "2026-03-06T22:59:45.822Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/35/0f/547eab75052384a72771b396a484556e5636629c031e5eafa8dc27af89ed/stripe-14.4.1-py3-none-any.whl", hash = "sha256:d6722b985dc3b4d6da01ff4fa95a975d3694a89bba96895bf17aa858073ff2b8", size = 2116642, upload-time = "2026-03-06T22:59:43.72Z" },
 ]
 
 [[package]]

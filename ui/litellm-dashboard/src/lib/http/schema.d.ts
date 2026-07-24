@@ -15034,6 +15034,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/relay/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Accounts */
+        get: operations["accounts_v1_admin_relay_accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/relay/accounts/{account_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Account Status */
+        post: operations["account_status_v1_admin_relay_accounts__account_id__status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/relay/margin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Margin */
+        get: operations["margin_v1_admin_relay_margin_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/relay/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Payments */
+        get: operations["admin_payments_v1_admin_relay_payments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/relay/payments/{payment_id}/refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refund Payment */
+        post: operations["refund_payment_v1_admin_relay_payments__payment_id__refund_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/relay/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Prices */
+        get: operations["admin_prices_v1_admin_relay_prices_get"];
+        put?: never;
+        /** Create Price */
+        post: operations["create_price_v1_admin_relay_prices_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/relay/wallets/{wallet_id}/adjust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Wallet Adjustment */
+        post: operations["wallet_adjustment_v1_admin_relay_wallets__wallet_id__adjust_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents": {
         parameters: {
             query?: never;
@@ -17025,6 +17145,313 @@ export interface paths {
          *     ```
          */
         post: operations["ocr_v1_ocr_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/billing/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Checkout */
+        post: operations["checkout_v1_portal_billing_checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/billing/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Payments */
+        get: operations["payments_v1_portal_billing_payments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Keys */
+        get: operations["keys_v1_portal_keys_get"];
+        put?: never;
+        /** Create Key */
+        post: operations["create_key_v1_portal_keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Key */
+        delete: operations["remove_key_v1_portal_keys__key_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ledger */
+        get: operations["ledger_v1_portal_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Logs */
+        get: operations["logs_v1_portal_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Me */
+        get: operations["me_v1_portal_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Usage */
+        get: operations["usage_v1_portal_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portal/wallet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Wallet */
+        get: operations["wallet_v1_portal_wallet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login */
+        post: operations["login_v1_public_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_v1_public_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/auth/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Password Reset */
+        post: operations["password_reset_v1_public_auth_password_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/auth/password-reset/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Password Reset Code */
+        post: operations["password_reset_code_v1_public_auth_password_reset_code_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_v1_public_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/auth/register/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Code */
+        post: operations["register_code_v1_public_auth_register_code_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/payments/stripe/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stripe Webhook */
+        post: operations["stripe_webhook_v1_public_payments_stripe_webhook_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/pricing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pricing */
+        get: operations["pricing_v1_public_pricing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/public/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Relay Status */
+        get: operations["relay_status_v1_public_status_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -20388,6 +20815,33 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /** AccountResponse */
+        AccountResponse: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Email */
+            email: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ACTIVE" | "FROZEN" | "CLOSED";
+            /** User Id */
+            user_id: string;
+        };
+        /** AccountStatusRequest */
+        AccountStatusRequest: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ACTIVE" | "FROZEN" | "CLOSED";
+        };
         /**
          * ActiveUsersAnalyticsResponse
          * @description Response for active users analytics
@@ -20409,6 +20863,64 @@ export interface components {
             callback_vars: {
                 [key: string]: string;
             };
+        };
+        /** AdminAccountListResponse */
+        AdminAccountListResponse: {
+            /** Data */
+            data: components["schemas"]["AdminAccountResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** AdminAccountResponse */
+        AdminAccountResponse: {
+            /** Account Id */
+            account_id: string;
+            available: components["schemas"]["MoneyResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            debt: components["schemas"]["MoneyResponse"];
+            /** Email */
+            email: string;
+            reserved: components["schemas"]["MoneyResponse"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ACTIVE" | "FROZEN" | "CLOSED";
+            /** User Id */
+            user_id: string;
+            /** Wallet Id */
+            wallet_id: string;
+        };
+        /** AdminPaymentListResponse */
+        AdminPaymentListResponse: {
+            /** Data */
+            data: components["schemas"]["AdminPaymentResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** AdminPaymentResponse */
+        AdminPaymentResponse: {
+            /** Account Id */
+            account_id: string;
+            amount: components["schemas"]["MoneyResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Email */
+            email: string;
+            /** Payment Id */
+            payment_id: string;
+            refunded: components["schemas"]["MoneyResponse"];
+            /** Status */
+            status: string;
+            /** Wallet Id */
+            wallet_id: string;
         };
         /**
          * AgentCapabilities
@@ -20695,6 +21207,34 @@ export interface components {
             index_name: string;
             /** Index Permissions */
             index_permissions: ("read" | "write")[];
+        };
+        /** ApiKeyCreateRequest */
+        ApiKeyCreateRequest: {
+            /** Alias */
+            alias: string;
+            /**
+             * Log Content
+             * @default true
+             */
+            log_content: boolean;
+        };
+        /** ApiKeyListResponse */
+        ApiKeyListResponse: {
+            /** Data */
+            data: components["schemas"]["ApiKeyResponse"][];
+        };
+        /** ApiKeyResponse */
+        ApiKeyResponse: {
+            /** Alias */
+            alias: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Key */
+            key?: string | null;
+            /** Key Id */
+            key_id: string;
+            /** Log Content */
+            log_content: boolean;
         };
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
@@ -22212,6 +22752,20 @@ export interface components {
              * @enum {string}
              */
             role: "user" | "assistant";
+        };
+        /** CheckoutRequest */
+        CheckoutRequest: {
+            /** Amount Cents */
+            amount_cents: number;
+            /** Turnstile Token */
+            turnstile_token: string;
+        };
+        /** CheckoutResponse */
+        CheckoutResponse: {
+            /** Checkout Url */
+            checkout_url: string;
+            /** Payment Id */
+            payment_id: string;
         };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
@@ -24752,6 +25306,32 @@ export interface components {
             prompt_injection?: number;
         } & {
             [key: string]: unknown;
+        };
+        /** LedgerEntryResponse */
+        LedgerEntryResponse: {
+            amount: components["schemas"]["MoneyResponse"];
+            available_after: components["schemas"]["MoneyResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Entry Id */
+            entry_id: string;
+            /** Entry Type */
+            entry_type: string;
+            /** Payment Id */
+            payment_id?: string | null;
+            /** Request Id */
+            request_id?: string | null;
+            reserved_after: components["schemas"]["MoneyResponse"];
+        };
+        /** LedgerListResponse */
+        LedgerListResponse: {
+            /** Data */
+            data: components["schemas"]["LedgerEntryResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
         };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
@@ -27297,6 +27877,15 @@ export interface components {
              */
             status?: "healthy" | "unhealthy";
         };
+        /** LoginRequest */
+        LoginRequest: {
+            /** Email */
+            email: string;
+            /** Password */
+            password: string;
+            /** Turnstile Token */
+            turnstile_token: string;
+        };
         /** MCPCredentials */
         MCPCredentials: {
             /** Auth Value */
@@ -27493,6 +28082,12 @@ export interface components {
             /** Mcp Server Ids */
             mcp_server_ids: string[];
         };
+        /** MarginResponse */
+        MarginResponse: {
+            charged: components["schemas"]["MoneyResponse"];
+            gross_margin: components["schemas"]["MoneyResponse"];
+            upstream_cost: components["schemas"]["MoneyResponse"];
+        };
         /** Member */
         Member: {
             /**
@@ -27594,6 +28189,11 @@ export interface components {
             tool_calls: components["schemas"]["ChatCompletionMessageToolCall"][] | null;
         } & {
             [key: string]: unknown;
+        };
+        /** MessageResponse */
+        MessageResponse: {
+            /** Message */
+            message: string;
         };
         /** MetricWithMetadata */
         MetricWithMetadata: {
@@ -27715,6 +28315,71 @@ export interface components {
             /** Model Name */
             model_name: string;
         };
+        /** ModelPriceCreateRequest */
+        ModelPriceCreateRequest: {
+            /** Cached Input Micros Per Million */
+            cached_input_micros_per_million?: number | null;
+            /**
+             * Default Max Output Tokens
+             * @default 4096
+             */
+            default_max_output_tokens: number;
+            /** Embedding Micros Per Million */
+            embedding_micros_per_million?: number | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Input Micros Per Million */
+            input_micros_per_million: number;
+            /**
+             * Max Output Tokens
+             * @default 4096
+             */
+            max_output_tokens: number;
+            /** Model Name */
+            model_name: string;
+            /** Output Micros Per Million */
+            output_micros_per_million?: number | null;
+        };
+        /** ModelPriceResponse */
+        ModelPriceResponse: {
+            /** Cached Input Micros Per Million */
+            cached_input_micros_per_million?: number | null;
+            /**
+             * Default Max Output Tokens
+             * @default 4096
+             */
+            default_max_output_tokens: number;
+            /**
+             * Effective At
+             * Format: date-time
+             */
+            effective_at: string;
+            /** Embedding Micros Per Million */
+            embedding_micros_per_million?: number | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Input Micros Per Million */
+            input_micros_per_million: number;
+            /**
+             * Max Output Tokens
+             * @default 4096
+             */
+            max_output_tokens: number;
+            /** Model Name */
+            model_name: string;
+            /** Output Micros Per Million */
+            output_micros_per_million?: number | null;
+            /** Price Id */
+            price_id: string;
+            /** Version */
+            version: number;
+        };
         /** ModelResponse */
         ModelResponse: {
             /** Choices */
@@ -27731,6 +28396,19 @@ export interface components {
             system_fingerprint?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** MoneyResponse */
+        MoneyResponse: {
+            /** Amount Micros */
+            amount_micros: string;
+            /**
+             * Currency
+             * @default USD
+             * @constant
+             */
+            currency: "USD";
+            /** Display */
+            display: string;
         };
         /**
          * MutualTLSSecurityScheme
@@ -28856,6 +29534,17 @@ export interface components {
              */
             response_fields?: string[] | null;
         };
+        /** PasswordResetRequest */
+        PasswordResetRequest: {
+            /** Code */
+            code: string;
+            /** Email */
+            email: string;
+            /** Password */
+            password: string;
+            /** Turnstile Token */
+            turnstile_token: string;
+        };
         /** PatchAgentRequest */
         PatchAgentRequest: {
             agent_card_params?: components["schemas"]["AgentCard"];
@@ -28991,6 +29680,27 @@ export interface components {
             team_member_tpm_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** PaymentListResponse */
+        PaymentListResponse: {
+            /** Data */
+            data: components["schemas"]["PaymentResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** PaymentResponse */
+        PaymentResponse: {
+            amount: components["schemas"]["MoneyResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Payment Id */
+            payment_id: string;
+            refunded: components["schemas"]["MoneyResponse"];
+            /** Status */
+            status: string;
         };
         /**
          * PerTestingCriteriaResult
@@ -29793,6 +30503,17 @@ export interface components {
              */
             version_status: string;
         };
+        /** PricingResponse */
+        PricingResponse: {
+            /**
+             * Currency
+             * @default USD
+             * @constant
+             */
+            currency: "USD";
+            /** Models */
+            models: components["schemas"]["ModelPriceResponse"][];
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -30174,6 +30895,23 @@ export interface components {
             /** Value */
             value: string;
         };
+        /** RefundRequest */
+        RefundRequest: {
+            /** Amount Micros */
+            amount_micros: number;
+            /** Reason */
+            reason: string;
+        };
+        /** RefundResponse */
+        RefundResponse: {
+            amount: components["schemas"]["MoneyResponse"];
+            /** Payment Id */
+            payment_id: string;
+            /** Refund Id */
+            refund_id: string;
+            /** Status */
+            status: string;
+        };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
             /** Access Group Ids */
@@ -30421,10 +31159,51 @@ export interface components {
              */
             version: string | null;
         };
+        /** RegisterRequest */
+        RegisterRequest: {
+            /** Code */
+            code: string;
+            /** Email */
+            email: string;
+            /** Password */
+            password: string;
+            /** Turnstile Token */
+            turnstile_token: string;
+        };
         /** RejectMCPServerRequest */
         RejectMCPServerRequest: {
             /** Review Notes */
             review_notes?: string | null;
+        };
+        /** RequestLogListResponse */
+        RequestLogListResponse: {
+            /** Data */
+            data: components["schemas"]["RequestLogResponse"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** RequestLogResponse */
+        RequestLogResponse: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            charged: components["schemas"]["MoneyResponse"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Model */
+            model: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Request Duration Ms */
+            request_duration_ms: number | null;
+            /** Request Id */
+            request_id: string;
+            /** Status */
+            status: string | null;
         };
         /** ResetSpendRequest */
         ResetSpendRequest: {
@@ -31021,6 +31800,13 @@ export interface components {
             /** Timeout */
             timeout?: number | null;
         };
+        /** SessionResponse */
+        SessionResponse: {
+            account: components["schemas"]["AccountResponse"];
+            /** Csrf Token */
+            csrf_token: string;
+            default_key?: components["schemas"]["ApiKeyResponse"] | null;
+        };
         /**
          * Skill
          * @description Represents a skill from the Anthropic Skills API
@@ -31123,6 +31909,13 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** StatusResponse */
+        StatusResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Operational */
+            operational: boolean;
         };
         /**
          * SuccessfulKeyUpdate
@@ -33042,6 +33835,19 @@ export interface components {
             /** Type */
             type: string;
         };
+        /** UsageResponse */
+        UsageResponse: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            charged: components["schemas"]["MoneyResponse"];
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Request Count */
+            request_count: number;
+            upstream_cost: components["schemas"]["MoneyResponse"];
+        };
         /**
          * UserAPIKeyAuth
          * @description Return the row in the db
@@ -33597,6 +34403,26 @@ export interface components {
             } | null;
             /** Vector Store Name */
             vector_store_name?: string | null;
+        };
+        /** VerificationCodeRequest */
+        VerificationCodeRequest: {
+            /** Email */
+            email: string;
+            /** Turnstile Token */
+            turnstile_token: string;
+        };
+        /** WalletAdjustmentRequest */
+        WalletAdjustmentRequest: {
+            /** Amount Micros */
+            amount_micros: number;
+            /** Reason */
+            reason: string;
+        };
+        /** WalletResponse */
+        WalletResponse: {
+            available: components["schemas"]["MoneyResponse"];
+            debt: components["schemas"]["MoneyResponse"];
+            reserved: components["schemas"]["MoneyResponse"];
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -52400,6 +53226,252 @@ export interface operations {
             };
         };
     };
+    accounts_v1_admin_relay_accounts_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAccountListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_status_v1_admin_relay_accounts__account_id__status_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    margin_v1_admin_relay_margin_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarginResponse"];
+                };
+            };
+        };
+    };
+    admin_payments_v1_admin_relay_payments_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPaymentListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refund_payment_v1_admin_relay_payments__payment_id__refund_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "idempotency-key": string;
+            };
+            path: {
+                payment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_prices_v1_admin_relay_prices_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PricingResponse"];
+                };
+            };
+        };
+    };
+    create_price_v1_admin_relay_prices_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelPriceCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPriceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    wallet_adjustment_v1_admin_relay_wallets__wallet_id__adjust_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "idempotency-key": string;
+            };
+            path: {
+                wallet_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WalletAdjustmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_agents_v1_agents_get: {
         parameters: {
             query?: {
@@ -55485,6 +56557,535 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    checkout_v1_portal_billing_checkout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    payments_v1_portal_billing_payments_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    keys_v1_portal_keys_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyListResponse"];
+                };
+            };
+        };
+    };
+    create_key_v1_portal_keys_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiKeyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_key_v1_portal_keys__key_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ledger_v1_portal_ledger_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LedgerListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logs_v1_portal_logs_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestLogListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    me_v1_portal_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+        };
+    };
+    usage_v1_portal_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageResponse"];
+                };
+            };
+        };
+    };
+    wallet_v1_portal_wallet_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletResponse"];
+                };
+            };
+        };
+    };
+    login_v1_public_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_v1_public_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+        };
+    };
+    password_reset_v1_public_auth_password_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    password_reset_code_v1_public_auth_password_reset_code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_v1_public_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_code_v1_public_auth_register_code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stripe_webhook_v1_public_payments_stripe_webhook_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "stripe-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pricing_v1_public_pricing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PricingResponse"];
+                };
+            };
+        };
+    };
+    relay_status_v1_public_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusResponse"];
                 };
             };
         };

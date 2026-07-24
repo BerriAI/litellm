@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 describe("migratedHref / legacyPageHref", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
     vi.stubEnv("NODE_ENV", "test");
+    window.history.replaceState(null, "", "/");
   });
 
   afterEach(() => {
@@ -19,11 +21,18 @@ describe("migratedHref / legacyPageHref", () => {
   });
 
   it("prefixes a non-root serverRootPath without duplicating slashes", async () => {
-    vi.doMock("@/components/networking", () => ({ serverRootPath: "/team-x/" }));
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/team-x/" }));
     const { migratedHref, legacyPageHref } = await import("./migratedPages");
 
     expect(migratedHref("api-reference")).toBe("/team-x/ui/api-reference");
     expect(legacyPageHref("models")).toBe("/team-x/ui/?page=models");
+  });
+
+  it("derives the mounted UI prefix from the browser path", async () => {
+    window.history.replaceState(null, "", "/team-x/ui/status");
+    const { migratedHref } = await import("./migratedPages");
+
+    expect(migratedHref("portal")).toBe("/team-x/ui/portal");
   });
 
   it("tolerates a leading slash in the route segment", async () => {
@@ -39,6 +48,13 @@ describe("migratedHref / legacyPageHref", () => {
 
     expect(MIGRATED_PAGES.api_ref).toBe("api-reference");
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
+  });
+
+  it("maps the public relay admin page", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES.relay).toBe("admin/relay");
   });
 
   it("maps the api-keys landing id to its route and builds its redirect href", async () => {
@@ -168,6 +184,7 @@ describe("migratedHref / legacyPageHref", () => {
 describe("dev server (NODE_ENV=development)", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
     vi.stubEnv("NODE_ENV", "development");
   });
 
@@ -184,7 +201,7 @@ describe("dev server (NODE_ENV=development)", () => {
   });
 
   it("ignores serverRootPath, which only applies to proxy-mounted deployments", async () => {
-    vi.doMock("@/components/networking", () => ({ serverRootPath: "/team-x/" }));
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/team-x/" }));
     const { migratedHref } = await import("./migratedPages");
 
     expect(migratedHref("api-reference")).toBe("/api-reference");
@@ -202,6 +219,7 @@ describe("dev server (NODE_ENV=development)", () => {
 describe("legacyKeyForPathname", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.doUnmock("@/lib/serverRootPath");
     vi.stubEnv("NODE_ENV", "test");
   });
 
@@ -230,7 +248,7 @@ describe("legacyKeyForPathname", () => {
   });
 
   it("strips a non-root serverRootPath prefix before matching", async () => {
-    vi.doMock("@/components/networking", () => ({ serverRootPath: "/team-x/" }));
+    vi.doMock("@/lib/serverRootPath", () => ({ serverRootPath: "/team-x/" }));
     const { legacyKeyForPathname } = await import("./migratedPages");
 
     expect(legacyKeyForPathname("/team-x/ui/api-reference")).toBe("api_ref");

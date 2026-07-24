@@ -120,7 +120,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/ui");
+      expect(mockReplace).toHaveBeenCalledWith("/ui/admin");
     });
   });
 
@@ -201,7 +201,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/ui");
+      expect(mockReplace).toHaveBeenCalledWith("/ui/admin");
     });
 
     expect(mockPush).not.toHaveBeenCalled();
@@ -363,7 +363,7 @@ describe("LoginPage", () => {
       );
 
       await waitFor(() => {
-        expect(mockReplace).toHaveBeenCalledWith("/ui");
+        expect(mockReplace).toHaveBeenCalledWith("/ui/admin");
       });
 
       expect(document.cookie).not.toContain("token=attacker.jwt.value");

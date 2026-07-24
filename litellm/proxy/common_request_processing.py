@@ -1224,7 +1224,9 @@ class ProxyBaseLLMRequestProcessing:
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        self.data["litellm_call_id"] = self.data.get("litellm_call_id") or request.headers.get(
+            "x-litellm-call-id", str(uuid.uuid4())
+        )
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,

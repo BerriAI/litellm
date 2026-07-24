@@ -1,4 +1,4 @@
-import { serverRootPath } from "@/components/networking";
+import { serverRootPath } from "@/lib/serverRootPath";
 
 /**
  * Single source of truth for pages cut over from the legacy `?page=` switch in
@@ -9,6 +9,7 @@ import { serverRootPath } from "@/components/networking";
  * legacy `?page=` URL; remove it to roll back.
  */
 export const MIGRATED_PAGES: Record<string, string> = {
+  relay: "admin/relay",
   "api-keys": "api-keys",
   models: "models-and-endpoints",
   api_ref: "api-reference",
@@ -57,6 +58,12 @@ function uiBase(): string {
   // (and optionally under server_root_path). Inlined at build time, so production is unaffected.
   if (process.env.NODE_ENV === "development") {
     return "";
+  }
+  if (typeof window !== "undefined") {
+    const uiIndex = window.location.pathname.indexOf("/ui");
+    if (uiIndex >= 0) {
+      return window.location.pathname.slice(0, uiIndex + 3);
+    }
   }
   const root = serverRootPath && serverRootPath !== "/" ? `/${serverRootPath.replace(/^\/+|\/+$/g, "")}` : "";
   return `${root}/ui`;

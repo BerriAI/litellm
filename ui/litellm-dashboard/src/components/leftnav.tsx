@@ -282,6 +282,13 @@ const menuGroups: MenuGroup[] = [
     roles: all_admin_roles,
     items: [
       {
+        key: "relay",
+        page: "relay",
+        label: "Public Relay",
+        icon: <Wallet {...ICON} />,
+        roles: all_admin_roles,
+      },
+      {
         key: "settings",
         page: "settings",
         label: (

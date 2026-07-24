@@ -506,6 +506,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.public_endpoints import router as public_endpoints_router
+from litellm.proxy.public_relay.endpoints import router as public_relay_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
@@ -1939,6 +1940,8 @@ mount_swagger_ui()
 
 docs_url = _get_docs_url()
 root_redirect_url: Optional[str] = os.getenv("ROOT_REDIRECT_URL")
+if root_redirect_url is None and os.getenv("PUBLIC_RELAY_ENABLED", "").lower() in {"1", "true", "yes", "on"}:
+    root_redirect_url = f"{server_root_path.rstrip('/')}/ui"
 if docs_url != "/" and root_redirect_url is not None:
 
     @app.get("/", include_in_schema=False)
@@ -8300,6 +8303,28 @@ class ProxyStartupEvent:
                 verbose_proxy_logger.warning(f"Failed to setup key rotation job: {e}")
         else:
             verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
+
+        from litellm.proxy.public_relay.background import PublicRelayBackgroundJobs
+        from litellm.proxy.public_relay.config import PublicRelaySettings
+
+        public_relay_settings = PublicRelaySettings.from_env()
+        if public_relay_settings.enabled and prisma_client is not None:
+            public_relay_jobs = PublicRelayBackgroundJobs(
+                prisma_client=prisma_client,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+            )
+            scheduler.add_job(
+                public_relay_jobs.reconcile,
+                "interval",
+                seconds=60,
+                id="public_relay_reconcile",
+            )
+            scheduler.add_job(
+                public_relay_jobs.cleanup_retained_data,
+                "interval",
+                hours=1,
+                id="public_relay_content_cleanup",
+            )
 
         await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
 
@@ -16282,6 +16307,7 @@ async def get_routes():
 app.include_router(router)
 app.include_router(response_router)
 app.include_router(public_endpoints_router)
+app.include_router(public_relay_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
 app.include_router(rag_router)

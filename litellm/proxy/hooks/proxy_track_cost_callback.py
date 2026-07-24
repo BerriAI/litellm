@@ -55,6 +55,18 @@ class _ProxyDBLogger(CustomLogger):
         traceback_str: Optional[str] = None,
     ):
         try:
+            from litellm.proxy.public_relay.settlement import settle_failure
+
+            await settle_failure(
+                cast(  # cast-ok: isinstance validates callback request data before settlement.
+                    dict[str, object], request_data
+                ),
+                user_api_key_dict,
+                max(float(request_data.get("response_cost") or 0.0), 0.0),
+            )
+        except Exception:
+            verbose_proxy_logger.exception("Failed to settle public relay reservation during failure handling")
+        try:
             await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
@@ -163,13 +175,20 @@ class _ProxyDBLogger(CustomLogger):
         if isinstance(request_data.get("combined_usage_object"), litellm.Usage):
             recovered_response_cost = max(float(request_data.get("response_cost") or 0.0), 0.0)
 
+        from litellm.proxy.public_relay.content_logging import protect_public_content
+
+        protected_request_data = await protect_public_content(
+            cast(  # cast-ok: isinstance validates callback request data before content protection.
+                dict[str, object], request_data
+            )
+        )
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
             end_user_id=user_api_key_dict.end_user_id,
             team_id=user_api_key_dict.team_id,
-            kwargs=request_data,
+            kwargs=protected_request_data,
             completion_response=original_exception,
             start_time=actual_start_time,
             end_time=datetime.now(),
@@ -490,13 +509,20 @@ async def _update_database_and_spend_counters(
     request_tags: Optional[List[str]] = None,
 ) -> None:
     try:
+        from litellm.proxy.public_relay.content_logging import protect_public_content
+
+        protected_kwargs = await protect_public_content(
+            cast(  # cast-ok: callback kwargs are a mapping at this integration boundary.
+                dict[str, object], kwargs
+            )
+        )
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
             end_user_id=end_user_id,
             team_id=team_id,
-            kwargs=kwargs,
+            kwargs=protected_kwargs,
             completion_response=completion_response,
             start_time=start_time,
             end_time=end_time,
@@ -515,6 +541,16 @@ async def _update_database_and_spend_counters(
                         "Failed to invalidate budget reservation counters after release failed"
                     )
         raise
+
+    from litellm.proxy.public_relay.settlement import settle_success
+
+    await settle_success(
+        cast(  # cast-ok: callback kwargs are a mapping at this integration boundary.
+            dict[str, object], kwargs
+        ),
+        completion_response,
+        response_cost,
+    )
 
     try:
         await increment_spend_counters(

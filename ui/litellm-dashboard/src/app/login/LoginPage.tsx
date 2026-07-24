@@ -12,6 +12,7 @@ import { Alert, Button, Card, Form, Input, Popover, Select, Space, Typography } 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useWorker } from "@/hooks/useWorker";
+import { migratedHref } from "@/utils/migratedPages";
 
 function LoginPageContent() {
   const [username, setUsername] = useState("");
@@ -59,7 +60,7 @@ function LoginPageContent() {
         params.delete("code");
         const cleanSearch = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
-        router.replace("/ui/?login=success");
+        router.replace(`${migratedHref("admin")}?login=success`);
       });
       return;
     }
@@ -79,7 +80,7 @@ function LoginPageContent() {
       if (returnUrl) {
         router.replace(returnUrl);
       } else {
-        router.replace("/ui");
+        router.replace(migratedHref("admin"));
       }
       return;
     }
@@ -113,14 +114,14 @@ function LoginPageContent() {
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
-            router.push("/ui/?login=success");
+            router.push(`${migratedHref("admin")}?login=success`);
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
             const returnUrl = consumeReturnUrl();
             if (returnUrl) {
               router.push(returnUrl);
             } else {
-              router.push(data.redirect_url);
+              router.push(migratedHref("admin"));
             }
           }
         },

@@ -74,7 +74,7 @@ export default function ViewSwitcher() {
     // The chat route lives outside the dashboard SPA shell that reacts to `mode`,
     // so switching modes from there needs a real navigation, not just state.
     if (isChatRoute) {
-      window.location.assign(migratedHref(""));
+      window.location.assign(migratedHref("admin"));
     }
   };
 

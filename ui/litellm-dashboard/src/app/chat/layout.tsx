@@ -20,7 +20,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   const blocked = !isUISettingsLoading && !chatEnabled;
 
   useEffect(() => {
-    if (blocked) router.replace(migratedHref(""));
+    if (blocked) router.replace(migratedHref("admin"));
   }, [blocked, router]);
 
   if (isUISettingsLoading || blocked) return null;

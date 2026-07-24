@@ -132,7 +132,7 @@ describe("ViewSwitcher", () => {
       fireEvent.click(screen.getByText("AI Gateway"));
     });
     expect(state.setMode).toHaveBeenCalledWith("ai-gateway");
-    expect(assignSpy).toHaveBeenCalledWith("/ui/");
+    expect(assignSpy).toHaveBeenCalledWith("/ui/admin");
   });
 
   it("shows Chat as a disabled, non-navigating entry with an admin hint when disabled", async () => {
