@@ -127,14 +127,15 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
             {suggestedRange && !privateRanges.includes(suggestedRange) && (
               <div className="mt-1 flex items-center gap-2">
                 <p className="text-sm">Suggested range: </p>
-                <Badge
+                <Button
                   variant="outline"
-                  className="cursor-pointer font-mono"
+                  size="sm"
+                  className="font-mono"
                   onClick={() => addSuggestedRange(suggestedRange)}
                 >
                   <Plus />
                   {suggestedRange}
-                </Badge>
+                </Button>
               </div>
             )}
           </div>

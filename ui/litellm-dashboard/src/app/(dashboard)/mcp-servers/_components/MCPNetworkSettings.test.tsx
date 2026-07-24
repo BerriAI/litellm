@@ -58,6 +58,20 @@ describe("MCPNetworkSettings", () => {
     expect(screen.getByText("203.0.113.0/24")).toBeInTheDocument();
   });
 
+  it("exposes the suggested range as a control a keyboard user can reach and activate", async () => {
+    vi.mocked(fetchMCPClientIp).mockResolvedValue("203.0.113.45");
+
+    renderSettings();
+    const suggested = await screen.findByRole("button", { name: /203\.0\.113\.0\/24/ });
+
+    suggested.focus();
+    expect(suggested).toHaveFocus();
+
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.queryByText("Suggested range:")).not.toBeInTheDocument());
+  });
+
   it("adds the suggested range to the list when clicked, and stops suggesting it", async () => {
     vi.mocked(fetchMCPClientIp).mockResolvedValue("203.0.113.45");
 
