@@ -618,9 +618,23 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ]
         optional_params = config.map_openai_params(
             model="anthropic.claude-sonnet-5",
-            non_default_params={"parallel_tool_calls": False},
+            non_default_params={"parallel_tool_calls": False, "tools": tools},
             optional_params={},
             drop_params=False,
         )
@@ -632,6 +646,7 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
             messages=None,
         )
 
+        assert "toolConfig" in data
         assert data["additionalModelRequestFields"]["tool_choice"] == {
             "disable_parallel_tool_use": True
         }
@@ -5837,3 +5852,81 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     )
 
     assert "thinking" not in optional_params
+
+
+_PARALLEL_TOOL_USE_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+_WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}
+
+
+def _converse_request(non_default_params: dict) -> dict:
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params=dict(non_default_params),
+        optional_params={},
+        model=_PARALLEL_TOOL_USE_MODEL,
+        drop_params=False,
+    )
+    return config.transform_request(
+        model=_PARALLEL_TOOL_USE_MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+def test_toolless_request_does_not_leak_tool_choice_into_inference_config():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34420 (leak 1).
+
+    tool_choice was only popped when tools were present, so a request with no
+    tools left tool_choice in inference_params and it leaked into inferenceConfig,
+    which Bedrock Converse rejects with a 400.
+    """
+    result = _converse_request({"tool_choice": "auto"})
+
+    assert "toolConfig" not in result
+    assert "toolChoice" not in result.get("inferenceConfig", {})
+    assert "tool_choice" not in result.get("inferenceConfig", {})
+    assert "tool_choice" not in result.get("additionalModelRequestFields", {})
+
+
+def test_toolless_request_does_not_leak_parallel_tool_use_block():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34420 (leak 2).
+
+    parallel_tool_calls=False injects a disable_parallel_tool_use tool_choice
+    block into additionalModelRequestFields, gated only on model capability. On a
+    toolless request that produced a tool_choice block with no toolConfig, which
+    Bedrock rejects with a 400. Agent frameworks send parallel_tool_calls=False on
+    every turn, including toolless ones.
+    """
+    result = _converse_request({"parallel_tool_calls": False})
+
+    assert "toolConfig" not in result
+    assert "tool_choice" not in result.get("additionalModelRequestFields", {})
+
+
+def test_tool_request_still_carries_tool_config_and_parallel_block():
+    """
+    Guard: the fix for #34420 must not change requests that DO carry tools. A
+    tool-bearing request with parallel_tool_calls=False still emits toolConfig and
+    keeps the disable_parallel_tool_use block in additionalModelRequestFields.
+    """
+    result = _converse_request({"tools": [_WEATHER_TOOL], "parallel_tool_calls": False})
+
+    assert "toolConfig" in result
+    assert len(result["toolConfig"]["tools"]) >= 1
+    assert result["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
