@@ -245,9 +245,10 @@ def _log_deployment_health_transitions(
             continue
         exc = exceptions_by_model_id.get(model_id)
         previous = _deployment_reachability_state.get(model_id)
-        is_transition = previous is None or previous.get("reachable", True)
 
-        if is_transition:
+        # `previous is None` in the condition narrows `previous` to a dict in the
+        # else branch below, so the state updates there are not Optional access.
+        if previous is None or previous.get("reachable", True):
             if _is_transport_error(exc):
                 logger.warning(
                     "health_check: deployment %s is unreachable (%s); suppressing per-cycle logs until it recovers",
