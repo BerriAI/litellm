@@ -73,6 +73,7 @@ const mockUseTeams = vi.fn(() => mockUseTeamsData);
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
+  useTeam: () => ({ data: undefined }),
 }));
 
 const mockOrg = {
@@ -203,4 +204,34 @@ test("should display team ID as fallback when alias is not found", async () => {
   await waitFor(() => {
     expect(screen.getByText("team_999")).toBeInTheDocument();
   });
+});
+
+test("should keep unsaved settings edits when switching tabs and back", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={true}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+  await user.click(await screen.findByRole("button", { name: /Edit Settings/i }));
+
+  const alias = await screen.findByLabelText(/Organization Name/i);
+  await user.clear(alias);
+  await user.type(alias, "Renamed Org");
+  expect(alias).toHaveValue("Renamed Org");
+
+  await user.click(screen.getByRole("tab", { name: "Overview" }));
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+  expect(screen.getByLabelText(/Organization Name/i)).toHaveValue("Renamed Org");
 });
