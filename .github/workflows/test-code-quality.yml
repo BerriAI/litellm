@@ -115,6 +115,9 @@ jobs:
       - name: check_fastuuid_usage
         run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
 
+      - name: check_spend_logs_query_budget
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_spend_logs_query_budget.py
+
       - name: check_e2e_no_raw_requests
         run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
 
