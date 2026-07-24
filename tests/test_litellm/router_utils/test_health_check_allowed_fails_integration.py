@@ -790,3 +790,96 @@ class TestSharedCacheTransientErrorFilter:
 
         unhealthy_ids = router.health_state_cache.get_unhealthy_deployment_ids()
         assert "deploy-1" in unhealthy_ids
+
+
+class TestAllowedFailsPolicyZero:
+    """Regression tests for the `or`-zero swallow in should_cooldown_based_on_allowed_fails_policy.
+
+    When a user configures `AllowedFailsPolicy(RateLimitErrorAllowedFails=0)`,
+    the intent is "cooldown immediately on the first rate-limit error".
+    The previous `or` fallback treated 0 as falsy and silently discarded the
+    configured value, falling back to the router-level default.
+    """
+
+    def test_rate_limit_error_allowed_fails_zero_cooldowns_on_first_error(self):
+        """RateLimitErrorAllowedFails=0 should cooldown on the first 429."""
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+        )
+
+        rate_limit_exc = litellm.RateLimitError(
+            message="Rate limited", model="gpt-4", llm_provider="openai"
+        )
+
+        # First call: 1 > 0 -> should cooldown.
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=rate_limit_exc,
+        )
+        assert result is True
+
+    def test_timeout_error_allowed_fails_zero_cooldowns_on_first_error(self):
+        """TimeoutErrorAllowedFails=0 should cooldown on the first timeout."""
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(TimeoutErrorAllowedFails=0),
+        )
+
+        timeout_exc = litellm.Timeout(
+            message="timed out", model="gpt-4", llm_provider="openai"
+        )
+
+        # First call: 1 > 0 -> should cooldown.
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=timeout_exc,
+        )
+        assert result is True
+
+    def test_rate_limit_zero_does_not_cooldown_unmatched_exception(self):
+        """When RateLimitErrorAllowedFails=0 is set but a Timeout fires, the policy
+        returns None for Timeout and the router-level allowed_fails default applies.
+        The behavior must be the same as before this fix for non-matching exceptions.
+        """
+        from litellm.router_utils.cooldown_handlers import (
+            should_cooldown_based_on_allowed_fails_policy,
+        )
+
+        router = Router(
+            model_list=[_make_model("deploy-1"), _make_model("deploy-2", "gpt-5")],
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+            allowed_fails=2,
+        )
+
+        timeout_exc = litellm.Timeout(
+            message="timed out", model="gpt-4", llm_provider="openai"
+        )
+
+        # TimeoutErrorAllowedFails not set -> policy returns None -> router default 2 applies.
+        # Fails 1 and 2: should not cooldown.
+        for _ in range(2):
+            result = should_cooldown_based_on_allowed_fails_policy(
+                litellm_router_instance=router,
+                deployment="deploy-1",
+                original_exception=timeout_exc,
+            )
+            assert result is False
+
+        # Fail 3: should trigger cooldown (3 > 2).
+        result = should_cooldown_based_on_allowed_fails_policy(
+            litellm_router_instance=router,
+            deployment="deploy-1",
+            original_exception=timeout_exc,
+        )
+        assert result is True
