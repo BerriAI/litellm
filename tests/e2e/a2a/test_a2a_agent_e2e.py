@@ -113,6 +113,7 @@ class TestA2AAgentLifecycle:
         agent = unwrap(client.register_agent(body))
         resources.defer(lambda: client.delete_agent(agent.agent_id))
         assert agent.agent_card_params.protocol_version == "0.3"
+        location = "GBLON"
         request = A2AJsonRpcRequest(
             id=f"e2e-{unique_marker()}",
             params=A2AMessageSendParams(
@@ -121,7 +122,7 @@ class TestA2AAgentLifecycle:
                         A2ADataPart(
                             data=A2ASkillInvocation(
                                 skill="search_properties",
-                                params=A2ASearchPropertiesParams(un_locode="USSFO", service_type="sale", asking_price_max=2_000_000, limit=3),
+                                params=A2ASearchPropertiesParams(un_locode=location, service_type="long_term", limit=3),
                             )
                         )
                     ],
@@ -132,7 +133,12 @@ class TestA2AAgentLifecycle:
         response = unwrap(client.send_message(agent.agent_id, scoped_key, request))
         assert response.error is None
         assert response.result is not None
-        assert response.result.text.strip() != ""
+        results = response.result.search_results
+        assert results is not None, "agent returned no search_results artifact; skill did not run"
+        assert results.total > 0
+        assert results.listings, "search_properties matched nothing; agent returned no property cards"
+        assert all(listing.raia_id for listing in results.listings)
+        assert all(listing.location.un_locode == location for listing in results.listings)
 
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
     def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
