@@ -103,6 +103,7 @@ export const OrgCreateDialog = ({
             <FormField control={form.control} name="budget_duration" label="Reset Budget">
               {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                 <Select
+                  items={BUDGET_DURATION_OPTIONS}
                   value={value === "" ? NO_RESET : value}
                   onValueChange={(selected) => onChange(selected === NO_RESET ? "" : selected)}
                 >
