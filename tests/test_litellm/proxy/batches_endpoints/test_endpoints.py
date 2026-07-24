@@ -198,6 +198,10 @@ def harness():
         stack.enter_context(patch.object(proxy_server, "general_settings", {}))
         stack.enter_context(patch.object(proxy_server, "proxy_config", MagicMock()))
         stack.enter_context(patch.object(proxy_server, "version", "test-version"))
+        # Default to a database-less proxy so managed-file resolution is a no-op
+        # unless a test opts in; keeps the routing rows that do not exercise it
+        # deterministic regardless of cross-file prisma_client pollution.
+        stack.enter_context(patch.object(proxy_server, "prisma_client", None))
 
         h = Harness(
             body=body_holder,
