@@ -8,10 +8,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 from pydantic import BaseModel, ValidationError
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _get_token_base_cost,
     _get_web_search_requests,
-    _parse_prompt_tokens_details,
-    calculate_cache_writing_cost,
     generic_cost_per_token,
 )
 
@@ -19,41 +16,40 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
 import litellm
 
+_UNPRICED_INFERENCE_GEOS = frozenset({"global", "not_available"})
 
-def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage", service_tier: str | None = None) -> float:
+
+def _pricing_modifier_multiplier(model: str, usage: "Usage") -> float:
     """
-    Return only the cache-related portion of the prompt cost (cache read + cache write).
+    Resolve the combined geo and speed multiplier for a request.
 
-    These costs must NOT be scaled by geo/speed multipliers because the old
-    explicit ``fast/`` model entries carried unchanged cache rates while
-    multiplying only the regular input/output token costs.
+    Anthropic stacks these modifiers on top of the standard rates, and prompt
+    caching multipliers apply on top of the modified rates rather than the
+    unmodified ones, so a fast-mode cache read on Claude Opus 5 bills at
+    0.1 x $10/MTok, not 0.1 x $5/MTok. The caller therefore scales the whole
+    prompt cost, cache tokens included; see
+    https://platform.claude.com/docs/en/build-with-claude/fast-mode#pricing
+
+    Returns 1.0 when the model is unknown or carries no modifier entry.
     """
-    if usage.prompt_tokens_details is None:
-        return 0.0
+    try:
+        model_info = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+    except Exception:
+        return 1.0
 
-    prompt_tokens_details = _parse_prompt_tokens_details(usage)
-    (
-        _,
-        _,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        cache_read_cost,
-    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+    modifiers = model_info.get("provider_specific_entry") or {}
+    if not isinstance(modifiers, dict):
+        return 1.0
 
-    cache_cost = float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
+    inference_geo = getattr(usage, "inference_geo", None)
+    geo_multiplier = (
+        modifiers.get(inference_geo.lower(), 1.0)
+        if isinstance(inference_geo, str) and inference_geo.lower() not in _UNPRICED_INFERENCE_GEOS
+        else 1.0
+    )
+    speed_multiplier = modifiers.get("fast", 1.0) if getattr(usage, "speed", None) == "fast" else 1.0
 
-    if (
-        prompt_tokens_details["cache_creation_tokens"]
-        or prompt_tokens_details["cache_creation_token_details"] is not None
-    ):
-        cache_cost += calculate_cache_writing_cost(
-            cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
-            cache_creation_token_details=prompt_tokens_details["cache_creation_token_details"],
-            cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
-            cache_creation_cost=cache_creation_cost,
-        )
-
-    return cache_cost
+    return float(geo_multiplier) * float(speed_multiplier)
 
 
 def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) -> Tuple[float, float]:
@@ -76,29 +72,11 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
         service_tier=service_tier,
     )
 
-    # Apply provider_specific_entry multipliers for geo/speed routing
-    try:
-        model_info = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-        provider_specific_entry: dict = model_info.get("provider_specific_entry") or {}
+    multiplier = _pricing_modifier_multiplier(model=model, usage=usage)
+    if multiplier == 1.0:
+        return prompt_cost, completion_cost
 
-        multiplier = 1.0
-        if (
-            hasattr(usage, "inference_geo")
-            and usage.inference_geo
-            and usage.inference_geo.lower() not in ["global", "not_available"]
-        ):
-            multiplier *= provider_specific_entry.get(usage.inference_geo.lower(), 1.0)
-        if hasattr(usage, "speed") and usage.speed == "fast":
-            multiplier *= provider_specific_entry.get("fast", 1.0)
-
-        if multiplier != 1.0:
-            cache_cost = _compute_cache_only_cost(model_info=model_info, usage=usage, service_tier=service_tier)
-            prompt_cost = (prompt_cost - cache_cost) * multiplier + cache_cost
-            completion_cost *= multiplier
-    except Exception:
-        pass
-
-    return prompt_cost, completion_cost
+    return prompt_cost * multiplier, completion_cost * multiplier
 
 
 class _AnthropicServerToolUseProbe(BaseModel):

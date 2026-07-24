@@ -2672,11 +2672,10 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
     Regression for the cache/tier interaction in the Anthropic geo/speed path.
 
     When a request is served at "priority" and also carries a geo/speed
-    multiplier (here ``speed="fast"``), the cache portion is held out of the
-    multiplier so it is not scaled. That held-out cache cost must use the
-    served tier's cache rate; pricing it at the standard rate while the cache
-    embedded in ``prompt_cost`` is priced at the priority rate leaves a
-    ``(cache_priority - cache_standard)(multiplier - 1)`` billing error.
+    multiplier (here ``speed="fast"``), the cache tokens are priced at the
+    served tier's cache rate and then scaled by the multiplier alongside every
+    other token, because Anthropic stacks prompt-caching multipliers on top of
+    the modified rate rather than the standard one.
     """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
@@ -2715,10 +2714,9 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier():
         model=model, usage=usage, service_tier="priority"
     )
 
-    # non-cache input priced at the priority rate and scaled by the fast
-    # multiplier; the 200 cache-hit tokens priced at the priority cache rate
-    # and held out of the multiplier
-    expected_prompt = (1000 - 200) * 6e-6 * 2 + 200 * 0.6e-6
+    # non-cache input at the priority rate and the 200 cache-hit tokens at the
+    # priority cache rate, both scaled by the fast multiplier
+    expected_prompt = ((1000 - 200) * 6e-6 + 200 * 0.6e-6) * 2
     expected_completion = 500 * 30e-6 * 2
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
