@@ -5030,6 +5030,77 @@ async def test_update_team_standalone_budget_removal_blocked_for_team_admin():
 
 
 @pytest.mark.asyncio
+async def test_update_team_budget_duration_rearm_blocked_for_team_admin():
+    """
+    A team admin must not be able to re-arm a team's budget window
+    (change budget_duration), because re-arming resets accumulated spend and is
+    therefore equivalent to restoring the full ceiling - a budget-authority
+    action reserved for proxy admins.
+
+    Scenario:
+    - Team admin (internal_user) manages a capped team
+    - Admin sends budget_duration to re-arm the window (without touching max_budget)
+    - Expected: 403 (only a proxy admin can change budget_duration)
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    team_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="budget-rearm-admin",
+        models=[],
+    )
+
+    update_request = UpdateTeamRequest(
+        team_id="standalone-team-123",
+        budget_duration="30d",
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+        ),
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "standalone-team-123"
+        mock_existing_team.organization_id = None
+        mock_existing_team.max_budget = 500.0
+        mock_existing_team.budget_duration = "7d"
+        mock_existing_team.model_id = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "standalone-team-123",
+            "organization_id": None,
+            "max_budget": 500.0,
+            "members_with_roles": [{"user_id": "budget-rearm-admin", "role": "admin"}],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=team_admin_user,
+            )
+
+        assert exc_info.value.code == "403"
+        assert "budget_duration" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
 async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
     """
     When a team currently has NO cap (max_budget=None / unlimited), a team admin
@@ -10223,3 +10294,104 @@ def test_patch_team_route_publishes_its_request_body_schema():
     assert schema == {"$ref": "#/components/schemas/PatchTeamRequest"}
     properties = app.openapi()["components"]["schemas"]["PatchTeamRequest"]["properties"]
     assert "tpm_limit" in properties and "metadata" in properties
+
+
+@pytest.mark.asyncio
+async def test_update_team_zeroes_spend_on_new_budget_window():
+    from datetime import timedelta
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    captured = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server._invalidate_spend_counter", new=AsyncMock()),
+        patch("litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team", new=AsyncMock()),
+        patch("litellm.proxy.management_endpoints.team_endpoints.TeamRepository") as mock_repo,
+    ):
+        existing = MagicMock()
+        existing.model_dump.return_value = {
+            "team_id": "t1", "spend": 100.0, "budget_duration": None, "budget_reset_at": None,
+        }
+        existing.budget_duration = None
+        existing.budget_reset_at = None
+        existing.members_with_roles = []
+
+        async def _update(where, data, include=None):
+            captured.update(data)
+            row = MagicMock()
+            row.team_id = "t1"
+            row.model_dump.return_value = {"team_id": "t1"}
+            return row
+
+        repo_inst = MagicMock()
+        repo_inst.table.find_unique = AsyncMock(return_value=existing)
+        repo_inst.table.update = AsyncMock(side_effect=_update)
+        mock_repo.return_value = repo_inst
+        mock_prisma_client.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="t1", budget_duration="30d"),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+        assert captured.get("spend") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_preserves_spend_on_unchanged_window_resend():
+    from datetime import timedelta
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    captured = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server._invalidate_spend_counter", new=AsyncMock()),
+        patch("litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team", new=AsyncMock()),
+        patch("litellm.proxy.management_endpoints.team_endpoints.TeamRepository") as mock_repo,
+    ):
+        future = datetime.now(timezone.utc) + timedelta(days=15)
+        existing = MagicMock()
+        existing.model_dump.return_value = {
+            "team_id": "t1", "spend": 100.0, "budget_duration": "30d", "budget_reset_at": future,
+        }
+        existing.budget_duration = "30d"
+        existing.budget_reset_at = future
+        existing.members_with_roles = []
+
+        async def _update(where, data, include=None):
+            captured.update(data)
+            row = MagicMock()
+            row.team_id = "t1"
+            row.model_dump.return_value = {"team_id": "t1"}
+            return row
+
+        repo_inst = MagicMock()
+        repo_inst.table.find_unique = AsyncMock(return_value=existing)
+        repo_inst.table.update = AsyncMock(side_effect=_update)
+        mock_repo.return_value = repo_inst
+        mock_prisma_client.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="t1", budget_duration="30d", team_alias="x"),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+        assert "spend" not in captured

@@ -1880,6 +1880,56 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     return non_default_values
 
 
+async def _sync_key_spend_counter(key: str, explicit_spend, non_default_values: dict) -> None:
+    if explicit_spend is not None:
+        new_spend = explicit_spend
+    elif non_default_values.get("spend") == 0.0:
+        new_spend = 0.0
+    else:
+        return
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    counter_key = f"spend:key:{_hash_token_if_needed(key)}"
+    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_spend, ttl=60)
+    if spend_counter_cache.redis_cache is None:
+        return
+    try:
+        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_spend, ttl=60)
+    except Exception as redis_err:
+        verbose_proxy_logger.warning(
+            "Failed to sync spend counter %s in Redis after key update: %s. "
+            "Budget checks may use stale value until counter expires.",
+            counter_key,
+            redis_err,
+        )
+
+
+def _apply_key_budget_window(non_default_values: dict, existing_key_row: LiteLLM_VerificationToken) -> None:
+    budget_duration = non_default_values.pop("budget_duration")
+    if budget_duration is None:
+        non_default_values["budget_duration"] = None
+        non_default_values["budget_reset_at"] = None
+        return
+    if not (isinstance(budget_duration, str) and len(budget_duration) > 0):
+        return
+    from litellm.proxy.common_utils.timezone_utils import (
+        get_budget_reset_time,
+        is_budget_window_newly_armed,
+    )
+
+    non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
+    non_default_values["budget_duration"] = budget_duration
+    if non_default_values.get("spend") is not None:
+        # A caller-supplied explicit spend takes precedence over the window reset.
+        return
+    if is_budget_window_newly_armed(
+        new_duration=budget_duration,
+        existing_duration=existing_key_row.budget_duration,
+        existing_reset_at=existing_key_row.budget_reset_at,
+    ):
+        non_default_values["spend"] = 0.0
+
+
 async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
@@ -1923,16 +1973,7 @@ async def prepare_key_update_data(
             non_default_values["expires"] = expires
 
     if "budget_duration" in non_default_values:
-        budget_duration = non_default_values.pop("budget_duration")
-        if budget_duration is None:
-            non_default_values["budget_duration"] = None
-            non_default_values["budget_reset_at"] = None
-        elif isinstance(budget_duration, str) and len(budget_duration) > 0:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
-            non_default_values["budget_reset_at"] = key_reset_at
-            non_default_values["budget_duration"] = budget_duration
+        _apply_key_budget_window(non_default_values, existing_key_row)
 
     if "budget_limits" in non_default_values:
         raw_windows = non_default_values["budget_limits"]
@@ -2339,6 +2380,7 @@ async def _validate_update_key_data(
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
+        or data.budget_duration is not None
     )
 
     _existing_metadata = getattr(existing_key_row, "metadata", None)
@@ -2658,21 +2700,11 @@ async def update_key_fn(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        if data.spend is not None:
-            from litellm.proxy.proxy_server import spend_counter_cache
-
-            counter_key = f"spend:key:{_hash_token_if_needed(key)}"
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
-            if spend_counter_cache.redis_cache is not None:
-                try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
-                except Exception as redis_err:
-                    verbose_proxy_logger.warning(
-                        "Failed to update spend counter %s in Redis after key spend update: %s. "
-                        "Budget checks may use stale value until counter expires.",
-                        counter_key,
-                        redis_err,
-                    )
+        await _sync_key_spend_counter(
+            key=key,
+            explicit_spend=data.spend,
+            non_default_values=non_default_values,
+        )
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_updated_hook(

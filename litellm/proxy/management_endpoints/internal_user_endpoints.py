@@ -1195,6 +1195,22 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+def _reset_spend_if_budget_window_newly_armed(non_default_values: dict, existing_user_row: "BaseModel | None") -> None:
+    if existing_user_row is None or "budget_duration" not in non_default_values:
+        return
+    if non_default_values.get("spend") is not None:
+        # A caller-supplied explicit spend takes precedence over the window reset.
+        return
+    from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
+
+    if is_budget_window_newly_armed(
+        new_duration=non_default_values["budget_duration"],
+        existing_duration=getattr(existing_user_row, "budget_duration", None),
+        existing_reset_at=getattr(existing_user_row, "budget_reset_at", None),
+    ):
+        non_default_values["spend"] = 0.0
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1237,6 +1253,8 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable(**existing_user_row.model_dump(exclude_none=True))
+
+    _reset_spend_if_budget_window_newly_armed(non_default_values, existing_user_row)
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.
