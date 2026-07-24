@@ -11019,17 +11019,28 @@ def _check_if_model_is_team_model(models: List[DeploymentTypedDict], user_row: L
 
 
 async def non_admin_all_models(
-    all_models: List[Dict],
+    all_models: list[dict],
     llm_router: Router,
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Optional[PrismaClient],
-):
+    prisma_client: PrismaClient | None,
+) -> tuple[list[dict], list[str] | None]:
     """
     Check if model is in db
 
     Check if db model is 'created_by' == user_api_key_dict.user_id
 
     Only return models that match
+
+    Returns
+    -------
+    (unique_models, user_models)
+        unique_models: the de-duplicated deployment list as before.
+        user_models:   `LiteLLM_UserTable.models` (Personal Models) for
+                       the calling user if a row was loaded, else None.
+                       Lets the caller forward this to
+                       `apply_user_models_filter_to_deployments` as
+                       `user_models_override` to avoid a redundant
+                       `get_user_object` lookup downstream.
     """
     if prisma_client is None:
         raise HTTPException(
@@ -11044,6 +11055,7 @@ async def non_admin_all_models(
         prisma_client=prisma_client,
     )
 
+    user_models: list[str] | None = None
     if user_api_key_dict.user_id:
         try:
             user_row = await UserRepository(prisma_client).table.find_unique(
@@ -11052,15 +11064,22 @@ async def non_admin_all_models(
         except Exception:
             raise HTTPException(status_code=400, detail={"error": "User not found"})
 
-        # Get all models that are team models, when model team_id == user_row.teams
-        all_models += _check_if_model_is_team_model(
-            models=llm_router.get_model_list() or [],
-            user_row=user_row,
-        )
+        if user_row is not None:
+            # Empty list "user has no model restriction configured" is
+            # distinct from None "we never loaded a row" — keep the
+            # distinction so the override path can short-circuit
+            # correctly downstream.
+            user_models = list(user_row.models or [])
+
+            # Get all models that are team models, when model team_id == user_row.teams
+            all_models += _check_if_model_is_team_model(
+                models=llm_router.get_model_list() or [],
+                user_row=user_row,
+            )
 
     # de-duplicate models. Only return unique model ids
     unique_models = _deduplicate_litellm_router_models(models=all_models)
-    return unique_models
+    return unique_models, user_models
 
 
 def _add_team_models_to_all_models(
@@ -12128,8 +12147,14 @@ async def model_info_v2(
             sort_by=sortBy,
         )
 
+    # When user_models_only=true, `non_admin_all_models` already
+    # queries `litellm_usertable` to expand team-membership. Capture
+    # the user's `models` list here so the filter step below can
+    # forward it as `user_models_override` and skip a second
+    # `get_user_object` call on cache miss.
+    user_models_for_filter: list[str] | None = None
     if user_models_only:
-        all_models = await non_admin_all_models(
+        all_models, user_models_for_filter = await non_admin_all_models(
             all_models=all_models,
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
@@ -12152,6 +12177,52 @@ async def model_info_v2(
             debug=debug if debug is not None else False,
             llm_router=llm_router,
         )
+
+    # Defense-in-depth: bound the result by key.models / team_models
+    # (the listing-path filter) and then by LiteLLM_UserTable.models
+    # (Personal Models). Without these, a bare `GET /v2/model/info`
+    # (neither user_models_only nor include_team_models set) returns
+    # the full router model_list — leaking every deployment's
+    # litellm_params to any virtual key, even restricted ones.
+    # Matches /v1/models and inference-time `can_user_call_model`
+    # semantics. See BerriAI/litellm#26420.
+    from litellm.proxy.utils import (
+        apply_key_team_models_filter_to_deployments,
+        apply_user_models_filter_to_deployments,
+    )
+
+    all_models = await apply_key_team_models_filter_to_deployments(
+        deployments=all_models,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    all_models = await apply_user_models_filter_to_deployments(
+        deployments=all_models,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+        user_models_override=user_models_for_filter,
+    )
+
+    # Team BYOK deployments carry an internal routing key and other teams'
+    # public name / team_id / api_base; drop the ones the caller cannot
+    # access so a bare /v2/model/info (no user_models_only, no
+    # include_team_models) does not leak cross-team metadata when the
+    # caller's key/team/user lists are empty. Mirrors the v1 default
+    # branch behavior below.
+    allowed_team_ids = await _get_caller_byok_team_scope(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    all_models = [
+        model
+        for model in all_models
+        if not _byok_row_outside_caller_teams(
+            model.get("model_info") or {}, allowed_team_ids
+        )
+    ]
 
     # Apply teamId filter if provided
     if teamId is not None and teamId.strip():
@@ -12890,6 +12961,46 @@ async def model_info_v1(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
+        # Bound by the same filter chain as the listing branch below
+        # (key.models / team_models, then LiteLLM_UserTable.models, then
+        # BYOK team scope). by-id used to short-circuit before any of
+        # these, letting a restricted virtual key pull any deployment's
+        # litellm_params via /v1/model/info?litellm_model_id=. Filter
+        # (drop unauthorized deployments → empty list) instead of 403:
+        # matches the route_checks.py:189 spec comment "/model/info just
+        # shows models user has access to" and avoids leaking model
+        # existence via 403-vs-404 enumeration.
+        allowed_model_names = _get_v1_model_info_allowed_model_names(
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        single_model_list = _filter_v1_model_info_deployments(
+            all_models=single_model_list,
+            allowed_model_names=allowed_model_names,
+        )
+
+        from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+        single_model_list = await apply_user_models_filter_to_deployments(
+            deployments=single_model_list,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+        allowed_team_ids = await _get_caller_byok_team_scope(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+        single_model_list = [
+            model
+            for model in single_model_list
+            if not _byok_row_outside_caller_teams(
+                model.get("model_info") or {}, allowed_team_ids
+            )
+        ]
         return {"data": single_model_list}
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
@@ -12910,6 +13021,24 @@ async def model_info_v1(
     all_models = _filter_v1_model_info_deployments(
         all_models=all_models,
         allowed_model_names=allowed_model_names,
+    )
+
+    # Defense-in-depth: bound the result by LiteLLM_UserTable.models
+    # (Personal Models) so /v1/model/info honors the same filter as
+    # /v1/models and inference-time can_user_call_model. Upstream's
+    # _get_v1_model_info_allowed_model_names only intersects key/team
+    # models — user.models is applied as a second-step deployment
+    # filter, matching the /v2/model/info pattern above.
+    # See BerriAI/litellm#26420.
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    all_models = await apply_user_models_filter_to_deployments(
+        deployments=all_models,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
     )
 
     # Team BYOK deployments carry an internal routing key and other teams'

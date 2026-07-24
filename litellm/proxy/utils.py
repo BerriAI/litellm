@@ -6126,7 +6126,242 @@ async def get_available_models_for_user(
         team_id=effective_team_id,
     )
 
+    # Apply user-level (Personal Models) restriction so /v1/models is
+    # consistent with can_user_call_model at inference time
+    # (BerriAI/litellm#26420). Defense-in-depth: this only ever narrows
+    # the list, never widens it.
+    all_models = await _apply_user_models_filter(
+        all_models=all_models,
+        user_api_key_dict=user_api_key_dict,
+        model_access_groups=model_access_groups,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+    )
+
     return all_models
+
+
+async def _apply_user_models_filter(
+    all_models: list[str],
+    user_api_key_dict: "UserAPIKeyAuth",
+    model_access_groups: dict[str, list[str]],
+    prisma_client: Optional["PrismaClient"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    user_models_override: list[str] | None = None,
+) -> list[str]:
+    """
+    Intersect `all_models` with `LiteLLM_UserTable.models` (Personal
+    Models) for the user behind `user_api_key_dict`.
+
+    Returns `all_models` unchanged when:
+    - the key has no associated user_id (master key, service accounts),
+    - prisma/cache are unavailable,
+    - the user object can't be loaded,
+    - the user object has no model restrictions,
+    - or the user explicitly opts in to `all-proxy-models`.
+
+    Returns `[]` when the user has `no-default-models` (sentinel matches
+    `can_user_call_model` behavior at inference time).
+
+    `user_models_override` lets callers that already loaded
+    `LiteLLM_UserTable.models` (e.g. `non_admin_all_models` on
+    `/v2/model/info?user_models_only=true`) pass the list in so we skip
+    the redundant `get_user_object` DB hit on cache miss. Pass `[]`
+    for "user has no model restrictions configured" and a populated
+    list (including sentinels) when the user does.
+    """
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.auth.model_checks import (
+        filter_models_by_user_access,
+        get_user_models,
+    )
+
+    if user_models_override is not None:
+        user_models = list(user_models_override)
+    else:
+        if (
+            not user_api_key_dict.user_id
+            or prisma_client is None
+            or user_api_key_cache is None
+        ):
+            return all_models
+
+        try:
+            user_obj = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            # Mirror the swallow in user_api_key_auth.py — never break
+            # /v1/models if user lookup blips. No filter applied, which
+            # matches current behavior pre-fix.
+            verbose_proxy_logger.debug(
+                "_apply_user_models_filter: get_user_object failed, skipping "
+                "user-level filter. Exception: %s",
+                str(e),
+            )
+            return all_models
+
+        if user_obj is None:
+            return all_models
+        user_models = list(user_obj.models or [])
+
+    if not user_models:
+        return all_models
+
+    if SpecialModelNames.no_default_models.value in user_models:
+        return []
+
+    if SpecialModelNames.all_proxy_models.value in user_models:
+        return all_models
+
+    # The `all-proxy-models` short-circuit above returned already, so
+    # `user_models` here never contains it; `get_user_models` reads
+    # `proxy_model_list` only on that branch, so passing [] is a no-op
+    # here and lets the caller skip a `llm_router.get_model_names()` call
+    # on every /v1/models and /v2/model/info request.
+    user_allowed = get_user_models(
+        user_models=user_models,
+        proxy_model_list=[],
+        model_access_groups=model_access_groups,
+    )
+    return filter_models_by_user_access(
+        models=all_models,
+        user_allowed_models=user_allowed,
+    )
+
+
+async def apply_user_models_filter_to_deployments(
+    deployments: list[dict[str, Any]],
+    user_api_key_dict: "UserAPIKeyAuth",
+    llm_router: Optional["Router"],
+    prisma_client: Optional["PrismaClient"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    user_models_override: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Apply the `LiteLLM_UserTable.models` (Personal Models) filter to a
+    deployment-shaped list (`List[Dict]` with `model_name` keys), reusing
+    `_apply_user_models_filter` so the model-name-level semantics
+    (no-default-models / all-proxy-models / access groups / wildcards)
+    stay identical with /v1/models.
+
+    Used by /v1/model/info and /v2/model/info to close the
+    discovery-vs-inference gap described in BerriAI/litellm#26420 —
+    same fix as get_available_models_for_user() but operating on
+    deployment dicts (which carry api_base, model_info.id, etc.)
+    instead of bare model names.
+
+    Order of `deployments` is preserved; duplicates with the same
+    `model_name` are kept (multiple deployments can share a name).
+
+    `user_models_override` is forwarded to `_apply_user_models_filter`
+    so callers that already loaded the row (e.g. `model_info_v2` on the
+    `user_models_only=true` branch, where `non_admin_all_models` just
+    queried `litellm_usertable`) skip the redundant lookup.
+    """
+    if not deployments:
+        return deployments
+
+    if llm_router is None:
+        model_access_groups: dict[str, list[str]] = {}
+    else:
+        model_access_groups = llm_router.get_model_access_groups()
+
+    distinct_model_names = list(
+        {d.get("model_name", "") for d in deployments if d.get("model_name")}
+    )
+    allowed_model_names = await _apply_user_models_filter(
+        all_models=distinct_model_names,
+        user_api_key_dict=user_api_key_dict,
+        model_access_groups=model_access_groups,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
+        user_models_override=user_models_override,
+    )
+
+    allowed_set = set(allowed_model_names)
+    return [d for d in deployments if d.get("model_name") in allowed_set]
+
+
+async def apply_key_team_models_filter_to_deployments(
+    deployments: list[dict[str, Any]],
+    user_api_key_dict: "UserAPIKeyAuth",
+    llm_router: Optional["Router"],
+) -> list[dict[str, Any]]:
+    """
+    Bound deployments by the calling key's `models` and the key's
+    team's `team_models`. Mirrors the listing-path filter that
+    `get_available_models_for_user` runs (`get_key_models` +
+    `get_team_models` + `get_complete_model_list`), so /v2/model/info's
+    default branch stays consistent with /v1/models on key/team
+    restrictions — not just on user.models (BerriAI/litellm#26420).
+
+    Unrestricted keys (key.models == [] AND team_models == [])
+    short-circuit to the full deployment list — same fallback as
+    `get_complete_model_list` ("if key list is empty -> defer to team
+    list; if team list is empty -> defer to proxy model list").
+
+    Order of `deployments` is preserved.
+    """
+    from litellm.proxy.auth.model_checks import (
+        get_complete_model_list,
+        get_key_models,
+        get_team_models,
+    )
+
+    if not deployments:
+        return deployments
+
+    if llm_router is None:
+        proxy_model_list: list[str] = []
+        model_access_groups: dict[str, list[str]] = {}
+    else:
+        proxy_model_list = llm_router.get_model_names()
+        model_access_groups = llm_router.get_model_access_groups()
+
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=False,
+    )
+    team_models_resolved = get_team_models(
+        team_models=user_api_key_dict.team_models or [],
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=False,
+    )
+
+    # Both empty -> key is unrestricted at the key/team level
+    # (proxy admin / master key / unconstrained virtual key).
+    if not key_models and not team_models_resolved:
+        return deployments
+
+    allowed_model_names = get_complete_model_list(
+        key_models=key_models,
+        team_models=team_models_resolved,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=llm_router,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=False,
+        only_model_access_groups=False,
+        team_id=user_api_key_dict.team_id,
+    )
+
+    allowed_set = set(allowed_model_names)
+    return [d for d in deployments if d.get("model_name") in allowed_set]
 
 
 def create_model_info_response(
