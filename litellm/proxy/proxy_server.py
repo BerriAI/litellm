@@ -754,6 +754,7 @@ def cleanup_router_config_variables():
         otel_logging, \
         user_custom_auth, \
         user_custom_auth_path, \
+        user_custom_ui_auth, \
         user_custom_key_generate, \
         user_custom_key_update, \
         user_custom_sso, \
@@ -770,6 +771,7 @@ def cleanup_router_config_variables():
     otel_logging = None
     user_custom_auth = None
     user_custom_auth_path = None
+    user_custom_ui_auth = None
     user_custom_key_generate = None
     user_custom_key_update = None
     user_custom_sso = None
@@ -782,7 +784,13 @@ def cleanup_router_config_variables():
 
 
 async def proxy_shutdown_event():
-    global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
+    global \
+        prisma_client, \
+        master_key, \
+        user_custom_auth, \
+        user_custom_ui_auth, \
+        user_custom_key_generate, \
+        user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
@@ -1984,6 +1992,7 @@ polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
 native_background_mode: List[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
+user_custom_ui_auth = None
 user_custom_key_generate = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
@@ -3476,6 +3485,7 @@ _DB_OVERLAY_REMOTE_MODULE_STR_FIELDS: Dict[str, Tuple[str, ...]] = {
         "custom_key_generate",
         "custom_key_update",
         "custom_sso",
+        "custom_ui_auth",
         "custom_ui_sso_sign_in_handler",
     ),
 }
@@ -4333,6 +4343,7 @@ class ProxyConfig:
             otel_logging, \
             user_custom_auth, \
             user_custom_auth_path, \
+            user_custom_ui_auth, \
             user_custom_key_generate, \
             user_custom_key_update, \
             user_custom_sso, \
@@ -4798,6 +4809,10 @@ class ProxyConfig:
                 custom_auth_configured=custom_auth is not None,
                 run_common_checks=bool(general_settings.get("custom_auth_run_common_checks", False)),
             )
+
+            custom_ui_auth = general_settings.get("custom_ui_auth", None)
+            if custom_ui_auth is not None:
+                user_custom_ui_auth = get_instance_fn(value=custom_ui_auth, config_file_path=config_file_path)
 
             custom_key_generate = general_settings.get("custom_key_generate", None)
             if custom_key_generate is not None:
@@ -6917,6 +6932,7 @@ async def initialize(
         general_settings, \
         master_key, \
         user_custom_auth, \
+        user_custom_ui_auth, \
         prisma_client
     from litellm.proxy.common_utils.banner import show_banner
 
@@ -13480,12 +13496,15 @@ async def login(request: Request):
     password = str(form.get("password"))
 
     # Authenticate user and get login result
-    login_result = await authenticate_user(
-        username=username,
-        password=password,
-        master_key=master_key,
-        prisma_client=prisma_client,
-    )
+    if user_custom_ui_auth:
+        login_result = await user_custom_ui_auth(request, username, password)
+    else:
+        login_result = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+        )
 
     # Create UI token object
     returned_ui_token_object = create_ui_token_object(
@@ -13557,12 +13576,15 @@ async def login_v2(request: Request):
         username = str(body.get("username"))
         password = str(body.get("password"))
 
-        login_result = await authenticate_user(
-            username=username,
-            password=password,
-            master_key=master_key,
-            prisma_client=prisma_client,
-        )
+        if user_custom_ui_auth:
+            login_result = await user_custom_ui_auth(request, username, password)
+        else:
+            login_result = await authenticate_user(
+                username=username,
+                password=password,
+                master_key=master_key,
+                prisma_client=prisma_client,
+            )
 
         returned_ui_token_object = create_ui_token_object(
             login_result=login_result,
@@ -13630,12 +13652,15 @@ async def login_v3(request: Request):
         username = str(body.get("username"))
         password = str(body.get("password"))
 
-        login_result = await authenticate_user(
-            username=username,
-            password=password,
-            master_key=master_key,
-            prisma_client=prisma_client,
-        )
+        if user_custom_ui_auth:
+            login_result = await user_custom_ui_auth(request, username, password)
+        else:
+            login_result = await authenticate_user(
+                username=username,
+                password=password,
+                master_key=master_key,
+                prisma_client=prisma_client,
+            )
 
         returned_ui_token_object = create_ui_token_object(
             login_result=login_result,

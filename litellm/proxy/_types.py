@@ -2293,6 +2293,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth",
     )
+    custom_ui_auth: str | None = Field(
+        None,
+        description=(
+            "override authenticate_user with your own auth script - "
+            "`async def custom_ui_auth(request: Request, username: str, password: str) -> LoginResult` "
+            "(see litellm.proxy.auth.login_utils.LoginResult)"
+        ),
+    )
     max_parallel_requests: Optional[int] = Field(
         None,
         description="maximum parallel requests for each api key",
