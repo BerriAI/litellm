@@ -435,3 +435,35 @@ async def test_get_chat_completion_message_history_empty_response_dict():
 
         # Verify the session was still created correctly
         assert result["litellm_session_id"] == "test-session"
+
+
+@pytest.mark.asyncio
+async def test_get_all_spend_logs_for_previous_response_id_is_bounded():
+    """The session-reconstruction query must be bounded by
+    LIMIT $2 = MAX_RESPONSES_API_SESSION_SPEND_LOGS so a session_id mapping to a very
+    large number of rows cannot make the query engine buffer the whole session."""
+    captured = {}
+
+    class _MockDB:
+        async def query_raw(self, query, *params):
+            captured["query"] = query
+            captured["params"] = params
+            return []
+
+    class _MockPrisma:
+        db = _MockDB()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _MockPrisma()):
+        result = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            "resp_test_123"
+        )
+
+    assert result == []
+    # inner LIMIT $2 bounds the fetch; outer query re-sorts ASC for chronological replay
+    assert "LIMIT $2" in captured["query"]
+    assert 'ORDER BY "endTime" ASC' in captured["query"]
+    # the row cap is passed as the last positional param to query_raw
+    assert (
+        captured["params"][-1]
+        == session_handler.MAX_RESPONSES_API_SESSION_SPEND_LOGS
+    )
