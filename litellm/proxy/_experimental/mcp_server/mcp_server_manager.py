@@ -4529,9 +4529,14 @@ class MCPServerManager:
             # its check is all-or-nothing and stashes no acquisition on
             # rejection).
             if user_api_key_auth is not None:
-                await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(
-                    user_api_key_auth, synthetic_llm_data
-                )
+                try:
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(
+                        user_api_key_auth, synthetic_llm_data
+                    )
+                except Exception as release_error:  # noqa: BLE001 - never mask the original exception
+                    verbose_logger.warning(
+                        f"Failed to release max_parallel_requests slot in pre_call_tool_check: {str(release_error)}"
+                    )
             if isinstance(e, (BlockedPiiEntityError, GuardrailRaisedException, HTTPException)):
                 # Re-raise guardrail exceptions to properly fail the MCP call
                 verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
