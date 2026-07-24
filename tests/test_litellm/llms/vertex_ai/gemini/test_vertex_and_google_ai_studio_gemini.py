@@ -5368,6 +5368,23 @@ class TestModelResponseIteratorCleanup:
         mock_response.aclose.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    "model, expect_logprobs",
+    [
+        ("gemini-2.5-flash", True),
+        ("gemini-2.5-pro", True),
+        ("gemini-3.5-flash", False),
+        ("gemini-3-pro-preview", False),
+        ("gemini-3.1-flash", False),
+    ],
+)
+def test_logprobs_not_advertised_for_gemini_3(model, expect_logprobs):
+    """Gemini 3+ does not support logprobs on Vertex AI (#31600)."""
+    params = VertexGeminiConfig().get_supported_openai_params(model)
+    assert ("logprobs" in params) is expect_logprobs
+    assert ("top_logprobs" in params) is expect_logprobs
+
+
 def test_process_candidates_merges_thought_signatures_and_server_side_tools():
     """
     thought_signatures and server_side_tool_invocations must both survive in
