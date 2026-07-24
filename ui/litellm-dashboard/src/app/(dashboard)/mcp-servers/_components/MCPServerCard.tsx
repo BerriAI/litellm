@@ -1,18 +1,19 @@
 import { type FC, type KeyboardEvent, type MouseEvent } from "react";
-import { Dropdown, Tooltip, Typography, Tag } from "antd";
-import type { MenuProps } from "antd";
+import { Check, CircleAlert, Ellipsis, Trash2, Zap } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
-  CheckOutlined,
-  DeleteOutlined,
-  ExclamationCircleFilled,
-  MoreOutlined,
-  ThunderboltOutlined,
-} from "@ant-design/icons";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/cva.config";
 import { AUTH_TYPE, type MCPServer } from "@/components/mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { getMaskedAndFullUrl } from "./utils";
-
-const { Text } = Typography;
 
 interface MCPServerCardProps {
   server: MCPServer;
@@ -73,8 +74,8 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   const needsAttention = missing.length > 0;
 
   const cardClass = needsAttention
-    ? "border-2 border-red-300 bg-red-50/40 hover:border-red-400 hover:shadow-md"
-    : "border border-gray-200 bg-white hover:border-gray-300 hover:shadow-md";
+    ? "border-2 border-destructive/40 bg-destructive/5 hover:border-destructive/60 hover:shadow-md"
+    : "border border-border bg-card hover:shadow-md";
 
   const url = server.url || "";
   const { maskedUrl } = url ? getMaskedAndFullUrl(url) : { maskedUrl: "" };
@@ -105,174 +106,198 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     }
   };
 
-  const menuItems: MenuProps["items"] = [];
-  if (onRecheckHealth) {
-    menuItems.push({
-      key: "test-connection",
-      label: "Test Connection",
-      icon: <ThunderboltOutlined />,
-      disabled: isRechecking,
-      onClick: ({ domEvent }) => {
-        domEvent.stopPropagation();
-        onRecheckHealth();
-      },
-    });
-  }
-  if (onDelete) {
-    if (menuItems.length > 0) {
-      menuItems.push({ key: "divider", type: "divider" });
-    }
-    menuItems.push({
-      key: "delete",
-      label: "Delete",
-      icon: <DeleteOutlined />,
-      danger: true,
-      onClick: ({ domEvent }) => {
-        domEvent.stopPropagation();
-        onDelete();
-      },
-    });
-  }
+  const hasMenu = !!onRecheckHealth || !!onDelete;
 
   // Card uses role="button" + nested <button> children (Set, BYOK Connect, the
-  // recheck-health Tag), so a real <button> wrapper would produce invalid
+  // recheck-health Badge), so a real <button> wrapper would produce invalid
   // nested-interactive HTML. The role + tabIndex + Enter/Space handler keeps
   // the whole card clickable and keyboard-accessible.
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={handleKeyDown}
-      className={`group relative flex h-full cursor-pointer flex-col gap-3 rounded-lg p-4 transition-all duration-150 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-400 ${cardClass}`}
-    >
-      <div className="flex items-start gap-3">
-        {candidateLogo ? (
-          <Logo src={candidateLogo} label={name} className="h-10 w-10 shrink-0 rounded-sm object-contain" />
-        ) : (
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-gray-100 font-semibold text-gray-500">
-            {(name || "?").slice(0, 2).toUpperCase()}
-          </div>
+    <TooltipProvider>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={handleKeyDown}
+        className={cn(
+          "group relative flex h-full cursor-pointer flex-col gap-3 rounded-lg p-4 transition-all duration-150 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+          cardClass,
         )}
-        <div className="min-w-0 flex-1">
-          <div className="block w-full truncate text-left font-semibold text-gray-900" title={name}>
-            {name}
+      >
+        <div className="flex items-start gap-3">
+          {candidateLogo ? (
+            <Logo src={candidateLogo} label={name} className="h-10 w-10 shrink-0 rounded-sm object-contain" />
+          ) : (
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-muted font-semibold text-muted-foreground">
+              {(name || "?").slice(0, 2).toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="block w-full truncate text-left font-semibold" title={name}>
+              {name}
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+              {alias && <span className="truncate">{alias}</span>}
+              {alias && <span>·</span>}
+              <Tooltip>
+                <TooltipTrigger
+                  render={<span className="font-mono text-primary">{server.server_id.slice(0, 7)}</span>}
+                />
+                <TooltipContent>{server.server_id}</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
-            {alias && <span className="truncate">{alias}</span>}
-            {alias && <span className="text-gray-300">·</span>}
-            <Tooltip title={server.server_id}>
-              <span className="font-mono text-blue-600">{server.server_id.slice(0, 7)}</span>
-            </Tooltip>
-          </div>
+          {hasMenu && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={stop}
+                    onKeyDown={stop}
+                    aria-label="Server actions"
+                    className="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    <Ellipsis className="size-5" />
+                  </button>
+                }
+              />
+              <DropdownMenuContent align="end">
+                {onRecheckHealth && (
+                  <DropdownMenuItem
+                    disabled={isRechecking}
+                    onClick={(e) => {
+                      stop(e);
+                      onRecheckHealth();
+                    }}
+                  >
+                    <Zap />
+                    Test Connection
+                  </DropdownMenuItem>
+                )}
+                {onRecheckHealth && onDelete && <DropdownMenuSeparator />}
+                {onDelete && (
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={(e) => {
+                      stop(e);
+                      onDelete();
+                    }}
+                  >
+                    <Trash2 />
+                    Delete
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
-        {menuItems.length > 0 && (
-          <Dropdown menu={{ items: menuItems }} trigger={["click"]} placement="bottomRight">
-            <button
-              type="button"
-              onClick={stop}
-              onKeyDown={stop}
-              aria-label="Server actions"
-              className="-mr-1 -mt-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-blue-600"
-            >
-              <MoreOutlined style={{ fontSize: 20 }} />
-            </button>
-          </Dropdown>
-        )}
-      </div>
 
-      {subtitle ? (
-        <Tooltip title={subtitleTooltip}>
-          <Text className="truncate font-mono text-xs text-gray-500" ellipsis>
-            {subtitle}
-          </Text>
-        </Tooltip>
-      ) : (
-        // Defensive placeholder: keep the row even when no identifier is
-        // available so the tag row stays vertically aligned across the grid.
-        <div className="h-[18px]" aria-hidden />
-      )}
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        <HealthChip
-          status={status}
-          isLoadingHealth={isLoadingHealth}
-          isRechecking={isRechecking}
-          onRecheck={onRecheckHealth}
-          lastCheck={server.last_health_check}
-          error={server.health_check_error}
-          dotClass={healthTone.dot}
-        />
-        <Tag className="m-0">{displayTransport.toUpperCase()}</Tag>
-        <Tag className="m-0">{authType}</Tag>
-        {oauthFlowUnset && (
-          <Tooltip title="This OAuth server has no flow set (Machine-to-Machine vs Interactive). Open it and choose an OAuth Flow Type so LiteLLM authenticates it as you intend.">
-            <Tag color="warning" className="m-0">
-              <span className="inline-flex items-center gap-1">
-                <ExclamationCircleFilled />
-                OAuth flow not set
-              </span>
-            </Tag>
+        {subtitle ? (
+          <Tooltip>
+            <TooltipTrigger render={<p className="truncate font-mono text-xs text-muted-foreground">{subtitle}</p>} />
+            <TooltipContent>{subtitleTooltip}</TooltipContent>
           </Tooltip>
+        ) : (
+          // Defensive placeholder: keep the row even when no identifier is
+          // available so the badge row stays vertically aligned across the grid.
+          <div className="h-[18px]" aria-hidden />
         )}
-        <Tag color={isPublic ? "green" : "orange"} className="m-0">
-          <span className="inline-flex items-center gap-1">
-            <span className={`h-1.5 w-1.5 rounded-full ${isPublic ? "bg-green-500" : "bg-orange-500"}`} />
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <HealthChip
+            status={status}
+            isLoadingHealth={isLoadingHealth}
+            isRechecking={isRechecking}
+            onRecheck={onRecheckHealth}
+            lastCheck={server.last_health_check}
+            error={server.health_check_error}
+            dotClass={healthTone.dot}
+          />
+          <Badge variant="outline">{displayTransport.toUpperCase()}</Badge>
+          <Badge variant="outline">{authType}</Badge>
+          {oauthFlowUnset && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Badge variant="outline">
+                    <CircleAlert />
+                    OAuth flow not set
+                  </Badge>
+                }
+              />
+              <TooltipContent>
+                This OAuth server has no flow set (Machine-to-Machine vs Interactive). Open it and choose an OAuth Flow
+                Type so LiteLLM authenticates it as you intend.
+              </TooltipContent>
+            </Tooltip>
+          )}
+          <Badge variant="outline">
+            <span className={cn("h-1.5 w-1.5 rounded-full", isPublic ? "bg-green-500" : "bg-orange-500")} />
             {isPublic ? "Public" : "Internal"}
-          </span>
-        </Tag>
-        {accessGroups.slice(0, 2).map((g) => (
-          <Tooltip key={g} title={g}>
-            <Tag className="m-0 max-w-[120px] truncate">{g}</Tag>
-          </Tooltip>
-        ))}
-        {accessGroups.length > 2 && (
-          <Tooltip title={accessGroups.slice(2).join(", ")}>
-            <Tag className="m-0">+{accessGroups.length - 2}</Tag>
-          </Tooltip>
-        )}
-      </div>
+          </Badge>
+          {accessGroups.slice(0, 2).map((g) => (
+            <Tooltip key={g}>
+              <TooltipTrigger
+                render={
+                  <Badge variant="outline" className="max-w-[120px] truncate">
+                    {g}
+                  </Badge>
+                }
+              />
+              <TooltipContent>{g}</TooltipContent>
+            </Tooltip>
+          ))}
+          {accessGroups.length > 2 && (
+            <Tooltip>
+              <TooltipTrigger render={<Badge variant="outline">+{accessGroups.length - 2}</Badge>} />
+              <TooltipContent>{accessGroups.slice(2).join(", ")}</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
 
-      {(server.is_byok || needsAttention) && (
-        <div className="mt-auto flex flex-col gap-2">
-          {server.is_byok && <ByokRow connected={!!server.has_user_credential} onConnect={onByokConnect} />}
-          {needsAttention && (
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <Tooltip
-                title={
-                  <div>
-                    <div className="font-semibold mb-1">Missing user fields:</div>
+        {(server.is_byok || needsAttention) && (
+          <div className="mt-auto flex flex-col gap-2">
+            {server.is_byok && <ByokRow connected={!!server.has_user_credential} onConnect={onByokConnect} />}
+            {needsAttention && (
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="inline-flex items-center gap-1 font-semibold text-destructive">
+                        <CircleAlert className="size-3.5" />
+                        {missing.length} user field
+                        {missing.length === 1 ? "" : "s"} missing
+                      </span>
+                    }
+                  />
+                  <TooltipContent>
+                    <div className="mb-1 font-semibold">Missing user fields:</div>
                     <ul className="ml-3">
                       {missing.map((m) => (
                         <li key={m}>• {m}</li>
                       ))}
                     </ul>
-                  </div>
-                }
-              >
-                <span className="inline-flex items-center gap-1 font-semibold text-red-700">
-                  <ExclamationCircleFilled />
-                  {missing.length} user field
-                  {missing.length === 1 ? "" : "s"} missing
-                </span>
-              </Tooltip>
-              {onOpenFillFields && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    stop(e);
-                    onOpenFillFields();
-                  }}
-                  className="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white shadow-xs transition-colors hover:bg-red-700"
-                >
-                  Set
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+                  </TooltipContent>
+                </Tooltip>
+                {onOpenFillFields && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={(e) => {
+                      stop(e);
+                      onOpenFillFields();
+                    }}
+                  >
+                    Set
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </TooltipProvider>
   );
 };
 
@@ -297,46 +322,45 @@ const HealthChip: FC<HealthChipProps> = ({
 }) => {
   if (isLoadingHealth || isRechecking) {
     return (
-      <Tag className="m-0">
-        <span className="inline-flex items-center gap-1.5 text-xs text-gray-500">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-gray-300" />
-          Checking
-        </span>
-      </Tag>
+      <Badge variant="outline" className="text-muted-foreground">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
+        Checking
+      </Badge>
     );
   }
-  const tooltip = (
-    <div className="max-w-xs">
-      <div className="font-semibold mb-1">Health: {status}</div>
-      {lastCheck && <div className="text-xs mb-1">Last check: {new Date(lastCheck).toLocaleString()}</div>}
-      {error && (
-        <div className="text-xs">
-          <div className="font-medium text-red-300 mb-1">Error</div>
-          <div className="wrap-break-word">{error}</div>
-        </div>
-      )}
-      {!lastCheck && !error && <div className="text-xs text-gray-400">No health data</div>}
-      {onRecheck && <div className="mt-1 text-xs text-gray-300">Click to recheck</div>}
-    </div>
-  );
   return (
-    <Tooltip title={tooltip} placement="top">
-      <Tag
-        className={`m-0 ${onRecheck ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
-        onClick={
-          onRecheck
-            ? (e) => {
-                e.stopPropagation();
-                onRecheck();
-              }
-            : undefined
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Badge
+            variant="outline"
+            className={onRecheck ? "cursor-pointer hover:opacity-80" : "cursor-default"}
+            onClick={
+              onRecheck
+                ? (e) => {
+                    e.stopPropagation();
+                    onRecheck();
+                  }
+                : undefined
+            }
+          >
+            <span className={cn("h-1.5 w-1.5 rounded-full", dotClass)} />
+            {status.charAt(0).toUpperCase() + status.slice(1)}
+          </Badge>
         }
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
-          {status.charAt(0).toUpperCase() + status.slice(1)}
-        </span>
-      </Tag>
+      />
+      <TooltipContent side="top" className="max-w-xs">
+        <div className="mb-1 font-semibold">Health: {status}</div>
+        {lastCheck && <div className="mb-1 text-xs">Last check: {new Date(lastCheck).toLocaleString()}</div>}
+        {error && (
+          <div className="text-xs">
+            <div className="mb-1 font-medium">Error</div>
+            <div className="wrap-break-word">{error}</div>
+          </div>
+        )}
+        {!lastCheck && !error && <div className="text-xs">No health data</div>}
+        {onRecheck && <div className="mt-1 text-xs">Click to recheck</div>}
+      </TooltipContent>
     </Tooltip>
   );
 };
@@ -350,22 +374,22 @@ const ByokRow: FC<ByokRowProps> = ({ connected, onConnect }) => {
   if (connected) {
     return (
       <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="text-gray-500">BYOK credential</span>
+        <span className="text-muted-foreground">BYOK credential</span>
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 font-medium text-green-700">
-            <CheckOutlined style={{ fontSize: 10 }} /> Connected
-          </span>
+          <Badge variant="outline">
+            <Check /> Connected
+          </Badge>
           {onConnect && (
-            <button
-              type="button"
+            <Button
+              variant="link"
+              size="sm"
               onClick={(e) => {
                 stop(e);
                 onConnect();
               }}
-              className="text-xs text-gray-400 transition-colors hover:text-blue-600"
             >
               Update
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -373,20 +397,19 @@ const ByokRow: FC<ByokRowProps> = ({ connected, onConnect }) => {
   }
   return (
     <div className="flex items-center justify-between gap-2 text-xs">
-      <span className="text-gray-500">BYOK credential</span>
+      <span className="text-muted-foreground">BYOK credential</span>
       {onConnect ? (
-        <button
-          type="button"
+        <Button
+          size="sm"
           onClick={(e) => {
             stop(e);
             onConnect();
           }}
-          className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white shadow-xs transition-colors hover:bg-blue-700"
         >
           Connect
-        </button>
+        </Button>
       ) : (
-        <span className="text-gray-400">—</span>
+        <span className="text-muted-foreground">—</span>
       )}
     </div>
   );
