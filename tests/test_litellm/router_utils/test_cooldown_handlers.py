@@ -93,6 +93,15 @@ class TestResolveAllowedFailsFromPolicy:
         exc = litellm.InternalServerError("500", "openai", "gpt-4")
         assert _resolve_allowed_fails_from_policy(policy, exc) is None
 
+    def test_content_policy_violation_not_shadowed_by_bad_request_error(self):
+        """ContentPolicyViolationError subclasses BadRequestError, so if
+        BadRequestError were checked first, this would incorrectly resolve to
+        BadRequestErrorAllowedFails (10) instead of
+        ContentPolicyViolationErrorAllowedFails (2)."""
+        policy = {"BadRequestErrorAllowedFails": 10, "ContentPolicyViolationErrorAllowedFails": 2}
+        exc = litellm.ContentPolicyViolationError("flagged content", "openai", "gpt-4")
+        assert _resolve_allowed_fails_from_policy(policy, exc) == 2
+
 
 class TestShouldCooldownBasedOnDeploymentPolicy:
     def _make_router(self, model_info: dict | None = None):
@@ -108,9 +117,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {}, "model_info": {}})
 
-        with patch(
-            "litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy"
-        ) as mock_sc:
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = True
             result = _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, policy, None)
 
@@ -124,9 +131,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         exc = litellm.InternalServerError("500", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {}, "model_info": {}})
 
-        with patch(
-            "litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy"
-        ) as mock_sc:
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = False
             result = _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, policy, dep_allowed_fails=3)
 
@@ -143,9 +148,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         exc = litellm.InternalServerError("500", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {}, "model_info": {}})
 
-        with patch(
-            "litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy"
-        ) as mock_sc:
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = True
             _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, None, None)
 
@@ -161,9 +164,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         exc = litellm.Timeout("timed out", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {}, "model_info": {}})
 
-        with patch(
-            "litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy"
-        ) as mock_sc:
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = False
             _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, policy, dep_allowed_fails=None)
 
@@ -175,9 +176,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         router = self._make_router({"litellm_params": {"cooldown_time": 120.0}, "model_info": {}})
 
-        with patch(
-            "litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy"
-        ) as mock_sc:
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = True
             _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, None, None)
 
@@ -188,9 +187,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
         router = self._make_router(None)
 
-        with patch(
-            "litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy"
-        ) as mock_sc:
+        with patch("litellm.router_utils.cooldown_handlers.should_cooldown_based_on_allowed_fails_policy") as mock_sc:
             mock_sc.return_value = False
             _should_cooldown_based_on_deployment_policy(router, "dep-1", exc, None, None)
 
