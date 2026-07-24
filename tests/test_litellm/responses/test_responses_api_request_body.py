@@ -259,3 +259,48 @@ async def test_aresponses_bedrock_mantle_service_tier_raises_without_drop_params
         mock_post.assert_not_called()
         assert "drop_params" in str(excinfo.value)
         assert "priority" in str(excinfo.value)
+
+
+async def _aresponses_and_get_request_headers(**request_kwargs) -> dict:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_headers_test", "gpt-4o"), 200)
+
+        await litellm.aresponses(
+            model="openai/gpt-4o",
+            api_key="fake-api-key",
+            input="hi",
+            **request_kwargs,
+        )
+
+        mock_post.assert_called_once()
+        return dict(mock_post.call_args.kwargs["headers"])
+
+
+@pytest.mark.asyncio
+async def test_aresponses_forwards_client_headers_kwarg_to_provider():
+    """
+    The proxy passes client headers it forwards (`forward_client_headers_to_llm_api`)
+    as a `headers` kwarg; those must reach the provider request.
+    """
+    request_headers = await _aresponses_and_get_request_headers(headers={"x-my-new-header": "hello-from-client"})
+
+    assert request_headers["x-my-new-header"] == "hello-from-client"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_merges_client_headers_with_extra_headers():
+    """
+    A `headers` kwarg and an explicit `extra_headers` are merged, with
+    `extra_headers` winning on conflicts.
+    """
+    request_headers = await _aresponses_and_get_request_headers(
+        headers={"x-my-new-header": "hello-from-client", "x-shared": "from-client"},
+        extra_headers={"x-explicit": "from-caller", "x-shared": "from-caller"},
+    )
+
+    assert request_headers["x-my-new-header"] == "hello-from-client"
+    assert request_headers["x-explicit"] == "from-caller"
+    assert request_headers["x-shared"] == "from-caller"

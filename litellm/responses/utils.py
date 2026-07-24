@@ -90,6 +90,21 @@ class ResponsesAPIRequestUtils:
         return [*merged_input]
 
     @staticmethod
+    def merge_client_forwarded_headers(
+        extra_headers: dict[str, Any] | None,
+        client_headers: dict[str, str] | None,
+    ) -> dict[str, Any] | None:
+        """
+        Merge headers forwarded by the proxy (`headers` kwarg, set when
+        `forward_client_headers_to_llm_api` is enabled) into `extra_headers`.
+
+        `extra_headers` wins on conflicts, since it is set explicitly by the caller.
+        """
+        if not client_headers:
+            return extra_headers
+        return {**client_headers, **(extra_headers or {})}
+
+    @staticmethod
     def _check_valid_arg(
         supported_params: Optional[List[str]],
         non_default_params: Dict,

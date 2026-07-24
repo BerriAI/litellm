@@ -927,6 +927,13 @@ def responses(
         _is_async = kwargs.pop("aresponses", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
+        client_headers = kwargs.get("headers")
+        extra_headers = ResponsesAPIRequestUtils.merge_client_forwarded_headers(
+            extra_headers=extra_headers,
+            client_headers=client_headers if isinstance(client_headers, dict) else None,
+        )
+        local_vars["extra_headers"] = extra_headers
+
         # Convert text_format to text parameter if provided
         text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(text_format=text_format, text=text)
         if text is not None:
