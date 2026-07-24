@@ -304,3 +304,18 @@ async def test_aresponses_merges_client_headers_with_extra_headers():
     assert request_headers["x-my-new-header"] == "hello-from-client"
     assert request_headers["x-explicit"] == "from-caller"
     assert request_headers["x-shared"] == "from-caller"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_client_header_conflict_is_case_insensitive():
+    """
+    HTTP header names are case-insensitive, so a differently cased client header
+    must not survive alongside the explicit `extra_headers` value.
+    """
+    request_headers = await _aresponses_and_get_request_headers(
+        headers={"X-Shared": "from-client"},
+        extra_headers={"x-shared": "from-caller"},
+    )
+
+    assert [name for name in request_headers if name.lower() == "x-shared"] == ["x-shared"]
+    assert request_headers["x-shared"] == "from-caller"
