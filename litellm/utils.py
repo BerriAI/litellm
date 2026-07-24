@@ -711,6 +711,19 @@ def _remove_thought_signatures_from_messages(messages: list, thought_signature_s
     return processed_messages
 
 
+def _restore_correlation_context_if_supported(logging_obj: Any) -> None:
+    """Call logging_obj._restore_correlation_context() if it's actually there.
+
+    Some call sites (tests, narrow unit paths) inject a minimal stand-in
+    object as litellm_logging_obj instead of a real Logging instance - this
+    method is new plumbing specific to request_correlation_in_logs, not part
+    of any pre-existing stand-in's expected interface.
+    """
+    restore = getattr(logging_obj, "_restore_correlation_context", None)
+    if restore is not None:
+        restore()
+
+
 def function_setup(
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -1047,7 +1060,7 @@ def function_setup(
         # wrapper_async(), which would otherwise be the one doing this restore.
         _logging_obj_for_correlation_cleanup = locals().get("logging_obj")
         if _logging_obj_for_correlation_cleanup is not None:
-            _logging_obj_for_correlation_cleanup._restore_correlation_context()
+            _restore_correlation_context_if_supported(_logging_obj_for_correlation_cleanup)
         raise e
 
 
@@ -1272,7 +1285,7 @@ def client(original_function):
         finally:
             _correlation_logging_obj = _correlation_logging_obj_holder.get("logging_obj")
             if _correlation_logging_obj is not None:
-                _correlation_logging_obj._restore_correlation_context()
+                _restore_correlation_context_if_supported(_correlation_logging_obj)
 
     def _wrapper_body(args, kwargs, _correlation_logging_obj_holder):
         # DO NOT MOVE THIS. It always needs to run first
@@ -1589,7 +1602,7 @@ def client(original_function):
         finally:
             _correlation_logging_obj = _correlation_logging_obj_holder.get("logging_obj")
             if _correlation_logging_obj is not None:
-                _correlation_logging_obj._restore_correlation_context()
+                _restore_correlation_context_if_supported(_correlation_logging_obj)
 
     async def _wrapper_async_body(args, kwargs, _correlation_logging_obj_holder):
         print_args_passed_to_litellm(original_function, args, kwargs)
