@@ -5730,6 +5730,76 @@ class TestRouterRequestTimeoutPropagation:
         )
 
 
+class TestAdvisorSubCallCooldown:
+    """Regression for LIT-4565: an advisor orchestration failure must not cool
+    down the selected (healthy) deployment, which would reject unrelated
+    callers to the same model group."""
+
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "claude-sonnet-5",
+                    "litellm_params": {"model": "bedrock/us.anthropic.claude-opus-4-8"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+        )
+
+    def _kwargs(self, exception):
+        return {
+            "exception": exception,
+            "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}},
+        }
+
+    def _auth_error(self):
+        return litellm.AuthenticationError(
+            message="x-api-key header is required",
+            llm_provider="anthropic",
+            model="claude-opus-4-8",
+        )
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(
+            model_ids=["dep-1"], parent_otel_span=None
+        )
+        return [entry[0] for entry in active]
+
+    @pytest.mark.asyncio
+    async def test_untagged_auth_error_cools_down_deployment(self):
+        from datetime import datetime
+
+        router = self._router()
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                self._kwargs(self._auth_error()), None, now, now
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+    def test_advisor_orchestration_failure_does_not_cool_down_deployment(self):
+        from datetime import datetime
+
+        from litellm.router_utils.cooldown_handlers import (
+            mark_advisor_orchestration_failure,
+        )
+
+        router = self._router()
+        exception = self._auth_error()
+        mark_advisor_orchestration_failure(exception)
+
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                self._kwargs(exception), None, now, now
+            )
+            is False
+        )
+        assert "dep-1" not in self._cooled_down_ids(router)
+
+
 def test_get_configured_token_limits_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
