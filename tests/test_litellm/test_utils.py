@@ -31,6 +31,7 @@ from litellm.utils import (
     get_prompt_cache_min_tokens,
     is_cached_message,
     is_prompt_caching_valid_prompt,
+    trim_messages,
 )
 
 # Adds the parent directory to the system path
@@ -48,6 +49,26 @@ def test_usage_openai_cache_write_tokens_populates_both_names():
     )
     assert usage.prompt_tokens_details.cache_write_tokens == 800
     assert usage.prompt_tokens_details.cache_creation_tokens == 800
+
+
+def test_trim_messages_system_message_list_content():
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant."},
+                {"type": "text", "text": "Always answer in French."},
+            ],
+        },
+        {"role": "user", "content": "Hello there, how are you?"},
+    ]
+
+    trimmed_messages = trim_messages(messages, model="gpt-4", max_tokens=5)
+
+    assert (
+        trimmed_messages[0]["content"]
+        == "You are a helpful assistant.Always answer in French."
+    )
 
 
 def test_usage_anthropic_cache_creation_maps_to_cache_write_tokens():
