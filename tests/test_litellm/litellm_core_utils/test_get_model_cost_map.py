@@ -209,3 +209,29 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         "claude-opus-4-5",
     ]:
         assert "supports_adaptive_thinking" not in backup[non_adaptive], non_adaptive
+
+
+def test_shipped_backup_has_current_openrouter_claude_routes():
+    """Regression for #33068: the current OpenRouter Claude routes (sonnet 5,
+    opus 4.8, opus 4.8-fast, opus 4.7-fast, fable 5) must ship in the bundled
+    backup with the pricing and token limits OpenRouter actually serves.
+    Without these entries litellm resolves no cost or context window for them,
+    so cost tracking silently reports nothing and get_model_info raises."""
+    backup = GetModelCostMap.load_local_model_cost_map()
+
+    expected = {
+        "openrouter/anthropic/claude-sonnet-5": (2e-06, 1e-05),
+        "openrouter/anthropic/claude-opus-4.8": (5e-06, 2.5e-05),
+        "openrouter/anthropic/claude-opus-4.8-fast": (1e-05, 5e-05),
+        "openrouter/anthropic/claude-opus-4.7-fast": (3e-05, 1.5e-04),
+        "openrouter/anthropic/claude-fable-5": (1e-05, 5e-05),
+    }
+
+    for model, (input_cost, output_cost) in expected.items():
+        entry = backup[model]
+        assert entry["litellm_provider"] == "openrouter", model
+        assert entry["input_cost_per_token"] == input_cost, model
+        assert entry["output_cost_per_token"] == output_cost, model
+        assert entry["max_input_tokens"] == 1000000, model
+        assert entry["max_output_tokens"] == 128000, model
+        assert entry["max_tokens"] == 128000, model
