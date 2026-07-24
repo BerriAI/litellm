@@ -861,22 +861,19 @@ async def _check_user_team_limits(
 def _check_team_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
-    existing_team_row: Any,
+    existing_team_max_budget: Optional[float],
 ) -> None:
     """
     Restrict who can grow a standalone team's spend ceiling on /team/update.
 
     A team admin (already authorized via _verify_team_access) may keep or lower
     the team budget, but only a proxy admin may grow it - by raising max_budget
-    above the team's current value, removing the cap, or re-arming the budget
-    window (which resets accumulated spend and is equivalent to restoring the
-    full ceiling). Setting a finite budget on a team that has no cap is a
-    restriction and is allowed. Org-scoped teams are governed by
-    _check_org_team_limits().
+    above the team's current value or by removing the cap (setting it to None).
+    Setting a finite budget on a team that has no cap is a restriction and is
+    allowed. Org-scoped teams are governed by _check_org_team_limits().
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
-    existing_team_max_budget = getattr(existing_team_row, "max_budget", None)
     if existing_team_max_budget is None:
         return
 
@@ -897,13 +894,41 @@ def _check_team_budget_update_authority(
             },
         )
 
-    if data.budget_duration is not None:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "Only a proxy admin can change a team's budget_duration (re-arming the window resets accumulated spend)."
-            },
-        )
+
+def _check_team_budget_window_rearm_authority(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_team_row: Any,
+) -> None:
+    """
+    Only a proxy admin may re-arm a team's budget window on /team/update.
+
+    Re-arming (applying a fresh or changed budget_duration) resets the team's
+    accumulated spend, which is equivalent to restoring its full budget. Unlike
+    the max_budget ceiling checks, this guard applies to every team - standalone
+    and org-scoped alike - because the spend reset it protects
+    (_reset_team_spend_if_budget_window_newly_armed) runs unconditionally. A
+    no-op re-send of the same active duration does not reset spend and is
+    therefore allowed.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if data.budget_duration is None:
+        return
+    from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
+
+    if not is_budget_window_newly_armed(
+        new_duration=data.budget_duration,
+        existing_duration=getattr(existing_team_row, "budget_duration", None),
+        existing_reset_at=getattr(existing_team_row, "budget_reset_at", None),
+    ):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "Only a proxy admin can re-arm a team's budget window by changing budget_duration (it resets accumulated spend)."
+        },
+    )
 
 
 def _should_auto_add_team_creator(
@@ -1824,8 +1849,17 @@ async def update_team(
             _check_team_budget_update_authority(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
-                existing_team_row=existing_team_row,
+                existing_team_max_budget=existing_team_row.max_budget,
             )
+
+        # Re-arming a budget window resets accumulated spend, so it needs
+        # proxy-admin authority regardless of whether the team is standalone or
+        # org-scoped (the ceiling checks above only cover standalone teams).
+        _check_team_budget_window_rearm_authority(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            existing_team_row=existing_team_row,
+        )
 
         updated_kv = data.json(exclude_unset=True)
 
@@ -2044,9 +2078,6 @@ def _reset_team_spend_if_budget_window_newly_armed(
     data: UpdateTeamRequest, updated_kv: dict, existing_team_row: Any
 ) -> None:
     if data.budget_duration is None:
-        return
-    if updated_kv.get("spend") is not None:
-        # A caller-supplied explicit spend takes precedence over the window reset.
         return
     from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
 

@@ -5042,6 +5042,8 @@ async def test_update_team_budget_duration_rearm_blocked_for_team_admin():
     - Admin sends budget_duration to re-arm the window (without touching max_budget)
     - Expected: 403 (only a proxy admin can change budget_duration)
     """
+    from datetime import timedelta
+
     from fastapi import Request
 
     from litellm.proxy._types import (
@@ -5077,12 +5079,98 @@ async def test_update_team_budget_duration_rearm_blocked_for_team_admin():
         mock_existing_team.organization_id = None
         mock_existing_team.max_budget = 500.0
         mock_existing_team.budget_duration = "7d"
+        # Active window (future reset) with a different duration -> newly armed.
+        mock_existing_team.budget_reset_at = datetime.now(timezone.utc) + timedelta(
+            days=3
+        )
         mock_existing_team.model_id = None
         mock_existing_team.model_dump.return_value = {
             "team_id": "standalone-team-123",
             "organization_id": None,
             "max_budget": 500.0,
             "members_with_roles": [{"user_id": "budget-rearm-admin", "role": "admin"}],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=dummy_request,
+                user_api_key_dict=team_admin_user,
+            )
+
+        assert exc_info.value.code == "403"
+        assert "budget_duration" in str(exc_info.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_team_budget_duration_rearm_blocked_for_org_scoped_team_admin():
+    """
+    The budget-window re-arm guard must also cover org-scoped teams.
+
+    The max_budget ceiling checks only run for standalone teams
+    (org_id_to_check is None), and _check_org_team_limits() does not gate
+    budget_duration - so without a dedicated, unconditional guard an org-scoped
+    team admin could re-arm the window and zero the team's accumulated spend.
+
+    Scenario:
+    - Team admin (internal_user) manages an ORG-SCOPED capped team
+    - Admin sends budget_duration to re-arm the window
+    - Expected: 403 (only a proxy admin can re-arm the budget window)
+    """
+    from datetime import timedelta
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        ProxyException,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    team_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="org-rearm-admin",
+        models=[],
+    )
+
+    update_request = UpdateTeamRequest(
+        team_id="org-team-123",
+        budget_duration="30d",
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "org-team-123"
+        mock_existing_team.organization_id = "org-1"  # Org-scoped team
+        mock_existing_team.max_budget = 500.0
+        mock_existing_team.budget_duration = "7d"
+        mock_existing_team.budget_reset_at = datetime.now(timezone.utc) + timedelta(
+            days=3
+        )
+        mock_existing_team.model_id = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "org-team-123",
+            "organization_id": "org-1",
+            "max_budget": 500.0,
+            "members_with_roles": [{"user_id": "org-rearm-admin", "role": "admin"}],
         }
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
