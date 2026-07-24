@@ -16,7 +16,11 @@ from typing import (
 )
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+    redact_nested_match_and_regex_keys,
+)
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.secret_managers.main import str_to_bool
@@ -944,17 +948,8 @@ class CustomGuardrail(CustomLogger):
                 # should not happen
                 container[key] = [existing, slg]
 
-        if "metadata" in request_data:
-            if request_data["metadata"] is None:
-                request_data["metadata"] = {}
-            _append_guardrail_info(request_data["metadata"])
-        elif "litellm_metadata" in request_data:
-            _append_guardrail_info(request_data["litellm_metadata"])
-        else:
-            # Ensure guardrail info is always logged (e.g. proxy may not have set
-            # metadata yet). Attach to "metadata" so spend log / standard logging see it.
-            request_data["metadata"] = {}
-            _append_guardrail_info(request_data["metadata"])
+        _, metadata_bucket = get_or_create_metadata_bucket(request_data)
+        _append_guardrail_info(metadata_bucket)
 
         # Emit the otel guardrail span here, where every guardrail execution lands,
         # rather than relying on a post-call hook that does not fire on every path
@@ -1211,7 +1206,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     """
     if logging_obj is None:
         return
-    meta_src = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    meta_src = request_data.get(get_metadata_variable_name_from_kwargs(request_data)) or {}
     slg_info = meta_src.get("standard_logging_guardrail_information")
     if not slg_info:
         return

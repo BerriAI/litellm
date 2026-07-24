@@ -1,12 +1,16 @@
 import copy
 import os
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -406,23 +410,6 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
     return headers
 
 
-def get_metadata_variable_name_from_kwargs(
-    kwargs: dict,
-) -> Literal["metadata", "litellm_metadata"]:
-    """
-    Helper to return what the "metadata" field should be called in the request data
-
-    - New endpoints return `litellm_metadata`
-    - Old endpoints return `metadata`
-
-    Context:
-    - LiteLLM used `metadata` as an internal field for storing metadata
-    - OpenAI then started using this field for their metadata
-    - LiteLLM is now moving to using `litellm_metadata` for our metadata
-    """
-    return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-
-
 LITELLM_PROXY_INTERNAL_METADATA_KEYS = frozenset(
     {
         "applied_policies",
@@ -448,23 +435,6 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS = frozenset(
         "secret_fields",
     }
 )
-
-
-def _get_or_create_proxy_metadata_bucket(
-    request_data: Dict,
-) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
-    """
-    Return the proxy-internal metadata bucket for this request.
-
-    Batch/file routes store proxy state in ``litellm_metadata`` so the OpenAI
-    ``metadata`` field can remain provider-safe (string values only).
-    """
-    metadata_key = get_metadata_variable_name_from_kwargs(request_data)
-    metadata_bucket = request_data.get(metadata_key)
-    if not isinstance(metadata_bucket, dict):
-        metadata_bucket = {}
-        request_data[metadata_key] = metadata_bucket
-    return metadata_key, metadata_bucket
 
 
 def sanitize_openai_provider_metadata(
@@ -496,7 +466,7 @@ def sanitize_openai_provider_metadata(
 def add_guardrail_to_applied_guardrails_header(request_data: Dict, guardrail_name: Optional[str]):
     if guardrail_name is None:
         return
-    _, _metadata = _get_or_create_proxy_metadata_bucket(request_data)
+    _, _metadata = get_or_create_metadata_bucket(request_data)
     if "applied_guardrails" in _metadata:
         if guardrail_name not in _metadata["applied_guardrails"]:
             _metadata["applied_guardrails"].append(guardrail_name)
@@ -513,7 +483,7 @@ def add_policy_to_applied_policies_header(request_data: Dict, policy_name: Optio
     """
     if policy_name is None:
         return
-    _, _metadata = _get_or_create_proxy_metadata_bucket(request_data)
+    _, _metadata = get_or_create_metadata_bucket(request_data)
     if "applied_policies" in _metadata:
         if policy_name not in _metadata["applied_policies"]:
             _metadata["applied_policies"].append(policy_name)
@@ -531,7 +501,7 @@ def add_policy_sources_to_metadata(request_data: Dict, policy_sources: Dict[str,
     """
     if not policy_sources:
         return
-    _, _metadata = _get_or_create_proxy_metadata_bucket(request_data)
+    _, _metadata = get_or_create_metadata_bucket(request_data)
     existing = _metadata.get("policy_sources", {})
     if not isinstance(existing, dict):
         existing = {}

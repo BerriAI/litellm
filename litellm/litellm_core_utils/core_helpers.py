@@ -195,6 +195,25 @@ def get_metadata_variable_name_from_kwargs(
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
 
+def get_or_create_metadata_bucket(
+    request_data: dict,
+) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
+    """
+    Return the proxy-internal metadata bucket for this request, creating it if absent.
+
+    Batch/file routes store proxy state in ``litellm_metadata`` so the OpenAI
+    ``metadata`` field can remain provider-safe (string values only). Every writer and
+    reader of proxy-internal metadata resolves the bucket through here, so a caller that
+    supplies its own ``metadata`` field cannot split them across two dicts.
+    """
+    metadata_key = get_metadata_variable_name_from_kwargs(request_data)
+    metadata_bucket = request_data.get(metadata_key)
+    if not isinstance(metadata_bucket, dict):
+        metadata_bucket = {}
+        request_data[metadata_key] = metadata_bucket
+    return metadata_key, metadata_bucket
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
