@@ -2478,6 +2478,82 @@ def test_get_assembled_streaming_response_returns_result_for_streaming():
     assert assembled is result
 
 
+def _assemble_responses_terminal_event(response: object) -> object:
+    import datetime
+
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    event = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=response,
+    )
+    return _make_logging_obj(stream=True)._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+
+def test_get_assembled_streaming_response_accepts_dict_response_usage() -> None:
+    response = {
+        "id": "resp-1",
+        "created_at": 0,
+        "usage": {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8},
+    }
+
+    assert _assemble_responses_terminal_event(response) is response
+    assert response["usage"] == {
+        "input_tokens": 3,
+        "output_tokens": 5,
+        "total_tokens": 8,
+    }
+
+
+def test_get_assembled_streaming_response_transforms_typed_dict_usage() -> None:
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    response = {
+        "id": "resp-1",
+        "created_at": 0,
+        "usage": ResponseAPIUsage(input_tokens=3, output_tokens=5, total_tokens=8),
+    }
+
+    assert _assemble_responses_terminal_event(response) is response
+    assert isinstance(response["usage"], dict)
+    assert response["usage"]["prompt_tokens"] == 3
+    assert response["usage"]["completion_tokens"] == 5
+    assert response["usage"]["total_tokens"] == 8
+
+
+def test_get_assembled_streaming_response_preserves_typed_responses_usage() -> None:
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    response = ResponsesAPIResponse(
+        id="resp-1",
+        created_at=0,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=3, output_tokens=5, total_tokens=8),
+    )
+
+    assert _assemble_responses_terminal_event(response) is response
+    assert isinstance(response.usage, dict)
+    assert response.usage["prompt_tokens"] == 3
+    assert response.usage["completion_tokens"] == 5
+    assert response.usage["total_tokens"] == 8
+
+
+def test_get_assembled_streaming_response_preserves_dict_without_usage() -> None:
+    response = {"id": "resp-1", "created_at": 0}
+
+    assert _assemble_responses_terminal_event(response) is response
+    assert response == {"id": "resp-1", "created_at": 0}
+
+
 def test_streaming_success_handler_includes_vertex_ai_metadata_in_standard_logging():
     """Assembled streaming responses should include Vertex AI metadata in logging payload."""
     import datetime
