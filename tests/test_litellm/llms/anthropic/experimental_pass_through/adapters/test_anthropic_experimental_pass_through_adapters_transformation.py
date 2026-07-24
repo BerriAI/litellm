@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from typing import Any, cast
@@ -3147,3 +3148,34 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_tools_to_openai_does_not_mutate_input_schema():
+    """Regression for #34510: translation must not alias or mutate the caller's
+    input_schema; extra top-level tool keys must not leak back into it."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    input_schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+    tools = [
+        {
+            "type": "computer_20250124",
+            "name": "computer",
+            "input_schema": input_schema,
+            "display_width_px": 1024,
+            "display_height_px": 768,
+        }
+    ]
+
+    original_tools = copy.deepcopy(tools)
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    assert input_schema == {"type": "object", "properties": {"a": {"type": "string"}}}
+    assert tools == original_tools
+
+    params = new_tools[0]["function"]["parameters"]
+    assert params is not input_schema
+    assert params["display_width_px"] == 1024
+    assert params["display_height_px"] == 768
+    assert params["type"] == "object"
+
+    second_pass, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+    assert second_pass == new_tools

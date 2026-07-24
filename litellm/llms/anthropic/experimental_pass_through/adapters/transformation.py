@@ -767,14 +767,18 @@ class LiteLLMAnthropicMessagesAdapter:
             function_chunk = ChatCompletionToolParamFunctionChunk(
                 name=truncated_name,
             )
-            if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
+            extra_tool_params = {k: v for k, v in tool.items() if k not in mapped_tool_params}
+            input_schema = tool.get("input_schema")
+            if isinstance(input_schema, dict):
+                function_chunk["parameters"] = {
+                    **copy.deepcopy(input_schema),
+                    **extra_tool_params,
+                }
+            elif extra_tool_params:
+                function_chunk["parameters"] = dict(extra_tool_params)
             if "description" in tool:
                 function_chunk["description"] = tool["description"]  # type: ignore
 
-            for k, v in tool.items():
-                if k not in mapped_tool_params:  # pass additional computer kwargs
-                    function_chunk.setdefault("parameters", {}).update({k: v})
             tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)  # type: ignore[arg-type]
