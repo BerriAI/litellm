@@ -209,6 +209,86 @@ async def test_apply_guardrail_judge_error_fails_open(mock_completion):
     assert result is inputs
 
 
+# ---------------------------------------------------------------------------
+# judge_model credential/provider resolution — route through the proxy Router
+# ---------------------------------------------------------------------------
+
+
+def _make_router(model_names):
+    router = MagicMock()
+    router.get_model_names.return_value = list(model_names)
+    router.acompletion = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))]
+        )
+    )
+    return router
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_call_routes_through_router_for_configured_model(mock_sdk_completion):
+    """A judge_model that is a configured proxy deployment must resolve its
+    credentials via the Router, not the SDK (which cannot see deployment creds)."""
+    router = _make_router({"my-judge-alias"})
+    guardrail = _make_guardrail(judge_model="my-judge-alias", llm_router=router)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    router.acompletion.assert_awaited_once()
+    assert router.acompletion.await_args.kwargs["model"] == "my-judge-alias"
+    mock_sdk_completion.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_call_falls_back_to_sdk_when_model_not_in_router(mock_sdk_completion):
+    """A judge_model that is not a configured deployment (e.g. a raw provider
+    model resolved from the environment) must fall back to the SDK."""
+    mock_sdk_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))]
+    )
+    router = _make_router({"some-other-model"})
+    guardrail = _make_guardrail(judge_model="gpt-4o-mini", llm_router=router)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    router.acompletion.assert_not_called()
+    mock_sdk_completion.assert_awaited_once()
+    assert mock_sdk_completion.await_args.kwargs["model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
+async def test_judge_call_uses_sdk_when_no_router(mock_sdk_completion):
+    mock_sdk_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))]
+    )
+    guardrail = _make_guardrail(judge_model="gpt-4o-mini")
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    assert result is inputs
+    mock_sdk_completion.assert_awaited_once()
+
+
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_wires_llm_router(mock_mgr):
+    router = _make_router({"my-judge-alias"})
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict(judge_model="my-judge-alias")
+    instance = initialize_guardrail(lp, g, router)
+    assert instance.llm_router is router
+
+
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
 async def test_apply_guardrail_clamps_score(mock_completion):
