@@ -4,6 +4,7 @@ count actual model entries, not reserved meta keys) and the extraction of the
 ``fallback_generalizations`` block out of the raw map.
 """
 
+import json
 import os
 import sys
 
@@ -23,6 +24,14 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     _count_model_entries,
     _finalize_model_cost_map,
 )
+
+
+def _load_root_cost_map() -> dict:
+    path = os.path.join(
+        os.path.dirname(__file__), "../../../model_prices_and_context_window.json"
+    )
+    with open(path) as f:
+        return json.load(f)
 
 
 def _make_models(n: int) -> dict:
@@ -211,12 +220,17 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         assert "supports_adaptive_thinking" not in backup[non_adaptive], non_adaptive
 
 
-def test_azure_ai_claude_1m_context_entries():
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_azure_ai_claude_1m_context_entries(cost_map: dict):
     """Microsoft Foundry serves a 1M-token context window for Opus 4.6+ and Sonnet
     4.6+, so the ``azure_ai`` entries must not advertise the 200k cap that made
-    context-aware clients compact prompts early (LIT-4406)."""
-    backup = GetModelCostMap.load_local_model_cost_map()
-
+    context-aware clients compact prompts early (LIT-4406). Both the root map (used
+    by default network loading) and the bundled fallback are checked so the two can
+    never drift apart."""
     for model in [
         "azure_ai/claude-opus-4-6",
         "azure_ai/claude-opus-4-7",
@@ -225,7 +239,7 @@ def test_azure_ai_claude_1m_context_entries():
         "azure_ai/claude-sonnet-5",
         "azure_ai/claude-sonnet-4-6",
     ]:
-        assert backup[model]["max_input_tokens"] == 1000000, model
+        assert cost_map[model]["max_input_tokens"] == 1000000, model
 
     for model in [
         "azure_ai/claude-opus-4-1",
@@ -233,4 +247,4 @@ def test_azure_ai_claude_1m_context_entries():
         "azure_ai/claude-sonnet-4-5",
         "azure_ai/claude-haiku-4-5",
     ]:
-        assert backup[model]["max_input_tokens"] == 200000, model
+        assert cost_map[model]["max_input_tokens"] == 200000, model
