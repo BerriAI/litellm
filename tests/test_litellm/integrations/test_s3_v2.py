@@ -1388,3 +1388,140 @@ def test_s3_server_side_encryption_read_from_callback_params():
         assert logger.s3_server_side_encryption == "aws:kms"
     finally:
         litellm.s3_callback_params = original
+
+
+@pytest.mark.asyncio
+async def test_async_upload_sets_kms_key_id_header_when_configured():
+    """
+    When s3_server_side_encryption_kms_key_id is set, the PUT must carry
+    x-amz-server-side-encryption-aws-kms-key-id so buckets whose IAM policy
+    enforces an exact customer-managed KMS key stop returning 403.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_server_side_encryption="aws:kms",
+        s3_server_side_encryption_kms_key_id="arn:aws:kms:us-east-1:123456789012:key/abc-123",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-kms.json",
+        payload={"test": "kms"},
+        s3_object_download_filename="test-kms.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(test_element)
+
+    headers = logger.async_httpx_client.put.call_args.kwargs["headers"]
+    assert headers["x-amz-server-side-encryption"] == "aws:kms"
+    assert (
+        headers["x-amz-server-side-encryption-aws-kms-key-id"]
+        == "arn:aws:kms:us-east-1:123456789012:key/abc-123"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_upload_omits_kms_key_id_header_when_not_configured():
+    """Without s3_server_side_encryption_kms_key_id, the KMS header is absent."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_server_side_encryption="aws:kms",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-no-kms.json",
+        payload={"test": "no-kms"},
+        s3_object_download_filename="test-no-kms.json",
+    )
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(test_element)
+
+    headers = logger.async_httpx_client.put.call_args.kwargs["headers"]
+    assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
+
+
+def test_sync_upload_sets_kms_key_id_header_when_configured(monkeypatch):
+    """The sync upload path must also send the KMS key id header when configured."""
+    from unittest.mock import MagicMock
+
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_server_side_encryption="aws:kms",
+        s3_server_side_encryption_kms_key_id="arn:aws:kms:us-east-1:123456789012:key/abc-123",
+    )
+
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sync-kms.json",
+        payload={"test": "sync-kms"},
+        s3_object_download_filename="test-sync-kms.json",
+    )
+    _require_non_security_md5(monkeypatch)
+
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch(
+        "litellm.integrations.s3_v2._get_httpx_client",
+        return_value=mock_sync_client,
+    ):
+        logger.upload_data_to_s3(test_element)
+
+    headers = mock_sync_client.put.call_args.kwargs["headers"]
+    assert headers["x-amz-server-side-encryption"] == "aws:kms"
+    assert (
+        headers["x-amz-server-side-encryption-aws-kms-key-id"]
+        == "arn:aws:kms:us-east-1:123456789012:key/abc-123"
+    )
+
+
+def test_s3_server_side_encryption_kms_key_id_read_from_callback_params():
+    """s3_server_side_encryption_kms_key_id can be configured via s3_callback_params."""
+    import litellm
+
+    original = litellm.s3_callback_params
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "from-global",
+        "s3_server_side_encryption": "aws:kms",
+        "s3_server_side_encryption_kms_key_id": "arn:aws:kms:us-east-1:123456789012:key/abc-123",
+    }
+    try:
+        logger = S3Logger()
+        assert (
+            logger.s3_server_side_encryption_kms_key_id
+            == "arn:aws:kms:us-east-1:123456789012:key/abc-123"
+        )
+    finally:
+        litellm.s3_callback_params = original
