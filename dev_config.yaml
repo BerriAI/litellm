@@ -176,6 +176,33 @@ model_list:
     model_info:
       access_groups: ["free", "pro", "team"]
 
+  # ============================================================
+  # BytePlus (Ark) — Video Generation (async /v1/videos)
+  # model_name matches the id registered on tokenhub so xct-chat's
+  # video_gen tool and xct-home's catalog resolve the same string.
+  # ============================================================
+
+  - model_name: dreamina-seedance-2-0-260128
+    litellm_params:
+      model: byteplus/dreamina-seedance-2-0-260128
+      api_key: os.environ/BYTEPLUS_API_KEY
+    model_info:
+      access_groups: ["free", "pro", "team"]
+
+  - model_name: dreamina-seedance-2-0-fast-260128
+    litellm_params:
+      model: byteplus/dreamina-seedance-2-0-fast-260128
+      api_key: os.environ/BYTEPLUS_API_KEY
+    model_info:
+      access_groups: ["free", "pro", "team"]
+
+  - model_name: seedance-1-5-pro-251215
+    litellm_params:
+      model: byteplus/seedance-1-5-pro-251215
+      api_key: os.environ/BYTEPLUS_API_KEY
+    model_info:
+      access_groups: ["free", "pro", "team"]
+
 general_settings:
   master_key: sk-1234
 

@@ -44558,6 +44558,90 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "byteplus/dreamina-seedance-2-0-260128": {
+        "litellm_provider": "byteplus",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1512,
+        "output_cost_per_second_1080p": 0.3742,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "byteplus/dreamina-seedance-2-0-fast-260128": {
+        "litellm_provider": "byteplus",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.121,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "byteplus/seedance-1-0-pro-250528": {
+        "litellm_provider": "byteplus",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.054,
+        "output_cost_per_second_1080p": 0.1215,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1587798",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "byteplus/seedance-1-0-pro-fast-251015": {
+        "litellm_provider": "byteplus",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0216,
+        "output_cost_per_second_1080p": 0.0486,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "byteplus/seedance-1-5-pro-251215": {
+        "litellm_provider": "byteplus",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.052,
+        "output_cost_per_second_1080p": 0.117,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk/1544106",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "byteplus/seedream-4-5-251128": {
         "litellm_provider": "byteplus",
         "mode": "image_generation",
