@@ -27,6 +27,7 @@ class FailBeforeFix(str, Enum):
 
 LlmEndpoint = Literal[
     "chat_completions",
+    "completions",
     "messages",
     "responses",
     "embeddings",

@@ -85,6 +85,12 @@ class RichMessagesRequest(BaseModel):
     messages: list[RichMessage]
 
 
+class CompletionsRequest(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 32
+
+
 class EmbeddingsRequest(BaseModel):
     model: str
     input: str
@@ -191,6 +197,14 @@ class MessagesResult(BaseModel):
     @property
     def text(self) -> str:
         return "".join(block.text or "" for block in self.content)
+
+
+class CompletionChoice(BaseModel):
+    text: str | None = None
+
+
+class CompletionsResult(BaseModel):
+    choices: list[CompletionChoice] = []
 
 
 class EmbeddingItem(BaseModel):
@@ -324,6 +338,15 @@ class EndpointsClient:
                 max_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
             ),
+        )
+
+    def text_completions(
+        self, key: str, model: str, prompt: str, *, max_tokens: int = 32
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/completions",
+            key,
+            CompletionsRequest(model=model, prompt=prompt, max_tokens=max_tokens),
         )
 
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:
