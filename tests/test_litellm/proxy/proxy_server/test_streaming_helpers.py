@@ -1100,6 +1100,30 @@ def test_keepalive_from_deployment_config_fallback_by_name_conflicting_deploymen
     assert result is None
 
 
+def test_keepalive_from_deployment_config_fallback_by_name_configured_plus_unset(monkeypatch):
+    """A deployment that leaves keepalive_seconds unset entirely (not explicitly 0)
+    must not inherit a sibling deployment's configured interval: without a model_id
+    we can't tell which deployment served the stream, so mixing a configured
+    deployment with an unconfigured one is just as ambiguous as two conflicting
+    configured values."""
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 20.0}},
+        {"litellm_params": {}},
+    ]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {}
+
+    result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
+    assert result is None
+
+
 def test_keepalive_from_deployment_config_no_router_returns_none(monkeypatch):
     monkeypatch.setattr(ps, "llm_router", None)
     result = _keepalive_from_deployment_config({"model": "gpt-4"}, None)
