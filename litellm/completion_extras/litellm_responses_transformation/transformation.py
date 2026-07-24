@@ -1070,6 +1070,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return status_mapping.get(status, "stop")
 
+    @staticmethod
+    def _finish_reason_for_incomplete_response(
+        incomplete_details: object | None,
+    ) -> str:
+        reason: str | None = None
+        if isinstance(incomplete_details, dict):
+            raw_reason = incomplete_details.get("reason")
+            if isinstance(raw_reason, str):
+                reason = raw_reason
+        elif incomplete_details is not None:
+            raw_reason = getattr(incomplete_details, "reason", None)
+            if isinstance(raw_reason, str):
+                reason = raw_reason
+        if reason == "content_filter":
+            return "content_filter"
+        return "length"
+
 
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
@@ -1302,22 +1319,30 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
-        elif event_type == "response.completed":
-            # Response is fully complete - now we can signal is_finished=True
-            # This ensures we don't prematurely end the stream before tool_calls arrive
-
-            # Check if response contains function_call items in output
-            # to determine correct finish_reason
-            response_data = parsed_chunk.get("response", {})
+        elif event_type in (
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+        ):
+            # Preserve upstream usage on terminal events so chat streaming does
+            # not fall back to local token_counter (e.g. max_output_tokens).
+            response_data = parsed_chunk.get("response", {}) or {}
             output_items = response_data.get("output", []) if response_data else []
 
             has_function_calls = any(
                 item.get("type") == "function_call" for item in output_items if isinstance(item, dict)
             )
 
-            finish_reason = "tool_calls" if has_function_calls else "stop"
+            status = response_data.get("status")
+            if event_type == "response.incomplete" or status == "incomplete":
+                finish_reason = LiteLLMResponsesTransformationHandler._finish_reason_for_incomplete_response(
+                    response_data.get("incomplete_details")
+                )
+            elif event_type == "response.completed" and has_function_calls:
+                finish_reason = "tool_calls"
+            else:
+                finish_reason = "stop"
 
-            # Extract reasoning items with encrypted_content for round-tripping
             completed_reasoning_items: Optional[List[Dict[str, Any]]] = None
             for item in output_items:
                 if not isinstance(item, dict) or item.get("type") != "reasoning":
