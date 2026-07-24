@@ -6,8 +6,9 @@ and the MIT-licensed reference implementation at
 https://github.com/patlux/pi-commandcode-provider.
 """
 
+from __future__ import annotations
+
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -34,7 +35,7 @@ class CommandCodeError(BaseLLMException):
     pass
 
 
-def get_command_code_headers(api_key: str) -> Dict[str, str]:
+def get_command_code_headers(api_key: str) -> dict[str, str]:
     """Build the required request headers for the Command Code API."""
     return {
         "Content-Type": "application/json",
@@ -44,7 +45,7 @@ def get_command_code_headers(api_key: str) -> Dict[str, str]:
     }
 
 
-def map_command_code_finish_reason(finish_reason: Optional[str]) -> str:
+def map_command_code_finish_reason(finish_reason: str | None) -> str:
     """Map a Command Code finishReason to an OpenAI finish_reason."""
     if finish_reason == "tool-calls":
         return "tool_calls"
@@ -53,7 +54,7 @@ def map_command_code_finish_reason(finish_reason: Optional[str]) -> str:
     return "stop"
 
 
-def parse_stream_event_line(line: str) -> Optional[dict]:
+def parse_stream_event_line(line: str) -> dict | None:
     """Parse one line of the newline-delimited event stream.
 
     Skips empty lines, comment lines (``:``), ``event:`` lines and
@@ -76,7 +77,7 @@ def parse_stream_event_line(line: str) -> Optional[dict]:
     return parsed
 
 
-def parse_tool_call_input(value: Any) -> Dict[str, Any]:
+def parse_tool_call_input(value: object) -> dict:
     """Normalize a tool-call ``input`` field to a dict.
 
     The API may send tool call arguments as a dict or as a JSON-encoded
@@ -95,15 +96,15 @@ def parse_tool_call_input(value: Any) -> Dict[str, Any]:
 
 
 def flatten_system_messages(
-    messages: List[AllMessageValues],
-) -> Tuple[str, List[AllMessageValues]]:
+    messages: list[AllMessageValues],
+) -> tuple[str, list[AllMessageValues]]:
     """Split system messages out of the message list.
 
     Command Code takes the system prompt as a flat ``params.system`` string
     rather than as messages. Returns (system_text, remaining_messages).
     """
-    system_parts: List[str] = []
-    remaining: List[AllMessageValues] = []
+    system_parts: list[str] = []
+    remaining: list[AllMessageValues] = []
     for message in messages:
         if message.get("role") in ("system", "developer"):
             content = convert_content_list_to_str(message)
@@ -114,28 +115,28 @@ def flatten_system_messages(
     return "\n\n".join(system_parts), remaining
 
 
-def _paired_tool_call_ids(messages: List[AllMessageValues]) -> Set[str]:
+def _paired_tool_call_ids(messages: list[AllMessageValues]) -> set[str]:
     """Return tool call ids that have both a call and a matching result.
 
     The API rejects unpaired tool calls, so both orphan tool calls and
     orphan tool results are dropped before sending.
     """
-    call_ids: Set[str] = set()
-    result_ids: Set[str] = set()
+    call_ids: set[str] = set()
+    result_ids: set[str] = set()
     for message in messages:
         if message.get("role") == "assistant":
-            for tool_call in cast(List[Dict[str, Any]], message.get("tool_calls") or []):
+            for tool_call in message.get("tool_calls") or []:
                 tool_call_id = tool_call.get("id")
                 if tool_call_id:
                     call_ids.add(tool_call_id)
         elif message.get("role") == "tool":
-            tool_call_id = cast(Optional[str], message.get("tool_call_id"))
+            tool_call_id = message.get("tool_call_id")
             if tool_call_id:
                 result_ids.add(tool_call_id)
     return call_ids & result_ids
 
 
-def _user_message_content(message: AllMessageValues) -> Any:
+def _user_message_content(message: AllMessageValues) -> object:
     """Translate user message content, keeping strings as-is.
 
     List content is reduced to Command Code text parts; non-text parts
@@ -146,7 +147,7 @@ def _user_message_content(message: AllMessageValues) -> Any:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: List[Dict[str, Any]] = []
+        parts: list[dict] = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 parts.append({"type": "text", "text": part.get("text", "")})
@@ -155,19 +156,19 @@ def _user_message_content(message: AllMessageValues) -> Any:
 
 
 def transform_messages_to_command_code(
-    messages: List[AllMessageValues],
-) -> List[Dict[str, Any]]:
+    messages: list[AllMessageValues],
+) -> list[dict]:
     """Translate OpenAI chat messages to Command Code message format."""
     paired_ids = _paired_tool_call_ids(messages)
-    out: List[Dict[str, Any]] = []
+    out: list[dict] = []
 
     for message in messages:
         role = message.get("role")
         if role == "user":
             out.append({"role": "user", "content": _user_message_content(message)})
         elif role == "assistant":
-            parts: List[Dict[str, Any]] = []
-            reasoning_content = cast(Optional[str], message.get("reasoning_content"))
+            parts: list[dict] = []
+            reasoning_content = message.get("reasoning_content")
             if reasoning_content:
                 parts.append({"type": "reasoning", "text": reasoning_content})
             content = message.get("content")
@@ -177,7 +178,7 @@ def transform_messages_to_command_code(
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         parts.append({"type": "text", "text": part.get("text", "")})
-            for tool_call in cast(List[Dict[str, Any]], message.get("tool_calls") or []):
+            for tool_call in message.get("tool_calls") or []:
                 tool_call_id = tool_call.get("id") or ""
                 if tool_call_id not in paired_ids:
                     continue
@@ -193,7 +194,7 @@ def transform_messages_to_command_code(
             if parts:
                 out.append({"role": "assistant", "content": parts})
         elif role == "tool":
-            tool_call_id = cast(Optional[str], message.get("tool_call_id"))
+            tool_call_id = message.get("tool_call_id")
             if not tool_call_id or tool_call_id not in paired_ids:
                 continue
             out.append(
@@ -203,7 +204,7 @@ def transform_messages_to_command_code(
                         {
                             "type": "tool-result",
                             "toolCallId": tool_call_id,
-                            "toolName": cast(Optional[str], message.get("name")) or "",
+                            "toolName": message.get("name") or "",
                             "output": {
                                 "type": "text",
                                 "value": convert_content_list_to_str(message),
@@ -216,13 +217,13 @@ def transform_messages_to_command_code(
     return out
 
 
-def transform_tools_to_command_code(tools: List[dict]) -> List[CommandCodeTool]:
+def transform_tools_to_command_code(tools: list[dict]) -> list[CommandCodeTool]:
     """Translate OpenAI tool definitions to Command Code format.
 
     Command Code uses a flat ``input_schema`` field, not OpenAI's nested
     ``function.parameters``.
     """
-    out: List[CommandCodeTool] = []
+    out: list[CommandCodeTool] = []
     for tool in tools:
         if tool.get("type") != "function":
             continue

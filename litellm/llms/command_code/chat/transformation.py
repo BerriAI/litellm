@@ -12,10 +12,12 @@ The API is not OpenAI-compatible: OpenAI-style params are nested under
 JSON events. See litellm/types/llms/command_code.py for the wire types.
 """
 
+from __future__ import annotations
+
 import datetime
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -51,16 +53,9 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.utils import CustomStreamWrapper
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
-    HTTPHandler = Any
-    AsyncHTTPHandler = Any
-    CustomStreamWrapper = Any
 
 
 class CommandCodeConfig(BaseConfig):
@@ -75,7 +70,7 @@ class CommandCodeConfig(BaseConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "max_tokens",
@@ -106,11 +101,11 @@ class CommandCodeConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or get_secret_str("COMMANDCODE_API_KEY")
         if not api_key:
@@ -123,12 +118,12 @@ class CommandCodeConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         base = api_base or get_secret_str("COMMANDCODE_API_BASE") or COMMAND_CODE_API_BASE
         return f"{base.rstrip('/')}/alpha/generate"
@@ -141,7 +136,7 @@ class CommandCodeConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -185,7 +180,7 @@ class CommandCodeConfig(BaseConfig):
             threadId=str(uuid.uuid4()),
             params=params,
         )
-        return cast(dict, request_body)
+        return dict(request_body)
 
     def transform_response(
         self,
@@ -194,21 +189,21 @@ class CommandCodeConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: object,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """Assemble a single ModelResponse from the buffered event stream.
 
         The generation endpoint always streams newline-delimited events;
         for the non-streaming path the full body is drained here.
         """
-        text_parts: List[str] = []
-        reasoning_parts: List[str] = []
-        tool_calls: List[ChatCompletionMessageToolCall] = []
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls: list[ChatCompletionMessageToolCall] = []
         finish_reason = "stop"
         usage = None
 
@@ -264,9 +259,7 @@ class CommandCodeConfig(BaseConfig):
             setattr(model_response, "usage", usage)
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CommandCodeError(status_code=status_code, message=error_message, headers=headers)
 
     @property
@@ -281,9 +274,9 @@ class CommandCodeConfig(BaseConfig):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """Command Code has native streaming support."""
         return False
@@ -304,9 +297,9 @@ class CommandCodeConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, "AsyncHTTPHandler"]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
@@ -358,18 +351,19 @@ class CommandCodeConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional["AsyncHTTPHandler"] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
         from litellm.llms.custom_httpx.http_handler import (
             AsyncHTTPHandler,
             get_async_httpx_client,
         )
+        from litellm.types.utils import LlmProviders
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider=cast(Any, "command_code"), params={})
+            client = get_async_httpx_client(llm_provider=LlmProviders.COMMAND_CODE, params={})
 
         verbose_logger.debug(f"Making async streaming request to: {api_base}")
 

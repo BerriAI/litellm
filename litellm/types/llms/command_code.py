@@ -7,7 +7,7 @@ OpenAI-compatible: OpenAI-style params are nested under ``params`` and the
 response is a newline-delimited stream of typed JSON events.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from __future__ import annotations
 
 from typing_extensions import Literal, TypedDict
 
@@ -23,12 +23,12 @@ class CommandCodeConfigBlock(TypedDict):
     workingDir: str
     date: str
     environment: str
-    structure: List[Any]
+    structure: list[str]
     isGitRepo: bool
     currentBranch: str
     mainBranch: str
     gitStatus: str
-    recentCommits: List[Any]
+    recentCommits: list[str]
 
 
 class CommandCodeTool(TypedDict, total=False):
@@ -40,16 +40,16 @@ class CommandCodeTool(TypedDict, total=False):
 
     type: Literal["function"]
     name: str
-    description: Optional[str]
-    input_schema: Dict[str, Any]
+    description: str | None
+    input_schema: dict[str, object]
 
 
 class CommandCodeParamsBlock(TypedDict, total=False):
     """OpenAI-style generation params, nested under ``params``."""
 
     model: str
-    messages: List[Dict[str, Any]]
-    tools: List[CommandCodeTool]
+    messages: list[dict[str, object]]
+    tools: list[CommandCodeTool]
     system: str
     max_tokens: int
     temperature: float
@@ -60,9 +60,9 @@ class CommandCodeRequestBody(TypedDict, total=False):
     """Request body for POST /alpha/generate."""
 
     config: CommandCodeConfigBlock
-    memory: Optional[Any]
-    taste: Optional[Any]
-    skills: Optional[Any]
+    memory: str | None
+    taste: str | None
+    skills: str | None
     threadId: str
     params: CommandCodeParamsBlock
 
@@ -104,9 +104,9 @@ class CommandCodeToolCallEvent(TypedDict, total=False):
     type: Literal["tool-call"]
     toolCallId: str
     toolName: str
-    input: Union[Dict[str, Any], str]
-    args: Union[Dict[str, Any], str]
-    arguments: Union[Dict[str, Any], str]
+    input: dict[str, object] | str
+    args: dict[str, object] | str
+    arguments: dict[str, object] | str
 
 
 class CommandCodeToolResultEvent(TypedDict, total=False):
@@ -143,4 +143,4 @@ class CommandCodeErrorEvent(TypedDict, total=False):
     """Stream-level error event. ``error`` may be an object or a string."""
 
     type: Literal["error"]
-    error: Union[Dict[str, Any], str]
+    error: dict[str, object] | str

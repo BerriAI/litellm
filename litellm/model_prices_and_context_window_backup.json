@@ -21445,6 +21445,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 0.0,
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true
@@ -21469,8 +21470,10 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 0.0,
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true
     },
     "command_code/claude-opus-5": {
@@ -21481,6 +21484,8 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 0.0,
+        "prompt_cache_min_tokens": 512,
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true
@@ -21493,8 +21498,10 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 0.0,
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true
     },
     "command_code/claude-opus-4-7": {
@@ -21507,6 +21514,7 @@
         "output_cost_per_token": 0.0,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_system_messages": true
     },
     "command_code/claude-haiku-4-5-20251001": {

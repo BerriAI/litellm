@@ -7,8 +7,9 @@ This iterator translates them into OpenAI-style ModelResponseStream chunks.
 Supports both sync and async iteration.
 """
 
+from __future__ import annotations
+
 import json
-from typing import Optional
 
 import httpx
 
@@ -57,8 +58,8 @@ class CommandCodeSSEStreamIterator:
     def _build_chunk(
         self,
         delta: Delta,
-        finish_reason: Optional[str] = None,
-        usage: Optional[Usage] = None,
+        finish_reason: str | None = None,
+        usage: Usage | None = None,
     ) -> ModelResponseStream:
         chunk = ModelResponseStream(
             choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
@@ -67,7 +68,7 @@ class CommandCodeSSEStreamIterator:
         )
         return chunk
 
-    def _process_line(self, line: str) -> Optional[ModelResponseStream]:
+    def _process_line(self, line: str) -> ModelResponseStream | None:
         """Translate one stream line into a chunk, or None for no-op events."""
         event = parse_stream_event_line(line)
         if event is None:
