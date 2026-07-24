@@ -164,7 +164,11 @@ class CohereChatConfig(BaseConfig):
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
-                optional_params["num_generations"] = value
+                if value is not None and value > 1 and not (litellm.drop_params or drop_params):
+                    raise litellm.utils.UnsupportedParamsError(
+                        message="Cohere's chat API does not support n > 1. Call the API multiple times to generate multiple completions. To drop this param, set `litellm.drop_params = True`",
+                        status_code=400,
+                    )
             if param == "top_p":
                 optional_params["p"] = value
             if param == "frequency_penalty":
