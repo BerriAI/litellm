@@ -252,7 +252,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-4 py-3">
-                  <p className="text-sm font-medium text-muted-foreground">Metadata</p>
+                  <p className="text-sm font-medium text-muted-foreground">mcp_info</p>
                   <div className="col-span-2 text-sm">
                     {hasCustomMcpInfo ? (
                       <pre className="text-xs bg-muted border border-border rounded-md p-3 overflow-auto whitespace-pre-wrap break-all">

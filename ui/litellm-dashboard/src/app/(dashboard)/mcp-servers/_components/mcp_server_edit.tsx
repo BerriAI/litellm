@@ -1052,8 +1052,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <Form.Item
               label={
                 <span className="flex items-center">
-                  Metadata (JSON)
-                  <Tooltip title="Optional free-form JSON stored on the server's mcp_info. Use it for arbitrary metadata such as the owning team or cost center.">
+                  mcp_info (JSON)
+                  <Tooltip title="Optional free-form JSON stored alongside the managed mcp_info fields. Use it for arbitrary data such as the owning team or cost center.">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
