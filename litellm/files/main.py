@@ -25,10 +25,13 @@ FileCreateProvider = Literal[
     "hosted_vllm",
     "manus",
     "anthropic",
+    "moonshot",
 ]
-FileRetrieveProvider = Literal["openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
-FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
+FileRetrieveProvider = Literal[
+    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic", "moonshot"
+]
+FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic", "moonshot"]
+FileListProvider = Literal["openai", "azure", "manus", "anthropic", "moonshot"]
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
@@ -82,6 +85,34 @@ azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
 bedrock_files_instance = BedrockFilesHandler()
 #################################################
+
+
+def _get_moonshot_file_credentials(
+    caller_api_key: str | None,
+    caller_api_base: str | None,
+) -> tuple[str, str]:
+    """Resolve Moonshot api_key and api_base for file operations.
+
+    Only trust the caller's api_base when they supply their own api_key.
+    When falling back to the server-side MOONSHOT_API_KEY the base URL is
+    resolved from server config so the key is never forwarded to a
+    caller-controlled endpoint.
+    """
+    default_base = get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+    if caller_api_key:
+        api_key = caller_api_key
+        api_base = caller_api_base or default_base
+    else:
+        server_key = get_secret_str("MOONSHOT_API_KEY")
+        if not server_key:
+            raise litellm.exceptions.AuthenticationError(
+                message="No Moonshot API key found. Pass api_key or set MOONSHOT_API_KEY in the environment.",
+                model="n/a",
+                llm_provider="moonshot",
+            )
+        api_key = server_key
+        api_base = default_base
+    return api_key, api_base
 
 
 def _add_trusted_model_credentials_to_litellm_params(
@@ -227,6 +258,20 @@ def create_file(
                 organization=openai_creds.organization,
                 create_file_data=_create_file_request,
             )
+        elif custom_llm_provider == "moonshot":
+            api_key, api_base = _get_moonshot_file_credentials(
+                caller_api_key=optional_params.api_key,
+                caller_api_base=optional_params.api_base,
+            )
+            response = openai_files_instance.create_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=None,
+                create_file_data=_create_file_request,
+            )
         elif custom_llm_provider == "azure":
             azure_creds = get_azure_credentials(
                 api_base=optional_params.api_base,
@@ -349,6 +394,20 @@ def file_retrieve(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+            )
+        elif custom_llm_provider == "moonshot":
+            api_key, api_base = _get_moonshot_file_credentials(
+                caller_api_key=optional_params.api_key,
+                caller_api_base=optional_params.api_base,
+            )
+            response = openai_files_instance.retrieve_file(
+                file_id=file_id,
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=None,
             )
         elif custom_llm_provider == "azure":
             azure_creds = get_azure_credentials(
@@ -532,6 +591,20 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+            )
+        elif custom_llm_provider == "moonshot":
+            api_key, api_base = _get_moonshot_file_credentials(
+                caller_api_key=optional_params.api_key,
+                caller_api_base=optional_params.api_base,
+            )
+            response = openai_files_instance.delete_file(
+                file_id=file_id,
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=None,
             )
         elif custom_llm_provider == "azure":
             azure_creds = get_azure_credentials(
@@ -737,6 +810,20 @@ def file_list(
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
             )
+        elif custom_llm_provider == "moonshot":
+            api_key, api_base = _get_moonshot_file_credentials(
+                caller_api_key=optional_params.api_key,
+                caller_api_base=optional_params.api_base,
+            )
+            response = openai_files_instance.list_files(
+                purpose=purpose,
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=None,
+            )
         elif custom_llm_provider == "azure":
             azure_creds = get_azure_credentials(
                 api_base=optional_params.api_base,
@@ -938,6 +1025,20 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+            )
+        elif custom_llm_provider == "moonshot":
+            api_key, api_base = _get_moonshot_file_credentials(
+                caller_api_key=optional_params.api_key,
+                caller_api_base=optional_params.api_base,
+            )
+            response = openai_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=None,
             )
         elif custom_llm_provider == "azure":
             azure_creds = get_azure_credentials(
