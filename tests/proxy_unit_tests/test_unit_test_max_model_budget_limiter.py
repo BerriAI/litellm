@@ -14,6 +14,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 
@@ -450,6 +451,23 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
                 kwargs, response_obj=None, start_time=None, end_time=None
             )
             mock_push.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_model_budget_limiter_initializes_redis_increment_queue_lock():
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    spend_key = "virtual_key_spend:test-key:gpt-4:1d"
+
+    await limiter._increment_spend_in_current_window(
+        spend_key=spend_key, response_cost=0.01, ttl=86400
+    )
+
+    assert limiter.redis_increment_operation_queue == [
+        RedisPipelineIncrementOperation(
+            key=spend_key, increment_value=0.01, ttl=86400
+        )
+    ]
 
 
 @pytest.mark.asyncio

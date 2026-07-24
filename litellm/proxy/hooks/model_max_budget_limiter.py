@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import List, Optional
 
@@ -28,6 +29,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue = []
+        self._redis_increment_queue_lock = asyncio.Lock()
         self.deployment_budget_config = None
 
     async def is_key_within_model_budget(
