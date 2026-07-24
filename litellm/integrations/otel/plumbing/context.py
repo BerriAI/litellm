@@ -5,7 +5,14 @@ from typing import TYPE_CHECKING, Mapping
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
-from opentelemetry.trace import Link, Span, get_current_span, set_span_in_context
+from opentelemetry.trace import (
+    Link,
+    NonRecordingSpan,
+    Span,
+    SpanContext,
+    get_current_span,
+    set_span_in_context,
+)
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
@@ -100,6 +107,62 @@ def reset_mcp_message_trace_carrier(token: "Token[Mapping[str, str] | None]") ->
     _mcp_message_trace_carrier.reset(token)
 
 
+# The transport span of the HTTP request carrying the CURRENT MCP message, as a
+# plain ``SpanContext`` so it can cross a task boundary.
+#
+# ``_request_root_span`` above cannot be used for MCP: a *stateful* streamable-HTTP
+# session runs every message on the single task spawned by that session's
+# ``initialize`` POST, so the ContextVar the ASGI request task writes at auth time
+# is frozen at ``initialize`` there and never sees the later ``tools/call`` POSTs.
+# Reading it from the message handler would parent every tool call in the session
+# to the first request's (already ended) server span. The gateway instead resolves
+# the current message's transport span on the request task and hands it over the
+# same way it hands over per-request auth, and the handler publishes it here for
+# the span emitter to pick up.
+_mcp_message_transport_span_context: "ContextVar[SpanContext | None]" = ContextVar(
+    "litellm_otel_mcp_message_transport_span_context", default=None
+)
+
+
+def set_mcp_message_transport_span_context(
+    span_context: "SpanContext | None",
+) -> "Token[SpanContext | None]":
+    """Publish the transport span of the request carrying the current MCP message.
+
+    Returns the reset token; the caller must reset it once the message is handled
+    so the transport never leaks to the next message on the same session task.
+    """
+    return _mcp_message_transport_span_context.set(span_context)
+
+
+def reset_mcp_message_transport_span_context(token: "Token[SpanContext | None]") -> None:
+    _mcp_message_transport_span_context.reset(token)
+
+
+def request_root_span_context() -> "SpanContext | None":
+    """The anchored request root span's context, safe to hand to another task.
+
+    A ``SpanContext`` is an immutable value, unlike the live ``Span``, so passing it
+    across the MCP session-task boundary cannot keep a finished span alive or invite
+    writes to it from the wrong request.
+    """
+    span = request_root_span()
+    return span.get_span_context() if span is not None else None
+
+
+def _mcp_transport_span_context() -> "SpanContext | None":
+    """The transport span an MCP message span should attach to.
+
+    Prefers the transport the gateway published for this specific message; falls
+    back to the ambient request anchor for paths that emit an MCP span on the
+    request task itself (the REST MCP endpoints, the SDK).
+    """
+    published = _mcp_message_transport_span_context.get()
+    if published is not None and published.is_valid:
+        return published
+    return request_root_span_context()
+
+
 def set_request_baggage(values: Mapping[str, str], context: Context | None = None) -> Context:
     """Return a context with ``values`` written into Baggage."""
     ctx = context
@@ -160,33 +223,44 @@ def resolve_request_span_context() -> Context:
 def resolve_mcp_span_context(
     carrier: "Mapping[str, str] | None" = None,
 ) -> "tuple[Context, tuple[Link, ...]]":
-    """Parent context + links for an MCP message span, per the OTel GenAI MCP semconv.
+    """Parent context + links for an MCP message span.
 
-    MCP and the underlying transport (HTTP) are independent lifecycles — one
-    streamable-HTTP session multiplexes many messages, so nesting the message span
-    under the HTTP/session span is wrong (it renders the message at the session's
-    start, skewed by however long the session has been open). Instead:
+    When the client propagates W3C trace context in the request's ``params._meta``
+    (SEP-414), MCP and the underlying transport are independent lifecycles — one
+    streamable-HTTP session multiplexes many messages, and the client's own span is
+    the truthful parent. So, per the OTel GenAI MCP semconv:
 
-    * parent to the trace context the client propagated in the request's
-      ``params._meta`` (a *remote* parent), and
-    * record the transport/session span as a *link*, never the parent.
+    * parent to the trace context the client propagated (a *remote* parent), and
+    * record the transport span as a *link*, never the parent.
+
+    Almost no client implements SEP-414 yet, so in practice nothing is propagated.
+    Rooting the span there splits a single tool call into two disconnected traces
+    joined only by a link, which is how it surfaces in APM: the ``POST`` transaction
+    and the ``tools/call`` span share no trace. With no remote parent to honor,
+    parent to the transport span of the request carrying this message instead, so
+    the call stays in one trace; no link is added since the transport is now the
+    real parent. The transport comes from :func:`_mcp_transport_span_context`, which
+    is the *current message's* POST rather than whatever request happened to open
+    the session, so a long-lived session does not glue every message under its
+    first request. With neither a remote parent nor a transport the returned context
+    carries no span and the span legitimately starts its own root trace.
 
     Only trace context (``traceparent``/``tracestate``) is extracted, never the
     client's W3C Baggage: ``params._meta`` is caller-controlled, and the otel
     baggage processor stamps allowlisted baggage keys (``litellm.team.id``,
     ``litellm.metadata.*``, ...) onto the span as attributes, so honoring remote
-    baggage would let a client spoof a span's identity attribution.
-
-    With no propagated context the returned context carries no span, so the span
-    starts its own root trace (still linked to the transport). The base context is
-    explicitly empty so an absent ``traceparent`` can never fall through to the
-    ambient (stale session) span.
+    baggage would let a client spoof a span's identity attribution. The base context
+    for extraction is explicitly empty so an absent or malformed ``traceparent`` can
+    never fall through to the ambient (stale session) span.
     """
     source = carrier if carrier is not None else _mcp_message_trace_carrier.get()
     parent = _PROPAGATOR.extract(dict(source or {}), context=Context())
-    transport = request_root_span()
-    links = (Link(transport.get_span_context()),) if transport is not None else ()
-    return parent, links
+    transport = _mcp_transport_span_context()
+    if is_recordable_span(get_current_span(parent)):
+        return parent, (Link(transport),) if transport is not None else ()
+    if transport is not None:
+        return context_from_span(NonRecordingSpan(transport)), ()
+    return parent, ()
 
 
 def is_recordable_span(obj: object) -> bool:
