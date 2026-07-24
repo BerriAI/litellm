@@ -32,7 +32,11 @@ from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 
-BRIDGE = A2ABridgeParams(custom_llm_provider="anthropic", model="claude-haiku-4-5")
+BRIDGE = A2ABridgeParams(
+    custom_llm_provider="anthropic",
+    model="claude-haiku-4-5",
+    api_key="os.environ/ANTHROPIC_API_KEY",
+)
 
 MOVEHOME_AGENT_CARD_URL = "https://movehome.org/.well-known/agent.json"
 MOVEHOME_ORIGIN = "https://movehome.org"
