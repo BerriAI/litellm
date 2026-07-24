@@ -151,6 +151,9 @@ class MockPrismaClient:
             "budget": [],
             "enduser": [],
         }
+        # Records every update_data invocation (one entry per call) so tests can
+        # assert on how writes are batched, not just the final overwrite above.
+        self.update_data_calls: List[Dict[str, Any]] = []
         self.db = MockDB()
 
     async def get_data(self, table_name, query_type, **kwargs):
@@ -180,6 +183,13 @@ class MockPrismaClient:
         return data
 
     async def update_data(self, query_type, data_list, table_name):
+        self.update_data_calls.append(
+            {
+                "query_type": query_type,
+                "table_name": table_name,
+                "data_list": list(data_list),
+            }
+        )
         self.updated_data[table_name] = data_list
         return data_list
 
@@ -379,6 +389,73 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
     updated_budget = mock_prisma_client.updated_data["budget"][0]
     assert updated_enduser.spend == 0.0
     assert updated_budget.budget_reset_at > now
+
+
+def test_reset_budget_for_endusers_commits_in_bounded_chunks(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    End users must be written in bounded batches. A single batch commit for
+    every end user is one Prisma query-engine request that times out
+    (httpx.ReadTimeout) at scale, failing the whole reset. Verify writes are
+    split into chunks of at most RESET_BUDGET_ENDUSER_BATCH_SIZE, and that every
+    end user is still reset.
+    """
+    from litellm.proxy.common_utils.reset_budget_job import (
+        RESET_BUDGET_ENDUSER_BATCH_SIZE,
+    )
+
+    now = datetime.now(timezone.utc)
+    test_budget = type(
+        "LiteLLM_BudgetTable",
+        (),
+        {
+            "max_budget": 500.0,
+            "budget_duration": "1d",
+            "budget_reset_at": now,
+            "budget_id": "test-budget-1",
+        },
+    )
+
+    num_endusers = RESET_BUDGET_ENDUSER_BATCH_SIZE * 2 + 5  # spans 3 chunks
+    endusers = [
+        type(
+            "LiteLLM_EndUserTable",
+            (),
+            {
+                "spend": 20.0,
+                "litellm_budget_table": test_budget,
+                "user_id": f"test-enduser-{i}",
+            },
+        )
+        for i in range(num_endusers)
+    ]
+
+    mock_prisma_client.data["budget"] = [test_budget]
+    mock_prisma_client.data["enduser"] = endusers
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    enduser_calls = [
+        c
+        for c in mock_prisma_client.update_data_calls
+        if c["table_name"] == "enduser"
+    ]
+
+    # Chunked into ceil(n / batch) calls, none larger than the batch size.
+    expected_calls = (
+        num_endusers + RESET_BUDGET_ENDUSER_BATCH_SIZE - 1
+    ) // RESET_BUDGET_ENDUSER_BATCH_SIZE
+    assert len(enduser_calls) == expected_calls
+    assert all(
+        len(c["data_list"]) <= RESET_BUDGET_ENDUSER_BATCH_SIZE for c in enduser_calls
+    )
+
+    # Every end user was written exactly once, and all had spend reset to 0.
+    written = [eu for c in enduser_calls for eu in c["data_list"]]
+    assert len(written) == num_endusers
+    assert {eu.user_id for eu in written} == {eu.user_id for eu in endusers}
+    assert all(eu.spend == 0.0 for eu in written)
 
 
 def test_reset_budget_all(reset_budget_job, mock_prisma_client):

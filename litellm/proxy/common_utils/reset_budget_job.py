@@ -31,6 +31,14 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.services import ServiceTypes
 
+# Max number of end-user rows written per Prisma batch during budget reset.
+# The end-user reset writes every row in a single `batch_().commit()` — one
+# request to the Prisma query engine covering all rows. On large deployments
+# that request exceeds the Prisma HTTP client read timeout and the whole reset
+# fails with httpx.ReadTimeout, so no end-user budgets are reset. Committing in
+# bounded chunks keeps each request small enough to complete.
+RESET_BUDGET_ENDUSER_BATCH_SIZE = 100
+
 
 class ResetBudgetJob:
     """
@@ -306,11 +314,20 @@ class ResetBudgetJob:
                     json.dumps(updated_endusers, indent=4, default=str),
                 )
 
-                await self.prisma_client.update_data(
-                    query_type="update_many",
-                    data_list=updated_endusers,
-                    table_name="enduser",
-                )
+                # Commit in bounded chunks. A single batch commit for all
+                # end users is one query-engine request that times out
+                # (httpx.ReadTimeout) once the set is large enough, failing
+                # the entire reset.
+                for i in range(
+                    0, len(updated_endusers), RESET_BUDGET_ENDUSER_BATCH_SIZE
+                ):
+                    await self.prisma_client.update_data(
+                        query_type="update_many",
+                        data_list=updated_endusers[
+                            i : i + RESET_BUDGET_ENDUSER_BATCH_SIZE
+                        ],
+                        table_name="enduser",
+                    )
 
             end_time = time.time()
             if len(failed_endusers) > 0:  # If any endusers failed to reset
