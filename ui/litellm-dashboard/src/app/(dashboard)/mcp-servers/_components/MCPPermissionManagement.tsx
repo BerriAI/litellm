@@ -4,6 +4,35 @@ import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-desi
 import { MCPServer, AUTH_TYPE } from "@/components/mcp_tools/types";
 const { Panel } = Collapse;
 
+function normalizeCidrs(value: string[] | null | undefined): string[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * Lightweight client-side check that a string is an IPv4 or IPv6 CIDR. The
+ * proxy re-validates with Python's ipaddress on write; this only surfaces
+ * obvious typos before submit.
+ */
+export function isValidCidr(value: string): boolean {
+  const trimmed = value.trim();
+  const slash = trimmed.lastIndexOf("/");
+  if (slash === -1) return false;
+  const addr = trimmed.slice(0, slash);
+  const prefix = Number(trimmed.slice(slash + 1));
+  if (!Number.isInteger(prefix) || prefix < 0) return false;
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+  const v4match = addr.match(ipv4);
+  if (v4match) {
+    if (prefix > 32) return false;
+    return v4match.slice(1).every((octet) => Number(octet) <= 255);
+  }
+  // IPv6: allow hex groups and a single "::" compression.
+  if (prefix > 128) return false;
+  if (!/^[0-9a-fA-F:]+$/.test(addr)) return false;
+  if ((addr.match(/::/g) ?? []).length > 1) return false;
+  return addr.includes(":");
+}
+
 interface MCPPermissionManagementProps {
   availableAccessGroups: string[];
   mcpServer: MCPServer | null;
@@ -70,6 +99,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
       if (typeof mcpServer.available_on_public_internet === "boolean") {
         form.setFieldValue("available_on_public_internet", mcpServer.available_on_public_internet);
       }
+      form.setFieldValue("allowed_cidrs", normalizeCidrs(mcpServer.allowed_cidrs));
       if (typeof mcpServer.delegate_auth_to_upstream === "boolean") {
         form.setFieldValue("delegate_auth_to_upstream", mcpServer.delegate_auth_to_upstream);
       }
@@ -79,6 +109,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
     } else {
       form.setFieldValue("allow_all_keys", false);
       form.setFieldValue("available_on_public_internet", true);
+      form.setFieldValue("allowed_cidrs", []);
       form.setFieldValue("delegate_auth_to_upstream", false);
       form.setFieldValue("oauth_passthrough", false);
     }
@@ -163,6 +194,43 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <Switch />
             </Form.Item>
           </div>
+
+          <Form.Item
+            label={
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Allowed CIDRs
+                <Tooltip title="Restrict this server to callers whose source IP falls within these IPv4/IPv6 CIDR ranges (e.g. 10.0.0.0/8, 2001:db8::/32). Applies to tool listing and tool calls, on top of the internal-network setting. Leave empty for no per-server IP restriction.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+            name="allowed_cidrs"
+            className="mb-4"
+            rules={[
+              {
+                validator: (_, value: string[] | undefined) => {
+                  const invalid = (value ?? []).filter((cidr) => !isValidCidr(cidr));
+                  if (invalid.length > 0) {
+                    return Promise.reject(
+                      new Error(
+                        `Invalid CIDR(s): ${invalid.join(", ")}. Use notation like 10.0.0.0/8 or 2001:db8::/32`,
+                      ),
+                    );
+                  }
+                  return Promise.resolve();
+                },
+              },
+            ]}
+          >
+            <Select
+              mode="tags"
+              placeholder="e.g. 10.0.0.0/8, 192.168.1.0/24, 2001:db8::/32"
+              tokenSeparators={[","]}
+              className="rounded-lg"
+              size="large"
+              allowClear
+            />
+          </Form.Item>
 
           {isOAuth2 && (
             <div className="flex items-start justify-between gap-4">

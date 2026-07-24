@@ -338,6 +338,7 @@ model LiteLLM_MCPServerTable {
   token_exchange_profile String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
+  allowed_cidrs String[] @default([])
   delegate_auth_to_upstream Boolean @default(false)
   oauth_passthrough Boolean @default(false)
   dcr_bridge Boolean?

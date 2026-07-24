@@ -24,13 +24,14 @@ from litellm.proxy.auth.ip_address_utils import (
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
-def _make_server(server_id, available_on_public_internet=False):
+def _make_server(server_id, available_on_public_internet=False, allowed_cidrs=None):
     return MCPServer(
         server_id=server_id,
         name=server_id,
         server_name=server_id,
         transport="http",
         available_on_public_internet=available_on_public_internet,
+        allowed_cidrs=allowed_cidrs,
     )
 
 
@@ -591,3 +592,160 @@ class TestFilterServerIdsByIpWithInfo:
         )
         assert allowed == []
         assert blocked == 2
+
+
+class TestParseCidrs:
+    def test_empty_or_none_returns_empty(self):
+        assert IPAddressUtils.parse_cidrs(None) == []
+        assert IPAddressUtils.parse_cidrs([]) == []
+
+    def test_parses_ipv4_and_ipv6(self):
+        networks = IPAddressUtils.parse_cidrs(["10.0.0.0/8", "2001:db8::/32"])
+        assert len(networks) == 2
+
+    def test_skips_invalid_entries(self):
+        networks = IPAddressUtils.parse_cidrs(["10.0.0.0/8", "not-a-cidr", "999.1.1.1/8"])
+        assert len(networks) == 1
+
+    def test_all_invalid_returns_empty_not_default(self):
+        assert IPAddressUtils.parse_cidrs(["nope", "also-bad"]) == []
+
+
+class TestIsIpInNetworks:
+    def test_ipv4_membership(self):
+        nets = IPAddressUtils.parse_cidrs(["10.0.0.0/8"])
+        assert IPAddressUtils.is_ip_in_networks("10.1.2.3", nets) is True
+        assert IPAddressUtils.is_ip_in_networks("8.8.8.8", nets) is False
+
+    def test_ipv6_membership(self):
+        nets = IPAddressUtils.parse_cidrs(["2001:db8::/32"])
+        assert IPAddressUtils.is_ip_in_networks("2001:db8::1", nets) is True
+        assert IPAddressUtils.is_ip_in_networks("2001:dead::1", nets) is False
+
+    def test_xff_chain_uses_leftmost(self):
+        nets = IPAddressUtils.parse_cidrs(["10.0.0.0/8"])
+        assert IPAddressUtils.is_ip_in_networks("10.0.0.1, 8.8.8.8", nets) is True
+        assert IPAddressUtils.is_ip_in_networks("8.8.8.8, 10.0.0.1", nets) is False
+
+    def test_fails_closed_on_bad_input(self):
+        nets = IPAddressUtils.parse_cidrs(["10.0.0.0/8"])
+        assert IPAddressUtils.is_ip_in_networks("", nets) is False
+        assert IPAddressUtils.is_ip_in_networks(None, nets) is False
+        assert IPAddressUtils.is_ip_in_networks("not-an-ip", nets) is False
+        assert IPAddressUtils.is_ip_in_networks("10.0.0.1", []) is False
+
+
+class TestPerServerCidrAllowlist:
+    """Per-server allowed_cidrs must gate every ingress path (IPv4 + IPv6),
+    apply on top of available_on_public_internet, and leave servers without a
+    list unaffected."""
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_ipv4_inside_allowlist_is_accessible(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=["10.0.0.0/8"])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "10.1.2.3") is True
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_ipv4_outside_allowlist_is_rejected_even_when_public(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=["10.0.0.0/8"])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "8.8.8.8") is False
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_ipv6_inside_allowlist_is_accessible(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=["2001:db8::/32"])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "2001:db8::5") is True
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_ipv6_outside_allowlist_is_rejected(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=["2001:db8::/32"])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "2001:dead::5") is False
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_no_allowlist_preserves_existing_public_behavior(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=None)
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "8.8.8.8") is True
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_empty_allowlist_preserves_existing_public_behavior(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=[])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "8.8.8.8") is True
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_none_client_ip_bypasses_allowlist_for_internal_callers(self):
+        server = _make_server("s", available_on_public_internet=False, allowed_cidrs=["10.0.0.0/8"])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, None) is True
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_allowlist_and_internal_gate_both_apply(self):
+        # Inside the per-server CIDR but the server is internal-only and the IP is
+        # public: the internal-network gate still rejects it.
+        server = _make_server("s", available_on_public_internet=False, allowed_cidrs=["8.8.8.0/24"])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "8.8.8.8") is False
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_all_invalid_allowlist_fails_closed(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=["bad", "also-bad"])
+        manager = _make_manager([server])
+        assert manager._is_server_accessible_from_ip(server, "10.0.0.1") is False
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_filter_only_affects_servers_with_allowlist(self):
+        gated = _make_server("gated", available_on_public_internet=True, allowed_cidrs=["10.0.0.0/8"])
+        ungated = _make_server("ungated", available_on_public_internet=True)
+        manager = _make_manager([gated, ungated])
+        result = manager.filter_server_ids_by_ip(["gated", "ungated"], client_ip="8.8.8.8")
+        assert result == ["ungated"]
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_denied_message_names_cidr_allowlist(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=["10.0.0.0/8"])
+        manager = _make_manager([server])
+        message = manager._ip_access_denied_message(server, "8.8.8.8")
+        assert message is not None
+        assert "CIDR allowlist" in message
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_denied_message_none_when_allowed(self):
+        server = _make_server("s", available_on_public_internet=True, allowed_cidrs=["10.0.0.0/8"])
+        manager = _make_manager([server])
+        assert manager._ip_access_denied_message(server, "10.0.0.1") is None
+
+
+class TestAllowedCidrsRequestValidation:
+    def test_new_request_accepts_ipv4_and_ipv6(self):
+        from litellm.proxy._types import NewMCPServerRequest
+
+        req = NewMCPServerRequest(url="https://x", allowed_cidrs=["10.0.0.0/8", "2001:db8::/32"])
+        assert req.allowed_cidrs == ["10.0.0.0/8", "2001:db8::/32"]
+
+    def test_new_request_rejects_invalid_cidr(self):
+        from litellm.proxy._types import NewMCPServerRequest
+
+        with pytest.raises(ValidationError):
+            NewMCPServerRequest(url="https://x", allowed_cidrs=["not-a-cidr"])
+
+    def test_update_request_rejects_invalid_cidr(self):
+        from litellm.proxy._types import UpdateMCPServerRequest
+
+        with pytest.raises(ValidationError):
+            UpdateMCPServerRequest(server_id="s", allowed_cidrs=["999.999.0.0/8"])

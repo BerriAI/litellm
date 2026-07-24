@@ -1,4 +1,5 @@
 import enum
+import ipaddress
 import json
 import os
 from datetime import datetime
@@ -1235,6 +1236,25 @@ from litellm.models.mcp_server import (  # noqa: E402
 
 
 # MCP Proxy Request Types
+def _validate_allowed_cidrs(cidrs: list[str] | None) -> list[str] | None:
+    """Validate each per-server ``allowed_cidrs`` entry as an IPv4/IPv6 CIDR.
+
+    Raising here gives admins immediate feedback on a typo instead of silently
+    dropping the range at request time (which would fail the server closed).
+    """
+    if not cidrs:
+        return cidrs
+    for cidr in cidrs:
+        try:
+            ipaddress.ip_network(cidr, strict=False)
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid CIDR in allowed_cidrs: {cidr!r}. Use IPv4/IPv6 CIDR notation, "
+                "e.g. 10.0.0.0/8 or 2001:db8::/32"
+            ) from e
+    return cidrs
+
+
 def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
     return ValueError(
         f"dcr_bridge is only supported for auth_type true_passthrough or oauth_delegate (got {auth_type!r}). "
@@ -1281,6 +1301,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    allowed_cidrs: list[str] | None = None
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: Optional[bool] = None
@@ -1304,6 +1325,11 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
+
+    @field_validator("allowed_cidrs")
+    @classmethod
+    def _check_allowed_cidrs(cls, value: list[str] | None) -> list[str] | None:
+        return _validate_allowed_cidrs(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -1387,6 +1413,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    allowed_cidrs: list[str] | None = None
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: Optional[bool] = None
@@ -1396,6 +1423,11 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: Optional[str] = None
     timeout: Optional[float] = None
     max_concurrent_requests: Optional[int] = None
+
+    @field_validator("allowed_cidrs")
+    @classmethod
+    def _check_allowed_cidrs(cls, value: list[str] | None) -> list[str] | None:
+        return _validate_allowed_cidrs(value)
 
     @model_validator(mode="before")
     @classmethod

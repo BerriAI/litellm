@@ -94,6 +94,48 @@ class IPAddressUtils:
         return networks
 
     @staticmethod
+    def parse_cidrs(
+        configured_ranges: list[str] | None,
+    ) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+        """
+        Parse a per-server ``allowed_cidrs`` allowlist into network objects.
+
+        Invalid entries are skipped with a warning so one typo cannot break the
+        whole list; callers must treat a configured-but-empty result as
+        fail-closed rather than "no allowlist".
+        """
+        if not configured_ranges:
+            return []
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        for cidr in configured_ranges:
+            try:
+                networks.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                verbose_proxy_logger.warning("Invalid CIDR in MCP server allowed_cidrs: %s, skipping", cidr)
+        return networks
+
+    @staticmethod
+    def is_ip_in_networks(
+        client_ip: str | None,
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
+    ) -> bool:
+        """
+        Return True if ``client_ip`` falls within any of ``networks``.
+
+        Handles X-Forwarded-For comma chains (takes leftmost = original client)
+        and IPv4/IPv6 uniformly. Fails closed: empty/invalid IPs never match.
+        """
+        if not client_ip:
+            return False
+        if "," in client_ip:
+            client_ip = client_ip.split(",")[0].strip()
+        try:
+            addr = ipaddress.ip_address(client_ip.strip())
+        except ValueError:
+            return False
+        return any(addr in network for network in networks)
+
+    @staticmethod
     def is_trusted_proxy(
         proxy_ip: Optional[str],
         trusted_networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]],
@@ -118,21 +160,8 @@ class IPAddressUtils:
         Handles X-Forwarded-For comma chains (takes leftmost = original client).
         Fails closed: empty/invalid IPs are treated as external.
         """
-        if not client_ip:
-            return False
-
-        # X-Forwarded-For may contain comma-separated chain; leftmost is original client
-        if "," in client_ip:
-            client_ip = client_ip.split(",")[0].strip()
-
         networks = internal_networks or IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
-
-        try:
-            addr = ipaddress.ip_address(client_ip.strip())
-        except ValueError:
-            return False
-
-        return any(addr in network for network in networks)
+        return IPAddressUtils.is_ip_in_networks(client_ip, networks)
 
     @staticmethod
     def is_request_from_trusted_proxy(
