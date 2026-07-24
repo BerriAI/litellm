@@ -43,7 +43,7 @@ def pair(client: BudgetClient) -> Iterator[_Pair]:
     """One team with a large budget and two members on it: a tight member capped at
     a tiny per-team budget and a roomy member with headroom, each with their own key.
     Shared across the class and torn down LIFO best-effort when it finishes."""
-    resources = ResourceManager(client=client.gateway)
+    resources = ResourceManager(client=client.proxy)
     try:
         marker = unique_marker()
         team_id = client.create_team(alias=f"e2e-member-iso-{marker}", max_budget=TEAM_BUDGET)
@@ -71,7 +71,7 @@ def pair(client: BudgetClient) -> Iterator[_Pair]:
 
 def _roomy_send(client: BudgetClient, key: str) -> str:
     """One roomy-member call that must go through; returns its request id."""
-    match client.gateway.chat(
+    match client.proxy.chat(
         key,
         ChatBody(
             model=MODEL,
@@ -105,7 +105,7 @@ class TestTeamMemberBudgetIsolation:
             client.chat(pair.tight_key, MODEL, f"tight {unique_marker()}", max_tokens=16)
         ), "tight member stopped being blocked once the peer spent"
 
-        rows = client.gateway.poll_logs_for_key(
+        rows = client.proxy.poll_logs_for_key(
             pair.roomy_key, predicate=lambda rs: bool(sent & {r.request_id for r in rs})
         )
         logged = [row for row in rows if row.request_id in sent]

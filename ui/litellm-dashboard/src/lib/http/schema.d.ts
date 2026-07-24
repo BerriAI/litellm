@@ -13860,11 +13860,12 @@ export interface paths {
          * Patch Team
          * @description Partially update a team using RFC 7386 JSON Merge Patch semantics.
          *
-         *     `team_id` is taken from the path. `metadata` is merged with the team's stored
-         *     metadata rather than replacing it: an omitted key is preserved, `key: null`
-         *     deletes it, and any other value overwrites (recursing into nested objects).
-         *     Every other field behaves exactly like `POST /team/update` (omitted preserves,
-         *     a value overwrites). Returns the full updated team.
+         *     `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+         *     matches. `metadata` is merged with the team's stored metadata rather than replacing
+         *     it: an omitted key is preserved, `key: null` deletes it, and any other value
+         *     overwrites (recursing into nested objects). Every other field behaves exactly like
+         *     `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+         *     updated team.
          *
          *     ```
          *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
@@ -17899,6 +17900,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tool/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tool Spend
+         * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
+         *
+         *     Joins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to
+         *     ``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools
+         *     counts its full spend toward each of those tools, so per-tool numbers are
+         *     attributions. ``total_spend`` is the deduplicated spend of every request that
+         *     called at least one tool in the window, so it never double counts.
+         */
+        get: operations["get_tool_spend_v1_tool_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tool/{tool_name}": {
         parameters: {
             query?: never;
@@ -18884,6 +18911,33 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v2/organization/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization V2
+         * @description Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
+         *
+         *     A sent field is written and an omitted one is left untouched (presence is read from
+         *     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+         *     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+         *     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+         *     Validation failures return 422; the object-permission upsert, budget-row write, and
+         *     org-row write are one transaction.
+         */
+        patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
         trace?: never;
     };
     "/v2/rerank": {
@@ -22630,6 +22684,12 @@ export interface components {
              */
             provider_url_destination_allowed_hosts?: string[] | null;
             /**
+             * Proxy Config Reload Interval Seconds
+             * @description how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup
+             * @default 30
+             */
+            proxy_config_reload_interval_seconds: number;
+            /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
@@ -22711,6 +22771,10 @@ export interface components {
             field_description: string;
             /** Field Name */
             field_name: string;
+            /** Field Options */
+            field_options?: string[] | null;
+            /** Field Tab */
+            field_tab?: string | null;
             /** Field Type */
             field_type: string;
             /** Field Value */
@@ -23240,6 +23304,16 @@ export interface components {
              */
             total_completion_tokens: number;
             /**
+             * Total Compression Saved Tokens
+             * @default 0
+             */
+            total_compression_saved_tokens: number;
+            /**
+             * Total Compression Savings Spend
+             * @default 0
+             */
+            total_compression_savings_spend: number;
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -23249,6 +23323,11 @@ export interface components {
              * @default 1
              */
             total_pages: number;
+            /**
+             * Total Prompt Caching Savings Spend
+             * @default 0
+             */
+            total_prompt_caching_savings_spend: number;
             /**
              * Total Prompt Tokens
              * @default 0
@@ -24322,7 +24401,7 @@ export interface components {
          */
         HTTPAuthSecurityScheme: {
             /** Bearerformat */
-            bearerFormat: string | null;
+            bearerFormat?: string | null;
             /** Description */
             description?: string | null;
             /** Scheme */
@@ -27284,7 +27363,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "true_passthrough" | "oauth_delegate") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
@@ -28510,7 +28589,7 @@ export interface components {
             description?: string | null;
             flows: components["schemas"]["OAuthFlows"];
             /** Oauth2Metadataurl */
-            oauth2MetadataUrl: string | null;
+            oauth2MetadataUrl?: string | null;
             /**
              * Type
              * @constant
@@ -28615,6 +28694,41 @@ export interface components {
         OrganizationRequest: {
             /** Organizations */
             organizations: string[];
+        };
+        /**
+         * OrganizationUpdateRequestV2
+         * @description Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+         *
+         *     Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+         *     left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+         *     the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+         */
+        OrganizationUpdateRequestV2: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Alias */
+            organization_alias?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PaginatedAuditLogResponse
@@ -28781,6 +28895,102 @@ export interface components {
         PatchPromptRequest: {
             litellm_params?: components["schemas"]["PromptLiteLLMParams"] | null;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /**
+         * PatchTeamRequest
+         * @description Body of PATCH /team/{team_id}.
+         *
+         *     Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+         *     from the path. A team_id in the body is still accepted when it matches the path.
+         */
+        PatchTeamRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
+            /** Allowed Passthrough Routes */
+            allowed_passthrough_routes?: unknown[] | null;
+            /** Allowed Vector Store Indexes */
+            allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Team Member Models */
+            default_team_member_models?: string[] | null;
+            /** Disable Global Guardrails */
+            disable_global_guardrails?: boolean | null;
+            /** Enforced Batch Output Expires After */
+            enforced_batch_output_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enforced File Expires After */
+            enforced_file_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Aliases */
+            model_aliases?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Models */
+            models?: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Router Settings */
+            router_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Secret Manager Settings */
+            secret_manager_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tags */
+            tags?: unknown[] | null;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Member Budget */
+            team_member_budget?: number | null;
+            /** Team Member Budget Duration */
+            team_member_budget_duration?: string | null;
+            /** Team Member Key Duration */
+            team_member_key_duration?: string | null;
+            /** Team Member Rpm Limit */
+            team_member_rpm_limit?: number | null;
+            /** Team Member Tpm Limit */
+            team_member_tpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PerTestingCriteriaResult
@@ -30662,6 +30872,11 @@ export interface components {
              */
             generic_client_secret?: string | null;
             /**
+             * Generic Scope
+             * @description Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'
+             */
+            generic_scope?: string | null;
+            /**
              * Generic Token Endpoint
              * @description Token endpoint URL for generic OAuth provider
              */
@@ -30724,6 +30939,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Provenance */
+            provenance?: {
+                [key: string]: string;
             };
             /** Values */
             values: {
@@ -30865,10 +31084,25 @@ export interface components {
              */
             completion_tokens: number;
             /**
+             * Compression Saved Tokens
+             * @default 0
+             */
+            compression_saved_tokens: number;
+            /**
+             * Compression Savings Spend
+             * @default 0
+             */
+            compression_savings_spend: number;
+            /**
              * Failed Requests
              * @default 0
              */
             failed_requests: number;
+            /**
+             * Prompt Caching Savings Spend
+             * @default 0
+             */
+            prompt_caching_savings_spend: number;
             /**
              * Prompt Tokens
              * @default 0
@@ -31769,6 +32003,67 @@ export interface components {
             tool_name: string;
             /** Updated */
             updated: boolean;
+        };
+        /**
+         * ToolSpendDailyEntry
+         * @description Spend attributed to one tool on one UTC day.
+         */
+        ToolSpendDailyEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /** Date */
+            date: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /**
+         * ToolSpendEntry
+         * @description Total spend attributed to one tool over the requested window.
+         */
+        ToolSpendEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /**
+             * Spend
+             * @description Attributed spend: a request that used several tools counts its full spend toward each of them
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** ToolSpendResponse */
+        ToolSpendResponse: {
+            /** By Tool */
+            by_tool?: components["schemas"]["ToolSpendEntry"][];
+            /** Daily */
+            daily?: components["schemas"]["ToolSpendDailyEntry"][];
+            /** End Date */
+            end_date?: string | null;
+            /** Start Date */
+            start_date?: string | null;
+            /**
+             * Total Spend
+             * @description Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist
+             * @default 0
+             */
+            total_spend: number;
         };
         /**
          * ToolUsageLogEntry
@@ -50564,7 +50859,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchTeamRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -55964,6 +56263,40 @@ export interface operations {
             };
         };
     };
+    get_tool_spend_v1_tool_spend_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (defaults to 30 days ago) */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (defaults to today) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolSpendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_tool_v1_tool__tool_name__get: {
         parameters: {
             query?: never;
@@ -57481,6 +57814,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_v2_v2_organization__organization_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpdateRequestV2"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_OrganizationTableWithMembers"];
                 };
             };
             /** @description Validation Error */

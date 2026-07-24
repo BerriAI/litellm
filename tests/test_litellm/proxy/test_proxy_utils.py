@@ -476,101 +476,205 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "response_cost" not in request_data
 
 
+from typing import cast
+
+import litellm
 from litellm.proxy.utils import create_model_info_response
-from litellm.types.router import ModelGroupInfo
+from litellm.types.utils import ModelInfo
 
 
-def _router_returning(model_group_info):
-    router = MagicMock()
-    router.get_model_group_info = MagicMock(return_value=model_group_info)
-    return router
+def _fake_model_info(**fields: object) -> ModelInfo:
+    return cast(ModelInfo, dict(fields))
 
 
-def test_create_model_info_response_includes_max_tokens_when_available():
-    router = _router_returning(
-        ModelGroupInfo(
-            model_group="qwen-vllm",
-            providers=["hosted_vllm"],
-            max_input_tokens=32768,
-            max_output_tokens=8192,
-        )
-    )
+def _raise_unmapped(model_id: str) -> ModelInfo:
+    raise ValueError(f"This model isn't mapped yet: {model_id}")
 
+
+def test_create_model_info_response_includes_max_tokens_from_lookup():
     response = create_model_info_response(
-        model_id="qwen-vllm", provider="openai", llm_router=router
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
     )
 
-    router.get_model_group_info.assert_called_once_with("qwen-vllm")
-    assert response["id"] == "qwen-vllm"
+    assert response["id"] == "some-model"
     assert response["object"] == "model"
-    assert response["max_input_tokens"] == 32768
-    assert response["max_output_tokens"] == 8192
-
-
-def test_create_model_info_response_emits_integer_token_counts():
-    # ModelGroupInfo types the limits as float; OpenAI-compatible clients expect
-    # plain integers, so the response must not leak 128000.0.
-    router = _router_returning(
-        ModelGroupInfo(
-            model_group="gpt-4o",
-            providers=["openai"],
-            max_input_tokens=128000.0,
-            max_output_tokens=16384.0,
-        )
-    )
-
-    response = create_model_info_response(
-        model_id="gpt-4o", provider="openai", llm_router=router
-    )
-
     assert response["max_input_tokens"] == 128000
-    assert isinstance(response["max_input_tokens"], int)
     assert response["max_output_tokens"] == 16384
-    assert isinstance(response["max_output_tokens"], int)
 
 
-def test_create_model_info_response_omits_unknown_individual_limit():
-    router = _router_returning(
-        ModelGroupInfo(
-            model_group="partial",
-            providers=["openai"],
-            max_input_tokens=4096,
-            max_output_tokens=None,
-        )
+def test_create_model_info_response_does_not_call_router_group_info():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    router.get_model_group_info.assert_not_called()
+    assert response["max_input_tokens"] == 128000
+
+
+def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (32000, 8000)
+
+    response = create_model_info_response(
+        model_id="my-custom-deployment",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    router.get_model_group_info.assert_not_called()
+    assert response["max_input_tokens"] == 32000
+    assert response["max_output_tokens"] == 8000
+
+
+def test_create_model_info_response_deployment_limits_override_cost_map():
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (200000, None)
+
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=router,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    assert response["max_input_tokens"] == 200000
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_survives_malformed_configured_limits():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-limit-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": "128,000"},
+            }
+        ]
     )
 
     response = create_model_info_response(
-        model_id="partial", provider="openai", llm_router=router
+        model_id="bad-limit-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
     )
 
-    assert response["max_input_tokens"] == 4096
-    assert "max_output_tokens" not in response
-
-
-def test_create_model_info_response_omits_limits_when_both_none():
-    router = _router_returning(
-        ModelGroupInfo(
-            model_group="no-limits",
-            providers=["openai"],
-            max_input_tokens=None,
-            max_output_tokens=None,
-        )
-    )
-
-    response = create_model_info_response(
-        model_id="no-limits", provider="openai", llm_router=router
-    )
-
+    assert response["id"] == "bad-limit-model"
     assert "max_input_tokens" not in response
     assert "max_output_tokens" not in response
 
 
-def test_create_model_info_response_omits_limits_when_group_unknown():
-    # Wildcard routes / access groups have no ModelGroupInfo.
-    router = _router_returning(None)
-
+@pytest.mark.parametrize("bad_value", ["128,000", "", "unlimited", [128000], {"max": 128000}, True])
+def test_create_model_info_response_survives_malformed_cost_map_limits(bad_value):
     response = create_model_info_response(
-        model_id="openai/*", provider="openai", llm_router=router
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=bad_value, max_output_tokens=bad_value
+        ),
+    )
+
+    assert response["id"] == "some-model"
+    assert "max_input_tokens" not in response
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_keeps_valid_cost_map_limit_beside_malformed_one():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens="128,000", max_output_tokens=16384
+        ),
+    )
+
+    assert "max_input_tokens" not in response
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_survives_malformed_limits_registered_by_router():
+    """A deployment's model_info is registered into litellm.model_cost verbatim, so a
+    malformed configured limit reaches the listing through the real cost-map lookup and
+    not just the router index. Guarding only the index path still 500s the whole listing."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "openai/some-unmapped-model",
+                    "litellm_params": {"model": "openai/some-unmapped-model"},
+                    "model_info": {"max_input_tokens": "128,000"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="openai/some-unmapped-model",
+            provider="openai",
+            llm_router=router,
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["id"] == "openai/some-unmapped-model"
+    assert "max_input_tokens" not in response
+
+
+def test_create_model_info_response_emits_integer_token_counts():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            max_input_tokens=128000, max_output_tokens=16384
+        ),
+    )
+
+    assert isinstance(response["max_input_tokens"], int)
+    assert isinstance(response["max_output_tokens"], int)
+
+
+def test_create_model_info_response_omits_unknown_individual_limit():
+    response = create_model_info_response(
+        model_id="some-embedding",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=8191),
+    )
+
+    assert response["max_input_tokens"] == 8191
+    assert "max_output_tokens" not in response
+
+
+def test_create_model_info_response_omits_limits_when_lookup_raises():
+    response = create_model_info_response(
+        model_id="openai/*",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
     )
 
     assert response["id"] == "openai/*"
@@ -578,32 +682,66 @@ def test_create_model_info_response_omits_limits_when_group_unknown():
     assert "max_output_tokens" not in response
 
 
-def test_create_model_info_response_degrades_when_group_info_raises():
-    # A malformed deployment must not turn the listing into a 500; the entry
-    # falls back to the base fields without limits.
-    router = MagicMock()
-    router.get_model_group_info = MagicMock(side_effect=ValueError("bad deployment"))
-
-    response = create_model_info_response(
-        model_id="broken", provider="openai", llm_router=router
-    )
-
-    assert response["id"] == "broken"
-    assert "max_input_tokens" not in response
-    assert "max_output_tokens" not in response
-
-
 def test_create_model_info_response_no_router_keeps_base_fields():
     response = create_model_info_response(
-        model_id="some-model", provider="openai", llm_router=None
+        model_id="totally-unknown-model-xyz",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
     )
 
     assert response == {
-        "id": "some-model",
+        "id": "totally-unknown-model-xyz",
         "object": "model",
         "created": response["created"],
         "owned_by": "openai",
     }
+
+
+def test_create_model_info_response_reads_real_cost_map():
+    response = create_model_info_response(
+        model_id="gpt-4o", provider="openai", llm_router=None
+    )
+
+    assert isinstance(response["max_input_tokens"], int)
+    assert response["max_input_tokens"] > 0
+    assert isinstance(response["max_output_tokens"], int)
+    assert response["max_output_tokens"] > 0
+
+
+def test_create_model_info_response_includes_mode_from_lookup():
+    response = create_model_info_response(
+        model_id="text-embedding-3-small",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(mode="embedding"),
+    )
+
+    assert response["mode"] == "embedding"
+
+
+def test_create_model_info_response_omits_mode_when_lookup_raises():
+    response = create_model_info_response(
+        model_id="my-custom-deployment",
+        provider="openai",
+        llm_router=None,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert "mode" not in response
+
+
+def test_create_model_info_response_omits_non_string_mode():
+    response = create_model_info_response(
+        model_id="some-model",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(mode=None),
+    )
+
+    assert "mode" not in response
+
+
 class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized

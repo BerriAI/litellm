@@ -43,15 +43,6 @@ vi.mock("@tremor/react", () => ({
   },
 }));
 
-vi.mock("./provider_display_helpers", () => ({
-  getProviderDisplayInfo: vi.fn((providerValue: string) => ({
-    displayName: providerValue === "openai" ? "OpenAI" : providerValue,
-    logo: providerValue === "openai" ? "https://example.com/openai.png" : "",
-    enumKey: providerValue === "openai" ? "OpenAI" : null,
-  })),
-  handleImageError: vi.fn(),
-}));
-
 const DEFAULT_DISCOUNT_CONFIG = {
   openai: 0.05,
   anthropic: 0.1,

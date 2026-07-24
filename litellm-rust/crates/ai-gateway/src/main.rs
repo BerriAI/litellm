@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use litellm_ai_gateway::io::realtime_pool::{upstream_key, PoolConfig, RealtimePool};
+use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_ai_gateway::routes;
 use litellm_ai_gateway::state::AppState;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};

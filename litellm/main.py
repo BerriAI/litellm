@@ -27,7 +27,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
-    Callable,
     Coroutine,
     Dict,
     Iterable,
@@ -81,22 +80,19 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.chat_completion_agentic_loop import (
-    maybe_run_chat_completion_agentic_loop,
-)
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.request_timeout_resolver import (
-    get_configured_request_timeout,
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    maybe_run_chat_completion_agentic_loop,
 )
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
 )
-from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -111,6 +107,9 @@ from litellm.litellm_core_utils.mock_functions import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
+)
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -213,7 +212,6 @@ from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
-from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
@@ -222,24 +220,25 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
+from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.ollama.completion import handler as ollama
-from .llms.oobabooga.chat import oobabooga
-from .llms.openai.completion.handler import OpenAITextCompletion
-from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
-from .llms.openai.openai import OpenAIChatCompletion
 from .llms.nvidia_riva.audio_transcription.handler import (
     NvidiaRivaAudioTranscription,
 )
 from .llms.nvidia_riva.audio_transcription.transformation import (
     NvidiaRivaAudioTranscriptionConfig,
 )
+from .llms.oci.chat.transformation import OCIChatConfig
+from .llms.ollama.completion import handler as ollama
+from .llms.oobabooga.chat import oobabooga
+from .llms.openai.completion.handler import OpenAITextCompletion
+from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
@@ -5112,7 +5111,10 @@ def completion(  # type: ignore
     try:
         if base_url is not None:
             api_base = base_url
-        if num_retries is not None:
+        is_router_call = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
+        if is_router_call:
+            max_retries = 0
+        elif num_retries is not None:
             max_retries = num_retries
         logging: LiteLLMLoggingObj = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
@@ -7722,6 +7724,32 @@ def transcription(
             headers=extra_headers,
             provider_config=provider_config,  # type: ignore[arg-type]
         )
+    elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+
+        dispatch = BedrockAudioTranscriptionRustDispatch()
+        if atranscription:
+            response = dispatch.async_audio_transcriptions(
+                model=model,
+                audio_file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
+        else:
+            response = dispatch.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,

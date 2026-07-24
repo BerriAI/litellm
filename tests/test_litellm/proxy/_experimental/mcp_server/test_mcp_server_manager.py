@@ -176,6 +176,89 @@ class TestMCPServerManager:
         assert calls == [("", "authz-srv")]
         assert client is not None
 
+    @pytest.mark.asyncio
+    async def test_caller_auth_header_cannot_bypass_id_jag_exchange(self):
+        """A caller-supplied per-request override must not disable the ID-JAG exchange and forward an
+        arbitrary bearer upstream: _create_mcp_client keeps the v2 spec and resolves through the
+        injected provider rather than deferring to the v1 caller-override path."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
+            Ok,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        calls = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                calls.append((subject.subject_id, server.server_id))
+                return Ok(StaticHeaderAuth("Bearer minted-id-jag-token"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="id-jag-srv",
+            name="id-jag",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+        client = await manager._create_mcp_client(
+            server,
+            mcp_auth_header="Bearer caller-supplied-token",
+            subject_token="caller-id-token",
+        )
+
+        assert calls == [("", "id-jag-srv")]
+        assert client is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "missing_field",
+        ["token_exchange_endpoint", "id_jag_resource_token_endpoint", "client_id", "client_secret"],
+    )
+    async def test_half_configured_id_jag_fails_closed_instead_of_deferring_to_v1(self, missing_field):
+        """ID-JAG has no v1 arm, so a half-configured oauth2_id_jag server must not silently fall
+        through to resolve_mcp_auth, where a caller x-mcp-* override or the static
+        authentication_token would bypass the per-user identity assertion. It must be refused as an
+        operator misconfiguration (HTTP 500) before any client is built."""
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        fields = {
+            "client_id": "gateway-client",
+            "client_secret": "gateway-secret",
+            "token_exchange_endpoint": "https://org-idp.example/oauth2/token",
+            "id_jag_resource_token_endpoint": "https://resource-as.example/oauth2/token",
+        }
+        fields.pop(missing_field)
+        server = MCPServer(
+            server_id="id-jag-srv",
+            name="id-jag",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2_id_jag,
+            authentication_token="static-server-secret",
+            **fields,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPServerManager()._create_mcp_client(
+                server,
+                mcp_auth_header="Bearer caller-supplied-token",
+                subject_token="caller-id-token",
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "oauth2_id_jag" in str(exc_info.value.detail)
+
     async def test_create_mcp_client_stdio_injects_npm_config_cache(self):
         """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
         and preserves user-provided NPM_CONFIG_CACHE when present."""
@@ -257,6 +340,35 @@ class TestMCPServerManager:
         assert env == {}
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_debug_dump_redacts_secrets(self, caplog):
+        """The registry debug dump must not leak long-lived credentials: the ID-JAG signing key,
+        client secret, and static token are masked while non-secret fields stay readable."""
+
+        manager = MCPServerManager()
+        config = {
+            "idjag": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_id_jag,
+                "client_id": "gateway-client",
+                "client_secret": "SECRET-CLIENT-SECRET",
+                "client_private_key": "-----BEGIN PRIVATE KEY-----SECRET-PEM-----END PRIVATE KEY-----",
+                "token_exchange_endpoint": "https://org-idp.example/oauth2/token",
+                "id_jag_resource_token_endpoint": "https://resource-as.example/oauth2/token",
+                "authentication_token": "SECRET-STATIC-TOKEN",
+            }
+        }
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        dump = next(m for m in caplog.messages if "Loaded MCP Servers" in m)
+        assert "SECRET-PEM" not in dump
+        assert "SECRET-CLIENT-SECRET" not in dump
+        assert "SECRET-STATIC-TOKEN" not in dump
+        assert "gateway-client" in dump
+        assert "https://org-idp.example/oauth2/token" in dump
+
     async def test_load_servers_from_config_warns_on_invalid_alias(self, caplog):
         """Invalid aliases from config should emit warnings during load."""
 
@@ -1648,6 +1760,42 @@ class TestMCPServerManager:
         assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
 
     @pytest.mark.asyncio
+    async def test_injected_authorization_does_not_shadow_m2m_minted_token(self):
+        """The M2M twin of the OBO shadow test: a guardrail/static Authorization must not displace
+        the gateway-minted client_credentials bearer. Dropping the resolved auth here would also
+        drop the one-shot 401 refetch that rides on it, so the resolver-owned credential is
+        authoritative exactly as for token_exchange and authorization_code."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="m2m-shadow",
+            name="m2m-shadow-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            client_id="cid",
+            client_secret="csec",
+            token_url="https://idp.example.com/token",
+        )
+
+        client = await manager._create_mcp_client(
+            server,
+            extra_headers={"Authorization": "Bearer signer-jwt"},  # simulate the JWT signer
+        )
+
+        assert client._resolved_auth is not None
+        assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
+
+    @pytest.mark.asyncio
     async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
         """A subject the IdP rejects must raise the RFC 9728 401 challenge from the preflight, so a
         single-server route fails observably at the transport edge instead of the old behavior of
@@ -2184,6 +2332,59 @@ class TestMCPServerManager:
         flow.close()
         assert emitted.headers["Authorization"] == "Bearer upstream-token"
         assert not kwargs["extra_headers"] or "authorization" not in {k.lower() for k in kwargs["extra_headers"]}
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_token_exchange_never_falls_back_to_v1(self):
+        """A configured OBO server is owned end to end by the v2 token_exchange arm, even when the
+        caller supplies an x-mcp-* override. This is what makes the v1 OBO handler unreachable, so if
+        it ever defers to v1 again the deleted handler is silently needed back."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+            OAuthToken,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import (
+            UpstreamCredentialProvider,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _StubExchanger:
+            def __init__(self):
+                self.subject_tokens = []
+
+            async def exchange(self, subject_token, server, config, *, tenant_id=""):
+                self.subject_tokens.append(subject_token)
+                return Ok(OAuthToken(access_token="exchanged-token"))
+
+            async def invalidate(self, subject_token, server, config, *, tenant_id=""):
+                return None
+
+        exchanger = _StubExchanger()
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="obo-egress",
+            name="obo",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://idp.example.com/oauth2/token",
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.resolve_mcp_auth",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as mock_client_cls,
+        ):
+            await manager._create_mcp_client(
+                server=server,
+                mcp_auth_header="Bearer caller-override",
+                subject_token="eyJ-subject-token",
+                cred_provider=UpstreamCredentialProvider(token_exchanger=exchanger),
+            )
+        mock_resolve.assert_not_awaited()
+        assert exchanger.subject_tokens == ["eyJ-subject-token"]
+        assert self._emitted_authorization(mock_client_cls) == "Bearer exchanged-token"
 
     @staticmethod
     def _emitted_authorization(mock_client_cls) -> str:
@@ -2883,7 +3084,7 @@ class TestMCPServerManager:
             registration_url="https://discovered.example.com/register",
         )
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             assert server_url == "https://example.com/mcp"
             # oauth2 (browser flow) keeps the origin fallback; only OBO disables it.
             assert allow_origin_fallback is True
@@ -5278,7 +5479,7 @@ class TestMCPServerTimestamps:
         manager = MCPServerManager()
         calls: list[bool] = []
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             calls.append(allow_origin_fallback)
             return MCPOAuthMetadata(
                 scopes=None,
@@ -5313,7 +5514,7 @@ class TestMCPServerTimestamps:
         manager = MCPServerManager()
         calls: list[str] = []
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             calls.append(server_url)
             raise AssertionError("discovery must not run when token_exchange_endpoint is configured")
 
@@ -5343,7 +5544,7 @@ class TestMCPServerTimestamps:
         back to the row, so the next rebuild skips discovery instead of re-running it every time."""
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             assert server_url == "https://example.com/mcp"
             assert allow_origin_fallback is False  # OBO never guesses the origin
             return MCPOAuthMetadata(
@@ -5449,12 +5650,12 @@ class TestMCPServerTimestamps:
     async def test_build_mcp_server_from_table_persists_discovered_oauth_endpoints(self):
         """A DB-backed oauth2 server with no configured endpoints discovers them and must write
         authorization_url, token_url, and scopes back to the row; otherwise the resolved values
-        live only in memory and one failed re-discovery serves 400 "authorization url is not set"
+        live only in memory and one failed re-discovery serves the 400 "authorization url is not configured"
         from /authorize. registration_url must never be persisted because
         _dcr_bridge_relays_client_registration keys off that column."""
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             assert allow_origin_fallback is True
             return MCPOAuthMetadata(
                 scopes=["mcp.read", "mcp.write"],
@@ -5669,7 +5870,7 @@ class TestMCPServerTimestamps:
         persist_discovered_endpoints=False neither the oauth2 nor the OBO write-back may fire."""
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             return MCPOAuthMetadata(
                 scopes=["s1"],
                 authorization_url="https://idp.example.com/authorize",
@@ -7648,23 +7849,58 @@ class TestCreateMcpClientV2Graft:
         assert client._resolved_auth.header_name == "Authorization"
         assert client._resolved_auth._header_value.get_secret_value() == f"Basic {encoded}"
 
-    async def test_m2m_client_credentials_defers_to_v1(self):
-        # M2M (oauth2 client_credentials) is not migrated: to_server_spec returns
-        # None, so the graft sets no resolved auth and leaves v1 in charge (v1
-        # performs the client_credentials grant itself - the static
-        # authentication_token is never consumed for oauth2, so it does not flow
-        # to _mcp_auth_value). Per-user oauth2 (authorization_code) is migrated to
-        # v2 and is exercised separately.
+    async def test_m2m_client_credentials_resolves_via_v2(self):
+        # M2M (oauth2 client_credentials) is migrated: to_server_spec owns the server and the
+        # v2 arm mints the token through the injected source; nothing flows to v1's auth_value.
+        from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+            UpstreamCredentialProvider,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+            OAuthToken,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeM2MSource:
+            async def get(self, server_id, config):
+                return Ok(OAuthToken(access_token="m2m-at"))
+
+            async def refetch(self, server_id, config, failed_access_token):
+                return None
+
         client = await MCPServerManager()._create_mcp_client(
             self._http_server(
                 auth_type=MCPAuth.oauth2,
                 oauth2_flow="client_credentials",
-                authentication_token="legacy-token",
-            )
+                client_id="cid",
+                client_secret="csec",
+                token_url="https://idp.example.com/token",
+            ),
+            cred_provider=UpstreamCredentialProvider(client_credentials_source=_FakeM2MSource()),
         )
 
-        assert client._resolved_auth is None
+        assert isinstance(client._resolved_auth, ClientCredentialsBearerAuth)
+        assert client._resolved_auth._access_token.get_secret_value() == "m2m-at"
         assert client._mcp_auth_value is None
+
+    async def test_m2m_client_credentials_incomplete_config_fails_closed(self):
+        # An M2M server missing its grant fields is still owned by v2 and surfaces a 500
+        # misconfigured naming the missing fields, rather than deferring to v1 and connecting
+        # unauthenticated (which masked the upstream 401 as an empty tool list).
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPServerManager()._create_mcp_client(
+                self._http_server(
+                    auth_type=MCPAuth.oauth2,
+                    oauth2_flow="client_credentials",
+                    authentication_token="legacy-token",
+                )
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "misconfigured" in str(exc_info.value.detail)
+        assert "token_url" in str(exc_info.value.detail)
 
     async def test_static_token_missing_defers_to_v1(self):
         client = await MCPServerManager()._create_mcp_client(
@@ -8123,6 +8359,86 @@ class TestOBOCallToolRetry:
         assert first.attempts == 1 and retry.attempts == 1
 
     @pytest.mark.asyncio
+    async def test_upstream_401_on_id_jag_evicts_the_cached_bearer_and_retries(self):
+        """The retry path must invalidate the ID-JAG leg-2 bearer too: without eviction the rebuilt
+        client resolves the same rejected token from the cache and the retry 401s identically."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+            IdJagConfig,
+        )
+
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+        server = MCPServer(
+            server_id="id-jag-srv",
+            name="id-jag",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=server,
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-id-token",
+            user_api_key_auth=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_awaited_once()
+        invalidated_spec = manager._cred_provider.invalidate_credentials.await_args.args[1]
+        assert isinstance(invalidated_spec.config, IdJagConfig)
+        assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_call_regular_routes_id_jag_through_the_retry_path(self):
+        """An oauth2_id_jag tool call with a subject token must take the invalidate-and-retry branch
+        of _call_regular_mcp_tool, not the plain single call, so an upstream 401 re-exchanges."""
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(side_effect=[first, retry])
+        server = MCPServer(
+            server_id="id-jag-srv",
+            name="id-jag",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+        result = await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer caller-id-token"},
+            raw_headers=None,
+            proxy_logging_obj=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_awaited_once()
+        assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
     async def test_non_auth_error_does_not_retry(self):
         manager = self._manager()
         first = _RetryFakeClient(raises=ValueError("tool blew up"))
@@ -8276,7 +8592,7 @@ class TestOBOEndpointDiscovery:
         )
         seen = []
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             seen.append((server_url, allow_origin_fallback))
             return discovered
 
@@ -8304,7 +8620,7 @@ class TestOBOEndpointDiscovery:
     async def test_config_obo_with_configured_endpoint_skips_discovery(self):
         manager = MCPServerManager()
 
-        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True, warn_when_no_metadata: bool = False):
             raise AssertionError("discovery must not run when the endpoint is configured")
 
         manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
@@ -8628,3 +8944,299 @@ async def test_resolve_toolset_tool_permissions_single_db_fetch_across_checks():
     assert first == {"server-a": ["lookup_status"]}
     assert second == first
     list_toolsets_mock.assert_awaited_once()
+
+
+class TestMaterializeAuthHeaders:
+    """_materialize_auth_headers drives one step of a resolved httpx.Auth's own flow to turn it
+    into a header dict for the OpenAPI egress arm, which sends plain headers and cannot carry an
+    httpx.Auth. Generic across auth shapes via the resolver-arm header_name convention."""
+
+    @pytest.mark.asyncio
+    async def test_static_header_auth_materializes_its_header(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+
+        headers = await _materialize_auth_headers(StaticHeaderAuth("Bearer stored-token"))
+        assert headers == {"Authorization": "Bearer stored-token"}
+
+    @pytest.mark.asyncio
+    async def test_client_credentials_bearer_auth_materializes_bearer(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+
+        async def _refetch(_stale: str):
+            return None
+
+        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch))
+        assert headers == {"Authorization": "Bearer m2m-token"}
+
+    @pytest.mark.asyncio
+    async def test_noop_and_none_materialize_to_none(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            NoOpAuth,
+        )
+
+        assert await _materialize_auth_headers(None) is None
+        assert await _materialize_auth_headers(NoOpAuth()) is None
+
+
+class TestUrllessIssuerDiscovery:
+    """LIT-4629: servers with no url (OpenAPI spec_path, stdio) run no resource discovery, so
+    their OAuth endpoints could only ever come from manual entry; an admin-pinned issuer is a
+    url-independent trust anchor (RFC 8414 section 3.3) and must unlock discovery for them."""
+
+    def _urlless_row(self, **overrides):
+        fields = dict(
+            server_id="urlless-1",
+            alias="sheets_urlless",
+            description="spec-only server",
+            url=None,
+            spec_path="https://example.com/sheets-openapi.yaml",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+        fields.update(overrides)
+        return LiteLLM_MCPServerTable(**fields)
+
+    @pytest.mark.asyncio
+    async def test_urlless_server_with_issuer_discovers_endpoints(self):
+        """The gate previously required bool(server_url), so a url-less server with an issuer
+        configured never ran the issuer-anchored fetch and /authorize 400d. Kills the mutant that
+        restores the bare bool(server_url) term."""
+        manager = MCPServerManager()
+        row = self._urlless_row(issuer="https://accounts.google.com")
+
+        resolved = MCPOAuthMetadata(
+            authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        resource_rooted = AsyncMock(return_value=None)
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=resolved)) as anchored,
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_awaited_once_with("https://accounts.google.com", None)
+        resource_rooted.assert_not_awaited()
+        assert built.issuer_is_anchored is True
+        assert built.authorization_url == "https://accounts.google.com/o/oauth2/v2/auth"
+        assert built.token_url == "https://oauth2.googleapis.com/token"
+
+    @pytest.mark.asyncio
+    async def test_urlless_server_without_issuer_stays_undiscovered(self):
+        """With neither a url nor an issuer there is no discovery source; the build must not
+        attempt any fetch and the endpoints stay unset (manual entry remains the only path)."""
+        manager = MCPServerManager()
+        row = self._urlless_row()
+
+        anchored = AsyncMock()
+        resource_rooted = AsyncMock()
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=anchored),
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_not_awaited()
+        resource_rooted.assert_not_awaited()
+        assert built.authorization_url is None
+        assert built.token_url is None
+        assert built.issuer_is_anchored is False
+
+    @pytest.mark.asyncio
+    async def test_urlless_obo_with_issuer_discovers_token_url(self):
+        """oauth2_token_exchange is not a discovery auth type, so the plain gate relax alone
+        would leave a url-less OBO server undiscovered; with an issuer pinned and no configured
+        exchange endpoint it must resolve token_url through the issuer-anchored fetch. Kills the
+        mutant that drops the OBO widening from the anchor computation."""
+        manager = MCPServerManager()
+        row = self._urlless_row(
+            alias="obo_urlless",
+            auth_type=MCPAuth.oauth2_token_exchange,
+            issuer="https://idp.example.com",
+        )
+
+        resolved = MCPOAuthMetadata(token_url="https://idp.example.com/token")
+        resource_rooted = AsyncMock(return_value=None)
+        with (
+            patch.object(manager, "_fetch_issuer_anchored_oauth_metadata", new=AsyncMock(return_value=resolved)) as anchored,
+            patch.object(manager, "_descovery_metadata", new=resource_rooted),
+        ):
+            built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        anchored.assert_awaited_once_with("https://idp.example.com", None)
+        resource_rooted.assert_not_awaited()
+        assert built.token_url == "https://idp.example.com/token"
+
+
+class TestDiscoveryFailureLogging:
+    """LIT-4658: a misconfigured MCP server url must be diagnosable from default-level server logs.
+
+    Discovery failures used to die at debug level and the config-load path emitted no warning at
+    all, so the only operator-facing signal was the bare 400 at /authorize."""
+
+    def _connect_error_client(self, url: str) -> MagicMock:
+        client = MagicMock()
+        client.get = AsyncMock(
+            side_effect=httpx.ConnectError(f"[Errno 8] nodename nor servname provided for {url}")
+        )
+        return client
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_warns_with_redacted_attempts_on_connect_error(self, caplog):
+        manager = MCPServerManager()
+        secret_url = "https://typo-host.example.com/mcp/s/PATHSECRET/mcp"
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=self._connect_error_client(secret_url),
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            result = await manager._descovery_metadata(secret_url, warn_when_no_metadata=True)
+        assert result is None
+        assert "found no authorization server metadata" in caplog.text
+        assert "ConnectError" in caplog.text
+        assert "https://typo-host.example.com" in caplog.text
+        # hosted MCP urls embed credentials in the path; neither the url nor the exception
+        # text may leak it into warning-level logs
+        assert "PATHSECRET" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_stays_silent_without_warn_flag(self, caplog):
+        manager = MCPServerManager()
+        url = "https://typo-host.example.com/mcp"
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=self._connect_error_client(url),
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            result = await manager._descovery_metadata(url)
+        assert result is None
+        assert "found no authorization server metadata" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_attempt_trail_names_each_failed_step(self, caplog):
+        manager = MCPServerManager()
+        url = "https://real-host.example.com/mcp-typo"
+        client = MagicMock()
+        client.get = AsyncMock(
+            return_value=httpx.Response(404, request=httpx.Request("GET", url))
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=client,
+            ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            result = await manager._descovery_metadata(url, warn_when_no_metadata=True)
+        assert result is None
+        assert "HTTP 404" in caplog.text
+        assert "well-known protected-resource lookup found no authorization servers" in caplog.text
+        assert "origin fallback" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_warns_when_endpoints_unresolved(self, caplog):
+        manager = MCPServerManager()
+        manager._descovery_metadata = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        config = {
+            "typo_server": {
+                "url": "https://typo.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+        assert "typo_server" in caplog.text
+        assert "authorization_url, token_url" in caplog.text
+        assert "unresolved" in caplog.text
+        assert "verify the configured server url" in caplog.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_config",
+        [
+            {
+                "authorization_url": "https://idp.example.com/auth",
+                "token_url": "https://idp.example.com/token",
+            },
+            {
+                "oauth2_flow": "client_credentials",
+                "token_url": "https://idp.example.com/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+            },
+        ],
+    )
+    async def test_load_servers_from_config_silent_when_flow_needs_covered(self, caplog, extra_config):
+        """Manually covered endpoints and M2M servers (which never need authorization_url) must not
+        warn on every reload; the warning is a misconfiguration signal, not discovery telemetry."""
+        manager = MCPServerManager()
+        manager._descovery_metadata = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        config = {
+            "covered_server": {
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
+                **extra_config,
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+        assert "unresolved" not in caplog.text
+        assert "no discovery source" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_config_server_without_discovery_source_warns_about_missing_endpoints(self, caplog):
+        manager = MCPServerManager()
+        manager._register_openapi_tools = AsyncMock()  # type: ignore[attr-defined]
+        config = {
+            "spec_only": {
+                "spec_path": "https://example.com/openapi.yaml",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "oauth2_flow": "authorization_code",
+            }
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+        assert "no discovery source" in caplog.text
+        assert "authorization_url and token_url are not set manually" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_db_build_warns_when_discovery_fails_for_oauth2_row(self, caplog):
+        manager = MCPServerManager()
+        manager._descovery_metadata = AsyncMock(return_value=None)  # type: ignore[attr-defined]
+        record = LiteLLM_MCPServerTable(
+            server_id="typo-row-1",
+            server_name="typo_row",
+            url="https://typo.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+        assert "typo_row" in caplog.text
+        assert "authorization_url, token_url" in caplog.text
+        assert "unresolved" in caplog.text

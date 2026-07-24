@@ -15,41 +15,25 @@ class DiscoveredModel(BaseModel):
 
     name: str
     mode: str = "chat"
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
 
 
-class _RawModelGroup(BaseModel):
+class _RawModelListing(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    model_group: str
-    # Optional: some real deployments return an explicit `"mode": null` for models that
-    # were registered without a mode (seen for embedding models like voyage-4-large).
-    # ModelGroupInfo's own "chat" default (litellm/types/router.py) only applies when the
-    # key is missing entirely, not when it's present as null, so this must tolerate None.
-    mode: str | None = "chat"
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
+    id: str
+    # /v1/models attaches "mode" (sourced from the cost map) only for models it can resolve;
+    # a model whose mode is unknown arrives without the field, so default it to chat rather
+    # than dropping it, which keeps it selectable as a routing target in the wizard.
+    mode: str = "chat"
 
 
-_RAW_MODEL_GROUPS_ADAPTER = TypeAdapter(list[_RawModelGroup])
+_RAW_MODEL_LISTING_ADAPTER = TypeAdapter(list[_RawModelListing])
 
 
 def parse_discovered_models(raw: list[JsonValue]) -> tuple[DiscoveredModel, ...]:
-    """Validate a raw `/model_group/info` response into typed models."""
-    parsed = _RAW_MODEL_GROUPS_ADAPTER.validate_python(raw)
-    return tuple(
-        DiscoveredModel(
-            name=group.model_group,
-            # A null mode means the server genuinely doesn't know what this model does;
-            # "unknown" (rather than guessing "chat") keeps it out of both chat_models()
-            # and embedding_models() instead of risking a wrong-mode deployment.
-            mode=group.mode or "unknown",
-            input_cost_per_token=group.input_cost_per_token,
-            output_cost_per_token=group.output_cost_per_token,
-        )
-        for group in parsed
-    )
+    """Validate a raw `/v1/models` response into typed models."""
+    parsed = _RAW_MODEL_LISTING_ADAPTER.validate_python(raw)
+    return tuple(DiscoveredModel(name=item.id, mode=item.mode) for item in parsed)
 
 
 def chat_models(models: tuple[DiscoveredModel, ...]) -> tuple[DiscoveredModel, ...]:
@@ -226,6 +210,24 @@ def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> di
     }
 
 
+def master_key_from_config(config: dict[str, JsonValue]) -> str | None:
+    """The master key persisted in a generated config, or None when absent or blank.
+
+    Single definition of "this config already has a usable key", shared by `up` (reuse
+    instead of minting) and the configure wizard (carry the key forward on rewrite) so the
+    two sites can never disagree on what counts as one. Returned verbatim, never stripped:
+    the proxy authenticates against the exact bytes under general_settings.master_key, so a
+    normalized copy here would diverge from what the proxy expects.
+    """
+    general_settings = config.get("general_settings")
+    if not isinstance(general_settings, dict):
+        return None
+    master_key = general_settings.get("master_key")
+    if isinstance(master_key, str) and master_key.strip():
+        return master_key
+    return None
+
+
 __all__ = [
     "AUTOROUTER_MODEL_NAME",
     "TIER_NAMES",
@@ -244,6 +246,7 @@ __all__ = [
     "build_generated_proxy_config",
     "chat_models",
     "embedding_models",
+    "master_key_from_config",
     "parse_discovered_models",
     "validate_config",
 ]

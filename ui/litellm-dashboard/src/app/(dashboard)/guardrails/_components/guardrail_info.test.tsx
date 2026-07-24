@@ -81,6 +81,37 @@ describe("Guardrail Info", () => {
     expect(getByText("Settings")).toBeInTheDocument();
   });
 
+  it("should render the provider logo from the bundled guardrail logo map", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: {
+        guardrail: "presidio",
+        mode: "pre_call",
+        default_on: true,
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { findByAltText } = render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+    );
+
+    const logo = await findByAltText("Presidio PII logo");
+    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+  });
+
   it("should not render the edit button for config guardrails", async () => {
     // Mock the network responses
     vi.mocked(networking.getGuardrailInfo).mockResolvedValue({

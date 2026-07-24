@@ -4,8 +4,18 @@ Shared by every e2e suite under tests/e2e/. Values come from the
 environment so the same tests run against localhost or a deployed proxy.
 """
 
+from __future__ import annotations
+
 import os
 import uuid
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
+# Compose injects them into the proxy container, but pytest on the host does not
+# inherit that file unless we load it. override=False so a real shell export wins.
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 PROXY_BASE_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000").rstrip("/")
 MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-1234")
@@ -28,6 +38,9 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
 
+LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
+LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
+
 # Jaeger query API of the compose stack's OTEL trace destination (the `jaeger`
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
 # read exported spans back through it.
@@ -41,6 +54,7 @@ OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").
 DD_SITE = os.environ.get("DD_SITE", "datadoghq.com").strip()
 DD_API_KEY = os.environ.get("DD_API_KEY", "").strip()
 DD_APP_KEY = os.environ.get("DD_APP_KEY", "").strip()
+
 # After the first event is searchable, keep watching this long for a late
 # duplicate before the exactly-one assertion: real-DataDog ingestion jitter can
 # make one call's two events searchable tens of seconds apart, and a duplicate
@@ -60,6 +74,49 @@ DD_SEARCH_INTERVAL = float(os.environ.get("E2E_DD_SEARCH_INTERVAL", "10"))
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
+
+EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
+
+LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
+LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
+LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
+LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
+LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
+
+WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
+ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
+ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
+ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
+ANOMALY_MAX_ERROR_RATIO = float(os.environ.get("E2E_ANOMALY_MAX_ERROR_RATIO", "0.05"))
+ANOMALY_MIN_WARM_CACHE_READ_SHARE = float(
+    os.environ.get("E2E_ANOMALY_MIN_WARM_CACHE_READ_SHARE", "0.65")
+)
+ANOMALY_MAX_P95_TURN_SECONDS = float(
+    os.environ.get("E2E_ANOMALY_MAX_P95_TURN_SECONDS", "30")
+)
+ANOMALY_MAX_KEY_SPEND_USD = float(
+    os.environ.get("E2E_ANOMALY_MAX_KEY_SPEND_USD", "0.60")
+)
+ANOMALY_SPEND_SETTLE_SECONDS = float(
+    os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
+)
+
+
+def datadog_mcp_url(*, toolsets: str = "core") -> str:
+    """Regional Datadog remote MCP endpoint for this process's DD_SITE.
+
+    US1 is mcp.datadoghq.com; every other site is mcp.<site> (e.g. us5 ->
+    mcp.us5.datadoghq.com). A fixed mcp.datadoghq.com URL 403s when the keys
+    belong to a non-US1 org.
+    """
+    site = (
+        os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
+    ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
+    if site.startswith("app."):
+        site = site[len("app.") :]
+    host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
+    base = f"https://{host}/v1/mcp"
+    return f"{base}?toolsets={toolsets}" if toolsets else base
 
 
 def unique_marker() -> str:

@@ -26762,6 +26762,113 @@
           "title": "ToolPolicyUpdateResponse",
           "type": "object"
         },
+        "ToolSpendDailyEntry": {
+          "description": "Spend attributed to one tool on one UTC day.",
+          "properties": {
+            "call_count": {
+              "default": 0,
+              "title": "Call Count",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "date",
+            "tool_name"
+          ],
+          "title": "ToolSpendDailyEntry",
+          "type": "object"
+        },
+        "ToolSpendEntry": {
+          "description": "Total spend attributed to one tool over the requested window.",
+          "properties": {
+            "call_count": {
+              "default": 0,
+              "title": "Call Count",
+              "type": "integer"
+            },
+            "spend": {
+              "default": 0.0,
+              "description": "Attributed spend: a request that used several tools counts its full spend toward each of them",
+              "title": "Spend",
+              "type": "number"
+            },
+            "tool_name": {
+              "title": "Tool Name",
+              "type": "string"
+            },
+            "total_tokens": {
+              "default": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "tool_name"
+          ],
+          "title": "ToolSpendEntry",
+          "type": "object"
+        },
+        "ToolSpendResponse": {
+          "properties": {
+            "by_tool": {
+              "items": {
+                "$ref": "#/components/schemas/ToolSpendEntry"
+              },
+              "title": "By Tool",
+              "type": "array"
+            },
+            "daily": {
+              "items": {
+                "$ref": "#/components/schemas/ToolSpendDailyEntry"
+              },
+              "title": "Daily",
+              "type": "array"
+            },
+            "end_date": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End Date"
+            },
+            "start_date": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start Date"
+            },
+            "total_spend": {
+              "default": 0.0,
+              "description": "Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist",
+              "title": "Total Spend",
+              "type": "number"
+            }
+          },
+          "title": "ToolSpendResponse",
+          "type": "object"
+        },
         "ToolUsageLogEntry": {
           "description": "One spend log row for a tool call (for UI \"recent logs\" table).",
           "properties": {
@@ -26858,6 +26965,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -27296,6 +27410,81 @@
             }
           ],
           "summary": "Get Tool Policy Options",
+          "tags": [
+            "tools"
+          ]
+        }
+      },
+      "/v1/tool/spend": {
+        "get": {
+          "description": "Spend attributed to each tool over a date range, for the Cost Optimization dashboard.\n\nJoins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to\n``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools\ncounts its full spend toward each of those tools, so per-tool numbers are\nattributions. ``total_spend`` is the deduplicated spend of every request that\ncalled at least one tool in the window, so it never double counts.",
+          "operationId": "get_tool_spend_v1_tool_spend_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD (defaults to 30 days ago)",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (defaults to 30 days ago)",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD (defaults to today)",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD (defaults to today)",
+                "title": "End Date"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ToolSpendResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Tool Spend",
           "tags": [
             "tools"
           ]

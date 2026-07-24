@@ -600,6 +600,56 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
     assert card["url"].endswith("/a2a/agent-123")
 
 
+def test_public_agent_hub_serializes_http_security_scheme_without_bearer_format():
+    """Regression: agents created through the UI carry an auto-generated
+    ``securitySchemes.LiteLLMKey`` of ``{"type": "http", "scheme": "bearer"}``
+    with no ``bearerFormat``. The endpoint response_model must accept this
+    optional-field-omitted scheme; otherwise response validation raises and
+    /public/agent_hub returns 500, which the frontend swallows into an empty
+    list and hides the Agent Hub tab."""
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="public-agent",
+        agent_card_params={
+            "name": "public-agent",
+            "url": "https://upstream.internal.example.com/a2a",
+            "securitySchemes": {
+                "LiteLLMKey": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "LiteLLM virtual key",
+                }
+            },
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = [agent]
+
+    with (
+        patch("litellm.public_agent_groups", ["agent-123"]),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 1
+    scheme = payload[0]["securitySchemes"]["LiteLLMKey"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+    assert "bearerFormat" not in scheme
+
+
 def test_public_agent_hub_returns_empty_when_no_public_groups():
     app = FastAPI()
     app.include_router(router)

@@ -5,28 +5,23 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { Badge, Card, Grid, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
-import { Button, Form, Input, Select, Tabs, Typography } from "antd";
+import { Badge, Card, Grid, Text, Title, Button as TremorButton } from "@tremor/react";
+import { Button, Tabs, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import MemberTable from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
-import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
   Member,
-  Organization,
   organizationMemberAddCall,
   organizationMemberDeleteCall,
   organizationMemberUpdateCall,
-  organizationUpdateCall,
 } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
-import NumericalInput from "../shared/numerical_input";
 import MemberModal from "../team/EditMembership";
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -49,13 +44,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 }) => {
   const queryClient = useQueryClient();
   const { data: orgData, isLoading: loading } = useOrganization(organizationId);
-  const [form] = Form.useForm();
   const [isEditing, setIsEditing] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [isOrgSaving, setIsOrgSaving] = useState(false);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
 
@@ -76,7 +69,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
       NotificationsManager.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
-      form.resetFields();
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
       NotificationsManager.fromBackend("Failed to add organization member");
@@ -97,7 +89,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
       NotificationsManager.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
-      form.resetFields();
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
       NotificationsManager.fromBackend("Failed to update organization member");
@@ -112,63 +103,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
       NotificationsManager.success("Organization member deleted successfully");
       setIsEditMemberModalVisible(false);
-      form.resetFields();
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
       NotificationsManager.fromBackend("Failed to delete organization member");
       console.error("Error deleting organization member:", error);
-    }
-  };
-
-  const handleOrgUpdate = async (values: any) => {
-    try {
-      if (!accessToken) return;
-      setIsOrgSaving(true);
-
-      const updateData: any = {
-        organization_id: organizationId,
-        organization_alias: values.organization_alias,
-        models: values.models,
-        litellm_budget_table: {
-          tpm_limit: values.tpm_limit,
-          rpm_limit: values.rpm_limit,
-          max_budget: values.max_budget,
-          budget_duration: values.budget_duration,
-        },
-        metadata: values.metadata ? JSON.parse(values.metadata) : null,
-      };
-
-      // Handle object_permission updates
-      if (values.vector_stores !== undefined || values.mcp_servers_and_groups !== undefined) {
-        updateData.object_permission = {
-          ...orgData?.object_permission,
-          vector_stores: values.vector_stores || [],
-        };
-
-        if (values.mcp_servers_and_groups !== undefined) {
-          const { servers, accessGroups } = values.mcp_servers_and_groups || {
-            servers: [],
-            accessGroups: [],
-          };
-          if (servers && servers.length > 0) {
-            updateData.object_permission.mcp_servers = servers;
-          }
-          if (accessGroups && accessGroups.length > 0) {
-            updateData.object_permission.mcp_access_groups = accessGroups;
-          }
-        }
-      }
-
-      const response = await organizationUpdateCall(accessToken, updateData);
-
-      NotificationsManager.success("Organization settings updated successfully");
-      setIsEditing(false);
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
-    } catch (error) {
-      NotificationsManager.fromBackend("Failed to update organization settings");
-      console.error("Error updating organization:", error);
-    } finally {
-      setIsOrgSaving(false);
     }
   };
 
@@ -356,103 +294,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 </div>
 
                 {isEditing ? (
-                  <Form
-                    form={form}
-                    onFinish={handleOrgUpdate}
-                    initialValues={{
-                      organization_alias: orgData.organization_alias,
-                      models: orgData.models,
-                      tpm_limit: orgData.litellm_budget_table.tpm_limit,
-                      rpm_limit: orgData.litellm_budget_table.rpm_limit,
-                      max_budget: orgData.litellm_budget_table.max_budget,
-                      budget_duration: orgData.litellm_budget_table.budget_duration,
-                      metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
-                      vector_stores: orgData.object_permission?.vector_stores || [],
-                      mcp_servers_and_groups: {
-                        servers: orgData.object_permission?.mcp_servers || [],
-                        accessGroups: orgData.object_permission?.mcp_access_groups || [],
-                      },
-                    }}
-                    layout="vertical"
-                  >
-                    <Form.Item
-                      label="Organization Name"
-                      name="organization_alias"
-                      rules={[
-                        {
-                          required: true,
-                          message: "Please input an organization name",
-                        },
-                      ]}
-                    >
-                      <TextInput />
-                    </Form.Item>
-
-                    <Form.Item label="Models" name="models">
-                      <ModelSelect
-                        value={form.getFieldValue("models")}
-                        onChange={(values) => form.setFieldValue("models", values)}
-                        context="organization"
-                        options={{
-                          includeSpecialOptions: true,
-                          showAllProxyModelsOverride: true,
-                        }}
-                      />
-                    </Form.Item>
-
-                    <Form.Item label="Max Budget (USD)" name="max_budget">
-                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
-                    </Form.Item>
-
-                    <Form.Item label="Reset Budget" name="budget_duration">
-                      <Select placeholder="n/a">
-                        <Select.Option value="24h">daily</Select.Option>
-                        <Select.Option value="7d">weekly</Select.Option>
-                        <Select.Option value="30d">monthly</Select.Option>
-                      </Select>
-                    </Form.Item>
-
-                    <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                      <NumericalInput step={1} style={{ width: "100%" }} />
-                    </Form.Item>
-
-                    <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                      <NumericalInput step={1} style={{ width: "100%" }} />
-                    </Form.Item>
-
-                    <Form.Item label="Vector Stores" name="vector_stores">
-                      <VectorStoreSelector
-                        onChange={(values) => form.setFieldValue("vector_stores", values)}
-                        value={form.getFieldValue("vector_stores")}
-                        accessToken={accessToken || ""}
-                        placeholder="Select vector stores"
-                      />
-                    </Form.Item>
-
-                    <Form.Item label="MCP Servers & Access Groups" name="mcp_servers_and_groups">
-                      <MCPServerSelector
-                        onChange={(values) => form.setFieldValue("mcp_servers_and_groups", values)}
-                        value={form.getFieldValue("mcp_servers_and_groups")}
-                        accessToken={accessToken || ""}
-                        placeholder="Select MCP servers and access groups"
-                      />
-                    </Form.Item>
-
-                    <Form.Item label="Metadata" name="metadata">
-                      <Input.TextArea rows={4} />
-                    </Form.Item>
-
-                    <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
-                      <div className="flex justify-end items-center gap-2">
-                        <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isOrgSaving}>
-                          Cancel
-                        </TremorButton>
-                        <TremorButton type="submit" loading={isOrgSaving}>
-                          Save Changes
-                        </TremorButton>
-                      </div>
-                    </div>
-                  </Form>
+                  <OrgSettingsForm
+                    organizationId={organizationId}
+                    org={orgData}
+                    accessToken={accessToken || ""}
+                    onCancel={() => setIsEditing(false)}
+                    onSaved={() => setIsEditing(false)}
+                  />
                 ) : (
                   <div className="space-y-4">
                     <div>
