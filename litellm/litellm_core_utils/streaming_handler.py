@@ -1900,6 +1900,14 @@ class CustomStreamWrapper:
                     processed_chunk,
                     cache_hit,
                 )  # log response
+                # completion_stream just raised StopIteration - it's genuinely
+                # exhausted, so no more raw chunks are coming regardless of
+                # whether the caller keeps iterating. Many consumers stop here
+                # (they saw finish_reason and break) without ever calling
+                # __next__() again, so this is the only chance to restore -
+                # the sent_last_chunk-is-True StopIteration branch above never
+                # runs for them.
+                self._restore_consumer_correlation_context()
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
@@ -2136,6 +2144,11 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            # see sync __next__'s sibling branch: completion_stream just
+            # raised (Stop)(Async)Iteration, so it's genuinely exhausted - this
+            # is the only chance to restore for a caller that stops as soon as
+            # it sees finish_reason without calling __anext__() again.
+            self._restore_consumer_correlation_context()
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:

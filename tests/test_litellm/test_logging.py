@@ -1075,6 +1075,92 @@ def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
         session_id_var.set("")
 
 
+def test_stream_wrapper_next_restores_context_on_synthesized_finish_reason_chunk():
+    """When the underlying stream ends without ever emitting an explicit
+    finish_reason chunk, __next__ synthesizes one via finish_reason_handler()
+    and returns it - this is the only realistic exit point for a consumer
+    that stops as soon as it sees finish_reason (a common pattern), since the
+    normal terminal StopIteration handler only runs on a *subsequent* call to
+    __next__() that many consumers never make. completion_stream is already
+    exhausted at this point (that's why StopIteration was raised in the first
+    place), so restoring here is safe regardless of whether the caller keeps
+    iterating."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-finish-reason")
+    session_id_var.set("outer-session-finish-reason")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="finish-reason-call",
+            function_id="fn-finish-reason",
+            kwargs={"litellm_session_id": "finish-reason-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "finish-reason-session"
+
+        chunk = next(wrapper)
+
+        assert chunk.choices[0].finish_reason is not None
+        assert trace_id_var.get() == "outer-trace-finish-reason"
+        assert session_id_var.get() == "outer-session-finish-reason"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+@pytest.mark.asyncio
+async def test_stream_wrapper_anext_restores_context_on_synthesized_finish_reason_chunk():
+    """Async sibling of test_stream_wrapper_next_restores_context_on_synthesized_finish_reason_chunk -
+    _finalize_completed_stream()'s else branch has the same synthesize-and-
+    return-without-restoring gap."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-anext-finish-reason")
+    session_id_var.set("outer-session-anext-finish-reason")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="anext-finish-reason-call",
+            function_id="fn-anext-finish-reason",
+            kwargs={"litellm_session_id": "anext-finish-reason-session"},
+        )
+
+        async def _empty_aiter():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_empty_aiter(),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "anext-finish-reason-session"
+
+        chunk = await wrapper.__anext__()
+
+        assert chunk.choices[0].finish_reason is not None
+        assert trace_id_var.get() == "outer-trace-anext-finish-reason"
+        assert session_id_var.get() == "outer-session-anext-finish-reason"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 @pytest.mark.asyncio
 async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
     """Explicit early termination (aclose(), e.g. on client disconnect or a
