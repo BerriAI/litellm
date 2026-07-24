@@ -5852,3 +5852,47 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                         exporter="console", attributes=attributes
                     )
                 )
+
+
+class TestOpenTelemetrySemanticLogsNoneSafety(unittest.TestCase):
+    def test_drop_none_values_recursively_removes_none(self):
+        payload = {
+            "gen_ai.system": None,
+            "index": 0,
+            "finish_reason": None,
+            "message": {"role": "assistant", "content": None},
+            "tool_calls": [None, {"id": "a", "name": None}],
+        }
+        self.assertEqual(
+            OpenTelemetry._drop_none_values(payload),
+            {
+                "index": 0,
+                "message": {"role": "assistant"},
+                "tool_calls": [{"id": "a"}],
+            },
+        )
+
+    def test_sanitized_payload_encodes_without_nonetype_error(self):
+        """A ``None`` anywhere in a semantic-log record makes the OTLP exporter
+        raise ``Invalid type <class 'NoneType'>`` and drop the whole batch.
+        ``_drop_none_values`` removes them so the same payload encodes cleanly.
+        """
+        from opentelemetry.exporter.otlp.proto.common._internal import (
+            _encode_value,
+        )
+
+        attrs = {
+            "event_name": "gen_ai.content.completion",
+            "gen_ai.system": None,
+            "index": 0,
+            "finish_reason": None,
+        }
+        body = {"role": "assistant", "content": None, "tool_calls": None}
+
+        with self.assertRaises(Exception):
+            _encode_value(attrs)
+        with self.assertRaises(Exception):
+            _encode_value(body)
+
+        _encode_value(OpenTelemetry._drop_none_values(attrs))
+        _encode_value(OpenTelemetry._drop_none_values(body))
