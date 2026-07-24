@@ -1900,14 +1900,19 @@ class CustomStreamWrapper:
                     processed_chunk,
                     cache_hit,
                 )  # log response
-                # completion_stream just raised StopIteration - it's genuinely
-                # exhausted, so no more raw chunks are coming regardless of
-                # whether the caller keeps iterating. Many consumers stop here
-                # (they saw finish_reason and break) without ever calling
-                # __next__() again, so this is the only chance to restore -
-                # the sent_last_chunk-is-True StopIteration branch above never
-                # runs for them.
-                self._restore_consumer_correlation_context()
+                # Deliberately do NOT restore context here even though
+                # completion_stream is already exhausted: this chunk is still
+                # real data belonging to this call, and the caller's own
+                # (application-level) log statements processing it run
+                # immediately after this return, in this same synchronous
+                # frame - restoring first would make those lines carry the
+                # wrong ids, which is exactly what leaving context open during
+                # iteration is meant to prevent (see
+                # _restore_consumer_correlation_context's docstring). A caller
+                # that keeps iterating gets cleaned up on its next __next__()
+                # call (immediate StopIteration, handled above); one that
+                # stops right here relies on aclose() or the best-effort
+                # __del__ guard instead.
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
@@ -2144,11 +2149,12 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
-            # see sync __next__'s sibling branch: completion_stream just
-            # raised (Stop)(Async)Iteration, so it's genuinely exhausted - this
-            # is the only chance to restore for a caller that stops as soon as
-            # it sees finish_reason without calling __anext__() again.
-            self._restore_consumer_correlation_context()
+            # see sync __next__'s sibling branch: deliberately do NOT restore
+            # here - this chunk is still this call's own data, and restoring
+            # before returning it would corrupt the caller's own log
+            # statements processing it. A caller that keeps iterating gets
+            # cleaned up on the next __anext__() call; one that stops here
+            # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:

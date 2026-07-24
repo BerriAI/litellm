@@ -1075,16 +1075,17 @@ def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
         session_id_var.set("")
 
 
-def test_stream_wrapper_next_restores_context_on_synthesized_finish_reason_chunk():
+def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk():
     """When the underlying stream ends without ever emitting an explicit
     finish_reason chunk, __next__ synthesizes one via finish_reason_handler()
-    and returns it - this is the only realistic exit point for a consumer
-    that stops as soon as it sees finish_reason (a common pattern), since the
-    normal terminal StopIteration handler only runs on a *subsequent* call to
-    __next__() that many consumers never make. completion_stream is already
-    exhausted at this point (that's why StopIteration was raised in the first
-    place), so restoring here is safe regardless of whether the caller keeps
-    iterating."""
+    and returns it. That chunk is still this call's own data - the caller's
+    own (application-level) log statements processing it run immediately
+    after this return, in the same synchronous frame, so context must NOT be
+    restored yet or those log lines would carry the wrong ids. A caller that
+    keeps iterating (the common, non-early-break pattern) still gets a
+    correct, deterministic restore on the very next __next__() call, since
+    completion_stream is already exhausted and immediately re-raises
+    StopIteration."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     trace_id_var.set("outer-trace-finish-reason")
@@ -1111,6 +1112,14 @@ def test_stream_wrapper_next_restores_context_on_synthesized_finish_reason_chunk
         chunk = next(wrapper)
 
         assert chunk.choices[0].finish_reason is not None
+        # Still this call's own ids - not restored yet.
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "finish-reason-session"
+
+        # A caller that keeps iterating (doesn't break early) still gets a
+        # deterministic restore right here, on the next real StopIteration.
+        with pytest.raises(StopIteration):
+            next(wrapper)
         assert trace_id_var.get() == "outer-trace-finish-reason"
         assert session_id_var.get() == "outer-session-finish-reason"
     finally:
@@ -1118,11 +1127,50 @@ def test_stream_wrapper_next_restores_context_on_synthesized_finish_reason_chunk
         session_id_var.set("")
 
 
+def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk():
+    """A caller that breaks immediately after seeing finish_reason (the
+    early-break pattern) never triggers the next()-driven restore above - it
+    relies on the best-effort __del__ guard instead, same as any other
+    abandoned stream. The guard must still recognize this call's own
+    (unrestored) ids as unclaimed and clean them up."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-finish-reason-del")
+    session_id_var.set("outer-session-finish-reason-del")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="finish-reason-del-call",
+            function_id="fn-finish-reason-del",
+            kwargs={"litellm_session_id": "finish-reason-del-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+
+        chunk = next(wrapper)
+        assert chunk.choices[0].finish_reason is not None
+
+        wrapper.__del__()
+
+        assert trace_id_var.get() == "outer-trace-finish-reason-del"
+        assert session_id_var.get() == "outer-session-finish-reason-del"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 @pytest.mark.asyncio
-async def test_stream_wrapper_anext_restores_context_on_synthesized_finish_reason_chunk():
-    """Async sibling of test_stream_wrapper_next_restores_context_on_synthesized_finish_reason_chunk -
-    _finalize_completed_stream()'s else branch has the same synthesize-and-
-    return-without-restoring gap."""
+async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_finish_reason_chunk():
+    """Async sibling of test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk -
+    _finalize_completed_stream()'s else branch must not restore before
+    returning the synthesized chunk either."""
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     trace_id_var.set("outer-trace-anext-finish-reason")
@@ -1154,6 +1202,14 @@ async def test_stream_wrapper_anext_restores_context_on_synthesized_finish_reaso
         chunk = await wrapper.__anext__()
 
         assert chunk.choices[0].finish_reason is not None
+        # Still this call's own ids - not restored yet.
+        assert trace_id_var.get() == log_obj.litellm_trace_id
+        assert session_id_var.get() == "anext-finish-reason-session"
+
+        # A caller that keeps iterating still gets a deterministic restore
+        # right here, on the next real StopAsyncIteration.
+        with pytest.raises(StopAsyncIteration):
+            await wrapper.__anext__()
         assert trace_id_var.get() == "outer-trace-anext-finish-reason"
         assert session_id_var.get() == "outer-session-anext-finish-reason"
     finally:
