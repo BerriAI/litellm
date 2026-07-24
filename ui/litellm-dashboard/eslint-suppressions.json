@@ -838,15 +838,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/MCPLogoSelector.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/immutability": {
       "count": 2
     }
@@ -859,11 +851,6 @@
   "src/app/(dashboard)/mcp-servers/_components/MCPPermissionManagement.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPServerCard.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPSubmissionsTab.tsx": {
@@ -904,9 +891,6 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -944,11 +928,6 @@
       "count": 2
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/TruePassthroughWarning.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -999,9 +978,6 @@
     },
     "no-nested-ternary": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.tsx": {
@@ -1011,9 +987,6 @@
     "local/no-complex-jsx-arrow": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1021,16 +994,10 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_display.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1057,9 +1024,6 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_servers.tsx": {
@@ -1072,9 +1036,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1082,9 +1043,6 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
@@ -1096,9 +1054,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -1864,9 +1819,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -2435,11 +2387,6 @@
       "count": 1
     }
   },
-  "src/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterTestPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Settings/AdminSettings/PluginSettings/PluginSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2605,20 +2552,7 @@
     }
   },
   "src/components/ToolDetail.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "unused-imports/no-unused-imports": {
-      "count": 2
-    }
-  },
-  "src/components/ToolPolicies/PolicySelect.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/ToolPolicies/ToolPoliciesTableColumns.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
