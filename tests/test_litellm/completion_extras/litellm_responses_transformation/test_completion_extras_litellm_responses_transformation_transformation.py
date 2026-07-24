@@ -1,12 +1,8 @@
-import datetime
 import json
 import os
 import sys
-import unittest
-from typing import List, Optional, Tuple
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import Mock
 
-import httpx
 import pytest
 
 sys.path.insert(
@@ -51,7 +47,6 @@ def test_convert_chat_completion_messages_to_responses_api_image_input():
     assert user_content in response_str
     assert user_image in response_str
 
-    print("response: ", response)
     assert response[0]["content"][1]["image_url"] == user_image
 
 
@@ -142,8 +137,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_imag
     ), "image_url should be a flat string, not a nested object"
     assert "detail" in image_item, "detail field should be present"
 
-    print("✓ Tool result with image correctly transformed to Responses API format")
-
 
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text():
     """
@@ -219,10 +212,6 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_text
     assert (
         text_item["text"] == "15 degrees"
     ), f"Expected text '15 degrees', got '{text_item.get('text')}'"
-
-    print(
-        "✓ Tool result with text correctly transformed to use input_text for Responses API format"
-    )
 
 
 def test_openai_responses_chunk_parser_reasoning_summary():
@@ -507,8 +496,6 @@ and I learn to carry this small calm home."""
 
     # Check reasoning content
     assert choice.message.reasoning_content == reasoning_summary.text
-
-    print("✓ transform_response correctly handled reasoning items and output messages")
 
 
 def _make_empty_responses_api_response(model: str = "gpt-5.4"):
@@ -961,10 +948,6 @@ def test_transform_request_single_char_keys_not_matched():
     assert result_correct.get("metadata") == {"user_id": "123"}
     assert result_correct.get("previous_response_id") == "resp_abc"
 
-    print(
-        "✓ Single-character keys are not incorrectly matched to metadata/previous_response_id"
-    )
-
 
 # =============================================================================
 # Tests for issue #17246: Streaming tool_calls dropped when text + tool_calls
@@ -1355,8 +1338,6 @@ def test_tool_message_output_uses_input_text_not_output_text():
     ), f"Expected input_text, got {output[0].get('type')}"
     assert output[0]["text"] == '{"temperature": 15, "condition": "sunny"}'
 
-    print("✓ Tool message output correctly uses input_text type")
-
 
 def test_multiple_tool_calls_in_single_choice():
     """
@@ -1498,8 +1479,6 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["id"] == "call_horoscope"
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
-    print("✓ Multiple tool calls are correctly grouped in a single choice")
-
 
 def test_map_reasoning_effort_adds_summary_detailed():
     """
@@ -1513,7 +1492,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
     """
     import os
 
-    import litellm
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
@@ -1542,9 +1520,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
                 "summary" not in result
             ), f"Summary should NOT be present by default for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)"
-            )
 
         # Test 2: With flag enabled - summary IS added
         litellm.reasoning_auto_summary = True
@@ -1558,9 +1533,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
                 result["summary"] == "detailed"
             ), f"Summary should be 'detailed' when flag is enabled for effort={effort}"
 
-            print(
-                f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)"
-            )
 
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
@@ -1570,7 +1542,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
-        print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
 
         # Test 4: Dict input is passed through as-is (no modification)
         litellm.reasoning_auto_summary = False
@@ -1581,16 +1552,11 @@ def test_map_reasoning_effort_adds_summary_detailed():
         result_dict = handler._map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
-        print("✓ Dict input is passed through without modification")
 
         # Test 5: None/unknown values return None
         result_unknown = handler._map_reasoning_effort("unknown_value")
         assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
 
-        print(
-            "✓ All reasoning_effort behaviors work correctly with flag/env var control"
-        )
 
     finally:
         # Restore original values
@@ -1782,10 +1748,6 @@ def test_transform_response_preserves_annotations():
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 20
     assert result.usage.total_tokens == 30
-
-    print(
-        "✓ Annotations from Responses API are correctly preserved in Chat Completions format"
-    )
 
 
 def test_apply_patch_tool_call_converted_to_chat_completion_tool_call():
@@ -2079,10 +2041,6 @@ def test_multi_tool_call_stream_no_premature_finish():
                 f"Chunk at index {idx} (type={chunks[idx]['type']!r}) must not emit finish_reason "
                 f"— only response.completed should terminate the stream"
             )
-
-    print(
-        "✓ Multi-tool-call stream completes without premature finish_reason termination"
-    )
 
 
 # =============================================================================
@@ -2395,10 +2353,6 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
         0,
         1,
     }, f"Parallel tool calls must have distinct indices {{0, 1}}, got: {set(added_tool_call_indices)}"
-
-    print(
-        "✓ Parallel tool calls with split argument deltas stream correctly end-to-end"
-    )
 
 
 def test_map_optional_params_preserves_reasoning_summary():
@@ -2821,6 +2775,165 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
     assert ri["summary"][0]["text"] == summary_text
 
 
+def test_reasoning_items_preserved_when_merged_with_tool_calls():
+    """
+    Regression: when a Responses turn contains [message, reasoning, function_call]
+    (reasoning item arriving AFTER the assistant message), the merge path that
+    attaches accumulated tool_calls onto the last message choice must also backfill
+    the structured ``reasoning_items`` (with ``encrypted_content``) onto that
+    message; otherwise the encrypted reasoning payload needed to round-trip on the
+    next turn is silently dropped. The flattened ``reasoning_content`` string is
+    already backfilled by the existing code; ``reasoning_items`` currently is not.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import (
+        ResponseFunctionToolCall,
+        ResponseOutputMessage,
+        ResponseOutputText,
+    )
+    from openai.types.responses.response_reasoning_item import (
+        ResponseReasoningItem,
+        Summary,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    encrypted = "gAAAAABpw5xyz789FAKE=="
+    summary_text = "deciding which city"
+    preamble = "Let me check the weather."
+
+    output_message = ResponseOutputMessage(
+        id="msg_merge001",
+        content=[
+            ResponseOutputText(
+                annotations=[],
+                text=preamble,
+                type="output_text",
+                logprobs=[],
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    reasoning_item = ResponseReasoningItem(
+        id="rs_merge001",
+        summary=[Summary(text=summary_text, type="summary_text")],
+        type="reasoning",
+        content=None,
+        encrypted_content=encrypted,
+        status=None,
+    )
+    function_call_item = ResponseFunctionToolCall(
+        id="fc_merge001",
+        type="function_call",
+        status="completed",
+        arguments='{"city": "Paris"}',
+        call_id="call_paris_merge",
+        name="get_weather",
+    )
+
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(
+            audio_tokens=None, cached_tokens=0, text_tokens=None
+        ),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0, text_tokens=None),
+        total_tokens=30,
+        cost=None,
+    )
+    raw_response = ResponsesAPIResponse(
+        id="resp_merge001",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5-mini",
+        object="response",
+        output=[output_message, reasoning_item, function_call_item],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": "low", "summary": "detailed"},
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "developer"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+    model_response = ModelResponse(
+        id="chatcmpl-merge001",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = handler.transform_response(
+        model="gpt-5-mini",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5-mini"},
+        messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1, (
+        f"merge must collapse into a single choice, got {len(result.choices)}"
+    )
+    choice = result.choices[0]
+    msg = choice.message
+
+    assert msg.tool_calls is not None and len(msg.tool_calls) == 1
+    assert msg.tool_calls[0]["function"]["name"] == "get_weather"
+    assert msg.tool_calls[0]["function"]["arguments"] == '{"city": "Paris"}'
+    assert choice.finish_reason == "tool_calls"
+
+    assert msg.content == preamble, "assistant preamble text must be preserved"
+
+    assert msg.reasoning_content == summary_text, (
+        "reasoning_content must be backfilled onto the merged choice"
+    )
+
+    assert msg.reasoning_items is not None, (
+        "reasoning_items must be backfilled onto the merged choice so encrypted_content "
+        "can round-trip to the provider on the next turn"
+    )
+    assert len(msg.reasoning_items) == 1
+    assert msg.reasoning_items[0]["encrypted_content"] == encrypted
+
+
 def test_streaming_function_call_tool_id_for_degenerate_call_id():
     """In streaming, Bedrock Mantle's function_call event carries a unique ``id``
     (``fc_...``) and a non-unique, index-based ``call_id`` (``call_0``). For that
@@ -2853,3 +2966,317 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
 
     assert stream_tool_id("fc_unique_abc123", "call_0") == "fc_unique_abc123"
     assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"
+
+
+def _build_message_plus_tool_call_response(
+    output_items,
+    model="gpt-4o",
+):
+    """Helper that wraps output_items into a minimal ResponsesAPIResponse and returns the
+    transformed ModelResponse produced by LiteLLMResponsesTransformationHandler."""
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        total_tokens=30,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_bug18401",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model=model,
+        object="response",
+        output=output_items,
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text=None,
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-bug18401",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    return handler.transform_response(
+        model=model,
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": model},
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+
+def _make_output_message(text, message_id="msg_bug18401"):
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    return ResponseOutputMessage(
+        id=message_id,
+        content=[
+            ResponseOutputText(
+                annotations=[],
+                text=text,
+                type="output_text",
+                logprobs=[],
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+
+def _make_function_tool_call(call_id, name, arguments, tc_id="fc_bug18401"):
+    from openai.types.responses import ResponseFunctionToolCall
+
+    return ResponseFunctionToolCall(
+        id=tc_id,
+        type="function_call",
+        status="completed",
+        arguments=arguments,
+        call_id=call_id,
+        name=name,
+    )
+
+
+def test_message_plus_function_call_merged_into_single_choice():
+    """Regression: a Responses turn that contains both a message and a function_call must
+    collapse into a single Chat Completions choice, because Chat Completions clients only
+    read choices[0]. Prior to the fix the bridge emitted two choices (content in [0],
+    tool_calls in [1]) which caused tools to be silently ignored downstream."""
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            _make_output_message("Fetching the weather now."),
+            _make_function_tool_call(
+                call_id="call_paris",
+                name="get_weather",
+                arguments='{"location": "Paris"}',
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+    assert choice.message.content == "Fetching the weather now."
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None and len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "call_paris"
+    assert tool_calls[0]["function"]["name"] == "get_weather"
+    assert tool_calls[0]["function"]["arguments"] == '{"location": "Paris"}'
+
+
+def test_tool_only_turn_unchanged():
+    """Guard against regressing the pre-fix behaviour for tool-only turns: when the
+    Responses output has no assistant message, a fresh Choice must still be appended
+    with the accumulated tool_calls and finish_reason='tool_calls'."""
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            _make_function_tool_call(
+                call_id="call_only",
+                name="get_weather",
+                arguments='{"location": "Tokyo"}',
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None and len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "call_only"
+
+
+def test_message_only_turn_unchanged():
+    """Guard: a message-only Responses turn must still produce a single choice with
+    finish_reason='stop' after the merge fix (no accumulated_tool_calls path taken)."""
+    result = _build_message_plus_tool_call_response(
+        output_items=[_make_output_message("Just a plain answer.")]
+    )
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.message.content == "Just a plain answer."
+    assert not choice.message.tool_calls
+
+
+def test_multiple_function_calls_after_message_merged():
+    """When a message is followed by multiple parallel function_calls, all of them must
+    land on the single message-carrying choice (Chat Completions groups them all under
+    one message)."""
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            _make_output_message("Fetching two cities in parallel."),
+            _make_function_tool_call(
+                call_id="call_paris",
+                name="get_weather",
+                arguments='{"location": "Paris"}',
+                tc_id="fc_1",
+            ),
+            _make_function_tool_call(
+                call_id="call_tokyo",
+                name="get_weather",
+                arguments='{"location": "Tokyo"}',
+                tc_id="fc_2",
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+    assert choice.message.content == "Fetching two cities in parallel."
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None and len(tool_calls) == 2
+    assert {tc["id"] for tc in tool_calls} == {"call_paris", "call_tokyo"}
+    assert all(tc["function"]["name"] == "get_weather" for tc in tool_calls)
+
+
+def test_multiple_message_items_tool_calls_collapse_onto_last():
+    """When the Responses output contains two assistant messages before a function_call,
+    the accumulated tool_calls must attach to the LAST (most recent) message choice, not
+    the first, because that is the one the model was on when it decided to call the tool.
+    The earlier message choice must remain a plain text turn with finish_reason='stop'."""
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            _make_output_message("first", message_id="msg_first"),
+            _make_output_message("second", message_id="msg_second"),
+            _make_function_tool_call(
+                call_id="call_after_second",
+                name="get_weather",
+                arguments='{"location": "Paris"}',
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 2
+
+    first_choice = next(c for c in result.choices if c.message.content == "first")
+    second_choice = next(c for c in result.choices if c.message.content == "second")
+
+    assert first_choice.finish_reason == "stop"
+    assert not first_choice.message.tool_calls
+
+    assert second_choice.finish_reason == "tool_calls"
+    tool_calls = second_choice.message.tool_calls
+    assert tool_calls is not None and len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "call_after_second"
+
+
+def test_streaming_text_plus_function_call_lands_on_choice_index_zero():
+    """Streaming counterpart to the merged-choice fix: when a message and a function_call
+    arrive in the same Responses turn, both the content deltas and the tool_call deltas
+    must be emitted on choice index 0, and the terminal response.completed chunk must
+    carry finish_reason='tool_calls'. This mirrors the non-streaming merge behaviour so
+    that Chat Completions clients that only read choices[0] see both the text and the
+    tool call."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunks = [
+        {"type": "response.output_text.delta", "delta": "Fetching "},
+        {"type": "response.output_text.delta", "delta": "the weather."},
+        {
+            "type": "response.output_item.done",
+            "item": {"type": "message", "content": []},
+        },
+        {
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_paris",
+                "id": "fc_1",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "delta": '{"location":"Paris"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_paris",
+                "arguments": '{"location":"Paris"}',
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {"type": "message"},
+                    {"type": "function_call", "call_id": "call_paris"},
+                ]
+            },
+        },
+    ]
+
+    results = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    for idx, r in enumerate(results):
+        assert len(r.choices) == 1, f"chunk {idx} produced {len(r.choices)} choices"
+        assert r.choices[0].index == 0, (
+            f"chunk {idx} landed on index {r.choices[0].index}, expected 0"
+        )
+
+    text_deltas = [r.choices[0].delta.content for r in results[:2]]
+    assert text_deltas == ["Fetching ", "the weather."]
+
+    tool_added = results[3].choices[0].delta.tool_calls
+    assert tool_added and tool_added[0]["function"]["name"] == "get_weather"
+
+    tool_arg_delta = results[4].choices[0].delta.tool_calls
+    assert (
+        tool_arg_delta
+        and tool_arg_delta[0]["function"]["arguments"] == '{"location":"Paris"}'
+    )
+
+    terminal = results[-1]
+    assert terminal.choices[0].finish_reason == "tool_calls"
