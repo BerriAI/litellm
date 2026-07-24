@@ -904,3 +904,45 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
         litellm.in_memory_llm_clients_cache = LLMClientCache()
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         assert client.timeout.read == 300.0
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_get_stream_does_not_buffer_body():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    handler = AsyncHTTPHandler()
+
+    streaming_response = MagicMock(spec=httpx.Response)
+    streaming_response.status_code = 200
+
+    mock_send = AsyncMock(return_value=streaming_response)
+
+    with patch.object(handler.client, "send", mock_send):
+        result = await handler.get("https://example.com/mcp", stream=True)
+
+    _, send_kwargs = mock_send.call_args
+    assert send_kwargs["stream"] is True
+    assert result is streaming_response
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_get_non_stream_buffers_body():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    handler = AsyncHTTPHandler()
+
+    buffered_response = MagicMock(spec=httpx.Response)
+    buffered_response.status_code = 200
+
+    mock_send = AsyncMock(return_value=buffered_response)
+
+    with patch.object(handler.client, "send", mock_send):
+        result = await handler.get("https://example.com/mcp", stream=False)
+
+    _, send_kwargs = mock_send.call_args
+    assert send_kwargs["stream"] is False
+    assert result is buffered_response
