@@ -4737,6 +4737,184 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
     assert len(deleted_keys) == 2
 
 
+def _make_verification_token(token: str) -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token=token,
+        user_id="user-123",
+        team_id=None,
+        key_alias=None,
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+
+
+def _make_jwt_mapping(token: str, claim_name: str, claim_value: str) -> MagicMock:
+    mapping = MagicMock()
+    mapping.token = token
+    mapping.jwt_claim_name = claim_name
+    mapping.jwt_claim_value = claim_value
+    return mapping
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_cleans_up_jwt_key_mappings_and_clears_cache(
+    monkeypatch,
+):
+    """Regression for #33702: deleting a virtual key must remove dependent JWT
+    mappings and invalidate their cache entries before the FK-backed delete."""
+    token = "hashed-token-1"
+    key = _make_verification_token(token)
+    mapping = _make_jwt_mapping(token, "sub", "jwt-user-1")
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key])
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[mapping])
+    mock_prisma_client.db.litellm_jwtkeymapping.delete_many = AsyncMock()
+    mock_prisma_client.delete_data = AsyncMock(return_value=[token])
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+
+    mock_user_api_key_cache = MagicMock()
+    mock_user_api_key_cache.delete_cache = MagicMock()
+    mock_user_api_key_cache.async_delete_cache = AsyncMock()
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: token,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token",
+        lambda token: token,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    result, _ = await delete_verification_tokens(
+        tokens=[token],
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+    )
+
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many.assert_awaited_once_with(
+        where={"token": {"in": [token]}}
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping.delete_many.assert_awaited_once_with(
+        where={"token": {"in": [token]}}
+    )
+    mock_user_api_key_cache.async_delete_cache.assert_awaited_once_with(
+        "jwt_key_mapping:sub:jwt-user-1"
+    )
+    assert result["deleted_keys"] == [token]
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_cleans_up_multiple_jwt_key_mappings_per_token(
+    monkeypatch,
+):
+    """One virtual key can back multiple JWT claim mappings; all must be removed."""
+    token = "hashed-token-1"
+    key = _make_verification_token(token)
+    mapping_sub = _make_jwt_mapping(token, "sub", "jwt-user-1")
+    mapping_email = _make_jwt_mapping(token, "email", "user@example.com")
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key])
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(
+        return_value=[mapping_sub, mapping_email]
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping.delete_many = AsyncMock()
+    mock_prisma_client.delete_data = AsyncMock(return_value=[token])
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+
+    mock_user_api_key_cache = MagicMock()
+    mock_user_api_key_cache.delete_cache = MagicMock()
+    mock_user_api_key_cache.async_delete_cache = AsyncMock()
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: token,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token",
+        lambda token: token,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    await delete_verification_tokens(
+        tokens=[token],
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+    )
+
+    assert mock_user_api_key_cache.async_delete_cache.await_count == 2
+    mock_user_api_key_cache.async_delete_cache.assert_any_await(
+        "jwt_key_mapping:sub:jwt-user-1"
+    )
+    mock_user_api_key_cache.async_delete_cache.assert_any_await(
+        "jwt_key_mapping:email:user@example.com"
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping.delete_many.assert_awaited_once_with(
+        where={"token": {"in": [token]}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_no_jwt_key_mappings_is_noop(monkeypatch):
+    """Keys with no JWT mappings must not call delete_many on the mapping table."""
+    token = "hashed-token-1"
+    key = _make_verification_token(token)
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key])
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_jwtkeymapping.delete_many = AsyncMock()
+    mock_prisma_client.delete_data = AsyncMock(return_value=[token])
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+
+    mock_user_api_key_cache = MagicMock()
+    mock_user_api_key_cache.delete_cache = MagicMock()
+    mock_user_api_key_cache.async_delete_cache = AsyncMock()
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: token,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token",
+        lambda token: token,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    await delete_verification_tokens(
+        tokens=[token],
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+    )
+
+    mock_prisma_client.db.litellm_jwtkeymapping.find_many.assert_awaited_once()
+    mock_prisma_client.db.litellm_jwtkeymapping.delete_many.assert_not_awaited()
+    mock_user_api_key_cache.async_delete_cache.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_delete_key_fn_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import KeyRequest
