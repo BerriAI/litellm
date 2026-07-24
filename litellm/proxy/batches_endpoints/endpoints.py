@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.llms.base_llm.managed_resources.isolation import can_access_resource
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -38,9 +39,48 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
+from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
 router = APIRouter()
+
+
+async def _resolve_managed_input_file_storage_url(
+    input_file_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> "str | None":
+    """Resolve a managed (unified) input_file_id to its backend storage_url.
+
+    Returns None only when the proxy has no database (nothing to resolve or
+    enforce against) or when an owned managed file has no storage_url yet
+    (legacy rows); callers fall back to dispatching the original id. Raises a
+    404 when the caller does not own the file or no row exists (an id that
+    cannot be verified must not be dispatched, since the managed-files
+    deployment hook maps ids from cache without re-checking ownership) and a
+    503 when the lookup itself fails.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return None
+    try:
+        db_file = await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
+    except Exception as e:
+        verbose_proxy_logger.warning("create_batch: managed file lookup failed for %s: %s", input_file_id, e)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "Unable to verify managed file access; please retry"},
+        )
+    if db_file is None or not can_access_resource(
+        user_api_key_dict=user_api_key_dict,
+        created_by=db_file.created_by,
+        resource_team_id=db_file.team_id,
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"File not found: {input_file_id}"},
+        )
+    return db_file.storage_url or None
 
 
 @router.post(
@@ -204,7 +244,12 @@ async def create_batch(
 
             response.input_file_id = input_file_id
 
-        elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
+        elif (
+            litellm.enable_loadbalancing_on_batch_endpoints is True
+            and is_router_model
+            and router_model is not None
+            and not unified_file_id
+        ):
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
@@ -224,6 +269,19 @@ async def create_batch(
                 )
             model = target_model_names[0]
             _create_batch_data["model"] = model
+
+            # Resolve the opaque unified id to its real backend storage_url and
+            # enforce ownership before dispatch. Kept inside this branch (not
+            # hoisted above load balancing) so the load-balanced path keeps the
+            # original id for model_file_id_mapping deployment filtering, and so
+            # the response restore below still returns the unified id.
+            resolved_storage_url = await _resolve_managed_input_file_storage_url(
+                input_file_id=input_file_id,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if resolved_storage_url is not None:
+                _create_batch_data["input_file_id"] = resolved_storage_url
+
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
