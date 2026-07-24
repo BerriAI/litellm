@@ -221,12 +221,22 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/ui/skills")).toBe("skills");
   });
 
+  it("maps a nested tab route back to its sidebar key via the first path segment", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(legacyKeyForPathname("/ui/caching/health")).toBe("caching");
+    expect(legacyKeyForPathname("/ui/caching/coordination-redis/")).toBe("caching");
+    expect(legacyKeyForPathname("/ui/models-and-endpoints/add")).toBe("models");
+  });
+
   it("returns null for a not-yet-migrated path", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { legacyKeyForPathname } = await import("./migratedPages");
 
     expect(legacyKeyForPathname("/ui/")).toBeNull();
     expect(legacyKeyForPathname("/ui/some-legacy-page")).toBeNull();
+    expect(legacyKeyForPathname("/ui/some-legacy-page/nested")).toBeNull();
   });
 
   it("strips a non-root serverRootPath prefix before matching", async () => {
