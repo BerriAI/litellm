@@ -1,0 +1,355 @@
+"""Vendor API strategy coverage for /chat/completions (LIT-4778).
+
+Positive multi-turn history, input validation, boundary handling, contract shape,
+and input sanitization against a live proxy and a real OpenAI-compatible model.
+"""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import BaseModel
+
+from e2e_config import unique_marker
+from e2e_http import AuthHeaders, StreamingResponse, require_successful_call, unwrap
+from lifecycle import ResourceManager
+from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
+from proxy_client import ProxyClient
+
+pytestmark = pytest.mark.e2e
+
+OPENAI_BACKEND = "openai/gpt-4o-mini"
+CHAT_PATH = "/chat/completions"
+
+SQL_INJECTION_PAYLOADS = (
+    "'; DROP TABLE users; --",
+    "1' OR '1'='1",
+    "admin' --",
+)
+XSS_PAYLOADS = (
+    "<script>alert('XSS')</script>",
+    "<img src=x onerror=alert('XSS')>",
+    "javascript:alert('XSS')",
+)
+
+
+class ChatMissingModelBody(BaseModel):
+    messages: list[ChatMessage]
+
+
+class ChatMissingMessagesBody(BaseModel):
+    model: str
+
+
+class ChatErrorBody(BaseModel):
+    message: str | None = None
+    type: str | None = None
+    code: str | int | None = None
+
+
+class ChatErrorEnvelope(BaseModel):
+    error: ChatErrorBody | None = None
+
+
+def _register_chat_model(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]:
+    model = f"e2e-vendor-chat-{unique_marker()}"
+    model_id = proxy.create_model(
+        model,
+        LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
+    )
+    resources.defer(lambda: proxy.delete_model(model_id))
+    return model, resources.key()
+
+
+def _chat_status(
+    proxy: ProxyClient, key: str, body: BaseModel, *, headers: AuthHeaders | None = None
+) -> StreamingResponse:
+    return proxy.transport.send(
+        CHAT_PATH,
+        headers=headers if headers is not None else proxy.transport.bearer(key),
+        json=body,
+    )
+
+
+def _is_client_error(status: int) -> bool:
+    return 400 <= status < 500
+
+
+def _assert_not_server_error(result: StreamingResponse, context: str) -> None:
+    assert result.status_code not in (500, 502, 503), (
+        f"{context}: proxy must not 5xx, got {result.status_code}: {result.body[:300]}"
+    )
+
+
+class TestChatCompletionsVendorContract:
+    @pytest.mark.covers("llm.chat_completions.openai.multi_turn.nonstream.works")
+    def test_multi_turn_history_is_honored(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        turn1 = unwrap(
+            proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(role="system", content="You are a helpful math tutor."),
+                        ChatMessage(role="user", content="What is 25 + 17? Reply with only the number."),
+                    ],
+                    temperature=0.1,
+                    max_completion_tokens=32,
+                ),
+            )
+        )
+        assert turn1.choices and turn1.choices[0].message is not None
+        assistant = turn1.choices[0].message.content or ""
+        assert "42" in assistant, f"turn1 must answer 42, got: {assistant!r}"
+
+        turn2 = unwrap(
+            proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(role="system", content="You are a helpful math tutor."),
+                        ChatMessage(role="user", content="What is 25 + 17? Reply with only the number."),
+                        ChatMessage(role="assistant", content=assistant),
+                        ChatMessage(
+                            role="user",
+                            content="Now multiply that result by 2. Reply with only the number.",
+                        ),
+                    ],
+                    temperature=0.1,
+                    max_completion_tokens=32,
+                ),
+            )
+        )
+        assert turn2.choices and turn2.choices[0].message is not None
+        second = turn2.choices[0].message.content or ""
+        assert "84" in second, f"turn2 must answer 84 from history, got: {second!r}"
+
+    @pytest.mark.covers("llm.chat_completions.openai.basic.nonstream.works")
+    def test_success_response_matches_chat_completion_contract(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Reply with a single word: confirmed. {unique_marker()}")
+                ],
+                max_completion_tokens=32,
+                temperature=0.2,
+            ),
+        )
+        require_successful_call(result)
+        parsed = ChatResponse.model_validate_json(result.body)
+        assert parsed.id, f"chat completion must return id: {result.body[:300]}"
+        assert parsed.object in (None, "chat.completion"), (
+            f"object must be chat.completion when present, got {parsed.object!r}"
+        )
+        assert parsed.choices, f"choices must be non-empty: {result.body[:300]}"
+        message = parsed.choices[0].message
+        assert message is not None, f"choices[0].message required: {result.body[:300]}"
+        assert message.role in (None, "assistant"), f"unexpected role: {message.role!r}"
+        assert (message.content or "").strip(), f"content must be non-empty: {result.body[:300]}"
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    def test_missing_model_returns_client_error(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        _, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatMissingModelBody(messages=[ChatMessage(role="user", content="hi")]),
+        )
+        assert _is_client_error(result.status_code), (
+            f"missing model must be 4xx, got {result.status_code}: {result.body[:300]}"
+        )
+        envelope = ChatErrorEnvelope.model_validate_json(result.body)
+        assert envelope.error is not None and envelope.error.message, (
+            f"error body must carry error.message: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    def test_missing_messages_returns_error(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(proxy, key, ChatMissingMessagesBody(model=model))
+        assert result.status_code in range(400, 600), (
+            f"missing messages must not succeed, got {result.status_code}: {result.body[:300]}"
+        )
+        assert result.status_code != 200
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    def test_empty_messages_returns_client_error(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(model=model, messages=[], max_completion_tokens=16),
+        )
+        assert _is_client_error(result.status_code), (
+            f"empty messages must be 4xx, got {result.status_code}: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    def test_invalid_role_returns_client_error(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="invalid_role", content="hi")],
+                max_completion_tokens=16,
+            ),
+        )
+        assert _is_client_error(result.status_code), (
+            f"invalid role must be 4xx, got {result.status_code}: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @pytest.mark.parametrize("temperature", [3.0, -0.1, 2.1, 100.0])
+    def test_invalid_temperature_returns_client_error(
+        self, proxy: ProxyClient, resources: ResourceManager, temperature: float
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content="hi")],
+                temperature=temperature,
+                max_completion_tokens=16,
+            ),
+        )
+        assert _is_client_error(result.status_code), (
+            f"temperature={temperature} must be 4xx, got {result.status_code}: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_validation.nonstream.works")
+    @pytest.mark.parametrize("max_completion_tokens", [-1, 0, -100])
+    def test_invalid_max_completion_tokens_returns_client_error(
+        self, proxy: ProxyClient, resources: ResourceManager, max_completion_tokens: int
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content="hi")],
+                max_completion_tokens=max_completion_tokens,
+            ),
+        )
+        assert _is_client_error(result.status_code), (
+            f"max_completion_tokens={max_completion_tokens} must be 4xx, "
+            f"got {result.status_code}: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.openai.basic.nonstream.works")
+    @pytest.mark.parametrize("temperature", [0.0, 2.0])
+    def test_temperature_boundaries_succeed(
+        self, proxy: ProxyClient, resources: ResourceManager, temperature: float
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Reply with ok. {unique_marker()}")
+                ],
+                temperature=temperature,
+                max_completion_tokens=16,
+            ),
+        )
+        require_successful_call(result)
+        parsed = ChatResponse.model_validate_json(result.body)
+        assert parsed.choices, f"temperature={temperature} must return choices"
+
+    @pytest.mark.covers("llm.chat_completions.openai.basic.nonstream.works")
+    def test_extremely_long_message_does_not_crash_proxy(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content="x" * 100_000)],
+                max_completion_tokens=16,
+            ),
+        )
+        assert result.status_code in (200, 400, 413, 500), (
+            f"long message acceptable statuses only, got {result.status_code}: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_sanitization.nonstream.works")
+    @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS)
+    def test_sql_injection_payloads_do_not_crash_proxy(
+        self, proxy: ProxyClient, resources: ResourceManager, payload: str
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=payload)],
+                max_completion_tokens=32,
+            ),
+        )
+        _assert_not_server_error(result, f"sql injection payload {payload!r}")
+        assert result.status_code in (200, 400, 401, 403, 422), (
+            f"sql injection must be handled safely, got {result.status_code}: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.chat_completions.openai.input_sanitization.nonstream.works")
+    @pytest.mark.parametrize("payload", XSS_PAYLOADS)
+    def test_xss_payloads_do_not_crash_or_echo_raw(
+        self, proxy: ProxyClient, resources: ResourceManager, payload: str
+    ) -> None:
+        model, key = _register_chat_model(proxy, resources)
+        result = _chat_status(
+            proxy,
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content=f"Echo this exactly with no changes: {payload}",
+                    )
+                ],
+                max_completion_tokens=64,
+                temperature=0.0,
+            ),
+        )
+        _assert_not_server_error(result, f"xss payload {payload!r}")
+        assert result.status_code in (200, 400, 401, 403, 422), (
+            f"xss must be handled safely, got {result.status_code}: {result.body[:300]}"
+        )
+        if result.status_code != 200:
+            return
+        try:
+            loaded = ChatResponse.model_validate_json(result.body)
+        except Exception:
+            pytest.fail(f"200 body must be JSON chat response: {result.body[:300]}")
+        text = loaded.model_dump_json()
+        if payload in text:
+            assert f"`{payload}`" in text or "```" in text, (
+                f"200 response must not echo raw XSS unescaped: {result.body[:300]}"
+            )

@@ -31,6 +31,9 @@
 - {id: mgmt.team.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py:1750", rationale: "Deletion prevents key access"}
 - {id: mgmt.team.block.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py", rationale: "Block suspends all members"}
 - {id: mgmt.team.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "team_endpoints.py:2244", rationale: "Metadata+members+budgets"}
+- {id: mgmt.team.daily_activity.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "vendor testing strategy §9.20 / LIT-4778", rationale: "GET /team/daily/activity returns results+metadata for a valid date range"}
+- {id: mgmt.team.daily_activity.missing_start_date_rejected, module: mgmt, tier: P1, surface: api, assertions: [missing_start_date_rejected], source: "vendor testing strategy §9.20 / LIT-4778", rationale: "Missing start_date on /team/daily/activity is 400"}
+- {id: mgmt.team.daily_activity.missing_end_date_rejected, module: mgmt, tier: P1, surface: api, assertions: [missing_end_date_rejected], source: "vendor testing strategy §9.20 / LIT-4778", rationale: "Missing end_date on /team/daily/activity is 400"}
 - {id: mgmt.team.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "team_endpoints.py:3645", rationale: "Pagination/filtering"}
 - {id: mgmt.team.member_update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py:2768", rationale: "Member budget/role updates persist"}
 - {id: mgmt.user.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "internal_user_endpoints.py:555", rationale: "Metadata/perm updates persist"}

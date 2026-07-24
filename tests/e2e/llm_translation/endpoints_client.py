@@ -110,6 +110,12 @@ class ImageRequest(BaseModel):
     size: str = "1024x1024"
 
 
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+
+
 class TranscriptionForm(BaseModel):
     model: str
     response_format: str = "json"
@@ -378,6 +384,20 @@ class EndpointsClient:
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
         return self._send(
             "/v1/images/generations", key, ImageRequest(model=model, prompt=prompt)
+        )
+
+    def image_edit(
+        self, key: str, model: str, prompt: str, image: bytes, *, filename: str = "image.png"
+    ) -> Result[ImagesResult]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename=filename,
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImagesResult,
         )
 
 
