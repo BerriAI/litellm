@@ -245,6 +245,66 @@ class TestPinstripes:
         assert result["temperature"] == 0.7
 
 
+class TestJSONProviderEmbedding:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/34503
+
+    JSON-configured providers are OpenAI-compatible, so embedding() must route them to the
+    OpenAI embeddings handler instead of raising LiteLLMUnknownProvider.
+    """
+
+    @pytest.mark.respx()
+    def test_scaleway_embedding_routed_to_openai_handler(self, respx_mock, monkeypatch):
+        litellm.disable_aiohttp_transport = True
+        monkeypatch.setenv("SCW_SECRET_KEY", "fake-scaleway-key")
+
+        route = respx_mock.post("https://api.scaleway.ai/v1/embeddings").respond(
+            json={
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}
+                ],
+                "model": "BAAI/bge-multilingual-gemma2",
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+            }
+        )
+
+        response = litellm.embedding(
+            model="scaleway/BAAI/bge-multilingual-gemma2",
+            input=["hello world"],
+        )
+
+        assert route.called
+        request = route.calls[0].request
+        assert request.headers["authorization"] == "Bearer fake-scaleway-key"
+        assert json.loads(request.content)["model"] == "BAAI/bge-multilingual-gemma2"
+        assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+    @pytest.mark.respx()
+    def test_json_provider_embedding_honors_custom_api_base(self, respx_mock):
+        litellm.disable_aiohttp_transport = True
+
+        route = respx_mock.post("https://custom.publicai.local/v1/embeddings").respond(
+            json={
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "index": 0, "embedding": [0.4, 0.5]}
+                ],
+                "model": "some-embedding-model",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            }
+        )
+
+        response = litellm.embedding(
+            model="publicai/some-embedding-model",
+            input=["hello world"],
+            api_base="https://custom.publicai.local/v1",
+            api_key="fake-publicai-key",
+        )
+
+        assert route.called
+        assert response.data[0]["embedding"] == [0.4, 0.5]
+
+
 class TestDarkbloom:
     def test_darkbloom_json_config_exists(self):
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry

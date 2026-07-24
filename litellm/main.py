@@ -6877,6 +6877,23 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif JSONProviderRegistry.exists(custom_llm_provider):
+            if headers:
+                optional_params["extra_headers"] = headers
+
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                max_retries=max_retries,
+            )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
             for item in litellm.custom_provider_map:
