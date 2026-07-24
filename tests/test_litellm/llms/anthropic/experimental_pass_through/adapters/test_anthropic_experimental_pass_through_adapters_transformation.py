@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
+    AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
     truncate_tool_name,
@@ -546,6 +547,80 @@ def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids
     assert len(result) == 1
     assert result[0]["type"] == "tool_use"
     assert result[0]["id"] == "functions_Bash_0"
+
+
+def test_translate_completion_input_params_sanitizes_colon_dot_tool_ids():
+    """Request direction: cross-provider ids must be normalized BEFORE OpenAI translation.
+
+    The response direction normalizes ids via ``normalize_anthropic_tool_use_id``,
+    so a cross-provider client that generated the id (e.g. Claude Code's
+    ``ToolSearch:15``) only ever saw the original and echoes it back unchanged in
+    ``tool_result.tool_use_id``. If the request direction does not also normalize,
+    the OpenAI tool message's ``tool_call_id`` no longer matches the assistant
+    ``tool_call`` id, and OpenAI-compatible backends reject the request with an
+    orphaned/mismatched tool_call_id error. Both the assistant ``tool_use`` id and
+    the user ``tool_result`` tool_use_id must end up normalized and matched.
+    """
+    anthropic_request = {
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 1024,
+        "messages": [
+            AnthropicMessagesUserMessageParam(
+                role="user",
+                content=[{"type": "text", "text": "Run ls."}],
+            ),
+            AnthopicMessagesAssistantMessageParam(
+                role="assistant",
+                content=[
+                    {
+                        "type": "tool_use",
+                        "id": "functions.Bash:0",
+                        "name": "Bash",
+                        "input": {"command": "ls"},
+                    }
+                ],
+            ),
+            AnthropicMessagesUserMessageParam(
+                role="user",
+                content=[
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "functions.Bash:0",
+                        "content": "file.txt",
+                    }
+                ],
+            ),
+        ],
+        "tools": [
+            {
+                "name": "Bash",
+                "description": "Run a shell command",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            }
+        ],
+    }
+
+    adapter = AnthropicAdapter()
+    openai_request, _ = adapter.translate_completion_input_params_with_tool_mapping(
+        dict(anthropic_request)
+    )
+
+    assert openai_request is not None
+    assistant_tool_call_id = None
+    tool_message_tool_call_id = None
+    for msg in openai_request["messages"]:
+        if isinstance(msg, dict) and msg.get("role") == "assistant" and msg.get("tool_calls"):
+            assistant_tool_call_id = msg["tool_calls"][0]["id"]
+        elif isinstance(msg, dict) and msg.get("role") == "tool":
+            tool_message_tool_call_id = msg.get("tool_call_id")
+
+    assert assistant_tool_call_id == "functions_Bash_0"
+    assert tool_message_tool_call_id == "functions_Bash_0"
+    assert assistant_tool_call_id == tool_message_tool_call_id
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():
