@@ -5786,6 +5786,16 @@ def function_to_dict(input_function) -> dict:  # noqa: C901
 
 
 def modify_url(original_url, new_path):
+    """
+    Replace the path component of a URL while preserving the scheme, host, port, and query parameters.
+
+    Args:
+        original_url (str): The original URL whose path will be replaced.
+        new_path (str): The new path to use (e.g. "/v1/chat/completions").
+
+    Returns:
+        str: The modified URL as a string with the updated path.
+    """
     url = httpx.URL(original_url)
     modified_url = url.copy_with(path=new_path)
     return str(modified_url)
