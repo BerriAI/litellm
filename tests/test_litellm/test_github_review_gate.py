@@ -255,7 +255,8 @@ class TestReviewGateGraceAndClose:
         result = _gate(triage_module, judge=_fail, greptile_score=None)
 
         assert result["action"] == "within-grace-notified"
-        assert rec.closed == [] and rec.added == [] and rec.removed == []
+        assert rec.closed == [] and rec.removed == []
+        assert rec.added == [triage_module.NOT_READY_LABEL]
         assert triage_module.WITHIN_GRACE_MARKER in rec.comments[0]
         assert "QA proof" in rec.comments[0]
 
@@ -486,6 +487,203 @@ class TestReviewGateGuards:
         assert r3["action"] == "labeled-ready"
         assert any(lbl["name"] == "ready for review" for lbl in state["labels"])
         assert "all clear" in state["comments"][-1]["body"].lower()
+
+
+class TestReviewGateNotReadyLabel:
+    """The red `not ready` label mirrors `ready for review`: added whenever
+    the PR is not passing, removed whenever it passes, so the pair always
+    shows the current verdict."""
+
+    def test_fail_untagged_adds_not_ready_label(self, triage_module, monkeypatch):
+        monkeypatch.setattr(
+            triage_module, "fetch_pr", lambda repo, n: _make_pr(created_at=JUST_NOW)
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, judge=_fail, greptile_score=None)
+
+        assert result["action"] == "within-grace-notified"
+        assert rec.added == [triage_module.NOT_READY_LABEL]
+        assert rec.closed == []
+
+    def test_regression_swaps_ready_for_not_ready(self, triage_module, monkeypatch):
+        pr = _make_pr(labels=[{"name": "ready for review"}])
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, judge=_fail, greptile_score=5)
+
+        assert result["action"] == "label-removed-regressed"
+        assert rec.added == [triage_module.NOT_READY_LABEL]
+        assert rec.removed == [triage_module.READY_FOR_REVIEW_LABEL]
+
+    def test_pass_removes_not_ready_label(self, triage_module, monkeypatch):
+        pr = _make_pr(labels=[{"name": "not ready"}])
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, judge=_pass, greptile_score=5)
+
+        assert result["action"] == "labeled-ready"
+        assert rec.added == [triage_module.READY_FOR_REVIEW_LABEL]
+        assert rec.removed == [triage_module.NOT_READY_LABEL]
+
+    def test_pass_already_tagged_still_clears_stale_not_ready(
+        self, triage_module, monkeypatch
+    ):
+        pr = _make_pr(labels=[{"name": "ready for review"}, {"name": "not ready"}])
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, judge=_pass, greptile_score=5)
+
+        assert result["action"] == "noop-passing"
+        assert rec.removed == [triage_module.NOT_READY_LABEL]
+        assert rec.added == [] and rec.comments == []
+
+    def test_labels_already_in_sync_are_untouched(self, triage_module, monkeypatch):
+        pr = _make_pr(labels=[{"name": "not ready"}], created_at=JUST_NOW)
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+        prior = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": triage_module.WITHIN_GRACE_MARKER,
+            }
+        ]
+
+        result = _gate(triage_module, judge=_fail, greptile_score=None, comments=prior)
+
+        assert result["action"] == "within-grace-already-notified"
+        assert rec.added == [] and rec.removed == []
+
+    def test_dry_run_never_touches_labels(self, triage_module, monkeypatch):
+        monkeypatch.setattr(
+            triage_module, "fetch_pr", lambda repo, n: _make_pr(created_at=JUST_NOW)
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, close=False, judge=_fail, greptile_score=None)
+
+        assert result["action"] == "would-notify-within-grace"
+        assert rec.added == [] and rec.removed == []
+
+
+class TestReviewGateLiteMode:
+    """Lite mode (notice_only=True): the launch-week posture. Never closes;
+    failing untagged PRs get a one-time "closes start in 7 days" notice
+    linking the policy post. Labels still reconcile."""
+
+    def test_lite_posts_one_time_notice_instead_of_closing(
+        self, triage_module, monkeypatch
+    ):
+        # TWO_DAYS_AGO is past the full-mode grace window, so this PR would
+        # be CLOSED in full mode — lite must notice instead.
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_pr",
+            lambda repo, n: _make_pr(created_at=TWO_DAYS_AGO),
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, judge=_fail, greptile_score=None, notice_only=True)
+
+        assert result["action"] == "lite-notified"
+        assert rec.closed == []
+        assert len(rec.comments) == 1
+        assert triage_module.LITE_NOTICE_MARKER in rec.comments[0]
+        assert "7 days" in rec.comments[0]
+        assert "@agent-shin reconsider" in rec.comments[0]
+        assert rec.added == [triage_module.NOT_READY_LABEL]
+
+    def test_lite_notice_links_policy_url(self, triage_module, monkeypatch):
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_pr",
+            lambda repo, n: _make_pr(created_at=TWO_DAYS_AGO),
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+        url = "https://docs.litellm.ai/blog/agent-shin"
+
+        _gate(
+            triage_module,
+            judge=_fail,
+            greptile_score=None,
+            notice_only=True,
+            policy_url=url,
+        )
+
+        assert url in rec.comments[0]
+
+    def test_lite_does_not_double_notify(self, triage_module, monkeypatch):
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_pr",
+            lambda repo, n: _make_pr(created_at=TWO_DAYS_AGO),
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+        prior = [
+            {
+                "user": {"login": "github-actions[bot]"},
+                "body": triage_module.LITE_NOTICE_MARKER,
+            }
+        ]
+
+        result = _gate(
+            triage_module,
+            judge=_fail,
+            greptile_score=None,
+            notice_only=True,
+            comments=prior,
+        )
+
+        assert result["action"] == "lite-already-notified"
+        assert rec.comments == [] and rec.closed == []
+
+    def test_lite_dry_run_previews_without_side_effects(
+        self, triage_module, monkeypatch
+    ):
+        monkeypatch.setattr(
+            triage_module,
+            "fetch_pr",
+            lambda repo, n: _make_pr(created_at=TWO_DAYS_AGO),
+        )
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(
+            triage_module,
+            close=False,
+            judge=_fail,
+            greptile_score=None,
+            notice_only=True,
+        )
+
+        assert result["action"] == "would-notify-lite"
+        assert rec.comments == [] and rec.closed == [] and rec.added == []
+        assert "comment" in result
+
+    def test_lite_regression_quotes_lite_window_and_never_closes(
+        self, triage_module, monkeypatch
+    ):
+        pr = _make_pr(labels=[{"name": "ready for review"}], created_at=TWO_DAYS_AGO)
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: pr)
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, judge=_fail, greptile_score=2, notice_only=True)
+
+        assert result["action"] == "label-removed-regressed"
+        assert rec.closed == []
+        assert "7 days" in rec.comments[0]
+        assert "24 hours" not in rec.comments[0]
+
+    def test_lite_pass_still_labels_ready(self, triage_module, monkeypatch):
+        monkeypatch.setattr(triage_module, "fetch_pr", lambda repo, n: _make_pr())
+        rec = _Recorder(triage_module, monkeypatch)
+
+        result = _gate(triage_module, judge=_pass, greptile_score=5, notice_only=True)
+
+        assert result["action"] == "labeled-ready"
+        assert rec.added == [triage_module.READY_FOR_REVIEW_LABEL]
 
 
 class TestReviewGateAllowlist:
