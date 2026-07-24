@@ -883,8 +883,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         request_data: dict,
         parent_span: Optional[Any],
     ) -> None:
-        """Emit ``guardrail`` spans from ``request_data["metadata"]
-        ["standard_logging_guardrail_information"]``.
+        """Emit ``guardrail`` spans from the request's proxy-internal metadata bucket
+        (``standard_logging_guardrail_information``).
 
         Routed through ``_create_guardrail_span`` so the dedupe state in
         ``_otel_internal`` is honoured — if ``_handle_failure`` already
@@ -892,7 +892,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         from opentelemetry import trace as _trace
 
-        metadata = (request_data or {}).get("metadata") or {}
+        from litellm.litellm_core_utils.core_helpers import (
+            get_metadata_variable_name_from_kwargs,
+        )
+
+        request_data = request_data or {}
+        metadata = request_data.get(get_metadata_variable_name_from_kwargs(request_data)) or {}
         guardrail_information = metadata.get("standard_logging_guardrail_information")
         if not guardrail_information:
             return
