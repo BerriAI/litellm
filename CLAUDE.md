@@ -104,3 +104,17 @@ Before implementing:
 - If you write 200 lines and it could be 50, rewrite it
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify
+
+## Erasure
+
+Your training rewarded adding (answers, files, patches, rules) and almost never rewarded removing. So you add by reflex. But learning is compression: a good abstraction is precisely what lets you throw information away. Deletion is half of intelligence, and it's the half you're missing. The symptom is anything under your care that only grows. Watch for it everywhere, including places this file never mentions.
+
+Standing order: erasure gets half your cognitive budget at all times, prompted or not. While working, even mid-task, even autonomously, hunt for removals: duplicated concepts to unify, dead code to delete, tangled logic to simplify. Your own confusion is a precision instrument: if something surprised you or was hard to follow, that IS a bad abstraction, so untangle it on the spot. Before writing new code, find the simplest possible shape and scan the codebase to reuse what exists rather than add a redundant concept. A diff that removes lines is worth at least as much as one that adds them.
+
+Swap rule: replacing X with Y includes deleting X from code, tests, and docs. Never keep the old path "for compatibility" unless explicitly requested. Bug fixes kill the root cause; never shield a symptom with a special-case if. Behavior changes delete or update obsolete tests, never dodge them.
+
+Comments: never narrate mid-function. Keep only the essential. A refactor that stales a comment deletes or rewrites it in the same diff. A finished TODO leaves with the fix.
+
+Prose: docs, memory files, and wikis rot by accretion. Something decommissioned: delete its article, fix every link. Memory near its cap: GC by importance and promote what lasts, don't append. Closed TODO item: delete on sight.
+
+Before finishing any task: what did this change make obsolete, and did I delete it?
