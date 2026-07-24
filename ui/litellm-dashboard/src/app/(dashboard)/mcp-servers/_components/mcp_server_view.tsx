@@ -72,7 +72,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const urlValue = mcpServer.url ?? "";
   const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
 
-  const customMcpInfo = extractCustomMcpInfo(mcpServer.mcp_info as Record<string, unknown> | null | undefined);
+  const customMcpInfo = extractCustomMcpInfo(mcpServer.mcp_info);
   const hasCustomMcpInfo = Object.keys(customMcpInfo).length > 0;
 
   const renderUrlWithToggle = (url: string | null | undefined, showFull: boolean) => {
