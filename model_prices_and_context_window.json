@@ -22393,11 +22393,6 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "output_cost_per_token_batches": 3e-07,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.03,
-            "search_context_size_low": 0.025,
-            "search_context_size_medium": 0.0275
-        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
