@@ -52,6 +52,15 @@ def normalize_json_schema_types(
         for key, value in schema.items():
             if key == "type" and isinstance(value, str) and value in type_mapping:
                 normalized_schema[key] = type_mapping[value]
+            elif key == "type" and isinstance(value, list):
+                # JSON Schema also allows a list of types, which is the usual way
+                # to mark a field nullable (e.g. ["STRING", "NULL"]). Without this
+                # branch those entries fall through to the generic list recursion,
+                # which leaves the bare strings uppercase.
+                normalized_schema[key] = [
+                    type_mapping.get(entry, entry) if isinstance(entry, str) else entry
+                    for entry in value
+                ]
             elif key == "properties" and isinstance(value, dict):
                 # Recursively normalize properties
                 normalized_schema[key] = {
