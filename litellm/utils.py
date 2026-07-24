@@ -4173,6 +4173,13 @@ def get_optional_params(
             model=model,
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
+    elif custom_llm_provider == "opencode_go":
+        optional_params = litellm.OpenCodeGoConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+        )
     elif custom_llm_provider == "xai":
         optional_params = litellm.XAIChatConfig().map_openai_params(
             model=model,
@@ -6038,6 +6045,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("CEREBRAS_API_KEY")
+        elif custom_llm_provider == "opencode_go":
+            if "OPENCODE_GO_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("OPENCODE_GO_API_KEY")
         elif custom_llm_provider == "baseten":
             if "BASETEN_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7691,6 +7703,7 @@ class ProviderConfigManager:
             LlmProviders.CODESTRAL: (lambda: litellm.MistralConfig(), False),
             LlmProviders.NVIDIA_NIM: (lambda: litellm.NvidiaNimConfig(), False),
             LlmProviders.CEREBRAS: (lambda: litellm.CerebrasConfig(), False),
+            LlmProviders.OPENCODE_GO: (lambda: litellm.OpenCodeGoConfig(), False),
             LlmProviders.BASETEN: (lambda: litellm.BasetenConfig(), False),
             LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
             LlmProviders.TEXT_COMPLETION_CODESTRAL: (

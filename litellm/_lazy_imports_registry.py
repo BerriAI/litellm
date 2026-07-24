@@ -1014,6 +1014,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "FeatherlessAIConfig",
     ),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
+    "OpenCodeGoConfig": (".llms.opencode_go.chat", "OpenCodeGoConfig"),
     "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
     "SambanovaConfig": (".llms.sambanova.chat", "SambanovaConfig"),
     "SambaNovaEmbeddingConfig": (
