@@ -35,6 +35,7 @@ describe("EndpointSelector", () => {
     await user.click(combobox);
 
     const input = await screen.findByRole("combobox");
+    await user.clear(input);
     await user.type(input, "ocr");
 
     expect(await screen.findByText("/v1/ocr")).toBeInTheDocument();
