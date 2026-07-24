@@ -26,8 +26,16 @@ from endpoints_client import (
 )
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from vendor_contract import assert_client_error, assert_error_or_server_known
 
 pytestmark = pytest.mark.e2e
+
+
+class _OptionalResponsesBody(BaseModel):
+    model: str | None = None
+    input: str | None = None
+    max_output_tokens: int | None = None
+
 
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -286,6 +294,78 @@ class TestResponses:
         arguments = WeatherArguments.model_validate(raw_arguments)
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_missing_input_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-val-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/responses",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(model=model),
+        )
+        assert_error_or_server_known(result, "responses missing input")
+
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_missing_model_returns_client_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/responses",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(input="ping"),
+        )
+        assert_client_error(result, "responses missing model")
+
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    def test_empty_input_returns_client_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-responses-val-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/responses",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(model=model, input=""),
+        )
+        assert_client_error(result, "responses empty input")
+
+    @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    @pytest.mark.parametrize("max_output_tokens", [-1, 0, -100])
+    def test_invalid_max_output_tokens_returns_client_error(
+        self,
+        endpoints_client: EndpointsClient,
+        resources: ResourceManager,
+        max_output_tokens: int,
+    ) -> None:
+        model = f"e2e-responses-val-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/responses",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalResponsesBody(
+                model=model, input="ping", max_output_tokens=max_output_tokens
+            ),
+        )
+        assert_client_error(result, f"responses max_output_tokens={max_output_tokens}")
+
 
 def _parse_stream_event(
     event: str,
@@ -294,3 +374,4 @@ def _parse_stream_event(
         return ResponsesOutputTextDeltaEvent.model_validate_json(event)
     except ValidationError:
         return None
+

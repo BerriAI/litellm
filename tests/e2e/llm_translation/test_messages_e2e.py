@@ -9,6 +9,7 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import require_successful_call, unwrap
@@ -23,8 +24,16 @@ from models import (
     SpendLogRow,
     ToolInputSchema,
 )
+from vendor_contract import assert_error_or_server_known
 
 pytestmark = pytest.mark.e2e
+
+
+class _OptionalMessagesBody(BaseModel):
+    model: str | None = None
+    messages: list[ChatMessage] | None = None
+    max_tokens: int | None = None
+
 
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5"
 
@@ -169,3 +178,43 @@ class TestAnthropicMessages:
         assert any(block.type == "tool_use" for block in response.content), (
             f"model did not call the tool: {response}"
         )
+
+    @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
+    def test_missing_messages_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(endpoints_client, resources)
+        result = endpoints_client.proxy.transport.send(
+            "/v1/messages",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalMessagesBody(model=model, max_tokens=50),
+        )
+        assert_error_or_server_known(result, "messages missing messages")
+
+    @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
+    def test_missing_max_tokens_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model, key = self._register(endpoints_client, resources)
+        result = endpoints_client.proxy.transport.send(
+            "/v1/messages",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalMessagesBody(
+                model=model, messages=[ChatMessage(role="user", content="hi")]
+            ),
+        )
+        assert_error_or_server_known(result, "messages missing max_tokens")
+
+    @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
+    def test_missing_model_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        _, key = self._register(endpoints_client, resources)
+        result = endpoints_client.proxy.transport.send(
+            "/v1/messages",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalMessagesBody(
+                messages=[ChatMessage(role="user", content="hi")], max_tokens=50
+            ),
+        )
+        assert_error_or_server_known(result, "messages missing model")

@@ -39,6 +39,10 @@ LlmEndpoint = Literal[
     "audio_transcriptions",
     "moderations",
     "realtime",
+    "vector_stores",
+    "search",
+    "ocr",
+    "bedrock_native",
 ]
 
 LlmRoute = Literal[

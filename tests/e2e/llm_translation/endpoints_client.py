@@ -22,6 +22,8 @@ __all__ = [
     "CacheControl",
     "RichMessage",
     "TextBlock",
+    "ImageEditForm",
+    "ImagesResult",
 ]
 
 

@@ -8,17 +8,24 @@ with at least one policy category tripped, and benign text comes back not flagge
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import unwrap
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from vendor_contract import assert_error_or_server_known
 
 pytestmark = pytest.mark.e2e
 
 VIOLENT_TEXT = "I am going to find you and kill you, and I will hurt everyone you love."
 BENIGN_TEXT = "I enjoyed the sunny afternoon and a relaxing walk in the park today."
+
+
+class _OptionalModerationBody(BaseModel):
+    model: str | None = None
+    input: str | None = None
 
 
 def _register_moderation_model(
@@ -63,3 +70,16 @@ class TestModerations:
         assert not item.flagged, (
             f"benign text was flagged as {item.flagged_categories}: {item}"
         )
+
+    @pytest.mark.covers("llm.moderations.openai.input_validation.nonstream.works")
+    def test_missing_input_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = _register_moderation_model(endpoints_client, resources)
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/moderations",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalModerationBody(model=model),
+        )
+        assert_error_or_server_known(result, "moderations missing input")
