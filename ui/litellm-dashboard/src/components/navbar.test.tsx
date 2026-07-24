@@ -340,6 +340,38 @@ describe("Navbar", () => {
     });
   });
 
+  it("should wait for an in-flight proxy settings fetch so a configured logout URL is not skipped", async () => {
+    const user = userEvent.setup();
+    vi.mocked(window.location.replace).mockClear();
+
+    const proxyUtils = vi.mocked(await import("@/utils/proxyUtils"));
+    let resolveSettings!: (value: { PROXY_BASE_URL: string; PROXY_LOGOUT_URL: string }) => void;
+    proxyUtils.fetchProxySettings.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSettings = resolve;
+        }),
+    );
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken="test-token-pending-settings" />);
+
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("test-user")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("Logout"));
+
+    expect(window.location.replace).not.toHaveBeenCalled();
+
+    resolveSettings({ PROXY_BASE_URL: "", PROXY_LOGOUT_URL: "https://sso.example.com/logout" });
+
+    await waitFor(() => {
+      expect(window.location.replace).toHaveBeenCalledWith("https://sso.example.com/logout");
+    });
+  });
+
   it("should not render dark mode toggle slider", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
