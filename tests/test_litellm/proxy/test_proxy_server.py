@@ -696,7 +696,6 @@ def test_restructure_always_happens(monkeypatch):
     assert should_restructure is True
     assert ui_path == packaged_ui_path
 
-
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
@@ -1738,6 +1737,27 @@ def test_add_team_models_to_all_models():
         llm_router=llm_router,
     )
     assert result == {"gpt-4-model-2": {"team1"}}
+
+def test_add_team_models_to_all_models_ignores_no_default_models():
+    """
+    Regression test for #31438.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import _add_team_models_to_all_models
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "team1"
+    team.models = ["no-default-models"]
+
+    llm_router = MagicMock()
+
+    result = _add_team_models_to_all_models(
+        team_db_objects_typed=[team],
+        llm_router=llm_router,
+    )
+
+    assert result == {}
+    llm_router.get_model_list.assert_not_called()
 
 
 @pytest.mark.asyncio

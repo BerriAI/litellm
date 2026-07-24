@@ -11095,6 +11095,11 @@ def _add_team_models_to_all_models(
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
             for model_name in team_object.models:
+                if model_name == SpecialModelNames.no_default_models.value:
+                    continue
+                _models = llm_router.get_model_list(
+                    model_name=model_name, team_id=team_object.team_id
+                )
                 _models = llm_router.get_model_list(model_name=model_name, team_id=team_object.team_id)
                 if _models is not None:
                     for model in _models:
