@@ -153,6 +153,105 @@ class SpendLogCleanup:
 
         return total_deleted
 
+    async def _delete_old_tool_index_logs(
+        self, prisma_client: PrismaClient, cutoff_date: datetime
+    ) -> int:
+        """
+        Helper method to delete old tool-index rows in batches.
+
+        `LiteLLM_SpendLogToolIndex` has no FK / cascade to `LiteLLM_SpendLogs`,
+        so rows are orphaned by the parent-table cleanup. The index carries its
+        own `start_time` column, so we can prune it on the same cutoff with the
+        same batched pattern as `_delete_old_logs`. See #29342.
+
+        Returns the total number of rows deleted.
+        """
+        total_deleted = 0
+        run_count = 0
+        consecutive_failures = 0
+        while True:
+            if run_count > SPEND_LOG_RUN_LOOPS:
+                verbose_proxy_logger.info(
+                    "Max tool-index rows deleted - 1,00,000, rest will be "
+                    "deleted in next run"
+                )
+                break
+            try:
+                # `ctid` is Postgres' physical row pointer — using it for the
+                # batched LIMIT avoids ambiguity when (request_id, tool_name)
+                # alone is not enough to identify a row in some edge cases,
+                # and matches the existing batched-delete shape.
+                deleted_result = await prisma_client.db.execute_raw(
+                    """
+                    DELETE FROM "LiteLLM_SpendLogToolIndex"
+                    WHERE "ctid" IN (
+                        SELECT "ctid" FROM "LiteLLM_SpendLogToolIndex"
+                        WHERE "start_time" < $1::timestamptz
+                        LIMIT $2
+                    )
+                    """,
+                    cutoff_date,
+                    self.batch_size,
+                )
+            except Exception as batch_exc:
+                consecutive_failures += 1
+                verbose_proxy_logger.exception(
+                    "Spend log tool-index cleanup batch failed "
+                    "(run_count=%d, consecutive_failures=%d, batch_size=%d, "
+                    "cutoff=%s, total_deleted_so_far=%d): %s: %s",
+                    run_count,
+                    consecutive_failures,
+                    self.batch_size,
+                    cutoff_date.isoformat(),
+                    total_deleted,
+                    type(batch_exc).__name__,
+                    batch_exc,
+                )
+                if (
+                    consecutive_failures
+                    >= SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES
+                ):
+                    verbose_proxy_logger.error(
+                        "Aborting tool-index cleanup after %d consecutive "
+                        "batch failures; total deleted before abort: %d",
+                        consecutive_failures,
+                        total_deleted,
+                    )
+                    break
+                await asyncio.sleep(SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS)
+                continue
+
+            consecutive_failures = 0
+
+            deleted_count = 0
+            if isinstance(deleted_result, int):
+                deleted_count = deleted_result
+            else:
+                verbose_proxy_logger.error(
+                    f"Unexpected execute_raw return type for tool-index cleanup: "
+                    f"{type(deleted_result)}; aborting cleanup to avoid infinite loop"
+                )
+                break
+
+            verbose_proxy_logger.info(
+                f"Deleted {deleted_count} tool-index rows in this batch"
+            )
+
+            if deleted_count == 0:
+                verbose_proxy_logger.info(
+                    f"No more tool-index rows to delete. Total deleted: "
+                    f"{total_deleted}"
+                )
+                break
+
+            total_deleted += deleted_count
+            run_count += 1
+
+            # Same throttle as `_delete_old_logs` to avoid overwhelming the DB.
+            await asyncio.sleep(0.1)
+
+        return total_deleted
+
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
         Main cleanup function. Deletes old spend logs in batches.
@@ -208,6 +307,17 @@ class SpendLogCleanup:
             else:
                 total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
                 verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
+
+            # Also prune LiteLLM_SpendLogToolIndex — there is no FK / cascade
+            # from SpendLogToolIndex to SpendLogs, so deleting the parent
+            # SpendLogs row leaves the tool-index rows behind. In tool-heavy
+            # deployments the index grows unbounded; see #29342.
+            total_tool_index_deleted = await self._delete_old_tool_index_logs(
+                prisma_client, cutoff_date
+            )
+            verbose_proxy_logger.info(
+                f"Deleted {total_tool_index_deleted} tool-index rows"
+            )
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
