@@ -1306,6 +1306,57 @@ describe("CreateMCPServer", () => {
       expect(payload.token_validation).toEqual({ organization: "my-org", "team.id": "42" });
     });
 
+    it("keeps typed mcp_info metadata through Authorize & Fetch and includes it in the submit payload", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      const metadataInput = document.getElementById("mcp_info_metadata_json") as HTMLTextAreaElement;
+      await act(async () => {
+        fireEvent.change(metadataInput, {
+          target: { value: '{"owning_team": "platform", "cost_center": "1234"}' },
+        });
+      });
+
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+
+      const metadataAfterAuthorize = document.getElementById("mcp_info_metadata_json") as HTMLTextAreaElement;
+      expect(metadataAfterAuthorize.value).toBe('{"owning_team": "platform", "cost_center": "1234"}');
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.mcp_info.owning_team).toBe("platform");
+      expect(payload.mcp_info.cost_center).toBe("1234");
+      expect(payload.mcp_info.server_name).toBe("OAuth_Server");
+    });
+
     it("invalidates the DCR client and OAuth flow when the MCP URL changes after Authorize & Fetch", async () => {
       await setupOAuthInteractive();
 

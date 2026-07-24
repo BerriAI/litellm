@@ -119,6 +119,34 @@ describe("MCPServerView", () => {
     expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
   });
 
+  it("keeps a config-defined server read-only: no Edit Settings, shows a config note", async () => {
+    renderView({ is_from_config: true });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(await screen.findByText("MCP Server Settings")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
+    expect(screen.getByText("Defined in config.yaml (read-only)")).toBeInTheDocument();
+  });
+
+  it("never opens the edit form for a config-defined server even when isEditing is set", async () => {
+    renderView({ is_from_config: true }, { isEditing: true });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(await screen.findByText("MCP Server Settings")).toBeInTheDocument();
+    expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+  });
+
+  it("keeps a database-defined server editable: Edit Settings is offered", async () => {
+    renderView({ is_from_config: false });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(await screen.findByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+    expect(screen.queryByText("Defined in config.yaml (read-only)")).not.toBeInTheDocument();
+  });
+
   it("opens on the tab named by initialTabIndex", async () => {
     renderView({}, { initialTabIndex: 1 });
 

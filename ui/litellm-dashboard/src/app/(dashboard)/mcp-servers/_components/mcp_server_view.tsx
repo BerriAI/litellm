@@ -59,7 +59,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
   const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
-  const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
+  const canEdit = isProxyAdmin && !mcpServer.is_from_config;
+  const [editing, setEditing] = useState((isEditing || returningFromEditOAuth) && canEdit);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
@@ -216,13 +217,16 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           <Card className="p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium">MCP Server Settings</h2>
-              {editing ? null : (
+              {!editing && canEdit && (
                 <Button variant="outline" onClick={() => setEditing(true)}>
                   Edit Settings
                 </Button>
               )}
+              {!editing && mcpServer.is_from_config && (
+                <span className="text-sm text-muted-foreground">Defined in config.yaml (read-only)</span>
+              )}
             </div>
-            {editing ? (
+            {editing && canEdit ? (
               <MCPServerEdit
                 mcpServer={mcpServer}
                 accessToken={accessToken}

@@ -416,6 +416,8 @@ export interface MCPServer {
   /** GitHub / source repository URL */
   source_url?: string | null;
 
+  is_from_config?: boolean | null;
+
   /** BYOM (Bring Your Own MCP) submission fields */
   approval_status?: "active" | "pending_review" | "rejected" | null;
   submitted_by?: string | null;

@@ -696,7 +696,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           }
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
-                          onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          onDelete={
+                            isAdminRole(userRole) && !server.is_from_config
+                              ? () => handleDelete(server.server_id)
+                              : undefined
+                          }
                         />
                       ))}
                     </div>
