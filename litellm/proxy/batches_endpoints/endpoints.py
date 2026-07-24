@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.llms.base_llm.managed_resources.isolation import can_access_resource
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -38,9 +39,45 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
+from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
 router = APIRouter()
+
+
+async def _resolve_managed_input_file_storage_url(
+    input_file_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> "str | None":
+    """Resolve a managed (unified) input_file_id to its backend storage_url.
+
+    Returns None when the proxy has no database, the lookup fails, no managed
+    file row exists, or the row has no storage_url; callers fall back to
+    dispatching the original id so the managed-files deployment hook can still
+    map it via model_file_id_mapping. Raises a 404 when the caller does not
+    own the managed file.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return None
+    try:
+        db_file = await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
+    except Exception as e:
+        verbose_proxy_logger.warning("create_batch: managed file lookup failed for %s: %s", input_file_id, e)
+        return None
+    if db_file is None:
+        return None
+    if not can_access_resource(
+        user_api_key_dict=user_api_key_dict,
+        created_by=db_file.created_by,
+        resource_team_id=db_file.team_id,
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"File not found: {input_file_id}"},
+        )
+    return db_file.storage_url or None
 
 
 @router.post(
@@ -156,6 +193,14 @@ async def create_batch(
             model_from_file_id = decode_model_from_file_id(input_file_id)
             unified_file_id = _is_base64_encoded_unified_file_id(input_file_id)
 
+        if model_from_file_id is None and unified_file_id and input_file_id:
+            resolved_storage_url = await _resolve_managed_input_file_storage_url(
+                input_file_id=input_file_id,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if resolved_storage_url is not None:
+                _create_batch_data["input_file_id"] = resolved_storage_url
+
         # SCENARIO 1: File ID is encoded with model info
         if model_from_file_id is not None and input_file_id:
             credentials = get_credentials_for_model(
@@ -229,29 +274,6 @@ async def create_batch(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
-
-            # The base64-encoded unified_file_id is an opaque LiteLLM-internal
-            # token (unified_id + target_model_names), not a real
-            # provider-side file reference. Provider-specific handlers (e.g.
-            # Vertex AI's batch transformation, which parses a `publishers/`
-            # segment out of the file URI) require the actual backend storage
-            # location. Resolve it from LiteLLM_ManagedFileTable before
-            # dispatching, mirroring the same lookup already used by the
-            # files retrieve/download endpoints for managed files.
-            from litellm.proxy.proxy_server import prisma_client
-
-            if prisma_client is not None:
-                import inspect
-                from litellm.repositories.table_repositories import (
-                    ManagedFileRepository,
-                )
-
-                db_file_res = ManagedFileRepository(prisma_client).table.find_first(
-                    where={"unified_file_id": unified_file_id}
-                )
-                db_file = await db_file_res if inspect.isawaitable(db_file_res) else db_file_res
-                if db_file is not None and getattr(db_file, "storage_url", None):
-                    _create_batch_data["input_file_id"] = db_file.storage_url
 
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
