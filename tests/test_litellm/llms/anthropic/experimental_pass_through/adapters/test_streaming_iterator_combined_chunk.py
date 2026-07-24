@@ -143,6 +143,60 @@ def test_delayed_usage_chunk_preserves_cache_tokens():
     assert message_delta["usage"]["cache_creation_input_tokens"] == 20
 
 
+def test_trailing_empty_choices_usage_chunk_emits_message_delta_usage():
+    """Regression for LIT-4767.
+
+    The trailing usage-only chunk an OpenAI-compatible provider sends when
+    ``include_usage`` is set has ``choices: []``. The adapter used to index
+    ``choices[0]`` unguarded (``is_final_chunk`` / ``_should_start_new_content_block``)
+    and crash with IndexError. It must instead merge the usage into the held
+    stop-reason chunk so ``message_delta`` still reports it.
+    """
+    chunks = [
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content="Two."), finish_reason=None)],
+        ),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+        ),
+        ModelResponseStream(
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="gpt-4o")
+    events = list(wrapper)
+
+    message_delta = next(event for event in events if event.get("type") == "message_delta")
+    assert message_delta["usage"]["input_tokens"] == 10
+    assert message_delta["usage"]["output_tokens"] == 5
+
+
+def test_leading_empty_choices_chunk_does_not_crash_stream():
+    """Azure emits a leading ``prompt_filter_results`` chunk with ``choices: []``
+    before any content. It must be tolerated and the following content emitted."""
+    chunks = [
+        ModelResponseStream(choices=[]),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content="Hi"), finish_reason=None)],
+        ),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+            usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4),
+        ),
+    ]
+
+    async def _aiter() -> "AsyncIterator[ModelResponseStream]":
+        for chunk in chunks:
+            yield chunk
+
+    wrapper = AnthropicStreamWrapper(completion_stream=_aiter(), model="gpt-4o")
+    sse = _collect_async(wrapper)
+
+    assert "Hi" in sse
+    assert "message_stop" in sse
+
+
 def test_splitter_passes_through_non_combined_chunks():
     """A chunk with content but no finish_reason is not split."""
     chunk = ModelResponseStream(
