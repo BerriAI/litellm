@@ -27,4 +27,17 @@ describe("EndpointSelector", () => {
     expect(await screen.findByText("/v1/audio/speech")).toBeInTheDocument();
     expect(await screen.findByText("/v1/audio/transcriptions")).toBeInTheDocument();
   });
+
+  it("should filter and show the OCR endpoint when user inputs 'ocr'", async () => {
+    const user = userEvent.setup();
+    render(<EndpointSelector endpointType={ENDPOINT_OPTIONS[0].value} onEndpointChange={() => {}} />);
+
+    const combobox = screen.getByRole("combobox");
+    await user.click(combobox);
+
+    const input = await screen.findByRole("combobox");
+    await user.type(input, "ocr");
+
+    expect(await screen.findByText("/v1/ocr")).toBeInTheDocument();
+  });
 });

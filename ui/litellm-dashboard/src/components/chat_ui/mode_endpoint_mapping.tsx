@@ -11,6 +11,7 @@ export enum ModelMode {
   IMAGE_EDITS = "image_edits",
   ANTHROPIC_MESSAGES = "anthropic_messages",
   EMBEDDING = "embedding",
+  OCR = "ocr",
   // add additional modes as needed
 }
 
@@ -25,6 +26,7 @@ export enum EndpointType {
   EMBEDDINGS = "embeddings",
   SPEECH = "speech",
   TRANSCRIPTION = "transcription",
+  OCR = "ocr",
   A2A_AGENTS = "a2a_agents",
   MCP = "mcp",
   REALTIME = "realtime",
@@ -42,6 +44,7 @@ export const litellmModeMapping: Record<ModelMode, EndpointType> = {
   [ModelMode.AUDIO_SPEECH]: EndpointType.SPEECH,
   [ModelMode.AUDIO_TRANSCRIPTION]: EndpointType.TRANSCRIPTION,
   [ModelMode.EMBEDDING]: EndpointType.EMBEDDINGS,
+  [ModelMode.OCR]: EndpointType.OCR,
 };
 
 export const getEndpointType = (mode: string): EndpointType => {
