@@ -15195,3 +15195,120 @@ async def test_prepare_key_update_explicit_spend_takes_precedence_over_window_re
     result = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
     assert result["spend"] == 50.0
     assert result["budget_duration"] == "30d"
+
+
+@pytest.mark.asyncio
+async def test_sync_key_spend_counter_syncs_window_reset_to_redis(monkeypatch):
+    """A window-reset spend=0.0 (no explicit spend) must be synced to both caches."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _hash_token_if_needed,
+        _sync_key_spend_counter,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.redis_cache = MagicMock()
+    mock_cache.redis_cache.async_set_cache = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", mock_cache)
+
+    await _sync_key_spend_counter(
+        key="sk-test", explicit_spend=None, non_default_values={"spend": 0.0}
+    )
+
+    counter_key = f"spend:key:{_hash_token_if_needed('sk-test')}"
+    mock_cache.in_memory_cache.set_cache.assert_called_once_with(
+        key=counter_key, value=0.0, ttl=60
+    )
+    mock_cache.redis_cache.async_set_cache.assert_awaited_once_with(
+        key=counter_key, value=0.0, ttl=60
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_key_spend_counter_noop_when_no_spend_change(monkeypatch):
+    """No explicit spend and no window reset means the counter is left untouched."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _sync_key_spend_counter,
+    )
+
+    mock_cache = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", mock_cache)
+
+    await _sync_key_spend_counter(
+        key="sk-test", explicit_spend=None, non_default_values={"metadata": {}}
+    )
+
+    mock_cache.in_memory_cache.set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_key_spend_counter_skips_redis_when_absent(monkeypatch):
+    """With no redis cache configured, only the in-memory counter is written."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _hash_token_if_needed,
+        _sync_key_spend_counter,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.redis_cache = None
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", mock_cache)
+
+    await _sync_key_spend_counter(
+        key="sk-test", explicit_spend=25.0, non_default_values={}
+    )
+
+    counter_key = f"spend:key:{_hash_token_if_needed('sk-test')}"
+    mock_cache.in_memory_cache.set_cache.assert_called_once_with(
+        key=counter_key, value=25.0, ttl=60
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_key_spend_counter_swallows_redis_error(monkeypatch):
+    """A Redis failure must be logged and swallowed, not propagated."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _sync_key_spend_counter,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.redis_cache = MagicMock()
+    mock_cache.redis_cache.async_set_cache = AsyncMock(
+        side_effect=Exception("redis down")
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", mock_cache)
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.verbose_proxy_logger"
+    ) as mock_logger:
+        await _sync_key_spend_counter(
+            key="sk-test", explicit_spend=0.0, non_default_values={}
+        )
+
+    mock_logger.warning.assert_called_once()
+
+
+def test_apply_key_budget_window_invalid_duration_is_noop():
+    """A non-string / empty budget_duration leaves budget fields untouched."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_key_budget_window,
+    )
+
+    existing_key_row = MagicMock(budget_duration=None, budget_reset_at=None)
+    non_default_values = {"budget_duration": ""}
+    _apply_key_budget_window(non_default_values, existing_key_row)
+
+    assert "budget_reset_at" not in non_default_values
+    assert "spend" not in non_default_values
+
+
+def test_apply_key_budget_window_null_clears_fields():
+    """budget_duration=None clears both budget_duration and budget_reset_at."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _apply_key_budget_window,
+    )
+
+    existing_key_row = MagicMock(budget_duration="30d", budget_reset_at=None)
+    non_default_values = {"budget_duration": None}
+    _apply_key_budget_window(non_default_values, existing_key_row)
+
+    assert non_default_values["budget_duration"] is None
+    assert non_default_values["budget_reset_at"] is None
