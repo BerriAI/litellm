@@ -410,6 +410,19 @@ class HeadroomGuardrail(CustomGuardrail):
             )
             if key in body
         }
+        tokens_before = stats.get("tokens_before")
+        tokens_after = stats.get("tokens_after")
+        if (
+            "tokens_saved" not in stats
+            and isinstance(tokens_before, (int, float))
+            and not isinstance(tokens_before, bool)
+            and isinstance(tokens_after, (int, float))
+            and not isinstance(tokens_after, bool)
+        ):
+            # Spend tracking (extract_compression_saved_tokens) reads only
+            # tokens_saved, which the live compression service omits; derive it
+            # so savings are counted, but let a service-sent value win.
+            stats["tokens_saved"] = tokens_before - tokens_after
         return filtered, True, stats
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
