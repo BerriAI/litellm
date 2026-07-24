@@ -4832,6 +4832,8 @@ class StandardLoggingPayloadSetup:
             batch_models=None,
             litellm_model_name=None,
             usage_object=None,
+            timing_pre_processing_ms=None,
+            timing_post_processing_ms=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():
@@ -5193,6 +5195,8 @@ def _extract_response_obj_and_hidden_params(
                     batch_models=None,
                     litellm_model_name=None,
                     usage_object=None,
+                    timing_pre_processing_ms=None,
+                    timing_post_processing_ms=None,
                 )
             )
 
@@ -5568,6 +5572,8 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         batch_models=None,
         litellm_model_name=None,
         usage_object=None,
+        timing_pre_processing_ms=None,
+        timing_post_processing_ms=None,
     )
 
     # Convert numeric values to appropriate types
