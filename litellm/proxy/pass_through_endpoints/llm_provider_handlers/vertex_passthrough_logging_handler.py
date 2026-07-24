@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Union, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -35,7 +35,6 @@ else:
     PassThroughEndpointLogging = Any
     LiteLLMBatch = Any
 
-# Define EndpointType locally to avoid import issues
 EndpointType = Any
 
 
@@ -49,7 +48,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: Optional[dict] = None,
+        request_body: dict | None = None,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         if "predictLongRunning" in url_route:
@@ -254,6 +253,16 @@ class VertexPassthroughLoggingHandler:
         _json_response = httpx_response.json()
 
         litellm_prediction_response: Union[ModelResponse, EmbeddingResponse, ImageResponse] = ModelResponse()
+        if VertexPassthroughLoggingHandler._is_audio_predict_response(
+            model=model,
+            json_response=_json_response,
+        ):
+            return VertexPassthroughLoggingHandler._handle_audio_predict_response(
+                json_response=_json_response,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+            )
         if vertex_image_generation_class.is_image_generation_response(_json_response):
             litellm_prediction_response = vertex_image_generation_class.process_image_generation_response(
                 _json_response,
@@ -307,7 +316,66 @@ class VertexPassthroughLoggingHandler:
         }
 
     @staticmethod
-    def _extract_embed_content_input(request_body: Optional[dict], batch: bool) -> str:
+    def _handle_audio_predict_response(
+        json_response: dict,
+        logging_obj: LiteLLMLoggingObj,
+        model: str,
+        kwargs: dict,
+    ) -> PassThroughEndpointLoggingTypedDict:
+        prediction_count = VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response)
+        response_cost = (
+            VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) or 0.0
+        ) * prediction_count
+
+        logging_obj.model = model
+        logging_obj.model_call_details["model"] = model
+        logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+        logging_obj.custom_llm_provider = "vertex_ai"
+        logging_obj.model_call_details["response_cost"] = response_cost
+
+        kwargs["response_cost"] = response_cost
+        kwargs["model"] = model
+        kwargs["custom_llm_provider"] = "vertex_ai"
+
+        standard_pass_through_response_object: StandardPassThroughResponseObject = {
+            "response": json_response,
+        }
+        return {
+            "result": standard_pass_through_response_object,
+            "kwargs": kwargs,
+        }
+
+    @staticmethod
+    def _is_audio_predict_response(model: str, json_response: dict) -> bool:
+        return (
+            VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response) > 0
+            and VertexPassthroughLoggingHandler._get_audio_prediction_unit_cost(model=model) is not None
+        )
+
+    @staticmethod
+    def _get_audio_prediction_unit_cost(model: str) -> float | None:
+        model_info = litellm.model_cost.get(f"vertex_ai/{model}", {})
+        output_cost_per_second = model_info.get("output_cost_per_second")
+        audio_seconds_per_prediction = model_info.get("audio_seconds_per_prediction")
+        if not isinstance(output_cost_per_second, (int, float)) or not isinstance(
+            audio_seconds_per_prediction, (int, float)
+        ):
+            return None
+        return float(output_cost_per_second * audio_seconds_per_prediction)
+
+    @staticmethod
+    def _get_audio_prediction_count(json_response: dict) -> int:
+        predictions = json_response.get("predictions")
+        if not isinstance(predictions, list):
+            return 0
+        return sum(
+            1
+            for prediction in predictions
+            if isinstance(prediction, dict) and (prediction.get("audioContent") or prediction.get("bytesBase64Encoded"))
+        )
+
+    @staticmethod
+    def _extract_embed_content_input(request_body: dict | None, batch: bool) -> str:
         """Extract raw input text from an :embedContent or :batchEmbedContents request body for token counting."""
         if not request_body:
             return ""
@@ -327,7 +395,7 @@ class VertexPassthroughLoggingHandler:
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         kwargs: dict,
-        request_body: Optional[dict] = None,
+        request_body: dict | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """Handle Vertex :embedContent and :batchEmbedContents endpoint responses."""
         from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -391,8 +459,8 @@ class VertexPassthroughLoggingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        all_chunks: List[str],
-        model: Optional[str],
+        all_chunks: list[str],
+        model: str | None,
         end_time: datetime,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -402,7 +470,7 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response = VertexPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=all_chunks,
@@ -437,11 +505,11 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _build_complete_streaming_response(
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
         url_route: str,
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> Union[ModelResponse, TextCompletionResponse] | None:
         parsed_chunks = []
         if "generateContent" in url_route or "streamGenerateContent" in url_route:
             vertex_iterator: Any = VertexModelResponseIterator(
@@ -522,7 +590,7 @@ class VertexPassthroughLoggingHandler:
         return vertex_model_path
 
     @staticmethod
-    def _get_vertex_publisher_or_api_spec_from_url(url: str) -> Optional[str]:
+    def _get_vertex_publisher_or_api_spec_from_url(url: str) -> str | None:
         # Check for specific Vertex AI partner publishers
         if "/publishers/mistralai/" in url:
             return "mistralai"

@@ -163,6 +163,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
+    supported_audio_formats: Optional[List[Literal["mp3", "wav"]]]
+    vertex_ai_audio_api: Optional[Literal["lyria_predict", "lyria_interactions"]]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
     bedrock_converse_supports_strict_tools: Optional[bool]
 
@@ -255,6 +257,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     output_cost_per_second: Optional[float]  # for OpenAI Speech models
+    audio_seconds_per_prediction: Optional[float]
+    max_audio_length_hours: Optional[float]
+    max_audio_per_prompt: Optional[int]
     output_cost_per_second_1080p: Optional[
         float
     ]  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
@@ -275,6 +280,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "image_generation",
             "chat",
             "audio_transcription",
+            "audio_speech",
             "responses",
             "ocr",
             "realtime",
