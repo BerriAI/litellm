@@ -55,6 +55,7 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.integrations.otel.model.semconv import Error
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
 from litellm.integrations.otel.model.utils import to_ns
 
@@ -615,18 +616,23 @@ class OpenTelemetryV2(CustomLogger):
         """Stamp the v2 error.* attributes on the FastAPI-owned SERVER span for a
         failure that dies before any LLM-call span exists (malformed body, auth /
         validation rejection). Called from the proxy's global exception handler via
-        ``_close_dangling_otel_server_span``. The instrumentor still owns the span's
-        status and lifecycle, so this only decorates it — never sets status, never
-        ends it — and emits no exception event, matching v1's SERVER-span behavior
-        and avoiding a duplicate of the event ``async_post_call_failure_hook`` or
-        the ``auth`` phase span already records."""
+        ``_close_dangling_otel_server_span``, which swallows the exception into a
+        ``JSONResponse`` so the instrumentor never sees it and leaves the span
+        ``UNSET``; the status is set here instead (v1 did the same from the handler)
+        so a failed request reads as failed and not merely as a span carrying an
+        error message. The instrumentor still owns the span's lifecycle, so this
+        never ends it. The exception event is recorded only when nothing stamped
+        this span already — ``async_post_call_failure_hook`` and the ``auth`` phase
+        span record their own, and a second event would duplicate it — while the
+        attributes are always restamped so ``error.code`` stays pinned to the real
+        response status."""
         if span is None or not is_recordable_span(span):
             return
+        already_stamped = Error.TYPE in (getattr(span, "attributes", None) or {})
         stamp_error(
             span,
             _span_error_from_exception(exception, status_code=status_code),
-            record_event=False,
-            set_status=False,
+            record_event=not already_stamped,
         )
 
     async def async_post_call_failure_hook(

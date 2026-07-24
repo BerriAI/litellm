@@ -921,8 +921,13 @@ def test_async_post_call_failure_hook_falls_back_to_user_api_key_parent_span():
 def test_record_error_attributes_on_span_decorates_without_ending():
     """PATH A: a failure that dies before any LLM-call span (malformed body,
     validation) is stamped onto the instrumentor-owned SERVER span. The method must
-    not end the span or emit a duplicate exception event, and must pin error.code
-    to the real response status (not the exception's own code)."""
+    not end the span, and must pin error.code to the real response status (not the
+    exception's own code).
+
+    LIT-4780: the instrumentor never sees the exception (the proxy handler turns it
+    into a JSONResponse), so nothing else marks the span as failed; the status and
+    the exception event have to come from here or the trace shows the error message
+    on an otherwise successful-looking request."""
     logger, exporter = _logger()
     server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     logger.record_error_attributes_on_span(server, _proxy_exc("Invalid JSON body", 400), 422)
@@ -932,7 +937,31 @@ def test_record_error_attributes_on_span_decorates_without_ending():
     assert span.attributes["error.type"] == "ProxyException"
     assert span.attributes["error.message"] == "Invalid JSON body"
     assert span.attributes["litellm.provider.error.code"] == "422"
-    assert all(e.name != "exception" for e in span.events)
+    assert span.status.status_code is StatusCode.ERROR
+    assert [e.name for e in span.events] == ["exception"]
+
+
+def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_error():
+    """A failure that already went through ``async_post_call_failure_hook`` reaches
+    the exception handler too; the second stamp must keep one exception event while
+    still repinning error.code to the real response status."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc("Authentication Error, invalid key", 401)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth()
+        )
+    )
+    logger.record_error_attributes_on_span(server, exc, 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert [e.name for e in span.events] == ["exception"]
+    assert span.attributes["litellm.provider.error.code"] == "400"
+    assert span.status.status_code is StatusCode.ERROR
 
 
 def test_record_error_attributes_on_span_ignores_below_400_and_missing_span():
