@@ -618,6 +618,44 @@ async def test_get_credentials_shows_only_in_scope_destinations_for_non_admin(
 
 
 @pytest.mark.asyncio
+async def test_get_credentials_masks_otel_headers_only_for_non_admin(
+    monkeypatch, _patch_team_admin_lookup
+):
+    raw_headers = "Authorization=Bearer collector-secret,x-api-key=api-secret"
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="generic-otel",
+                credential_values={
+                    "otel_endpoint": "https://collector.example.com/v1/traces",
+                    "otel_headers": raw_headers,
+                },
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "generic",
+                    "access": {"teams": ["team-existing"]},
+                },
+            ),
+        ],
+    )
+    _patch_team_admin_lookup["ids"] = frozenset({"team-existing"})
+
+    response = await endpoints.get_credentials(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        user_api_key_dict=_team_admin_of(["team-existing"]),
+    )
+
+    values = response["credentials"][0]["credential_values"]
+    assert values == {
+        "otel_endpoint": "https://collector.example.com/v1/traces",
+        "otel_headers": "********",
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_credentials_hides_out_of_scope_destination(
     monkeypatch, _patch_team_admin_lookup
 ):
@@ -822,6 +860,7 @@ async def test_patch_credentials_echoes_foreign_team_id_to_legit_team_admin(
 
 @pytest.mark.asyncio
 async def test_get_credentials_returns_all_for_proxy_admin(monkeypatch):
+    raw_headers = "Authorization=Bearer collector-secret,x-api-key=api-secret"
     monkeypatch.setattr(
         litellm,
         "credential_list",
@@ -836,6 +875,14 @@ async def test_get_credentials_returns_all_for_proxy_admin(monkeypatch):
                 credential_values={"public_key": "pk-1"},
                 credential_info=_DEST_WITH_TEAMS,
             ),
+            CredentialItem(
+                credential_name="generic-otel",
+                credential_values={"otel_headers": raw_headers},
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "generic",
+                },
+            ),
         ],
     )
     response = await endpoints.get_credentials(
@@ -844,7 +891,11 @@ async def test_get_credentials_returns_all_for_proxy_admin(monkeypatch):
         user_api_key_dict=_admin(),
     )
     names = sorted(c["credential_name"] for c in response["credentials"])
-    assert names == ["openai", "poc-langfuse"]
+    assert names == ["generic-otel", "openai", "poc-langfuse"]
+    generic = next(
+        c for c in response["credentials"] if c["credential_name"] == "generic-otel"
+    )
+    assert generic["credential_values"]["otel_headers"] == raw_headers
 
 
 @pytest.mark.asyncio
