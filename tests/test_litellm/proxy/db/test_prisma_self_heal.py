@@ -641,3 +641,82 @@ async def test_direct_reconnect_probe_success_clears_writer_unavailable(
 
     writer.query_raw.assert_awaited_once_with("SELECT 1")
     assert routing.writer_unavailable is False
+
+
+@pytest.fixture
+def no_backoff_sleep():
+    """Make health_check's @backoff.on_exception retries run instantly."""
+    with patch("backoff._async.asyncio.sleep", new=AsyncMock()):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_health_check_not_alerted_while_recreate_lock_held(
+    mock_proxy_logging, no_backoff_sleep
+):
+    """A SELECT 1 that races a planned engine recreate (wrapper reconnection
+    lock held) must not be reported to failure_handler as a DB exception."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db.query_raw = AsyncMock(
+        side_effect=httpx.ConnectError("All connection attempts failed")
+    )
+
+    await client.db._reconnection_lock.acquire()
+    try:
+        with pytest.raises(httpx.ConnectError):
+            await client.health_check()
+    finally:
+        client.db._reconnection_lock.release()
+
+    await asyncio.sleep(0)
+    mock_proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_health_check_not_alerted_when_engine_generation_moved(
+    mock_proxy_logging, no_backoff_sleep
+):
+    """A recreate that completes (engine generation bumped) while the probe is
+    in flight must not be reported, even though the lock is already free."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+
+    def _bump_then_fail(*args, **kwargs):
+        client.db._engine_generation += 1
+        raise httpx.ConnectError("All connection attempts failed")
+
+    client.db.query_raw = AsyncMock(side_effect=_bump_then_fail)
+
+    with pytest.raises(httpx.ConnectError):
+        await client.health_check()
+
+    await asyncio.sleep(0)
+    mock_proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_health_check_reports_real_outage_with_correct_label(
+    mock_proxy_logging, no_backoff_sleep
+):
+    """A persistent connection error with no recreate in flight is a real
+    outage: it must still be reported, and the traceback must be labeled
+    health_check() rather than the mislabeled disconnect()."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db.query_raw = AsyncMock(
+        side_effect=httpx.ConnectError("All connection attempts failed")
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        await client.health_check()
+
+    await asyncio.sleep(0.05)
+    mock_proxy_logging.failure_handler.assert_called()
+    _, kwargs = mock_proxy_logging.failure_handler.call_args
+    assert kwargs["call_type"] == "health_check"
+    assert "health_check()" in kwargs["traceback_str"]
+    assert "disconnect()" not in kwargs["traceback_str"]

@@ -4785,6 +4785,21 @@ class PrismaClient:
                 else:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
 
+    def _prisma_wrappers(self) -> tuple[PrismaWrapper, ...]:
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return (self.db.writer, self.db.reader)
+        return (self.db,)
+
+    def _engine_generations(self) -> tuple[int, ...]:
+        return tuple(w._engine_generation for w in self._prisma_wrappers())
+
+    def _is_planned_engine_recreate_error(self, e: Exception, generations_before: tuple[int, ...]) -> bool:
+        if not PrismaDBExceptionHandler.is_database_transport_error(e):
+            return False
+        if any(w._reconnection_lock.locked() for w in self._prisma_wrappers()):
+            return True
+        return self._engine_generations() != generations_before
+
     @backoff.on_exception(
         backoff.expo,
         Exception,
@@ -4797,6 +4812,7 @@ class PrismaClient:
         Health check endpoint for the prisma client
         """
         start_time = time.time()
+        generations_before = self._engine_generations()
         try:
             sql_query = "SELECT 1"
 
@@ -4807,19 +4823,26 @@ class PrismaClient:
         except Exception as e:
             import traceback
 
-            error_msg = f"LiteLLM Prisma Client Exception disconnect(): {str(e)}"
+            error_msg = f"LiteLLM Prisma Client Exception health_check(): {str(e)}"
             print_verbose(error_msg)
             error_traceback = error_msg + "\n" + traceback.format_exc()
             end_time = time.time()
             _duration = end_time - start_time
-            asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(
-                    original_exception=e,
-                    duration=_duration,
-                    call_type="health_check",
-                    traceback_str=error_traceback,
+            if self._is_planned_engine_recreate_error(e, generations_before):
+                verbose_proxy_logger.debug(
+                    "health_check: SELECT 1 raced a planned Prisma engine recreate (%s); "
+                    "not reporting as a DB exception.",
+                    str(e),
                 )
-            )
+            else:
+                asyncio.create_task(
+                    self.proxy_logging_obj.failure_handler(
+                        original_exception=e,
+                        duration=_duration,
+                        call_type="health_check",
+                        traceback_str=error_traceback,
+                    )
+                )
             raise e
 
     async def _get_spend_logs_row_count(self) -> int:
