@@ -79,7 +79,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
-from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
+from litellm.llms.anthropic.common_utils import (
+    normalize_anthropic_tool_use_id,
+    sanitize_tool_use_ids_in_anthropic_messages,
+)
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
@@ -184,6 +187,17 @@ class AnthropicAdapter:
         #########################################################
         # Created Typed Request Body
         #########################################################
+        # Normalize tool_use / tool_result ids to Anthropic's `^[a-zA-Z0-9_-]+$`
+        # pattern BEFORE translating to OpenAI format. The response direction
+        # (translate_openai_response_to_anthropic) already normalizes ids via
+        # normalize_anthropic_tool_use_id, so a cross-provider client that
+        # echoes back the original id (e.g. Claude Code's `ToolSearch:15`) in
+        # tool_result.tool_use_id would otherwise produce an OpenAI tool message
+        # whose tool_call_id no longer matches the assistant tool_call id,
+        # causing OpenAI-compatible backends (e.g. Moonshot Kimi) to reject the
+        # request with an orphaned/mismatched tool_call_id error.
+        messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+
         request_body = AnthropicMessagesRequest(model=model, messages=messages, **kwargs)
 
         (
