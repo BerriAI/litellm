@@ -10,9 +10,11 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 import copy
 import os
 import sys
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import httpx
 import pytest
 from botocore.exceptions import (
     ConnectTimeoutError,
@@ -630,6 +632,142 @@ class TestBedrockMantleCodexAdditionalTools:
             )
         assert mock_debug.call_count == 1
         assert "additional_tools" in str(mock_debug.call_args)
+
+
+class TestBedrockMantleNamespaceRestoration:
+    _NAMESPACE_TOOLS = [
+        {
+            "type": "namespace",
+            "name": "collaboration",
+            "tools": [
+                {"type": "function", "name": "spawn_agent"},
+                {"type": "function", "name": "wait_agent"},
+            ],
+        }
+    ]
+
+    @staticmethod
+    def _logging_obj(tools):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "additional_args": {"complete_input_dict": {"tools": tools}}
+        }
+        return logging_obj
+
+    @staticmethod
+    def _function_call(name="spawn_agent", namespace=None):
+        item = {
+            "type": "function_call",
+            "id": "fc_123",
+            "call_id": "call_123",
+            "name": name,
+            "arguments": "{}",
+            "status": "completed",
+        }
+        if namespace is not None:
+            item["namespace"] = namespace
+        return item
+
+    def test_non_stream_response_restores_namespace(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        response = httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://example.com/v1/responses"),
+            json={
+                "id": "resp_123",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "completed",
+                "model": "openai.gpt-5.6-luna",
+                "output": [self._function_call()],
+            },
+        )
+
+        parsed = cfg.transform_response_api_response(
+            model="openai.gpt-5.6-luna",
+            raw_response=response,
+            logging_obj=self._logging_obj(self._NAMESPACE_TOOLS),
+        )
+
+        assert parsed.output[0].namespace == "collaboration"
+
+    @pytest.mark.parametrize(
+        "chunk",
+        [
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": _function_call(),
+            },
+            {
+                "type": "response.output_item.done",
+                "sequence_number": 2,
+                "output_index": 0,
+                "item": _function_call(),
+            },
+            {
+                "type": "response.completed",
+                "sequence_number": 3,
+                "response": {
+                    "id": "resp_123",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "openai.gpt-5.6-luna",
+                    "output": [_function_call()],
+                },
+            },
+        ],
+    )
+    def test_streaming_response_restores_namespace(self, chunk):
+        cfg = BedrockMantleResponsesAPIConfig()
+
+        parsed = cfg.transform_streaming_response(
+            model="openai.gpt-5.6-luna",
+            parsed_chunk=chunk,
+            logging_obj=self._logging_obj(self._NAMESPACE_TOOLS),
+        )
+
+        payload = parsed.model_dump(exclude_none=True)
+        function_call = (
+            payload["item"] if "item" in payload else payload["response"]["output"][0]
+        )
+        assert function_call["namespace"] == "collaboration"
+
+    def test_existing_namespace_is_preserved(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        restored = cfg._restore_function_call_namespaces(
+            self._function_call(namespace="existing"),
+            {"spawn_agent": "collaboration"},
+        )
+        assert restored["namespace"] == "existing"
+
+    def test_non_namespaced_function_call_is_unchanged(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        function_call = self._function_call(name="standalone")
+        restored = cfg._restore_function_call_namespaces(
+            function_call,
+            {"spawn_agent": "collaboration"},
+        )
+        assert restored == function_call
+
+    def test_ambiguous_tool_name_is_not_assigned_a_namespace(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        tools = [
+            *self._NAMESPACE_TOOLS,
+            {
+                "type": "namespace",
+                "name": "other_namespace",
+                "tools": [{"type": "function", "name": "spawn_agent"}],
+            },
+        ]
+        namespace_by_tool_name = cfg._namespace_by_tool_name(self._logging_obj(tools))
+        restored = cfg._restore_function_call_namespaces(
+            self._function_call(),
+            namespace_by_tool_name,
+        )
+        assert "namespace" not in restored
 
 
 class TestBedrockMantleResponsesRegistry:

@@ -17,6 +17,7 @@ BaseAWSLLM._sign_request after the request body is finalized.
 
 from typing import Any, Dict, List, Optional
 
+import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -24,11 +25,16 @@ from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
 )
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import (
+    LiteLLMLoggingObj,
+    OpenAIResponsesAPIConfig,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -172,6 +178,121 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             response_api_optional_request_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+
+    @staticmethod
+    def _namespace_by_tool_name(logging_obj: LiteLLMLoggingObj) -> dict[str, str]:
+        model_call_details = getattr(logging_obj, "model_call_details", {})
+        if not isinstance(model_call_details, dict):
+            return {}
+        additional_args = model_call_details.get("additional_args")
+        if not isinstance(additional_args, dict):
+            return {}
+        complete_input_dict = additional_args.get("complete_input_dict")
+        if not isinstance(complete_input_dict, dict):
+            return {}
+        tools = complete_input_dict.get("tools")
+        if not isinstance(tools, list):
+            return {}
+
+        namespaces_by_tool_name: dict[str, set[str]] = {}
+        for namespace_tool in tools:
+            if not isinstance(namespace_tool, dict) or namespace_tool.get("type") != "namespace":
+                continue
+            namespace = namespace_tool.get("name")
+            nested_tools = namespace_tool.get("tools")
+            if not isinstance(namespace, str) or not isinstance(nested_tools, list):
+                continue
+            for nested_tool in nested_tools:
+                if not isinstance(nested_tool, dict):
+                    continue
+                tool_name = nested_tool.get("name")
+                if isinstance(tool_name, str):
+                    namespaces_by_tool_name.setdefault(tool_name, set()).add(namespace)
+
+        return {
+            tool_name: next(iter(namespaces))
+            for tool_name, namespaces in namespaces_by_tool_name.items()
+            if len(namespaces) == 1
+        }
+
+    @classmethod
+    def _restore_function_call_namespaces(
+        cls,
+        value: Any,
+        namespace_by_tool_name: dict[str, str],
+    ) -> Any:
+        if isinstance(value, list):
+            return [cls._restore_function_call_namespaces(item, namespace_by_tool_name) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        restored = {
+            key: cls._restore_function_call_namespaces(item, namespace_by_tool_name) for key, item in value.items()
+        }
+        if (
+            restored.get("type") == "function_call"
+            and restored.get("namespace") is None
+            and isinstance(restored.get("name"), str)
+        ):
+            namespace = namespace_by_tool_name.get(restored["name"])
+            if namespace is not None:
+                restored["namespace"] = namespace
+        return restored
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        namespace_by_tool_name = self._namespace_by_tool_name(logging_obj)
+        if not namespace_by_tool_name:
+            return super().transform_response_api_response(
+                model=model,
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
+
+        try:
+            response_payload = raw_response.json()
+        except ValueError:
+            return super().transform_response_api_response(
+                model=model,
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
+        restored_payload = self._restore_function_call_namespaces(
+            response_payload,
+            namespace_by_tool_name,
+        )
+        restored_response = httpx.Response(
+            status_code=raw_response.status_code,
+            headers=raw_response.headers,
+            json=restored_payload,
+            request=raw_response.request,
+            extensions=raw_response.extensions,
+        )
+        return super().transform_response_api_response(
+            model=model,
+            raw_response=restored_response,
+            logging_obj=logging_obj,
+        )
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        restored_chunk = self._restore_function_call_namespaces(
+            parsed_chunk,
+            self._namespace_by_tool_name(logging_obj),
+        )
+        return super().transform_streaming_response(
+            model=model,
+            parsed_chunk=restored_chunk,
+            logging_obj=logging_obj,
         )
 
     @staticmethod
