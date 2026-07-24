@@ -2011,6 +2011,9 @@ class LiteLLMCompletionResponsesConfig:
             if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None:
                 input_details_dict["audio_tokens"] = prompt_details.audio_tokens
 
+            if hasattr(prompt_details, "cache_creation_tokens") and prompt_details.cache_creation_tokens is not None:
+                input_details_dict["cache_write_tokens"] = prompt_details.cache_creation_tokens
+
             if input_details_dict:
                 response_usage.input_tokens_details = InputTokensDetails(**input_details_dict)
 

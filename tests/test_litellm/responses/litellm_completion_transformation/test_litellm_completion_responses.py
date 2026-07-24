@@ -1916,6 +1916,41 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is None
         assert response_usage.output_tokens_details is None
 
+    def test_transform_chat_usage_maps_cache_creation_to_cache_write_tokens(self):
+        """Test that cache_creation_tokens (Anthropic cache writes) map to input_tokens_details.cache_write_tokens"""
+        # Setup: Usage with cache_creation_input_tokens (Anthropic convention)
+        usage = Usage(
+            prompt_tokens=6429,
+            completion_tokens=100,
+            total_tokens=6529,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0),
+            cache_creation_input_tokens=5429,
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cache_write_tokens == 5429
+
     def test_transform_usage_with_image_tokens(self):
         """Test that image_tokens from Vertex AI/Gemini are properly transformed to output_tokens_details"""
         # Setup: Simulate Vertex AI/Gemini usage with image_tokens in completion_tokens_details

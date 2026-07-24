@@ -225,7 +225,8 @@ def _get_token_base_cost(
         output_image_cost = _get_cost_per_unit(model_info, "output_cost_per_image_token", None)
         if output_image_cost is not None:
             completion_base_cost = cast(float, output_image_cost)
-    cache_creation_cost = cast(float, _get_cost_per_unit(model_info, cache_creation_cost_key))
+    cache_creation_cost_from_map = _get_cost_per_unit(model_info, cache_creation_cost_key, None)
+    cache_creation_cost = cache_creation_cost_from_map if cache_creation_cost_from_map is not None else prompt_base_cost
     cache_creation_cost_above_1hr = cast(
         float,
         _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
