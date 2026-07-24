@@ -254,7 +254,7 @@ class TestJSONProviderEmbedding:
 
     @pytest.mark.respx()
     def test_scaleway_embedding_routed_to_openai_handler(self, respx_mock, monkeypatch):
-        litellm.disable_aiohttp_transport = True
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.setenv("SCW_SECRET_KEY", "fake-scaleway-key")
 
         route = respx_mock.post("https://api.scaleway.ai/v1/embeddings").respond(
@@ -280,8 +280,8 @@ class TestJSONProviderEmbedding:
         assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
     @pytest.mark.respx()
-    def test_json_provider_embedding_honors_custom_api_base(self, respx_mock):
-        litellm.disable_aiohttp_transport = True
+    def test_json_provider_embedding_honors_custom_api_base_and_headers(self, respx_mock, monkeypatch):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
         route = respx_mock.post("https://custom.publicai.local/v1/embeddings").respond(
             json={
@@ -299,9 +299,11 @@ class TestJSONProviderEmbedding:
             input=["hello world"],
             api_base="https://custom.publicai.local/v1",
             api_key="fake-publicai-key",
+            extra_headers={"x-tenant-id": "tenant-123"},
         )
 
         assert route.called
+        assert route.calls[0].request.headers["x-tenant-id"] == "tenant-123"
         assert response.data[0]["embedding"] == [0.4, 0.5]
 
 
