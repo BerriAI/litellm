@@ -42,7 +42,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -2672,6 +2672,8 @@ class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_id: str
     prompt_variables: Optional[dict]
     prompt_integration: str
+    prompt_label: NotRequired[Optional[str]]
+    prompt_version: NotRequired[Optional[int]]
 
 
 class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
