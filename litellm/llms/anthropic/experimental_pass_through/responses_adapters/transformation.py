@@ -8,6 +8,9 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -103,6 +106,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            image_urls: List[str] = []
                             if inner is None:
                                 output_text = ""
                             elif isinstance(inner, str):
@@ -112,8 +116,23 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
+                                image_candidates = [
+                                    self._translate_anthropic_image_source_to_url(
+                                        cast(dict, c.get("source", {}))  # cast-ok: same pattern as user image branch
+                                    )
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") == "image"
+                                ]
+                                image_urls = [url for url in image_candidates if url]
                             else:
                                 output_text = str(inner)
+                            if image_urls:
+                                output_text = (
+                                    f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
+                                    if output_text
+                                    else TOOL_RESULT_IMAGE_PLACEHOLDER
+                                )
+                                user_parts.extend({"type": "input_image", "image_url": url} for url in image_urls)
                             # tool_result is a top-level item, not inside the message
                             input_items.append(
                                 {

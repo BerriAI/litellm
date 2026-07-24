@@ -421,7 +421,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                 # (each tool_use must have exactly one tool_result)
                                 content_items = list(content.get("content", []))
 
-                                # For single-item content, maintain backward compatibility with string/url format
+                                # Single-item text keeps the backward-compatible string format; a single
+                                # image becomes a structured image_url part
                                 if len(content_items) == 1:
                                     c = content_items[0]
                                     if isinstance(c, str):
@@ -446,10 +447,20 @@ class LiteLLMAnthropicMessagesAdapter:
                                             openai_image_url = (
                                                 self._translate_anthropic_image_to_openai(cast(dict, source)) or ""
                                             )
+                                            single_image_content = (
+                                                [
+                                                    ChatCompletionImageObject(
+                                                        type="image_url",
+                                                        image_url=ChatCompletionImageUrlObject(url=openai_image_url),
+                                                    )
+                                                ]
+                                                if openai_image_url
+                                                else ""
+                                            )
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
                                                 tool_call_id=content.get("tool_use_id", ""),
-                                                content=openai_image_url,
+                                                content=single_image_content,
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
@@ -492,7 +503,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                         tool_result = ChatCompletionToolMessage(
                                             role="tool",
                                             tool_call_id=content.get("tool_use_id", ""),
-                                            content=combined_content_parts,  # type: ignore
+                                            content=combined_content_parts,
                                         )
                                         self._add_cache_control_if_applicable(content, tool_result, model)
                                         tool_message_list.append(tool_result)  # type: ignore[arg-type]

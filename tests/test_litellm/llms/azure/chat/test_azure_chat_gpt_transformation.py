@@ -54,3 +54,36 @@ def test_map_openai_params_with_preview_api_version():
     assert config.map_openai_params(
         non_default_params, optional_params, model, drop_params, api_version
     )
+
+
+def test_transform_request_hoists_tool_message_image():
+    """Azure builds its request via convert_to_azure_openai_messages without the
+    OpenAIGPTConfig._transform_messages pipeline, so transform_request must hoist
+    tool-message images itself; Azure rejects non-text tool content."""
+    data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    messages = [
+        {"role": "user", "content": "read the screenshot"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "image_url", "image_url": {"url": data_uri}}],
+        },
+    ]
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed = request["messages"]
+    assert [m.get("role") for m in transformed] == ["user", "assistant", "tool", "user"]
+    assert isinstance(transformed[2]["content"], str)
+    assert transformed[3]["content"] == [{"type": "image_url", "image_url": {"url": data_uri}}]
