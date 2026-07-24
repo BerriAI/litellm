@@ -144,9 +144,6 @@
   "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/budgets/_components/edit_budget_modal.tsx": {
@@ -1840,9 +1837,6 @@
     }
   },
   "src/app/(dashboard)/skills/_components/ClaudeCodePluginsPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1888,9 +1882,6 @@
     }
   },
   "src/app/(dashboard)/ui-theme/UIThemeSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "no-restricted-syntax": {
       "count": 3
     },
