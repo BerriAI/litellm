@@ -53,6 +53,40 @@ def get_litellm_user_role(role_str) -> Optional[LitellmUserRoles]:
         return None
 
 
+LITELLM_USER_ROLE_HIERARCHY: tuple[LitellmUserRoles, ...] = (
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    LitellmUserRoles.TEAM,
+    LitellmUserRoles.CUSTOMER,
+)
+
+
+def get_most_permissive_litellm_user_role(
+    role_strs: list[str],
+) -> Optional[LitellmUserRoles]:
+    """
+    Given a list of role strings from an SSO payload, return the most permissive
+    valid LitellmUserRoles according to LITELLM_USER_ROLE_HIERARCHY.
+
+    Some identity providers (e.g. Microsoft Entra with access packages) assign a
+    user multiple app_roles at once. Selecting the first array entry is arbitrary,
+    so pick the highest-privilege role instead.
+
+    Args:
+        role_strs: Role strings from the SSO payload (e.g. ["internal_user", "proxy_admin"])
+
+    Returns:
+        The most permissive valid LitellmUserRoles, or None if none are valid
+    """
+    valid_roles = frozenset(
+        role for role in (get_litellm_user_role(role_str) for role_str in role_strs) if role is not None
+    )
+    return next((role for role in LITELLM_USER_ROLE_HIERARCHY if role in valid_roles), None)
+
+
 class CustomOpenID(OpenID):
     team_ids: List[str]
     user_role: Optional[LitellmUserRoles] = None
