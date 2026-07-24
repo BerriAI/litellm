@@ -311,6 +311,34 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/qwen.qwen3-32b-v1:0",
+        "bedrock/converse/qwen.qwen3-32b-v1:0",
+    ],
+)
+def test_reasoning_effort_passes_through_for_qwen3_converse(model):
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["reasoning_effort"] == "high"
+    assert "thinking" not in result["additionalModelRequestFields"]
+
+
+@pytest.mark.parametrize(
     "model,effort,expected_effort",
     [
         ("bedrock/converse/us.anthropic.claude-opus-4-7", "low", "low"),
