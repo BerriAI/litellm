@@ -37,6 +37,7 @@ from litellm.proxy._types import (
     VirtualKeyEvent,
     WebhookEvent,
 )
+from litellm.proxy.management_helpers.user_invitation import get_user_invitation_link
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
@@ -1177,7 +1178,10 @@ Model Info:
                     email_logo_url=email_logo_url,
                     recipient_email=recipient_email,
                     team_name=team_name,
-                    base_url=base_url,
+                    base_url=await get_user_invitation_link(
+                        user_id=recipient_user_id,
+                        base_url=base_url,
+                    ),
                     email_support_contact=email_support_contact,
                 )
             else:

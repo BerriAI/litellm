@@ -3,8 +3,11 @@ import json
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from typing import List, Optional, Tuple
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -245,3 +248,112 @@ class TestSlackAlerting(unittest.TestCase):
         )
         self.assertEqual(parsed_data["alerts"], [408])
         self.assertEqual(parsed_data["provider_region_id"], "vertex_aius-east1")
+
+
+@pytest.mark.asyncio
+async def test_user_invited_email_links_to_existing_invitation():
+    """Legacy SMTP invite email must link to /ui/onboarding?invitation_id=... (issue #34555)"""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import WebhookEvent
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_invitationlink.find_many = AsyncMock(
+        return_value=[SimpleNamespace(id="1c1e7bfa-0f7e-4d1b-9d1c-6b1b6a5a7f3a")]
+    )
+    prisma_client.db.litellm_invitationlink.create = AsyncMock()
+
+    sent_email = AsyncMock()
+    slack_alerting = SlackAlerting(alerting=["email"])
+    with patch.object(proxy_server, "prisma_client", prisma_client), patch.dict(
+        os.environ, {"PROXY_BASE_URL": "https://proxy.example.com"}
+    ), patch("litellm.proxy.utils.send_email", sent_email):
+        result = await slack_alerting.send_key_created_or_user_invited_email(
+            webhook_event=WebhookEvent(
+                event="internal_user_created",
+                event_group=Litellm_EntityType.USER,
+                event_message="Welcome to LiteLLM Proxy",
+                spend=0.0,
+                user_id="new-user-id",
+                user_email="new-user@example.com",
+            )
+        )
+
+    assert result is True
+    prisma_client.db.litellm_invitationlink.create.assert_not_called()
+    html = sent_email.call_args.kwargs["html"]
+    assert (
+        'href="https://proxy.example.com/ui/onboarding?invitation_id=1c1e7bfa-0f7e-4d1b-9d1c-6b1b6a5a7f3a"'
+        in html
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_invited_email_creates_invitation_when_missing():
+    """No invitation row yet -> one is created and its id is used in the email link"""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import WebhookEvent
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_invitationlink.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_invitationlink.create = AsyncMock(
+        return_value=SimpleNamespace(id="fresh-invite-id")
+    )
+
+    sent_email = AsyncMock()
+    slack_alerting = SlackAlerting(alerting=["email"])
+    with patch.object(proxy_server, "prisma_client", prisma_client), patch.dict(
+        os.environ, {"PROXY_BASE_URL": "https://proxy.example.com/"}
+    ), patch("litellm.proxy.utils.send_email", sent_email):
+        await slack_alerting.send_key_created_or_user_invited_email(
+            webhook_event=WebhookEvent(
+                event="internal_user_created",
+                event_group=Litellm_EntityType.USER,
+                event_message="Welcome to LiteLLM Proxy",
+                spend=0.0,
+                user_id="new-user-id",
+                user_email="new-user@example.com",
+            )
+        )
+
+    assert (
+        prisma_client.db.litellm_invitationlink.create.call_args.kwargs["data"][
+            "user_id"
+        ]
+        == "new-user-id"
+    )
+    html = sent_email.call_args.kwargs["html"]
+    assert (
+        'href="https://proxy.example.com/ui/onboarding?invitation_id=fresh-invite-id"'
+        in html
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_invited_email_falls_back_to_base_url_on_db_error():
+    """If the invitation lookup blows up, the email still goes out with the base url"""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import WebhookEvent
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_invitationlink.find_many = AsyncMock(
+        side_effect=Exception("db down")
+    )
+
+    sent_email = AsyncMock()
+    slack_alerting = SlackAlerting(alerting=["email"])
+    with patch.object(proxy_server, "prisma_client", prisma_client), patch.dict(
+        os.environ, {"PROXY_BASE_URL": "https://proxy.example.com"}
+    ), patch("litellm.proxy.utils.send_email", sent_email):
+        result = await slack_alerting.send_key_created_or_user_invited_email(
+            webhook_event=WebhookEvent(
+                event="internal_user_created",
+                event_group=Litellm_EntityType.USER,
+                event_message="Welcome to LiteLLM Proxy",
+                spend=0.0,
+                user_id="new-user-id",
+                user_email="new-user@example.com",
+            )
+        )
+
+    assert result is True
+    assert 'href="https://proxy.example.com"' in sent_email.call_args.kwargs["html"]

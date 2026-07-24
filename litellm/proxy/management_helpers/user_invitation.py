@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 from datetime import timedelta
 
 from fastapi import HTTPException
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, InvitationNew, UserAPIKeyAuth
 from litellm.repositories.table_repositories import InvitationLinkRepository
 
@@ -46,3 +49,45 @@ async def create_invitation_for_user(
                 },
             )
         raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+def construct_invitation_link(invitation_id: str, base_url: str) -> str:
+    """
+    e.g. http://localhost:4000/ui/onboarding?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
+    """
+    return f"{base_url.rstrip('/')}/ui/onboarding?invitation_id={invitation_id}"
+
+
+async def get_user_invitation_link(user_id: str | None, base_url: str) -> str:
+    """
+    Return the onboarding link for `user_id`, reusing the user's most recent invitation
+    or creating one if none exists.
+
+    Falls back to `base_url` when the link cannot be built.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_id is None or prisma_client is None:
+        return base_url
+
+    try:
+        existing_invitations = await InvitationLinkRepository(prisma_client).table.find_many(
+            where={"user_id": user_id},
+            order={"created_at": "desc"},
+        )
+        invitation = (
+            existing_invitations[0]
+            if existing_invitations
+            else await create_invitation_for_user(
+                data=InvitationNew(user_id=user_id),
+                user_api_key_dict=UserAPIKeyAuth(user_id=user_id),
+            )
+        )
+    except Exception as e:
+        verbose_proxy_logger.error("Unable to get/create invitation for user_id %s - %s", user_id, str(e))
+        return base_url
+
+    if invitation is None:
+        return base_url
+
+    return construct_invitation_link(invitation_id=invitation.id, base_url=base_url)
