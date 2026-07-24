@@ -46,6 +46,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra proxy-runtime \
         --extra extra_proxy \
         --extra semantic-router \
+        --extra bedrock-realtime \
         --python python3
 
 # Stage 2 — copy source and install the project + workspace members.
@@ -57,6 +58,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra proxy-runtime \
         --extra extra_proxy \
         --extra semantic-router \
+        --extra bedrock-realtime \
         --python python3
 
 RUN mkdir -p /home/nonroot && \
