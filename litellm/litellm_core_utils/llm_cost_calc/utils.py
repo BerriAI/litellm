@@ -470,8 +470,8 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_creation_tokens = (
         cast(
             Optional[int],
-            getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0)
-            or getattr(usage.prompt_tokens_details, "cache_write_tokens", 0),
+            getattr(usage.prompt_tokens_details, "cache_write_tokens", 0)
+            or getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0),
         )
         or 0
     )
@@ -920,10 +920,6 @@ def get_token_type_cost_breakdown(
         cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
         cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
         cache_creation_token_details = prompt_tokens_details["cache_creation_token_details"]
-        # Some OpenAI-compatible providers (e.g. kimi-k2) report cache-write tokens
-        # under `cache_write_tokens`; mirror the total-cost normalization path.
-        if not cache_creation_tokens:
-            cache_creation_tokens = _coerce_token_count(getattr(usage.prompt_tokens_details, "cache_write_tokens", 0))
     # Fall back to the private top-level counters the Usage constructor mirrors cache
     # tokens onto, so providers/callers that bypass prompt_tokens_details are covered.
     if not cache_read_tokens:
