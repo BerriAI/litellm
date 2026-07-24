@@ -23,6 +23,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    NamedTuple,
     Optional,
     TypedDict,
     Union,
@@ -7570,7 +7571,12 @@ async def _iter_with_keepalive(aiter: Any, keepalive_seconds: float) -> AsyncGen
                 pass
 
 
-def _keepalive_from_deployment_config(request_data: dict[str, Any], response: Any) -> Any:
+class _DeploymentKeepaliveConfig(NamedTuple):
+    keepalive_seconds: Any
+    allow_client_override: bool
+
+
+def _keepalive_from_deployment_config(request_data: dict[str, Any], response: Any) -> _DeploymentKeepaliveConfig | None:
     if llm_router is None:
         return None
 
@@ -7584,21 +7590,30 @@ def _keepalive_from_deployment_config(request_data: dict[str, Any], response: An
         # through to guessing via model_name below, since a currently-live
         # sibling deployment's config was never what actually served this
         # stream.
-        if deployment is not None:
-            return getattr(deployment.litellm_params, "keepalive_seconds", None)
-        return None
+        if deployment is None:
+            return None
+        return _DeploymentKeepaliveConfig(
+            keepalive_seconds=getattr(deployment.litellm_params, "keepalive_seconds", None),
+            allow_client_override=bool(getattr(deployment.litellm_params, "allow_client_keepalive_override", False)),
+        )
 
     # No model_id at all to pin down which deployment actually served this
     # stream: only trust the fallback when every deployment under this
-    # model_name agrees, including deployments that leave keepalive_seconds
-    # unset (None), so an unconfigured deployment never inherits a sibling's
-    # configured interval.
-    values = {
-        (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")
+    # model_name agrees on both keepalive_seconds and
+    # allow_client_keepalive_override (including deployments that leave either
+    # field unset), so a stream never inherits a sibling deployment's policy.
+    configs = {
+        (
+            (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds"),
+            bool((deployment_dict.get("litellm_params") or {}).get("allow_client_keepalive_override", False)),
+        )
         for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or []
     }
-    if len(values) == 1:
-        return values.pop()
+    if len(configs) == 1:
+        keepalive_seconds, allow_client_override = configs.pop()
+        return _DeploymentKeepaliveConfig(
+            keepalive_seconds=keepalive_seconds, allow_client_override=allow_client_override
+        )
     return None
 
 
@@ -7612,7 +7627,10 @@ def _is_explicit_keepalive_disable(raw: Any) -> bool:
 
 
 def _resolve_keepalive_seconds(request_data: dict[str, Any], response: Any = None) -> float:
-    deployment_raw = _keepalive_from_deployment_config(request_data, response)
+    deployment_config = _keepalive_from_deployment_config(request_data, response)
+    deployment_raw = deployment_config.keepalive_seconds if deployment_config is not None else None
+    allow_client_override = deployment_config.allow_client_override if deployment_config is not None else False
+
     # An operator setting keepalive_seconds: 0 on a deployment is an explicit hard
     # disable: an authenticated client must not be able to re-enable heartbeats
     # (and the idle-timeout evasion that comes with them) for a deployment the
@@ -7620,7 +7638,10 @@ def _resolve_keepalive_seconds(request_data: dict[str, Any], response: Any = Non
     if _is_explicit_keepalive_disable(deployment_raw):
         return 0.0
 
-    raw = request_data.get("keepalive_seconds")
+    # keepalive_seconds is operator-only unless the deployment explicitly opts in:
+    # a client can't unilaterally enable heartbeats (and the LB-idle-timeout
+    # evasion that comes with them) for a deployment that never configured this.
+    raw = request_data.get("keepalive_seconds") if allow_client_override else None
     if raw is None:
         raw = deployment_raw
     try:

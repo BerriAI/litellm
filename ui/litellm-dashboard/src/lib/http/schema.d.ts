@@ -26481,6 +26481,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -35056,6 +35061,11 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /**
+             * Allow Client Keepalive Override
+             * @default false
+             */
+            allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
