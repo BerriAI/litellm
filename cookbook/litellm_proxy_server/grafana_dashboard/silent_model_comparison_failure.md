@@ -1,130 +1,178 @@
-# Silent model comparison observability failure
+# Silent 模型对比可观测性故障记录
 
-## Status
+## 状态
 
-Observed on 2026-07-24 in a LiteLLM deployment using a primary model and a background `silent_model`
+2026-07-24，在同时使用 Primary 模型和后台 `silent_model` 的 LiteLLM 环境中确认该问题
 
-This document records the observed failure modes and current observability gaps. It does not propose or implement a fix
+本文只记录已经观察到的故障现象、证据和可观测性缺口，不包含具体修复实现
 
-## Test shape
+## 测试链路
 
-Each client request is expected to produce two provider calls:
+每个客户端请求预期产生两次模型调用：
 
-1. The primary model call returned to the client
-2. A background silent-model call used only for comparison
+1. Primary 模型调用，其结果返回给客户端
+2. 后台 Silent 模型调用，只用于模型效果和性能对比
 
-The examined workload used:
+本次检查的模型为：
 
-- Primary LiteLLM model: `bailian/deepseek-v4-flash`
-- Silent LiteLLM model: `glm-5.2`
-- Silent provider model: `zai-org/GLM-5.2-FP8`
-- Shared key alias: `llm-shadow-yj-pre-20260723`
+- Primary LiteLLM 模型：`bailian/deepseek-v4-flash`
+- Silent LiteLLM 模型：`glm-5.2`
+- Silent Provider 模型：`zai-org/GLM-5.2-FP8`
+- 共同使用的 Key Alias：`llm-shadow-yj-pre-20260723`
 
-## Observed symptoms
+## 观察到的现象
 
-### Request-log counts do not appear one-to-one
+### Request Logs 数量看起来不是一比一
 
-The LiteLLM Request Logs UI showed different totals when filtering by deployment:
+LiteLLM Request Logs 页面按具体 Deployment 过滤时显示：
 
-- GLM deployment: 134 rows
-- DeepSeek deployment: 125 rows
+- GLM Deployment：134 条
+- DeepSeek Deployment：125 条
 
-Querying the same time range by provider-model name returned 137 raw rows for each model. The apparent discrepancy is caused by several different record shapes being combined in the UI totals:
+在相同时间范围内，直接按 Provider 模型名称查询得到两边各 137 条原始日志。页面上的数量差异由多种日志形态共同造成：
 
-- DeepSeek had failures that occurred before a deployment `model_id` was attached, so a UI filter for a specific deployment excluded those rows
-- The screenshots and the API query used slightly different end times
-- Seven GLM session IDs each had three GLM records, producing 14 additional GLM rows
-- Cache-hit records sometimes used different session IDs for the primary and silent sides
+- DeepSeek 的部分失败发生在选出具体 Deployment 之前，因此日志里没有 `model_id`，使用具体 Deployment 筛选时会被排除
+- 截图和 API 查询的结束时间有轻微差异
+- 7 个 GLM Session ID 分别产生了 3 条 GLM 记录，一共多出 14 条重复侧记录
+- Cache Hit 场景下，Primary 和 Silent 有时使用不同的 Session ID
 
-Raw row equality therefore does not prove that every primary request has exactly one corresponding silent request
+因此，即使两边原始日志总数相等，也不能证明每个 Primary 请求都有且只有一个对应的 Silent 请求
 
-### Session-level pairing is incomplete
+### 无法完整地按 Session 配对
 
-For the inspected interval:
+在检查的时间范围内：
 
-| Measurement | GLM | DeepSeek |
+| 统计项 | GLM | DeepSeek |
 | --- | ---: | ---: |
-| Raw rows | 137 | 137 |
-| Unique session IDs | 123 | 137 |
-| Success rows | 127 | 111 |
-| Cache-hit rows | 10 | 5 |
-| Failure rows | 0 | 21 |
+| 原始日志数 | 137 | 137 |
+| 唯一 Session ID 数 | 123 | 137 |
+| 成功日志数 | 127 | 111 |
+| Cache Hit 数 | 10 | 5 |
+| 失败日志数 | 0 | 21 |
 
-Only 111 session IDs formed clean, successful pairs. There were 12 GLM-only session IDs and 26 DeepSeek-only session IDs
+只有 111 个 Session ID 能组成干净、成功的 Primary/Silent 配对。另有 12 个 Session 只包含 GLM，26 个 Session 只包含 DeepSeek
 
-The DeepSeek failures included `APIConnectionError`, `BudgetExceededError`, `ProxyRateLimitError`, and `TypeError`. Some failures did not contain a deployment ID. Cache hits and duplicate calls also prevented a strict one-row-per-role join by session ID
+DeepSeek 的失败类型包括 `APIConnectionError`、`BudgetExceededError`、`ProxyRateLimitError` 和 `TypeError`。部分失败没有 Deployment ID。Cache Hit 和重复调用也会破坏基于 Session ID 的严格一角色一行关联
 
-### The silent model has a large latency tail
+### Silent 模型存在明显的延迟长尾
 
-For the 111 clean pairs, the two calls started within a few milliseconds of each other, confirming that they belonged to the same primary/silent comparison attempt
+在 111 组干净配对中，两边调用的开始时间通常只相差几毫秒，可以确认属于同一次 Primary/Silent 对比：
 
-| Duration | GLM silent | DeepSeek primary |
+| Duration | GLM Silent | DeepSeek Primary |
 | --- | ---: | ---: |
-| P50 | 15.0 s | 3.95 s |
-| P90 | 80.1 s | 9.74 s |
-| P95 | 112.0 s | 11.8 s |
-| P99 | 154.4 s | 21.4 s |
-| Maximum | 346.2 s | 27.0 s |
+| P50 | 15.0 秒 | 3.95 秒 |
+| P90 | 80.1 秒 | 9.74 秒 |
+| P95 | 112.0 秒 | 11.8 秒 |
+| P99 | 154.4 秒 | 21.4 秒 |
+| 最大值 | 346.2 秒 | 27.0 秒 |
 
-The per-session GLM-to-DeepSeek duration ratio had a median of 3.45x, a P95 of 22.96x, and a maximum of 62.38x
+同 Session 下，GLM 与 DeepSeek 的耗时比值中位数为 3.45 倍，P95 为 22.96 倍，最大值为 62.38 倍
 
-GLM frequently generated more output tokens. The paired output-token ratio had a median of 1.62x and a P90 of 5.69x. Output length explains part of the latency difference, but not all of it: one pair took approximately 100 seconds on GLM for 422 output tokens and 3.7 seconds on DeepSeek for 181 output tokens
+GLM 经常生成更多输出 Token。配对后的输出 Token 比值中位数为 1.62 倍，P90 为 5.69 倍。输出长度可以解释部分延迟差异，但不能解释全部差异。例如，有一组请求中 GLM 输出 422 Token、耗时约 100 秒，而 DeepSeek 输出 181 Token、耗时约 3.7 秒
 
-### Existing Prometheus metrics cannot identify bad pairs
+### 现有 Prometheus 指标无法找到差异最大的配对请求
 
-The deployed `litellm_request_total_latency_metric` exposes aggregate histogram labels such as:
+当前部署的 `litellm_request_total_latency_metric` 包含以下聚合维度：
 
 - `requested_model`
 - `model`
 - `model_id`
 - `api_provider`
-- key, team, organization, and user dimensions
+- Key、Team、Organization 和 User 等维度
 
-It does not expose `session_id`, a stable shadow-pair identifier, or a primary/silent request role
+它不包含 `session_id`、稳定的 Shadow Pair ID，也不包含 Primary/Silent 请求角色
 
-As a result, Prometheus can compare aggregate model latency distributions, but it cannot answer the following questions from existing metrics:
+因此，Prometheus 可以比较不同模型的整体延迟分布，但无法回答：
 
-- Which primary and silent samples belong to the same request
-- Which session IDs have the largest duration ratio or duration delta
-- Which primary requests succeeded while their silent counterparts failed or disappeared
-- Whether count differences came from missing pairs, retries, cache hits, or duplicate calls
+- 哪一条 Primary 样本和哪一条 Silent 样本属于同一个请求
+- 哪些 Session 的耗时比值或耗时差值最大
+- 哪些 Primary 请求成功，但对应的 Silent 请求失败或缺失
+- 数量差异来自配对缺失、重试、Cache Hit，还是重复调用
 
-Adding `session_id` as a normal Prometheus label would create one time series per request and is not a safe workaround for this gap. Histogram metrics also retain bucket counts rather than individual observations, so a per-session join cannot be reconstructed after collection
+不能简单地把 `session_id` 添加成普通 Prometheus Label。这样会为几乎每个请求创建新的时间序列，造成高基数问题。Histogram 指标只保留桶计数，不保存每次请求的原始观测值，因此采集完成后也无法重新执行逐 Session 关联
 
-### TTFT is not comparable between the two roles
+### Primary 和 Silent 的 TTFT 不能直接比较
 
-The silent call is forced to use `stream=False` so that the background response is fully consumed and callbacks execute. The primary request may use streaming
+Silent 请求会被强制设置为 `stream=False`，以保证后台响应被完整消费并触发 Callback。Primary 请求则可能使用 Streaming
 
-For the non-streaming silent request, a displayed TTFT can be equal or close to the full request duration. It must not be compared directly with streaming primary-model TTFT
+对于非 Streaming 的 Silent 请求，页面显示的 TTFT 可能等于或接近完整请求耗时，不能直接拿来和 Streaming Primary 请求的 TTFT 比较
 
-### OpenTelemetry does not currently preserve the pair as one trace
+### 当前 OTEL 不能自动把 Primary 和 Silent 关联成同一条 Trace
 
-OpenTelemetry is a suitable data model for this comparison because a primary model span and a silent model span could be represented under one request trace, with duration, status, token usage, and request role stored as span attributes
+OpenTelemetry 很适合承载这种对比关系。理想情况下，同一个客户端请求对应一条 Trace，Primary 和 Silent 分别是其中的两个模型调用 Span；Span 上记录请求角色、模型、耗时、状态和 Token 数。Grafana 配合 Tempo 等 Trace Backend 后，就可以筛选慢请求并从指标跳转到具体 Trace
 
-The current silent-experiment implementation does not provide that structure automatically:
+但是，仅配置 OTEL Exporter 还不能自动得到上述关系。当前 Silent 实现包含以下逻辑：
 
-- The silent request runs in a background thread with a new event loop
-- `_get_silent_experiment_kwargs` removes `metadata.litellm_parent_otel_span` before starting the silent request because a live span object cannot safely cross the event-loop boundary
-- The silent call receives a fresh LiteLLM call ID and logging context
-- The current OpenTelemetry GenAI span attributes do not expose the general LiteLLM `session_id` as a first-class comparison attribute
-- No span link is created between the primary span and the silent span
+```python
+def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
+    from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
-Enabling an OTLP exporter alone will therefore produce useful individual LLM spans, but it will not reliably make the existing primary and silent calls queryable as one trace. The trace relationship or an explicit shadow-pair correlation must first be propagated across the background boundary
+    silent_kwargs = safe_deep_copy(kwargs)
+    original_metadata = kwargs.get("metadata")
+    if original_metadata is not None and silent_kwargs.get("metadata") is original_metadata:
+        silent_kwargs["metadata"] = dict(original_metadata)
 
-## User impact
+    if "metadata" not in silent_kwargs:
+        silent_kwargs["metadata"] = {}
 
-Operators can see that one model has a worse aggregate P95 or P99, but they cannot quickly move from that signal to a ranked list of the affected paired requests
+    silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
+    silent_kwargs["metadata"]["is_silent_experiment"] = True
+    silent_kwargs["stream"] = False
+    silent_kwargs.pop("litellm_call_id", None)
+    silent_kwargs.pop("litellm_logging_obj", None)
+    silent_kwargs.pop("standard_logging_object", None)
+    return silent_kwargs
+```
 
-The current investigation path requires exporting or querying Spend Logs, joining rows by session ID, removing cache hits and duplicates, and calculating duration ratios manually. This makes performance regressions, missing silent requests, and provider-specific failures slower to detect and diagnose
+这里的“主动移除”指的是 LiteLLM 代码明确执行了：
 
-## Reproduction and validation criteria
+```python
+silent_kwargs["metadata"].pop("litellm_parent_otel_span", None)
+```
 
-The observability failure is present when all of the following are true:
+这不是用户配置删除了 Span，也不是 OTEL Exporter 丢失了数据。原因是 Silent 请求在后台线程和新的 Event Loop 中运行，不能安全地把一个仍然存活的 OTel Span 对象直接传到另一个 Event Loop。代码为了避免跨线程或跨 Event Loop 使用 Span 导致竞态和上下文损坏，先删除了这个对象
 
-1. A request is configured with a `silent_model`
-2. Request Logs contain primary and silent rows that can sometimes be correlated by session ID
-3. Prometheus exposes separate aggregate latency series for both models
-4. No existing metric query or trace query can return a ranked, exact list of paired requests by duration ratio or duration delta
-5. Cache hits, failures, or duplicate calls cause UI row counts or unique-session counts to diverge
+这个保护逻辑本身有合理目的，但副作用是 Silent 调用失去了原有的父 Span 引用。同时代码还为 Silent 调用创建新的 LiteLLM Call ID 和 Logging Context，并且没有创建指向 Primary Span 的 Span Link。因此当前行为是：
 
-Any future fix should be validated against successful pairs, primary-only and silent-only records, provider failures without a deployment ID, cache hits, retries, duplicate calls, streaming primary calls, and non-streaming silent calls
+- Primary 模型调用可以出现在原始 HTTP 请求 Trace 中
+- Silent 模型调用可能成为另一条 Trace，或者成为无法和原请求稳定关联的 Span
+- 两边虽然可能在 Spend Logs 中保留相同 Session ID，但当前 OTEL GenAI Span 没有把通用 LiteLLM Session ID 作为默认的一等对比属性
+- Grafana/Tempo 无法仅依靠现有 Trace 结构稳定地列出同一次请求的 Primary/Silent 差异
+
+所以，配置 OTEL 的目标确实可以是让 Grafana 更快发现并定位问题，但当前还缺少跨后台边界的关联信息。需要传播可序列化的 OTel Context，或者显式创建 Span Link，并增加稳定的 Shadow Pair ID 和 `request_role=primary|silent` 属性。不能直接跨线程传递 live Span 对象
+
+## 对 Grafana 的预期能力
+
+完成关联后，Grafana 应提供两层入口：
+
+1. Metrics 面板快速发现哪段时间、哪一对模型发生整体退化，包括配对成功率、失败率、耗时差值和耗时比值分布
+2. Trace 面板按 Shadow Pair ID 展示 Primary 和 Silent Span，并快速筛选耗时比值大、耗时差值大、状态不一致或缺失一侧的请求
+
+推荐的使用路径是：
+
+```text
+Prometheus 指标发现异常时间段或模型组合
+    -> 通过 Exemplar 或 Data Link 跳转到 Grafana Trace
+    -> 在同一条 Trace 中对比 Primary 和 Silent Span
+    -> 必要时继续跳转到对应 Request Logs
+```
+
+OTEL 主要解决单次请求的上下文、时序和下钻定位，Prometheus 主要解决整体趋势和告警。两者结合后，Grafana 才能同时做到快速发现和快速定位
+
+## 用户影响
+
+当前只能从 Grafana 看出某个模型的整体 P95 或 P99 较差，无法马上得到按差异程度排序的配对请求列表
+
+目前的排查方式需要查询或导出 Spend Logs，按 Session ID 关联记录，排除 Cache Hit 和重复调用，再手工计算耗时比值。这会延长性能退化、Silent 请求缺失和 Provider 失败的发现与定位时间
+
+## 复现与验收范围
+
+同时满足以下条件时，可以确认该可观测性问题仍然存在：
+
+1. 请求配置了 `silent_model`
+2. Request Logs 中部分 Primary 和 Silent 记录可以通过 Session ID 关联
+3. Prometheus 中存在两边模型各自的聚合延迟指标
+4. 现有 Metrics 或 Trace 查询无法返回按照耗时比值或耗时差值排序的精确配对请求
+5. Cache Hit、失败或重复调用导致 UI 日志数或唯一 Session 数量出现差异
+
+未来的修复需要覆盖：正常成功配对、Primary 单边记录、Silent 单边记录、缺少 Deployment ID 的 Provider 失败、Cache Hit、重试、重复调用、Streaming Primary 请求，以及非 Streaming Silent 请求
