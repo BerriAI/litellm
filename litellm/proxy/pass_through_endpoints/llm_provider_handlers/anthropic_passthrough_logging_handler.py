@@ -255,12 +255,20 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
             )
 
+            # Resolve base_model from the router deployment config (server-side
+            # source of truth) instead of request metadata, which is
+            # client-controllable on pass-through endpoints.
+            base_model = AnthropicPassthroughLoggingHandler._get_base_model_from_router(
+                router_model_id=router_model_id
+            )
+
             response_cost = litellm.completion_cost(
                 completion_response=litellm_model_response,
                 model=model_for_cost,
                 custom_llm_provider=custom_llm_provider,
                 custom_pricing=custom_pricing,
                 router_model_id=router_model_id,
+                base_model=base_model,
             )
 
             kwargs["response_cost"] = response_cost
@@ -295,6 +303,20 @@ class AnthropicPassthroughLoggingHandler:
         except Exception as e:
             verbose_proxy_logger.exception("Error creating Anthropic response logging payload: %s", e)
             return kwargs
+
+    @staticmethod
+    def _get_base_model_from_router(router_model_id: Optional[str]) -> Optional[str]:
+        """Read model_info.base_model from the router deployment config."""
+        if router_model_id is None:
+            return None
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            return None
+        deployment = llm_router.get_deployment(model_id=router_model_id)
+        if deployment is None or deployment.model_info is None:
+            return None
+        return deployment.model_info.base_model
 
     @staticmethod
     def _handle_logging_anthropic_collected_chunks(
