@@ -14,6 +14,7 @@ maps (litellm.completion_cost, batch_cost_calculator), the tokenizer
 deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
+import json
 import os
 import sys
 
@@ -24,6 +25,10 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 import litellm
 import litellm.batches.batch_utils as bu
 from litellm.types.utils import Usage
+
+
+def _jsonl(rows) -> bytes:
+    return ("\n".join(json.dumps(r) for r in rows)).encode("utf-8")
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -151,36 +156,36 @@ def test_parse_jsonl_malformed_raises():
 
 
 # =========================================================================== #
-# _iter_batch_input_lines / _iter_batch_input_entries  (JSONL parsing)
+# _iter_jsonl_lines / _iter_jsonl_entries  (JSONL parsing)
 # =========================================================================== #
 
 
 def test_iter_input_lines_skips_blank_and_strips():
     content = b'{"a":1}\n\n  \n{"b":2}\n'
-    assert list(bu._iter_batch_input_lines(content)) == [b'{"a":1}', b'{"b":2}']
+    assert list(bu._iter_jsonl_lines(content)) == [b'{"a":1}', b'{"b":2}']
 
 
 def test_iter_input_lines_handles_missing_trailing_newline():
-    assert list(bu._iter_batch_input_lines(b'{"a":1}')) == [b'{"a":1}']
+    assert list(bu._iter_jsonl_lines(b'{"a":1}')) == [b'{"a":1}']
 
 
 def test_iter_input_lines_empty():
-    assert list(bu._iter_batch_input_lines(b"")) == []
+    assert list(bu._iter_jsonl_lines(b"")) == []
 
 
 def test_iter_input_entries_parses_each_row():
     content = b'{"body": {"model": "gpt-4o"}}\n{"body": {"model": "claude-3"}}\n'
-    assert list(bu._iter_batch_input_entries(content)) == [
+    assert list(bu._iter_jsonl_entries(content)) == [
         {"body": {"model": "gpt-4o"}},
         {"body": {"model": "claude-3"}},
     ]
 
 
 def test_iter_input_entries_raises_on_malformed_line():
-    # _iter_batch_input_entries raises on a bad row; callers that must survive
-    # bad rows iterate _iter_batch_input_lines and parse per-row instead.
+    # _iter_jsonl_entries raises on a bad row; callers that must survive
+    # bad rows iterate _iter_jsonl_lines and parse per-row instead.
     with pytest.raises(Exception):
-        list(bu._iter_batch_input_entries(b'{"ok":1}\nnot-json\n'))
+        list(bu._iter_jsonl_entries(b'{"ok":1}\nnot-json\n'))
 
 
 # =========================================================================== #
@@ -945,3 +950,186 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     assert cost == pytest.approx(1000 * 3e-6 / 2 + 8000 * 3e-7 / 2 + 2000 * 3.75e-6 / 2 + 200 * 15e-6 / 2)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (11000, 200, 11200)
     assert models == ["claude-sonnet-4-5"]
+
+
+# =========================================================================== #
+# calculate_batch_cost_and_usage_from_content  (single-pass streaming variant)
+# =========================================================================== #
+
+
+def _usage_tuple(u: Usage):
+    return (u.prompt_tokens, u.completion_tokens, u.total_tokens)
+
+
+@pytest.mark.asyncio
+async def test_from_content_matches_list_openai(monkeypatch):
+    rows = [
+        _success_row(model="gpt-4o", usage=_usage(10, 5)),
+        _failed_row(),
+        _success_row(model="gpt-4o-mini", usage=_usage(3, 7)),
+    ]
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.25)
+
+    list_cost, list_usage, list_models = await bu.calculate_batch_cost_and_usage(
+        file_content_dictionary=rows, custom_llm_provider="openai"
+    )
+    stream_cost, stream_usage, stream_models = await bu.calculate_batch_cost_and_usage_from_content(
+        file_content=_jsonl(rows), custom_llm_provider="openai"
+    )
+
+    assert stream_cost == list_cost == pytest.approx(0.5)
+    assert _usage_tuple(stream_usage) == _usage_tuple(list_usage) == (13, 12, 25)
+    assert stream_models == list_models == ["gpt-4o", "gpt-4o-mini"]
+
+
+@pytest.mark.asyncio
+async def test_from_content_matches_list_anthropic_end_to_end():
+    rows = [
+        _anthropic_succeeded_row(usage=_anthropic_usage(1000, 200, cache_creation=2000, cache_read=8000)),
+        _anthropic_errored_row(),
+    ]
+    kwargs = dict(
+        custom_llm_provider="anthropic",
+        model_name="claude-sonnet-4-5",
+        model_info=_ANTHROPIC_MODEL_INFO,  # type: ignore[arg-type]
+    )
+
+    list_cost, list_usage, list_models = await bu.calculate_batch_cost_and_usage(
+        file_content_dictionary=rows, **kwargs  # type: ignore[arg-type]
+    )
+    stream_cost, stream_usage, stream_models = await bu.calculate_batch_cost_and_usage_from_content(
+        file_content=_jsonl(rows), **kwargs  # type: ignore[arg-type]
+    )
+
+    assert stream_cost == pytest.approx(list_cost)
+    assert _usage_tuple(stream_usage) == _usage_tuple(list_usage) == (11000, 200, 11200)
+    assert stream_models == list_models == ["claude-sonnet-4-5"]
+
+
+@pytest.mark.asyncio
+async def test_from_content_preserves_cache_token_usage(monkeypatch):
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.0)
+    rows = [
+        _success_row(
+            model="gpt-4o",
+            usage={
+                "prompt_tokens": 100,
+                "completion_tokens": 10,
+                "total_tokens": 110,
+                "prompt_tokens_details": {"cached_tokens": 40},
+            },
+        )
+    ]
+    _, list_usage, _ = await bu.calculate_batch_cost_and_usage(
+        file_content_dictionary=rows, custom_llm_provider="openai"
+    )
+    _, stream_usage, _ = await bu.calculate_batch_cost_and_usage_from_content(
+        file_content=_jsonl(rows), custom_llm_provider="openai"
+    )
+    assert stream_usage.model_dump() == list_usage.model_dump()
+    assert list_usage.model_dump().get("cache_read_input_tokens") == 40
+
+
+@pytest.mark.asyncio
+async def test_from_content_empty_output_is_zero(monkeypatch):
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: pytest.fail("no rows -> no cost calc"))
+    cost, usage, models = await bu.calculate_batch_cost_and_usage_from_content(
+        file_content=b"", custom_llm_provider="openai"
+    )
+    assert cost == 0.0
+    assert _usage_tuple(usage) == (0, 0, 0)
+    assert models == []
+
+
+def test_from_content_peak_below_list_build(monkeypatch):
+    import asyncio
+    import gc
+    import tracemalloc
+
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.0)
+    blob = "A" * 4000
+    rows = [_success_row(model="gpt-4o", usage=_usage(1, 1), data=blob) for _ in range(3000)]
+    raw = _jsonl(rows)
+    del rows
+
+    def _measure(fn):
+        gc.collect()
+        tracemalloc.start()
+        try:
+            fn()
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return peak
+
+    def _stream():
+        return asyncio.run(
+            bu.calculate_batch_cost_and_usage_from_content(
+                file_content=raw, custom_llm_provider="openai", model_name="gpt-4o"
+            )
+        )
+
+    def _build_list():
+        dicts = bu._get_file_content_as_dictionary(raw)
+        return asyncio.run(
+            bu.calculate_batch_cost_and_usage(
+                file_content_dictionary=dicts, custom_llm_provider="openai", model_name="gpt-4o"
+            )
+        )
+
+    stream_peak = _measure(_stream)
+    list_peak = _measure(_build_list)
+    assert stream_peak < list_peak * 0.5, (
+        f"streaming peak {stream_peak} is not a clear win over list build {list_peak} "
+        f"(ratio {stream_peak / list_peak:.2f})"
+    )
+
+
+# =========================================================================== #
+# Debug-logging guard: json.dumps of the full batch structure must not run
+# unless DEBUG is enabled (issue #33955)
+# =========================================================================== #
+
+
+def _spy_on_json_dumps(monkeypatch):
+    from litellm.batches import batch_utils
+
+    calls = {"n": 0}
+    real_dumps = json.dumps
+
+    def _spy(*args, **kwargs):
+        calls["n"] += 1
+        return real_dumps(*args, **kwargs)
+
+    monkeypatch.setattr(batch_utils.json, "dumps", _spy)
+    return calls
+
+
+def test_parse_jsonl_skips_json_dumps_when_debug_disabled(monkeypatch):
+    from litellm._logging import verbose_logger
+
+    monkeypatch.setattr(verbose_logger, "isEnabledFor", lambda level: False)
+    calls = _spy_on_json_dumps(monkeypatch)
+    bu._get_file_content_as_dictionary(b'{"a": 1}\n{"b": 2}')
+    assert calls["n"] == 0
+
+
+def test_parse_jsonl_serializes_when_debug_enabled(monkeypatch):
+    from litellm._logging import verbose_logger
+
+    monkeypatch.setattr(verbose_logger, "isEnabledFor", lambda level: True)
+    calls = _spy_on_json_dumps(monkeypatch)
+    bu._get_file_content_as_dictionary(b'{"a": 1}\n{"b": 2}')
+    assert calls["n"] == 1
+
+
+def test_cost_calc_skips_json_dumps_when_debug_disabled(monkeypatch):
+    from litellm._logging import verbose_logger
+
+    monkeypatch.setattr(verbose_logger, "isEnabledFor", lambda level: False)
+    monkeypatch.setattr(litellm, "completion_cost", lambda **kw: 0.0)
+    calls = _spy_on_json_dumps(monkeypatch)
+    bu._get_batch_job_cost_from_file_content(
+        [_success_row(model="gpt-4o", usage=_usage(1, 1))], custom_llm_provider="openai"
+    )
+    assert calls["n"] == 0

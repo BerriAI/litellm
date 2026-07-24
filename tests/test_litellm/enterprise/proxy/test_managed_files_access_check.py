@@ -195,6 +195,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
 
     # Mock proxy_logging_obj — should NOT be called for file content
     mock_proxy_logging = MagicMock()
+    mock_proxy_logging.db_spend_update_writer.pod_lock_manager.redis_cache = None
     mock_managed_files_hook = MagicMock()
     mock_managed_files_hook.afile_content = AsyncMock()
     mock_managed_files_hook.store_unified_file_id = AsyncMock()

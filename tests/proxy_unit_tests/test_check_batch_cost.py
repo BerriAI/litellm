@@ -13,6 +13,12 @@ import pytest
 _IS_B64 = "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id"
 
 
+def _no_redis_proxy_logging():
+    mock = MagicMock()
+    mock.db_spend_update_writer.pod_lock_manager.redis_cache = None
+    return mock
+
+
 def _unmanaged_vertex_file_object(
     input_file_id="gs://bucket/litellm-vertex-files/publishers/google/models/gemini-2.5-flash/abc.jsonl",
     status="validating",
@@ -69,6 +75,7 @@ class TestCheckBatchCost:
     def mock_proxy_logging_obj(self):
         mock = MagicMock()
         mock.get_proxy_hook.return_value = None
+        mock.db_spend_update_writer.pod_lock_manager.redis_cache = None
         return mock
 
     @pytest.fixture
@@ -274,11 +281,7 @@ class TestCheckBatchCost:
                 return_value=mock_file_content,
             ),
             patch(
-                "litellm.batches.batch_utils._get_file_content_as_dictionary",
-                return_value=[{"id": "req-1"}],
-            ),
-            patch(
-                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage_from_content",
                 new_callable=AsyncMock,
                 return_value=(
                     0.01,
@@ -383,11 +386,7 @@ class TestCheckBatchCost:
                 return_value=mock_file_content,
             ),
             patch(
-                "litellm.batches.batch_utils._get_file_content_as_dictionary",
-                return_value=[{"id": "req-1"}],
-            ),
-            patch(
-                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage_from_content",
                 new_callable=AsyncMock,
                 return_value=(
                     0.01,
@@ -644,11 +643,7 @@ class TestCheckBatchCost:
                 return_value=mock_file_content,
             ),
             patch(
-                "litellm.batches.batch_utils._get_file_content_as_dictionary",
-                return_value=[{"id": "req-1"}],
-            ),
-            patch(
-                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage_from_content",
                 new_callable=AsyncMock,
                 return_value=(
                     0.01,
@@ -704,7 +699,7 @@ class TestUnmanagedVertexRouting:
         )
 
         return CheckBatchCost(
-            proxy_logging_obj=MagicMock(),
+            proxy_logging_obj=_no_redis_proxy_logging(),
             prisma_client=MagicMock(),
             llm_router=router,
             track_unmanaged_batch_cost=track_unmanaged,
@@ -902,11 +897,7 @@ class TestUnmanagedVertexRouting:
                 return_value=mock_file_content,
             ),
             patch(
-                "litellm.batches.batch_utils._get_file_content_as_dictionary",
-                return_value=[{"id": "req-1"}],
-            ),
-            patch(
-                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage_from_content",
                 new_callable=AsyncMock,
                 return_value=(
                     0.01,
@@ -952,7 +943,7 @@ class TestUnmanagedBedrockRouting:
         )
 
         return CheckBatchCost(
-            proxy_logging_obj=MagicMock(),
+            proxy_logging_obj=_no_redis_proxy_logging(),
             prisma_client=MagicMock(),
             llm_router=router,
             track_unmanaged_batch_cost=track_unmanaged,
@@ -1132,11 +1123,7 @@ class TestUnmanagedBedrockRouting:
                 return_value=mock_file_content,
             ),
             patch(
-                "litellm.batches.batch_utils._get_file_content_as_dictionary",
-                return_value=[{"id": "req-1"}],
-            ),
-            patch(
-                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage_from_content",
                 new_callable=AsyncMock,
                 return_value=(
                     0.02,
@@ -1221,3 +1208,120 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
 
         assert vertex_result == ("deploy-vertex", "8823717160934178816")
         assert bedrock_result == ("deploy-bedrock", TestUnmanagedBedrockRouting._ARN)
+
+
+class TestCheckBatchCostLeaderElection:
+    """Every worker process schedules check_batch_cost on the same cadence. Without
+    coordination they all download and buffer the same (potentially huge) batch
+    output files at once, the concurrency amplifier behind the OOM in issue #33955.
+
+    When a Redis-backed lock is available exactly one pod must run the poll per
+    cycle and it must release the lock afterwards; when Redis is absent the poll
+    still runs (unlocked single-pod behavior) so nothing regresses.
+    """
+
+    def _make_instance(self, pod_lock_manager):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
+
+        prisma = MagicMock()
+        prisma.db = MagicMock()
+        prisma.db.litellm_managedobjecttable = MagicMock()
+        prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=0)
+        prisma.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[])
+
+        instance = CheckBatchCost(
+            proxy_logging_obj=MagicMock(),
+            prisma_client=prisma,
+            llm_router=MagicMock(),
+            pod_lock_manager=pod_lock_manager,
+        )
+        return instance, prisma
+
+    @pytest.mark.asyncio
+    async def test_skips_poll_when_lock_not_acquired(self):
+        plm = MagicMock()
+        plm.redis_cache = MagicMock()
+        plm.acquire_lock = AsyncMock(return_value=False)
+        plm.release_lock = AsyncMock()
+
+        instance, prisma = self._make_instance(plm)
+        await instance.check_batch_cost()
+
+        plm.acquire_lock.assert_awaited_once()
+        prisma.db.litellm_managedobjecttable.find_many.assert_not_called()
+        plm.release_lock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_runs_and_releases_when_lock_acquired(self):
+        from litellm.constants import (
+            CHECK_BATCH_COST_JOB_NAME,
+            CHECK_BATCH_COST_LOCK_TTL_SECONDS,
+        )
+
+        plm = MagicMock()
+        plm.redis_cache = MagicMock()
+        plm.acquire_lock = AsyncMock(return_value=True)
+        plm.release_lock = AsyncMock()
+
+        instance, prisma = self._make_instance(plm)
+        await instance.check_batch_cost()
+
+        plm.acquire_lock.assert_awaited_once_with(
+            cronjob_id=CHECK_BATCH_COST_JOB_NAME,
+            ttl=CHECK_BATCH_COST_LOCK_TTL_SECONDS,
+        )
+        prisma.db.litellm_managedobjecttable.find_many.assert_called()
+        plm.release_lock.assert_awaited_once_with(cronjob_id=CHECK_BATCH_COST_JOB_NAME)
+
+    @pytest.mark.asyncio
+    async def test_runs_unlocked_when_no_redis(self):
+        plm = MagicMock()
+        plm.redis_cache = None
+        plm.acquire_lock = AsyncMock(return_value=True)
+        plm.release_lock = AsyncMock()
+
+        instance, prisma = self._make_instance(plm)
+        await instance.check_batch_cost()
+
+        plm.acquire_lock.assert_not_called()
+        prisma.db.litellm_managedobjecttable.find_many.assert_called()
+        plm.release_lock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_lock_released_even_if_poll_raises(self):
+        from litellm.constants import CHECK_BATCH_COST_JOB_NAME
+
+        plm = MagicMock()
+        plm.redis_cache = MagicMock()
+        plm.acquire_lock = AsyncMock(return_value=True)
+        plm.release_lock = AsyncMock()
+
+        instance, prisma = self._make_instance(plm)
+        prisma.db.litellm_managedobjecttable.find_many = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+
+        with pytest.raises(RuntimeError, match="db down"):
+            await instance.check_batch_cost()
+
+        plm.release_lock.assert_awaited_once_with(cronjob_id=CHECK_BATCH_COST_JOB_NAME)
+
+    def test_falls_back_to_shared_pod_lock_manager(self):
+        """When no lock manager is injected, CheckBatchCost reuses the shared one on
+        proxy_logging_obj (the same instance the sibling cron jobs use)."""
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
+
+        shared_lock_manager = MagicMock()
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.db_spend_update_writer.pod_lock_manager = shared_lock_manager
+
+        instance = CheckBatchCost(
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=MagicMock(),
+            llm_router=MagicMock(),
+        )
+        assert instance.pod_lock_manager is shared_lock_manager
