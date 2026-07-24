@@ -4119,6 +4119,16 @@ def _init_custom_logger_compatible_class(
             newrelic_logger = NewRelicLogger()
             _in_memory_loggers.append(newrelic_logger)
             return newrelic_logger  # type: ignore
+        elif logging_integration == "asqav":
+            from litellm.integrations.asqav import AsqavLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AsqavLogger):
+                    return callback
+
+            asqav_logger = AsqavLogger()
+            _in_memory_loggers.append(asqav_logger)
+            return asqav_logger
         return None
     except Exception as e:
         verbose_logger.exception(f"[Non-Blocking Error] Error initializing custom logger: {e}")
