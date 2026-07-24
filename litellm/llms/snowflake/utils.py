@@ -118,5 +118,41 @@ class SnowflakeBaseConfig:
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
+        return (api_base, api_key)
+
+    def chunk_parser(self, chunk: dict) -> dict:
+        """Convert Snowflake streaming chunk into OpenAI-compatible chunk.
+        Handles tool_use deltas that are otherwise dropped by the generic parser."""
+        if chunk.get("type") == "tool_use":
+            # Convert Snowflake tool_use delta to OpenAI tool_calls delta
+            # Example: chunk = {"type":"tool_use", "id":"call_xxx", "name":"get_weather", "input":""}
+            # Expected OpenAI delta structure:
+            # {
+            #   "choices": [{
+            #       "delta": {
+            #           "tool_calls": [{
+            #               "index": 0,
+            #               "id": "call_xxx",
+            #               "function": {"name": "get_weather", "arguments": ""}
+            #           }]
+            #       }
+            #   }]
+            # }
+            tool_call = {
+                "index": 0,
+                "id": chunk.get("id", ""),
+                "function": {
+                    "name": chunk.get("name", ""),
+                    "arguments": chunk.get("input", "")
+                }
+            }
+            return {
+                "choices": [{
+                    "delta": {"tool_calls": [tool_call]},
+                    "finish_reason": None,
+                    "index": 0
+                }]
+            }
+        return chunkional[str]]:
         dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
         return api_base, dynamic_api_key
