@@ -3847,10 +3847,6 @@ def get_optional_params(
                     continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
                     continue  # skip this param
-                if (
-                    k == "max_retries"
-                ):  # TODO: This is a patch. We support max retries for OpenAI, Azure. For non OpenAI LLMs we need to add support for max retries
-                    continue  # skip this param
                 # Always keeps this in elif code blocks
                 else:
                     unsupported_params[k] = non_default_params[k]
@@ -3875,6 +3871,9 @@ def get_optional_params(
     supported_params = supported_params or []
     allowed_openai_params = allowed_openai_params or []
     supported_params.extend(allowed_openai_params)
+    providers_with_retry_support = {"openai", "azure", "anthropic"}
+    if custom_llm_provider in providers_with_retry_support and "max_retries" not in supported_params:
+        supported_params.append("max_retries")
 
     _check_valid_arg(
         supported_params=supported_params or [],

@@ -11,6 +11,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Optional,
     Tuple,
     Union,
     cast,
@@ -229,8 +230,16 @@ class AnthropicChatCompletion(BaseLLM):
 
         data["stream"] = True
 
+        _stream_client = client
+        _stream_max_retries = optional_params.get("max_retries") if isinstance(optional_params, dict) else None
+        if _stream_client is None and isinstance(_stream_max_retries, int):
+            _stream_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ANTHROPIC,
+                params={"max_retries": _stream_max_retries},
+            )
+
         completion_stream, headers = await make_call(
-            client=client,
+            client=_stream_client,
             api_base=api_base,
             headers=headers,
             data=json.dumps(data),
@@ -276,7 +285,13 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client: AsyncHTTPHandler | None = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
-        async_handler = client or get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+        _async_client_params: Optional[dict] = None
+        _async_max_retries = optional_params.get("max_retries") if isinstance(optional_params, dict) else None
+        if isinstance(_async_max_retries, int):
+            _async_client_params = {"max_retries": _async_max_retries}
+        async_handler = client or get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.ANTHROPIC, params=_async_client_params
+        )
 
         try:
             response = await async_handler.post(
@@ -450,8 +465,16 @@ class AnthropicChatCompletion(BaseLLM):
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 data["stream"] = stream
+                _sync_stream_client = client
+                _sync_stream_max_retries = (
+                    optional_params.get("max_retries") if isinstance(optional_params, dict) else None
+                )
+                if _sync_stream_client is None and isinstance(_sync_stream_max_retries, int):
+                    _sync_stream_client = _get_httpx_client(
+                        params={"timeout": timeout, "max_retries": _sync_stream_max_retries}
+                    )
                 completion_stream, headers = make_sync_call(
-                    client=client,
+                    client=_sync_stream_client,
                     api_base=api_base,
                     headers=headers,  # type: ignore
                     data=json.dumps(data),
@@ -477,7 +500,11 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(params={"timeout": timeout})
+                    _sync_client_params: dict = {"timeout": timeout}
+                    _sync_max_retries = optional_params.get("max_retries")
+                    if isinstance(_sync_max_retries, int):
+                        _sync_client_params["max_retries"] = _sync_max_retries
+                    client = _get_httpx_client(params=_sync_client_params)
                 else:
                     client = client
 
