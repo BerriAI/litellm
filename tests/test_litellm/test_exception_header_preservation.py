@@ -254,6 +254,51 @@ class TestExceptionAttributes:
         assert midstream_fallback.response.status_code == 503
         assert str(midstream_fallback.response.request.url) == "https://openai.com/v1/"
 
+    def test_midstream_fallback_error_handles_non_numeric_status_code(self):
+        """
+        Custom/OpenAI-mapped exceptions can expose non-HTTP status codes like
+        "litellm_error"; MidStreamFallbackError should still be constructible.
+        """
+
+        class NonNumericStatusError(Exception):
+            status_code = "litellm_error"
+
+        midstream_error = MidStreamFallbackError(
+            message="stream broke",
+            model="gpt-4o-mini",
+            llm_provider="openai",
+            original_exception=NonNumericStatusError("rate limited"),
+        )
+
+        assert midstream_error.status_code == 503
+        assert midstream_error.response.status_code == 503
+
+    def test_midstream_fallback_error_uses_response_status_code_fallback(self):
+        """
+        If exception.status_code is malformed but response.status_code is valid,
+        preserve the underlying HTTP status.
+        """
+
+        class NonNumericStatusError(Exception):
+            status_code = "litellm_error"
+
+            def __init__(self, response: httpx.Response):
+                self.response = response
+
+        response = httpx.Response(
+            status_code=429,
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+        )
+        midstream_error = MidStreamFallbackError(
+            message="stream broke",
+            model="gpt-4o-mini",
+            llm_provider="openai",
+            original_exception=NonNumericStatusError(response=response),
+        )
+
+        assert midstream_error.status_code == 429
+        assert midstream_error.response.status_code == 429
+
 
 class TestProxyHeaderExtraction:
     """Test that proxy correctly extracts headers from exceptions."""
