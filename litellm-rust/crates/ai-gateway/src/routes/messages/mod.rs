@@ -125,6 +125,8 @@ mod tests {
     use axum::http::Request;
     use axum::http::StatusCode;
     use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+    use futures_util::stream;
+    use litellm_core::CoreResult;
     use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -132,7 +134,9 @@ mod tests {
     use tower::ServiceExt;
 
     use super::super::app;
+    use super::stream_response;
     use crate::io::realtime_pool::RealtimePool;
+    use crate::messages::MessagesStream;
     use crate::state::AppState;
 
     fn state(model: &str, api_base: String, master_key: Option<&str>) -> AppState {
@@ -398,6 +402,23 @@ mod tests {
                 .expect("upstream body is json")["stream"],
             true
         );
+    }
+
+    #[test]
+    fn transcoded_stream_response_does_not_forward_upstream_framing_headers() {
+        let response = stream_response(MessagesStream {
+            content_type: "text/event-stream".to_string(),
+            cache_control: Some("no-cache".to_string()),
+            body: Box::pin(stream::empty::<CoreResult<bytes::Bytes>>()),
+        })
+        .expect("response builds");
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "text/event-stream"
+        );
+        assert_eq!(response.headers().get(CACHE_CONTROL).unwrap(), "no-cache");
+        assert!(response.headers().get("content-length").is_none());
+        assert!(response.headers().get("content-encoding").is_none());
     }
 
     #[tokio::test]

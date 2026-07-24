@@ -93,12 +93,7 @@ pub(super) async fn execute_messages_provider_stream(
             body: truncate_error_body(&text),
         });
     }
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("text/event-stream")
-        .to_string();
+    let content_type = response_content_type(request.streaming, response.headers());
     let cache_control = response
         .headers()
         .get(reqwest::header::CACHE_CONTROL)
@@ -116,6 +111,20 @@ pub(super) async fn execute_messages_provider_stream(
         cache_control,
         body,
     })
+}
+
+fn response_content_type(
+    streaming: MessagesStreaming,
+    headers: &reqwest::header::HeaderMap,
+) -> String {
+    if matches!(streaming, MessagesStreaming::BedrockEventStream) {
+        return "text/event-stream".to_string();
+    }
+    headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("text/event-stream")
+        .to_string()
 }
 
 #[cfg_attr(not(feature = "server"), allow(dead_code))]
@@ -211,4 +220,34 @@ async fn signed_headers(
 
 fn environment_lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::response_content_type;
+    use litellm_core::messages::transformation::MessagesStreaming;
+    use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+
+    #[test]
+    fn bedrock_transcoding_uses_anthropic_sse_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/vnd.amazon.eventstream"),
+        );
+        assert_eq!(
+            response_content_type(MessagesStreaming::BedrockEventStream, &headers),
+            "text/event-stream"
+        );
+    }
+
+    #[test]
+    fn passthrough_stream_keeps_upstream_content_type() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+        assert_eq!(
+            response_content_type(MessagesStreaming::SsePassthrough, &headers),
+            "text/event-stream"
+        );
+    }
 }
