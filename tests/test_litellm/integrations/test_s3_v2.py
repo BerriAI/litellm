@@ -1564,3 +1564,39 @@ def test_download_signature_matches_wire_url_special_chars(
     _assert_signature_valid_for_wire_url(
         request_url, None, signed_headers, access_key, secret_key, method="GET"
     )
+
+
+@patch("asyncio.create_task")
+@patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
+def test_sign_s3_request_raises_when_botocore_missing(
+    mock_periodic_flush, mock_create_task
+):
+    import builtins
+
+    mock_periodic_flush.return_value = None
+    mock_create_task.return_value = None
+
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="k",
+        s3_aws_secret_access_key="s",
+        s3_region_name="us-east-1",
+    )
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "botocore.auth":
+            raise ImportError("no botocore")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        with pytest.raises(ImportError, match="Missing boto3"):
+            logger._sign_s3_request(
+                credentials=MagicMock(),
+                method="PUT",
+                url="https://test-bucket.s3.us-east-1.amazonaws.com/x.json",
+                headers={"x-amz-content-sha256": "abc"},
+                region="us-east-1",
+                data="{}",
+            )

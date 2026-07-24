@@ -309,11 +309,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return dict(aws_request.headers.items())
 
     async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement):
-        try:
-            import base64
-            import hashlib
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        import base64
+        import hashlib
+
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
 
@@ -582,10 +580,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         Returns:
             Optional[dict]: The parsed JSON object or None if not found/error
         """
-        try:
-            import hashlib
-        except ImportError:
-            raise ImportError("Missing boto3 to call S3. Run 'pip install boto3'.")
+        import hashlib
 
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
