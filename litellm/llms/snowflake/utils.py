@@ -117,6 +117,40 @@ class SnowflakeBaseConfig:
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> Tuple[Optional[str], Opt
+
+    def chunk_parser(self, chunk: dict) -> ModelResponse:
+        from litellm.utils import ModelResponse, Choices, Message, Delta
+
+        # Check if chunk contains tool_use (streaming tool call)
+        if "choices" in chunk and len(chunk["choices"]) > 0:
+            delta = chunk["choices"][0].get("delta", {})
+            if "tool_calls" in delta:
+                # Already OpenAI format, return as is
+                return chunk
+        
+        # Snowflake native streaming format: content_list may contain tool_use
+        content_list = chunk.get("content_list", [])
+        tool_calls = []
+        for item in content_list:
+            if item.get("type") == "tool_use":
+                tool_calls.append({
+                    "id": item.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": item.get("input", "")
+                    }
+                })
+        if tool_calls:
+            return {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": tool_calls
+                    },
+                    "index": 0
+                }]
+            }
+        return chunkional[str]]:
         dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
         return api_base, dynamic_api_key
