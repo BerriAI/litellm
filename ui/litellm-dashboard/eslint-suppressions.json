@@ -2964,11 +2964,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/TableHeaderSortDropdown/TableHeaderSortDropdown.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/budget_duration_dropdown.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3552,11 +3547,6 @@
   "src/components/routing_groups/RoutingGroupModal.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/components/routing_groups/RoutingGroupsTable.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/routing_groups/index.tsx": {
