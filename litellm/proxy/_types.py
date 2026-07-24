@@ -818,6 +818,7 @@ class LiteLLMRoutes(enum.Enum):
             # Customer / end-user listing (handlers already gate on
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
+            "/customer/aliases",
             "/customer/info",
             # UI Logs page detail drawer (single + session). The list endpoint
             # `/spend/logs/ui` is covered via spend_tracking_routes below.

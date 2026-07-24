@@ -232,7 +232,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         onKeyHashClick={handleKeyHashClick}
         onSessionClick={handleSessionClick}
         teams={allTeams ?? []}
-        accessToken={accessToken}
         toolbarChildren={
           <LogsTableToolbar
             startTime={startTime}

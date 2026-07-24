@@ -11,10 +11,10 @@ All /customer management endpoints
 
 #### END-USER/CUSTOMER MANAGEMENT ####
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Annotated, Any, List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import litellm
@@ -35,6 +35,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.customer_endpoints import (
     BlockUsersResponse,
+    CustomerAliasesResponse,
     CustomerResponse,
     DeleteCustomersResponse,
     UnblockUsersResponse,
@@ -781,6 +782,95 @@ async def list_end_user(
             "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(
                 str(e)
             )
+        )
+        raise handle_exception_on_proxy(e)
+
+
+def _require_customer_read_access(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "Admin-only endpoint. Your user role={}".format(user_api_key_dict.user_role)},
+        )
+
+
+@router.get(
+    "/customer/aliases",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CustomerAliasesResponse,
+)
+async def list_customer_aliases(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    page: Annotated[int, Query(ge=1, description="Page number")] = 1,
+    size: Annotated[int, Query(ge=1, le=100, description="Page size")] = 50,
+    search: Annotated[
+        str | None,
+        Query(description="Case-insensitive partial match on the customer id"),
+    ] = None,
+) -> CustomerAliasesResponse:
+    """
+    [Admin-only] List customer ids with pagination and optional search.
+
+    Lightweight counterpart to `/customer/list`, for UI filter dropdowns.
+    `/customer/list` returns every customer with its budget and object-permission
+    relations eagerly loaded, which is unusable once LiteLLM_EndUserTable grows
+    (end-user rows are created automatically per distinct `user` seen in traffic).
+
+    Example curl:
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/aliases?page=1&size=50&search=acme' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        _require_customer_read_access(user_api_key_dict)
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        where_parts = ["user_id IS NOT NULL", "user_id != ''"]
+        query_params: List[Any] = []
+
+        if search:
+            # Escape LIKE metacharacters so a literal '_' or '%' matches itself.
+            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            query_params.append(f"%{escaped}%")
+            where_parts.append(f"user_id ILIKE ${len(query_params)} ESCAPE '\\'")
+
+        where_sql = " AND ".join(where_parts)
+
+        # size + 1: one row beyond the page reveals has_more without a COUNT(*).
+        limit_params = query_params + [size + 1, (page - 1) * size]
+        aliases_sql = (
+            f"SELECT user_id"
+            f' FROM "LiteLLM_EndUserTable"'
+            f" WHERE {where_sql}"
+            f" ORDER BY user_id ASC"
+            f" LIMIT ${len(limit_params) - 1} OFFSET ${len(limit_params)}"
+        )
+        rows = await prisma_client.db.query_raw(aliases_sql, *limit_params)
+        aliases: List[str] = [row["user_id"] for row in rows if row.get("user_id")]
+
+        return CustomerAliasesResponse(
+            aliases=aliases[:size],
+            current_page=page,
+            size=size,
+            has_more=len(aliases) > size,
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.management_endpoints.customer_endpoints.list_customer_aliases(): "
+            "Exception occured - {}".format(str(e))
         )
         raise handle_exception_on_proxy(e)
 

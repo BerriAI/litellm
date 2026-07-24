@@ -782,3 +782,160 @@ def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
         "deleted_customers": 2,
         "message": "Successfully deleted customers with ids: ['c1', 'c2']",
     }
+
+
+def _mock_alias_rows(mock_prisma_client, user_ids: List[str]) -> AsyncMock:
+    query_raw = AsyncMock(return_value=[{"user_id": uid} for uid in user_ids])
+    mock_prisma_client.db.query_raw = query_raw
+    return query_raw
+
+
+def test_customer_aliases_projects_only_user_id_and_never_loads_relations(
+    mock_prisma_client, mock_user_api_key_auth
+):
+    """The whole point of this endpoint: no full rows, no eager relations.
+
+    /customer/list does find_many(include={budget, object_permission}) over the
+    entire table; this must stay a single-column, bounded query.
+    """
+    query_raw = _mock_alias_rows(mock_prisma_client, ["a", "b"])
+
+    response = client.get("/customer/aliases", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "aliases": ["a", "b"],
+        "current_page": 1,
+        "size": 50,
+        "has_more": False,
+    }
+    mock_prisma_client.db.litellm_endusertable.find_many.assert_not_called()
+    sql = query_raw.call_args.args[0]
+    assert "SELECT user_id" in sql
+    assert '"LiteLLM_EndUserTable"' in sql
+    assert "JOIN" not in sql.upper()
+    assert "COUNT(" not in sql.upper()
+
+
+def test_customer_aliases_fetches_one_extra_row_and_trims_it(mock_prisma_client, mock_user_api_key_auth):
+    """has_more is derived from a size+1 fetch; the sentinel row must not leak."""
+    query_raw = _mock_alias_rows(mock_prisma_client, [f"u{i}" for i in range(4)])
+
+    response = client.get("/customer/aliases?size=3", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["aliases"] == ["u0", "u1", "u2"]
+    assert body["has_more"] is True
+    assert query_raw.call_args.args[1:] == (4, 0)
+
+
+def test_customer_aliases_reports_no_more_pages_on_a_short_page(mock_prisma_client, mock_user_api_key_auth):
+    _mock_alias_rows(mock_prisma_client, ["u0", "u1"])
+
+    response = client.get("/customer/aliases?size=3", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    assert response.json()["has_more"] is False
+
+
+def test_customer_aliases_reports_no_more_pages_on_an_exactly_full_page(mock_prisma_client, mock_user_api_key_auth):
+    _mock_alias_rows(mock_prisma_client, ["u0", "u1", "u2"])
+
+    response = client.get("/customer/aliases?size=3", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    assert response.json()["aliases"] == ["u0", "u1", "u2"]
+    assert response.json()["has_more"] is False
+
+
+def test_customer_aliases_offsets_by_page(mock_prisma_client, mock_user_api_key_auth):
+    query_raw = _mock_alias_rows(mock_prisma_client, [])
+
+    response = client.get("/customer/aliases?page=3&size=25", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 200
+    assert response.json()["current_page"] == 3
+    assert query_raw.call_args.args[1:] == (26, 50)
+
+
+def test_customer_aliases_without_search_issues_no_like_filter(mock_prisma_client, mock_user_api_key_auth):
+    query_raw = _mock_alias_rows(mock_prisma_client, [])
+
+    client.get("/customer/aliases", headers={"Authorization": "Bearer k"})
+
+    sql = query_raw.call_args.args[0]
+    assert "ILIKE" not in sql.upper()
+    assert query_raw.call_args.args[1:] == (51, 0)
+
+
+def test_customer_aliases_search_escapes_like_metacharacters(mock_prisma_client, mock_user_api_key_auth):
+    """End-user ids routinely contain '_'; an unescaped one is a wildcard.
+
+    Without ESCAPE, searching 'device_id' also matches 'deviceXid'.
+    """
+    query_raw = _mock_alias_rows(mock_prisma_client, [])
+
+    client.get("/customer/aliases?search=device_id%25", headers={"Authorization": "Bearer k"})
+
+    sql = query_raw.call_args.args[0]
+    assert "ILIKE $1 ESCAPE" in sql
+    assert query_raw.call_args.args[1] == r"%device\_id\%%"
+    assert query_raw.call_args.args[2:] == (51, 0)
+
+
+def test_customer_aliases_search_placeholder_precedes_limit_and_offset(mock_prisma_client, mock_user_api_key_auth):
+    query_raw = _mock_alias_rows(mock_prisma_client, [])
+
+    client.get("/customer/aliases?search=acme&size=10", headers={"Authorization": "Bearer k"})
+
+    sql = query_raw.call_args.args[0]
+    assert "LIMIT $2 OFFSET $3" in sql
+    assert query_raw.call_args.args[1:] == ("%acme%", 11, 0)
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ],
+)
+def test_customer_aliases_rejects_non_admin_roles(mock_prisma_client, role):
+    """Mirrors /customer/list: this exposes every customer id on the proxy."""
+    _mock_alias_rows(mock_prisma_client, ["secret-customer"])
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="u", user_role=role)
+    try:
+        response = client.get("/customer/aliases", headers={"Authorization": "Bearer k"})
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 401
+    assert "secret-customer" not in response.text
+
+
+def test_customer_aliases_allows_admin_viewer(mock_prisma_client):
+    _mock_alias_rows(mock_prisma_client, ["a"])
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+    try:
+        response = client.get("/customer/aliases", headers={"Authorization": "Bearer k"})
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert response.json()["aliases"] == ["a"]
+
+
+def test_customer_aliases_caps_page_size(mock_prisma_client, mock_user_api_key_auth):
+    """An unbounded size would reintroduce the very problem this endpoint fixes."""
+    _mock_alias_rows(mock_prisma_client, [])
+
+    response = client.get("/customer/aliases?size=100000", headers={"Authorization": "Bearer k"})
+
+    assert response.status_code == 422

@@ -1,8 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
+import { useInfiniteEndUserAliases } from "@/app/(dashboard)/hooks/customers/useEndUserAliases";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { DataTableFilterField } from "@/components/shared/DataTable";
@@ -20,7 +20,6 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import type { Team } from "../key_team_helpers/key_list";
-import { allEndUsersCall } from "../networking";
 import { ERROR_CODE_OPTIONS } from "./constants";
 import { LOG_FILTER_IDS } from "./log_filter_logic";
 
@@ -145,37 +144,35 @@ function ModelFilterField({ value, onChange }: { value: string; onChange: (value
   );
 }
 
-function EndUserFilterField({
-  value,
-  onChange,
-  accessToken,
-}: {
-  value: string;
-  onChange: (value: string | undefined) => void;
-  accessToken: string;
-}) {
-  const { data } = useQuery<string[]>({
-    queryKey: ["logFilterEndUsers", accessToken],
-    queryFn: async () => {
-      const endUsers = await allEndUsersCall(accessToken);
-      return (endUsers ?? []).flatMap((endUser: { user_id?: string }) =>
-        typeof endUser.user_id === "string" ? [endUser.user_id] : [],
-      );
-    },
-    enabled: accessToken !== "",
-  });
-
-  const options = useMemo<SearchSelectOption[]>(
-    () => (data ?? []).map((userId) => ({ label: userId, value: userId })),
-    [data],
+function EndUserFilterField({ value, onChange }: { value: string; onChange: (value: string | undefined) => void }) {
+  const [search, setSearch] = useState("");
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteEndUserAliases(
+    PAGE_SIZE,
+    emptyToUndefined(search),
   );
+
+  const options = useMemo<SearchSelectOption[]>(() => {
+    const seen = new Set<string>();
+    return (data?.pages ?? []).flatMap((page) =>
+      page.aliases.flatMap((alias) => {
+        if (!alias || seen.has(alias)) return [];
+        seen.add(alias);
+        return [{ label: alias, value: alias }];
+      }),
+    );
+  }, [data]);
 
   return (
     <DataTableFilterField label="End User">
-      <SearchSelect
+      <PaginatedSearchSelect
         options={options}
         value={value}
         onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onSearchChange={setSearch}
+        onLoadMore={() => void fetchNextPage()}
+        hasNextPage={hasNextPage}
+        isLoading={isLoading}
+        isFetchingNextPage={isFetchingNextPage}
         placeholder="Search an end user"
         emptyText="No end users found"
       />
@@ -236,10 +233,9 @@ interface RequestLogsFiltersProps {
   get: (columnId: string) => unknown;
   set: (columnId: string, value: unknown) => void;
   teams: Team[];
-  accessToken: string;
 }
 
-export function RequestLogsFilters({ get, set, teams, accessToken }: RequestLogsFiltersProps) {
+export function RequestLogsFilters({ get, set, teams }: RequestLogsFiltersProps) {
   const valueOf = (id: string): string => asString(get(id));
   const setter = (id: string) => (next: string | undefined) => set(id, next);
 
@@ -273,11 +269,7 @@ export function RequestLogsFilters({ get, set, teams, accessToken }: RequestLogs
         teamId={valueOf(LOG_FILTER_IDS.TEAM_ID)}
       />
 
-      <EndUserFilterField
-        value={valueOf(LOG_FILTER_IDS.END_USER)}
-        onChange={setter(LOG_FILTER_IDS.END_USER)}
-        accessToken={accessToken}
-      />
+      <EndUserFilterField value={valueOf(LOG_FILTER_IDS.END_USER)} onChange={setter(LOG_FILTER_IDS.END_USER)} />
 
       <ErrorCodeFilterField value={valueOf(LOG_FILTER_IDS.ERROR_CODE)} onChange={setter(LOG_FILTER_IDS.ERROR_CODE)} />
 
