@@ -14,7 +14,7 @@ import secrets
 
 import orjson
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, NamedTuple, List, Optional, Protocol, Tuple, Union, cast
+from typing import Any, Dict, NamedTuple, List, Optional, Protocol, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -58,6 +58,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
@@ -1538,6 +1539,13 @@ async def _user_api_key_auth_builder(
                             check_cache_only=True,
                         ).resolve(hashed_token=hash_token(api_key))
                     )
+                # Key-cache entries are written only after the proxy validated a
+                # virtual key or the master key, but via_virtual_key is exclude=True
+                # so serialization drops it; restore it at this trusted boundary.
+                # The UI-login JWT fallback below constructs its token from a
+                # decrypted blob, not this cache, and stays unmarked.
+                if isinstance(valid_token, UserAPIKeyAuth):
+                    valid_token.via_virtual_key = True
             except Exception:
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
@@ -1655,6 +1663,7 @@ async def _user_api_key_auth_builder(
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
+            _user_api_key_obj.via_virtual_key = True
 
             return _user_api_key_obj
 
@@ -2064,7 +2073,7 @@ async def _user_api_key_auth_builder(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            return await _return_user_api_key_auth_obj(
+            virtual_key_auth_obj = await _return_user_api_key_auth_obj(
                 user_obj=user_obj,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
@@ -2072,6 +2081,8 @@ async def _user_api_key_auth_builder(
                 route=route,
                 start_time=start_time,
             )
+            virtual_key_auth_obj.via_virtual_key = True
+            return virtual_key_auth_obj
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
             e=e,
@@ -2485,6 +2496,7 @@ async def _reserve_budget_after_common_checks(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
         skip_user_budget_on_team_key=general_settings.get("skip_user_budget_on_team_key") is True,
+        fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
     )
 
 
@@ -2854,19 +2866,11 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        # Validate every fallback model name reachable by this request.
-        # All three fields (``fallbacks``, ``context_window_fallbacks``,
-        # ``content_policy_fallbacks``) are forwarded to the router as
-        # per-request kwargs whether they appear at the top level of
-        # ``request_data`` or nested under ``router_settings_override``.
-        # Both surfaces must be validated against the API key's model
-        # allowlist or a caller can smuggle a restricted model. VERIA-44.
-        fallback_names: List[str] = []
-        override_settings = request_data.get("router_settings_override")
-        for _fb_key in ROUTER_FALLBACK_FIELDS:
-            fallback_names.extend(iter_router_fallback_model_names(request_data.get(_fb_key)))
-            if isinstance(override_settings, dict):
-                fallback_names.extend(iter_router_fallback_model_names(override_settings.get(_fb_key)))
+        fallback_names = tuple(
+            name
+            for target in iter_request_fallback_targets(request_data)
+            if (name := _fallback_target_model_name(target)) is not None
+        )
 
         for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
             await can_key_call_model(
@@ -2882,36 +2886,14 @@ async def _enforce_key_and_fallback_model_access(
             )
 
 
-ROUTER_FALLBACK_FIELDS: Tuple[str, ...] = (
-    "fallbacks",
-    "context_window_fallbacks",
-    "content_policy_fallbacks",
-)
-
-
-def iter_router_fallback_model_names(fallbacks: Any) -> Iterator[str]:
-    """Yield leaf model names from any of the supported fallbacks shapes.
-
-    Handles the simple top-level shape (``str`` or ``{"model": str}``) and
-    the nested router-config shape (``[{primary: [fallback_list]}]``).
-    """
-    if not isinstance(fallbacks, list):
-        return
-    for entry in fallbacks:
-        if isinstance(entry, str):
-            yield entry
-        elif isinstance(entry, dict):
-            if isinstance(entry.get("model"), str):
-                yield entry["model"]
-                continue
-            for fallback_list in entry.values():
-                if not isinstance(fallback_list, list):
-                    continue
-                for m in fallback_list:
-                    if isinstance(m, str):
-                        yield m
-                    elif isinstance(m, dict) and isinstance(m.get("model"), str):
-                        yield m["model"]
+def _fallback_target_model_name(target: object) -> str | None:
+    if isinstance(target, str):
+        return target
+    if isinstance(target, dict):
+        model = target.get("model")
+        if isinstance(model, str):
+            return model
+    return None
 
 
 async def _run_post_custom_auth_checks(

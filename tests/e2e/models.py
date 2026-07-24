@@ -6,6 +6,7 @@ response validates without mirroring every proxy field. No untyped dicts.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
 
@@ -115,6 +116,18 @@ class KeyInfoResponse(BaseModel):
 # ---------- customers ----------
 
 
+class CustomerNewBody(BaseModel):
+    user_id: str
+
+
+class CustomerResponse(BaseModel):
+    user_id: str | None = None
+
+
+class CustomerInfoParams(BaseModel):
+    end_user_id: str
+
+
 class CustomerDeleteBody(BaseModel):
     user_ids: list[str]
 
@@ -126,9 +139,26 @@ class ChatMetadata(BaseModel):
     tags: list[str] | None = None
 
 
+class ImageUrl(BaseModel):
+    url: str
+
+
+class TextContentPart(BaseModel):
+    type: str = "text"
+    text: str
+
+
+class ImageContentPart(BaseModel):
+    type: str = "image_url"
+    image_url: ImageUrl
+
+
+ContentPart = TextContentPart | ImageContentPart
+
+
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str | list[ContentPart]
 
 
 class CacheControl(BaseModel):
@@ -167,6 +197,19 @@ class ChatTool(BaseModel):
     function: ChatToolFunction
 
 
+class McpChatTool(BaseModel):
+    """An MCP server attached to a chat completion (OpenAI `type: "mcp"` tool).
+    `server_url` selects the gateway-registered server by its alias suffix; with
+    `require_approval="never"` the gateway lists, calls, and feeds the server's
+    tools back to the model in one agentic turn."""
+
+    type: Literal["mcp"] = "mcp"
+    server_url: str
+    require_approval: str
+    server_label: str | None = None
+    allowed_tools: list[str] | None = None
+
+
 class ChatBody(BaseModel):
     model: str
     messages: list[ChatMessage]
@@ -177,9 +220,10 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
-    tools: list[ChatTool] | None = None
+    tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    response_format: dict[str, object] | None = None
 
 
 class RouterSettingsOverride(BaseModel):
@@ -203,9 +247,55 @@ class ReliabilityChatBody(ChatBody):
     router_settings_override: RouterSettingsOverride | None = None
 
 
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    function: ToolCallFunction = ToolCallFunction()
+
+
+class McpToolFunctionRef(BaseModel):
+    name: str
+
+
+class McpListedTool(BaseModel):
+    """One entry of `mcp_list_tools`: a tool the gateway listed from the
+    attached MCP server and exposed to the model, in OpenAI function shape."""
+
+    function: McpToolFunctionRef | None = None
+
+
+class McpToolCall(BaseModel):
+    """One entry of `mcp_tool_calls`: a tool the model asked the gateway to run."""
+
+    function: McpToolFunctionRef | None = None
+
+
+class McpCallResult(BaseModel):
+    """One entry of `mcp_call_results`: what the gateway got back from executing
+    a tool upstream on the caller's behalf."""
+
+    name: str | None = None
+    result: str | None = None
+
+
+class McpResponseMetadata(BaseModel):
+    """`choices[].message.provider_specific_fields` MCP section: which tools the
+    gateway listed from the attached server, which the model called, and their
+    results. Populated only when the completion drove an MCP server."""
+
+    mcp_list_tools: list[McpListedTool] | None = None
+    mcp_tool_calls: list[McpToolCall] | None = None
+    mcp_call_results: list[McpCallResult] | None = None
+
+
 class OutMessage(BaseModel):
     content: str | None = None
     reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    provider_specific_fields: McpResponseMetadata | None = None
 
 
 class ChatChoice(BaseModel):
@@ -216,6 +306,10 @@ class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
 
 
+class CompletionTokensDetails(BaseModel):
+    reasoning_tokens: int | None = None
+
+
 class Usage(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -223,6 +317,7 @@ class Usage(BaseModel):
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
 
 class ChatResponse(BaseModel):
@@ -308,6 +403,36 @@ class CountTokensResponse(BaseModel):
     whose body lacks it fails validation instead of passing vacuously."""
 
     input_tokens: int
+
+
+# ---------- mcp servers ----------
+
+
+class McpServerCreateBody(BaseModel):
+    """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
+    `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
+    are discovered and registered via DCR when left unset. `allow_all_keys`
+    false scopes the server to keys granted it through object_permission."""
+
+    alias: str
+    url: str
+    transport: str = "http"
+    allow_all_keys: bool = True
+    auth_type: str | None = None
+    oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
+    authorization_url: str | None = None
+    token_url: str | None = None
+
+
+class McpServerInfo(BaseModel):
+    """Response of POST /v1/mcp/server and GET /v1/mcp/server/{server_id}."""
+
+    server_id: str
+    alias: str | None = None
+    url: str | None = None
+    auth_type: str | None = None
+    oauth2_flow: str | None = None
+    allow_all_keys: bool | None = None
 
 
 class EmbedBody(BaseModel):

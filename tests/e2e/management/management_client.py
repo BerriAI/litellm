@@ -14,6 +14,10 @@ from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, Un
 from models import (
     ChatBody,
     ChatMessage,
+    CustomerDeleteBody,
+    CustomerInfoParams,
+    CustomerNewBody,
+    CustomerResponse,
     KeyBlockBody,
     KeyDeleteBody,
     KeyGenerateBody,
@@ -269,6 +273,35 @@ class ManagementClient:
                 response_type=UserNewResponse,
             )
         ).user_id
+
+    def create_customer(self, user_id: str) -> str:
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/customer/new",
+                headers=self.proxy.transport.master,
+                json=CustomerNewBody(user_id=user_id),
+                response_type=CustomerResponse,
+            )
+        )
+        return user_id
+
+    def customer_info(self, end_user_id: str) -> CustomerResponse:
+        return unwrap(
+            self.proxy.transport.get(
+                "/customer/info",
+                headers=self.proxy.transport.master,
+                params=CustomerInfoParams(end_user_id=end_user_id),
+                response_type=CustomerResponse,
+            )
+        )
+
+    def delete_customer(self, user_id: str) -> None:
+        _ = self.proxy.transport.post(
+            "/customer/delete",
+            headers=self.proxy.transport.master,
+            json=CustomerDeleteBody(user_ids=[user_id]),
+            response_type=NoBody,
+        )
 
     def update_user(self, body: UserUpdateBody) -> None:
         _ = unwrap(

@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -659,6 +659,87 @@ describe("KeyEditView", () => {
       expect(onSubmitMock).toHaveBeenCalled();
       const callArgs = onSubmitMock.mock.calls[0][0];
       expect(callArgs.budget_limits).toEqual([]);
+    });
+  });
+
+  it("should persist a canonical budget_duration value, not a word-form the backend cannot parse", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item");
+    expect(resetBudgetItem).not.toBeNull();
+    const combobox = within(resetBudgetItem as HTMLElement).getByRole("combobox");
+    await userEvent.click(combobox);
+
+    const weeklyOption = await screen.findByText("weekly");
+    await userEvent.click(weeklyOption);
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("7d");
+    });
+  });
+
+  it("should keep an existing canonical budget_duration canonical when saved untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("30d");
+    });
+  });
+
+  it("should heal a legacy word-form budget_duration to canonical when saved untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const legacyKeyData = { ...MOCK_KEY_DATA, budget_duration: "monthly" };
+    renderWithProviders(
+      <KeyEditView
+        keyData={legacyKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("30d");
     });
   });
 

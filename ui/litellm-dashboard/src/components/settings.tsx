@@ -288,7 +288,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const resolveScope = (destinationName: string, access?: CredentialAccess): ResolvedScope => {
     const teams = new Set<string>();
     const orgs = new Set<string>();
-    let global = access?.global === true;
+    const global = access?.global === true;
     for (const teamId of access?.teams ?? []) teams.add(teamAlias(teamId));
     for (const orgId of access?.orgs ?? []) orgs.add(orgAlias(orgId));
     for (const team of teamsData ?? []) {

@@ -226,6 +226,7 @@ from litellm.constants import (
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
+    CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -303,6 +304,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
+from litellm.proxy.config_resolvers import resolve_fields
+from litellm.proxy.config_resolvers.alerting import (
+    EMAIL_DESCRIPTORS,
+    SLACK_DESCRIPTORS,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -1158,9 +1164,9 @@ _OPENAPI_HTTP_METHODS = {
 # Credentials surfaced by `/get/config/callbacks` in the alerting block: the
 # full Slack incoming-webhook URL is itself a credential, and the SMTP
 # password is a service password. Masked on read so plaintext never reaches
-# the UI. Kept here at module scope to match the analogous
-# `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
-# and cache endpoint files.
+# the UI. Kept here at module scope to match the analogous descriptor
+# `is_secret` flags in litellm.proxy.config_resolvers and the
+# `_CACHE_SENSITIVE_FIELDS` constant in the cache endpoint file.
 _ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
 
 
@@ -1970,6 +1976,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+cli_sso_session_cache = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=user_api_key_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: Optional[RedisCache] = None  # redis cache used for tracking spend, tpm/rpm limits
@@ -3696,12 +3703,21 @@ def _build_redis_usage_cache_from_environment() -> RedisCache | None:
 def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: bool) -> None:
     """
     Wires an established coordination Redis into the proxy-level caches that
-    consume it directly: the spend counter cache, the cluster-wide config
-    cache, and (only when opted in) the virtual-key auth cache.
+    consume it directly: the spend counter cache, the CLI SSO login-session
+    cache, the cluster-wide config cache, and (only when opted in) the
+    virtual-key auth cache.
+
+    The CLI SSO login-session cache is always backed by Redis when available so
+    that the browser SSO flow behind `lite login` survives landing on different
+    workers; it must not be gated behind enable_redis_auth_cache.
     """
     spend_counter_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=litellm.default_redis_ttl,
+    )
+    cli_sso_session_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(
@@ -4617,6 +4633,11 @@ class ProxyConfig:
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, native_background_mode={native_background_mode}, ttl={polling_cache_ttl}{reset_color_code}"
+                    )
+                elif key == "max_ui_session_budget":
+                    litellm.max_ui_session_budget = float(value) if value is not None else None
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.max_ui_session_budget={litellm.max_ui_session_budget}{reset_color_code}"
                     )
                 elif key == "default_team_settings":
                     for idx, team_setting in enumerate(value):  # run through pydantic validation
@@ -13451,7 +13472,7 @@ async def fallback_login(request: Request):
 @router.post("/login", include_in_schema=False)  # hidden since this is a helper for UI sso login
 async def login(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
     from litellm.proxy.utils import get_custom_url
 
     form = await request.form()
@@ -13474,13 +13495,7 @@ async def login(request: Request):
     )
 
     # Generate JWT token
-    import jwt
-
-    jwt_token = jwt.encode(
-        cast(dict, returned_ui_token_object),
-        cast(str, master_key),
-        algorithm="HS256",
-    )
+    jwt_token = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
     # Build redirect URL
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
@@ -13490,16 +13505,51 @@ async def login(request: Request):
         litellm_dashboard_ui += "/ui/"
     litellm_dashboard_ui += "?login=success"
 
+    # Honor a same-origin return_to preserved by the sign-in page (e.g. the aggregate DCR connect flow's
+    # authorize round-trip), mirroring the SSO callback; otherwise land on the dashboard. Gated by
+    # _is_same_origin_return_path (strictly relative path) so it can never be an open redirect, and the
+    # one-shot cookie is cleared after use.
+    from litellm.proxy.management_endpoints.ui_sso import _sso_return_to_redirect
+
+    # Resume through the SAME resumer the SSO callback uses, rather than a second, narrower arm.
+    # _persist_return_to_cookie stores both shapes it accepts (a relative same-origin path AND a
+    # control_plane_url-matching absolute URL); honoring only the relative one here silently dropped
+    # the control-plane case, landing the user on the dashboard. One function decides how a stored
+    # return_to is honored for EVERY sign-in branch, so the write and read sets cannot diverge: it
+    # sets the token cookie on the same-origin arm and hands off via a one-time login code on the
+    # cross-origin arm, and clears the one-shot cookie in both.
+    cp_return_to = request.cookies.get("litellm_cp_return_to")
+    if cp_return_to:
+        try:
+            resumed = await _sso_return_to_redirect(
+                return_to=cp_return_to,
+                jwt_token=jwt_token,
+                redis_usage_cache=redis_usage_cache,
+                user_api_key_cache=user_api_key_cache,
+            )
+        except Exception:  # noqa: BLE001  # resuming must NEVER block a completed sign-in
+            # The symmetric half of _persist_return_to_cookie's "never raises" contract. The resumer
+            # rejects a return_to that no longer matches control_plane_url (a config change between
+            # the cookie's write and this read), and the user has ALREADY authenticated here —
+            # failing their login over a stale one-shot cookie is the worst possible outcome. Land
+            # on the dashboard instead; the cookie is cleared below either way.
+            verbose_proxy_logger.info("Ignoring stale litellm_cp_return_to cookie; landing on dashboard")
+            resumed = None
+        if resumed is not None:
+            return resumed
+
     # Create redirect response with cookie
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     redirect_response.set_cookie(key="token", value=jwt_token)
+    if cp_return_to:
+        redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
 
 
 @router.post("/v2/login", include_in_schema=False)  # hidden helper for UI logins via API
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -13520,13 +13570,7 @@ async def login_v2(request: Request):
             premium_user=premium_user,
         )
 
-        import jwt
-
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            cast(str, master_key),
-            algorithm="HS256",
-        )
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
         if litellm_dashboard_ui.endswith("/"):
@@ -13570,7 +13614,7 @@ async def login_v2(request: Request):
 )  # control-plane login — always returns token in body for cross-origin use
 async def login_v3(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -13599,13 +13643,7 @@ async def login_v3(request: Request):
             premium_user=premium_user,
         )
 
-        import jwt
-
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            cast(str, master_key),
-            algorithm="HS256",
-        )
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
         if litellm_dashboard_ui.endswith("/"):
@@ -14914,10 +14952,11 @@ GeneralSettingsUILiteLLMValue = Union[float, bool, str, None]
 
 
 class GeneralSettingsUILiteLLMFieldSpec(TypedDict):
-    type: Literal["Float", "Boolean", "Select"]
+    type: Literal["Float", "Dollar", "Boolean", "Select"]
     description: str
     options: NotRequired[tuple[str, ...]]
     tab: NotRequired[str]  # Admin UI sub-tab this field renders under; None groups it with the rest
+    default: NotRequired[float]  # reset/clear restores this instead of None; fields whose None means fail-open set it
 
 
 _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec] = {
@@ -14943,21 +14982,32 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: dict[str, GeneralSettingsUILiteLLMFieldSpec
         "tab": "prompt_caching",
         "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
     },
+    "max_ui_session_budget": {
+        "type": "Dollar",
+        "default": 1.0,
+        "description": (
+            "USD spend cap for each dashboard login session; covers LLM calls made from the dashboard "
+            "such as the playground and auto router Test Connection. Each login starts a fresh session "
+            "with this budget. Clearing restores the $1 default."
+        ),
+    },
 }
 
 
 def _general_settings_ui_litellm_default(
-    field_type: Literal["Float", "Boolean", "Select"],
+    spec: GeneralSettingsUILiteLLMFieldSpec,
 ) -> GeneralSettingsUILiteLLMValue:
     """The value a field falls back to when it is cleared or reset."""
-    return False if field_type == "Boolean" else None
+    if "default" in spec:
+        return spec["default"]
+    return False if spec["type"] == "Boolean" else None
 
 
 def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
     spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
     field_type = spec["type"]
     if value is None or value == "":
-        return _general_settings_ui_litellm_default(field_type)
+        return _general_settings_ui_litellm_default(spec)
     match field_type:
         case "Boolean":
             if not isinstance(value, bool):
@@ -14979,6 +15029,13 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> 
                 raise HTTPException(
                     status_code=400,
                     detail={"error": f"{field_name} must be a number in (0, 1] or empty"},
+                )
+            return float(value)
+        case "Dollar":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"{field_name} must be a positive dollar amount or empty"},
                 )
             return float(value)
         case _:
@@ -15003,7 +15060,7 @@ async def _persist_general_settings_ui_litellm_field(
 async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
     config = await proxy_config.get_config()
     before_value = config.get("litellm_settings", {}).get(field_name)
-    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]["type"])
+    default_value = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name])
     setattr(litellm, field_name, default_value)
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
@@ -15178,7 +15235,7 @@ async def get_config_list(
     )
     for litellm_field_name, spec in _GENERAL_SETTINGS_UI_LITELLM_FIELDS.items():
         current_value: GeneralSettingsUILiteLLMValue = getattr(litellm, litellm_field_name, None)
-        default_value = _general_settings_ui_litellm_default(spec["type"])
+        default_value = _general_settings_ui_litellm_default(spec)
         stored_in_db_litellm: Optional[bool]
         if litellm_field_name in db_litellm_settings:
             stored_in_db_litellm = True
@@ -15456,14 +15513,10 @@ async def get_config(
         _alerting = _general_settings.get("alerting", [])
         alerting_data = []
         if "slack" in _alerting:
-            _slack_vars = [
-                "SLACK_WEBHOOK_URL",
-            ]
-            _slack_env_vars = {
-                _var: (value if (value := environment_variables.get(_var)) is not None else os.getenv(_var))
-                for _var in _slack_vars
-            }
-            _slack_env_vars = _apply_alerting_env_role_gate(_slack_env_vars, is_full_admin)
+            _slack_values, _ = resolve_fields(
+                SLACK_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True
+            )
+            _slack_env_vars = _apply_alerting_env_role_gate(_slack_values, is_full_admin)
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
@@ -15479,19 +15532,8 @@ async def get_config(
                 }
             )
         # pass email alerting vars
-        _email_vars = [
-            "SMTP_HOST",
-            "SMTP_PORT",
-            "SMTP_USERNAME",
-            "SMTP_PASSWORD",
-            "SMTP_SENDER_EMAIL",
-            "TEST_EMAIL_ADDRESS",
-            "EMAIL_LOGO_URL",
-            "EMAIL_SUPPORT_CONTACT",
-        ]
-        _email_env_vars = _apply_alerting_env_role_gate(
-            {_var: environment_variables.get(_var) for _var in _email_vars}, is_full_admin
-        )
+        _email_values, _ = resolve_fields(EMAIL_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True)
+        _email_env_vars = _apply_alerting_env_role_gate(_email_values, is_full_admin)
 
         alerting_data.append(
             {

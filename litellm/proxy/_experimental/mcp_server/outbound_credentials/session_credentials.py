@@ -149,6 +149,7 @@ class SessionRefreshOpened(BaseModel):
     model_config = ConfigDict(frozen=True)
     tag: Literal["opened"] = "opened"
     principal: SessionPrincipal
+    jti: str
 
 
 class SessionRefreshInvalid(BaseModel):
@@ -187,4 +188,4 @@ def open_session_refresh_bearer(
         return SessionRefreshInvalid()
     if opened.principal.client_id != expected_client_id:
         return SessionRefreshInvalid()
-    return SessionRefreshOpened(principal=opened.principal)
+    return SessionRefreshOpened(principal=opened.principal, jti=opened.jti)
