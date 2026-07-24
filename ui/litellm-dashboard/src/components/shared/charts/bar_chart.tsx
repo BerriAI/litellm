@@ -104,6 +104,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
             fill={fills[i]}
             stackId={stack ? "stack" : undefined}
             isAnimationActive={false}
+            className={onValueChange ? "cursor-pointer" : undefined}
             onClick={
               onValueChange
                 ? (item: { payload?: TDatum }) => {
