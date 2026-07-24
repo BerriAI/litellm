@@ -919,9 +919,73 @@ def test_normalize_resource_contents_blob_with_metadata():
     result = _normalize_resource_contents(contents)
 
     assert len(result) == 1
-    assert result[0].content == "aGVsbG8="
+    assert result[0].content == b"hello"
+    assert isinstance(result[0].content, bytes)
     assert result[0].mime_type == "image/png"
     assert result[0].meta == meta
+
+
+def test_normalize_resource_contents_blob_round_trips_to_blob_resource_contents():
+    """A BlobResourceContents must normalize to a `bytes` content value so
+    downstream serialization preserves the binary/text discriminator (issue
+    #32330). ReadResourceContents uses `str` for text and `bytes` for blob —
+    forwarding the raw base64 `str` collapses both branches into text."""
+    pytest.importorskip("mcp.server.lowlevel.helper_types")
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from mcp.server.lowlevel.helper_types import ReadResourceContents
+
+    contents = [
+        BlobResourceContents(
+            uri="https://example.com/image.png",
+            blob="aGVsbG8=",
+            mimeType="image/png",
+            meta=None,
+        )
+    ]
+
+    normalized = _normalize_resource_contents(contents)
+
+    assert len(normalized) == 1
+    entry = normalized[0]
+    assert isinstance(entry, ReadResourceContents)
+    assert isinstance(entry.content, bytes), (
+        f"blob must normalize to bytes for the binary/text discriminator, "
+        f"got {type(entry.content).__name__}: {entry.content!r}"
+    )
+    assert entry.content == b"hello"
+    assert entry.mime_type == "image/png"
+
+
+def test_normalize_resource_contents_blob_invalid_base64_raises():
+    """Malformed upstream base64 should surface as a clear error rather than
+    be silently passed through as text content."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    contents = [
+        BlobResourceContents(
+            uri="https://example.com/bad.bin",
+            blob="!!!not-base64!!!",
+            mimeType="application/octet-stream",
+            meta=None,
+        )
+    ]
+
+    import binascii
+
+    with pytest.raises((binascii.Error, ValueError)):
+        _normalize_resource_contents(contents)
 
 
 def test_normalize_resource_contents_preserves_empty_metadata():
