@@ -20,6 +20,7 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm.router import _copy_custom_pricing_fields
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
@@ -31,6 +32,27 @@ def _restore_model_cost_entries(original_entries):
         else:
             litellm.model_cost[key] = value
     _invalidate_model_cost_lowercase_map()
+
+
+def test_copy_custom_pricing_fields_preserves_declared_and_arbitrary_threshold_fields():
+    """Copy supported pricing fields without copying unrelated LiteLLM params."""
+    model_info = {}
+    litellm_params = LiteLLM_Params(
+        model="openai/gpt-4o-mini",
+        api_key="fake-key",
+        input_cost_per_token=1e-6,
+        input_cost_per_token_above_32k_tokens=9e-6,
+    )
+
+    _copy_custom_pricing_fields(
+        model_info=model_info,
+        litellm_params=litellm_params,
+    )
+
+    assert model_info == {
+        "input_cost_per_token": 1e-6,
+        "input_cost_per_token_above_32k_tokens": 9e-6,
+    }
 
 
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
