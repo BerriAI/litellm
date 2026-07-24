@@ -1,4 +1,5 @@
 import { render, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HourlySavingsResponse, ToolSpendResponse } from "@/components/networking";
 
@@ -26,6 +27,9 @@ vi.mock("@/components/shared/charts", () => ({
   ),
   BarChart: ({ data, categories }: { data: unknown; categories: string[] }) => (
     <div data-testid="bar-chart" data-categories={categories.join(",")} data-series={JSON.stringify(data)} />
+  ),
+  CustomLegend: ({ categories }: { categories: readonly string[] }) => (
+    <div data-testid="chart-legend">{categories.join(",")}</div>
   ),
   DEFAULT_COLOR_CYCLE: ["emerald", "blue", "violet", "amber"],
 }));
@@ -136,16 +140,50 @@ describe("UsageTab", () => {
     expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
   });
 
-  it("builds a per-day time series and per-driver donut from the daily rows", () => {
-    const { getByTestId } = renderWith([
-      day("2026-07-12", { compression_savings_spend: 0.04, prompt_caching_savings_spend: 0.006 }),
-      day("2026-07-13", { compression_savings_spend: 0.1, prompt_caching_savings_spend: 0.01 }),
-    ]);
+  const twoDays = () => [
+    day("2026-07-12", { compression_savings_spend: 0.04, prompt_caching_savings_spend: 0.006 }),
+    day("2026-07-13", { compression_savings_spend: 0.1, prompt_caching_savings_spend: 0.01 }),
+  ];
 
-    const series = JSON.parse(getByTestId("area-chart").getAttribute("data-series") ?? "[]");
+  it("opens on a running total, so each point is everything saved so far", () => {
+    const { getByTestId } = renderWith(twoDays());
+
+    const series = readSeries(getByTestId("area-chart"));
     expect(series).toHaveLength(2);
     expect(series[0]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
+    expect(series[1].Compression).toBeCloseTo(0.14, 5);
+    expect(series[1]["Prompt caching"]).toBeCloseTo(0.016, 5);
+  });
+
+  it("drops back to the raw per-interval readings on the other tab", async () => {
+    const { getByRole, getByTestId } = renderWith(twoDays());
+
+    await userEvent.click(getByRole("tab", { name: "Per day" }));
+
+    const series = readSeries(getByTestId("area-chart"));
+    expect(series[0]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
     expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.01 });
+  });
+
+  it("names the interval tab after the granularity actually on screen", async () => {
+    mockGetHourlySavings.mockResolvedValue(hourlyResponse(fullDayOfBuckets()));
+    const oneDay = new Date(2026, 6, 23);
+    const { getByRole, findByRole } = renderWith([], { from: oneDay, to: oneDay });
+
+    expect(await findByRole("tab", { name: "Per hour" })).toBeInTheDocument();
+    expect(() => getByRole("tab", { name: "Per day" })).toThrow();
+  });
+
+  it("says what the line means and over what range", async () => {
+    const { getByText, getByRole } = renderWith(twoDays());
+
+    expect(getByText("Running total saved \u00b7 Jul 1 \u2013 Jul 14")).toBeInTheDocument();
+    await userEvent.click(getByRole("tab", { name: "Per day" }));
+    expect(getByText("Saved per day \u00b7 Jul 1 \u2013 Jul 14")).toBeInTheDocument();
+  });
+
+  it("builds the per-driver donut from the range totals, not the running total", () => {
+    const { getByTestId } = renderWith(twoDays());
 
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([

@@ -172,6 +172,51 @@ export const shouldUseHourlySavings = (from: Date | undefined, to: Date | undefi
   return span >= 1 && span <= HOURLY_SAVINGS_MAX_SPAN_DAYS;
 };
 
+export type SavingsAccumulation = "cumulative" | "per-interval";
+
+// A type alias, not an interface: only aliases get the implicit index signature
+// that the chart wrappers' `Record<string, unknown>` datum bound requires.
+export type SavingsPoint = {
+  date: string;
+  Compression: number;
+  "Prompt caching": number;
+};
+
+export const SAVINGS_SERIES = ["Compression", "Prompt caching"] as const;
+
+/**
+ * Running total of each series across the selected window. The total restarts
+ * at the beginning of the range rather than carrying in earlier spend, which is
+ * what "running total saved, <range>" claims on the card.
+ */
+export const toCumulative = (points: readonly SavingsPoint[]): SavingsPoint[] =>
+  points.reduce<SavingsPoint[]>((acc, point) => {
+    const previous = acc[acc.length - 1];
+    return [
+      ...acc,
+      {
+        date: point.date,
+        Compression: (previous?.Compression ?? 0) + point.Compression,
+        "Prompt caching": (previous?.["Prompt caching"] ?? 0) + point["Prompt caching"],
+      },
+    ];
+  }, []);
+
+/** "Jul 16 – Jul 23", collapsing to a single date when the range is one day. */
+export const formatRangeLabel = (from: Date | undefined, to: Date | undefined): string => {
+  if (!from || !to) return "";
+  const short = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const start = short(from);
+  const end = short(to);
+  return start === end ? start : `${start} – ${end}`;
+};
+
+/**
+ * Dots mark each reading, as in the design. Past this many readings they crowd
+ * into a solid band and stop being readable, so the line carries it alone.
+ */
+export const MAX_POINTS_WITH_DOTS = 31;
+
 /**
  * Buckets arrive as naive local wall-clock stamps ("2026-07-23T14:00"); they are
  * already on the viewer's clock, so they are read apart rather than parsed as

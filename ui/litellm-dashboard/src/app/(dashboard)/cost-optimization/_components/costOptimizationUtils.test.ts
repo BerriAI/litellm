@@ -6,10 +6,12 @@ import {
   buildDailyToolSeries,
   computeCacheLeakage,
   formatHourBucket,
+  formatRangeLabel,
   isAnthropicModel,
   localIsoDay,
   shouldUseHourlySavings,
   spanInDays,
+  toCumulative,
   topToolsBySpend,
 } from "./costOptimizationUtils";
 
@@ -281,5 +283,51 @@ describe("formatHourBucket", () => {
 
   it("passes an unrecognized bucket through instead of rendering NaN", () => {
     expect(formatHourBucket("garbage", false)).toBe("garbage");
+  });
+});
+
+describe("toCumulative", () => {
+  const point = (date: string, compression: number, caching: number) => ({
+    date,
+    Compression: compression,
+    "Prompt caching": caching,
+  });
+
+  it("turns each reading into everything saved up to that point", () => {
+    const running = toCumulative([point("Jul 1", 1, 10), point("Jul 2", 2, 20), point("Jul 3", 3, 30)]);
+    expect(running.map((p) => p.Compression)).toEqual([1, 3, 6]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([10, 30, 60]);
+  });
+
+  it("accumulates each driver on its own, so one flat series cannot lift the other", () => {
+    const running = toCumulative([point("Jul 1", 0, 5), point("Jul 2", 0, 5)]);
+    expect(running.map((p) => p.Compression)).toEqual([0, 0]);
+    expect(running.map((p) => p["Prompt caching"])).toEqual([5, 10]);
+  });
+
+  it("never falls, even across a quiet interval", () => {
+    const running = toCumulative([point("Jul 1", 4, 0), point("Jul 2", 0, 0), point("Jul 3", 1, 0)]);
+    expect(running.map((p) => p.Compression)).toEqual([4, 4, 5]);
+  });
+
+  it("keeps the labels and length of the readings it was given", () => {
+    const running = toCumulative([point("9am", 1, 1), point("10am", 1, 1)]);
+    expect(running.map((p) => p.date)).toEqual(["9am", "10am"]);
+    expect(toCumulative([])).toEqual([]);
+  });
+});
+
+describe("formatRangeLabel", () => {
+  it("reads as a range across days", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 16), new Date(2026, 6, 23))).toBe("Jul 16 \u2013 Jul 23");
+  });
+
+  it("collapses to one date when both ends are the same day", () => {
+    expect(formatRangeLabel(new Date(2026, 6, 23), new Date(2026, 6, 23))).toBe("Jul 23");
+  });
+
+  it("is empty until both ends are picked", () => {
+    expect(formatRangeLabel(undefined, new Date(2026, 6, 23))).toBe("");
+    expect(formatRangeLabel(new Date(2026, 6, 23), undefined)).toBe("");
   });
 });
