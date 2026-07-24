@@ -204,11 +204,6 @@ general_settings:
   # configured for the batched model. Defaults to false.
   # track_unmanaged_batch_cost: true
 
-# for /v1/files (vector store upload, batches, etc.)
-files_settings:
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
-
 sandbox_tools:
   - sandbox_tool_name: e2b_sandbox
     litellm_params:

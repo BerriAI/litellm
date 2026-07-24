@@ -1,8 +1,8 @@
-"""Vendor §11.1 auth security on LLM routes (LIT-4778).
+"""Chat Authorization header matrix on LLM routes (LIT-4778).
 
 Virtual-key chat must reject missing and malformed Authorization headers before
 any provider call. These cases sit next to the existing valid/invalid key check
-and pin the full bearer-token failure matrix from the vendor brief.
+and pin the bearer-token failure matrix.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class RawAuthorizationHeaders(BaseModel):
 
 
 def _register_model(proxy: ProxyClient, resources: ResourceManager) -> str:
-    model = f"e2e-auth-sec-{unique_marker()}"
+    model = f"e2e-auth-headers-{unique_marker()}"
     model_id = proxy.create_model(
         model,
         LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
@@ -56,7 +56,7 @@ def _assert_auth_denied(result: StreamingResponse, context: str) -> None:
     )
 
 
-class TestChatAuthSecurity:
+class TestChatAuthHeaders:
     @pytest.mark.covers("other.auth.llm_chat.missing_header_denied")
     def test_missing_authorization_header_is_denied(
         self, proxy: ProxyClient, resources: ResourceManager

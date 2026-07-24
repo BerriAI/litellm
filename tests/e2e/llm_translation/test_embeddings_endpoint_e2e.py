@@ -12,15 +12,15 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
-from endpoints_client import EmbeddingsResult, EndpointsClient
-from lifecycle import ResourceManager
-from models import LiteLLMParamsBody
-from vendor_contract import (
+from e2e_http import (
     assert_client_error,
     assert_error_or_server_known,
     require_success_or_provider_denied,
+    require_successful_call,
 )
+from endpoints_client import EmbeddingsResult, EndpointsClient
+from lifecycle import ResourceManager
+from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 

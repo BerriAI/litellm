@@ -10,11 +10,10 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap
+from e2e_http import NoBody, unwrap, assert_auth_denied
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from vendor_contract import assert_auth_denied
 
 pytestmark = pytest.mark.e2e
 

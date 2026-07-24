@@ -7,19 +7,18 @@ missing messages and invalid model handling without crashing the proxy.
 from __future__ import annotations
 
 import pytest
+import requests
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-import requests
-
-from lifecycle import ResourceManager
-from models import LiteLLMParamsBody
-from proxy_client import ProxyClient
-from vendor_contract import (
+from e2e_http import (
     assert_client_error,
     assert_error_or_server_known,
     require_success_or_provider_denied,
 )
+from lifecycle import ResourceManager
+from models import LiteLLMParamsBody
+from proxy_client import ProxyClient
 
 pytestmark = pytest.mark.e2e
 

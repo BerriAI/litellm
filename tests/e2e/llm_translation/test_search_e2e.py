@@ -12,10 +12,9 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap
+from e2e_http import NoBody, unwrap, assert_client_error, assert_error_or_server_known
 from lifecycle import ResourceManager
 from proxy_client import ProxyClient
-from vendor_contract import assert_client_error, assert_error_or_server_known
 
 pytestmark = pytest.mark.e2e
 

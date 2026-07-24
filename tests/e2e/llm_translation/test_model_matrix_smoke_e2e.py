@@ -11,11 +11,10 @@ from dataclasses import dataclass
 import pytest
 
 from e2e_config import unique_marker
-from e2e_http import StreamingResponse, UnknownApiError, unwrap
+from e2e_http import StreamingResponse, UnknownApiError, unwrap, is_provider_account_denied
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from proxy_client import ProxyClient
-from vendor_contract import is_provider_account_denied
 
 pytestmark = pytest.mark.e2e
 

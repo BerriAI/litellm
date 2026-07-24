@@ -14,7 +14,14 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
+from e2e_http import (
+    assert_client_error,
+    assert_error_or_server_known,
+    assert_not_server_error,
+    is_client_error,
+    require_success_or_provider_denied,
+    require_successful_call,
+)
 from endpoints_client import (
     EndpointsClient,
     FunctionParameterProperty,
@@ -26,13 +33,6 @@ from endpoints_client import (
 )
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
-from vendor_contract import (
-    assert_client_error,
-    assert_error_or_server_known,
-    assert_not_server_error,
-    is_client_error,
-    require_success_or_provider_denied,
-)
 
 pytestmark = pytest.mark.e2e
 

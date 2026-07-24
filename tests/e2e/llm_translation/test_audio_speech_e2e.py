@@ -12,11 +12,10 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
+from e2e_http import require_successful_call, assert_error_or_server_known
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
-from vendor_contract import assert_error_or_server_known
 
 pytestmark = pytest.mark.e2e
 

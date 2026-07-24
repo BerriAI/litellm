@@ -13,11 +13,10 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
-from e2e_http import FileUploadForm, NoBody, unwrap
+from e2e_http import FileUploadForm, NoBody, unwrap, assert_error_or_server_known
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from vendor_contract import assert_error_or_server_known
 
 pytestmark = pytest.mark.e2e
 
@@ -221,7 +220,7 @@ class TestVectorStores:
             proxy.transport.upload(
                 "/v1/files",
                 headers=proxy.transport.bearer(key),
-                form=FileUploadForm(purpose="assistants"),
+                form=FileUploadForm(purpose="assistants", custom_llm_provider="openai"),
                 filename="vs_doc.txt",
                 content=content,
                 file_content_type="text/plain",
@@ -275,7 +274,16 @@ class TestVectorStores:
                 response_type=VectorStoreSearchResponse,
             )
         )
-        assert search.data is not None, f"search returned no data field: {search}"
+        assert search.data, f"search returned no hits for marker {marker!r}: {search}"
+        hit_blob = " ".join(
+            " ".join(part.get("text", "") for part in (hit.content or []))
+            + " "
+            + (hit.filename or "")
+            for hit in search.data
+        )
+        assert marker in hit_blob or any(
+            (hit.file_id or "") == uploaded.id for hit in search.data
+        ), f"search hits must reference marker or uploaded file; marker={marker!r} hits={search.data}"
 
         deleted_file = unwrap(
             proxy.transport.delete(

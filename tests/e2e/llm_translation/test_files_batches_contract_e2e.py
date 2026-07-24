@@ -10,11 +10,10 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, Success, UnknownApiError
+from e2e_http import NoBody, Success, UnknownApiError, assert_error_or_server_known
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from vendor_contract import assert_error_or_server_known
 
 pytestmark = pytest.mark.e2e
 

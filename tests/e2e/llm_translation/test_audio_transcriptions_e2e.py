@@ -79,10 +79,12 @@ class TestAudioTranscriptions:
         match result:
             case Success():
                 pytest.fail("empty audio file must not succeed as a transcript")
-            case UnknownApiError(status_code=status):
-                assert status in range(400, 600), f"unexpected {status}"
-            case _:
+            case UnknownApiError(status_code=status) if 400 <= status < 500:
                 return
+            case UnknownApiError(status_code=status):
+                pytest.fail(f"empty audio expected 4xx, got {status}: {result}")
+            case _:
+                pytest.fail(f"empty audio unexpected result: {result}")
 
     @pytest.mark.covers("llm.audio_transcriptions.openai.input_validation.nonstream.works")
     def test_missing_model_returns_error(
@@ -101,7 +103,9 @@ class TestAudioTranscriptions:
         match result:
             case Success():
                 pytest.fail("transcription without model must not succeed")
-            case UnknownApiError(status_code=status):
-                assert status in range(400, 600), f"unexpected {status}"
-            case _:
+            case UnknownApiError(status_code=status) if 400 <= status < 500:
                 return
+            case UnknownApiError(status_code=status):
+                pytest.fail(f"missing model expected 4xx, got {status}: {result}")
+            case _:
+                pytest.fail(f"missing model unexpected result: {result}")
