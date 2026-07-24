@@ -47,6 +47,7 @@ class KeyMetadata(BaseModel):
 
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
