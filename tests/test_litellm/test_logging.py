@@ -328,3 +328,84 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+def _uvicorn_access_record(path: str) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:1234", "GET", path, "1.1", 200),
+        exc_info=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/health/liveliness",
+        "/health/liveness",
+        "/health/readiness",
+        "/health/readiness/",
+        "/health/readiness?foo=bar",
+    ],
+)
+def test_health_check_filter_drops_probe_paths(path):
+    from litellm._logging import HealthCheckAccessLogFilter
+
+    assert HealthCheckAccessLogFilter().filter(_uvicorn_access_record(path)) is False
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/chat/completions",
+        "/health",
+        "/health/readiness/details",
+        "/v1/models",
+    ],
+)
+def test_health_check_filter_keeps_other_paths(path):
+    from litellm._logging import HealthCheckAccessLogFilter
+
+    assert HealthCheckAccessLogFilter().filter(_uvicorn_access_record(path)) is True
+
+
+def test_health_check_filter_ignores_non_access_records():
+    from litellm._logging import HealthCheckAccessLogFilter
+
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="server started",
+        args=None,
+        exc_info=None,
+    )
+    assert HealthCheckAccessLogFilter().filter(record) is True
+
+
+def test_disable_health_check_access_logs_is_idempotent_and_active():
+    from litellm._logging import (
+        HealthCheckAccessLogFilter,
+        disable_health_check_access_logs,
+    )
+
+    access_logger = logging.getLogger("uvicorn.access")
+    original_filters = list(access_logger.filters)
+    try:
+        disable_health_check_access_logs()
+        disable_health_check_access_logs()
+        installed = [
+            f
+            for f in access_logger.filters
+            if isinstance(f, HealthCheckAccessLogFilter)
+        ]
+        assert len(installed) == 1
+        assert access_logger.filter(_uvicorn_access_record("/health/liveliness")) is False
+        assert access_logger.filter(_uvicorn_access_record("/chat/completions")) is True
+    finally:
+        access_logger.filters = original_filters
