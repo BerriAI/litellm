@@ -170,6 +170,56 @@ class TestGetOptionalParamsWithBaseModel:
                 base_model="azure/gpt-5",
             )
 
+    def test_should_allow_reasoning_effort_none_for_custom_deployment_with_gpt5_base_model(
+        self,
+    ):
+        """GH #31243: the reasoning_effort='none' gate must resolve via base_model."""
+        params = get_optional_params(
+            model="gpt-5.6-sol-e2e",
+            custom_llm_provider="azure",
+            reasoning_effort="none",
+            base_model="azure/gpt-5.6-sol",
+        )
+        assert params.get("reasoning_effort") == "none"
+
+    def test_should_reject_reasoning_effort_none_for_custom_deployment_without_base_model(
+        self,
+    ):
+        """GH #31243: without base_model the 'none' gate fails closed for unknown deployment names."""
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="gpt-5.6-sol-e2e",
+                custom_llm_provider="azure",
+                reasoning_effort="none",
+            )
+
+
+class TestCompletionThreadsBaseModelIntoParamGate:
+    """litellm.completion must thread the base_model kwarg into get_optional_params (GH #31243)."""
+
+    def test_should_complete_with_reasoning_effort_none_when_base_model_is_set(self):
+        response = litellm.completion(
+            model="azure/gpt-5.6-sol-e2e",
+            base_model="azure/gpt-5.6-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="none",
+            mock_response="ok",
+            api_key="fake-key",
+            api_base="https://fake.openai.azure.com",
+        )
+        assert response.choices[0].message.content == "ok"
+
+    def test_should_raise_for_reasoning_effort_none_without_base_model(self):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.completion(
+                model="azure/gpt-5.6-sol-e2e",
+                messages=[{"role": "user", "content": "hi"}],
+                reasoning_effort="none",
+                mock_response="ok",
+                api_key="fake-key",
+                api_base="https://fake.openai.azure.com",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Backward compatibility — existing patterns still work
