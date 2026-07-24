@@ -2005,6 +2005,45 @@ class TestAnthropicUsageOnlyFallback:
         assert usage.server_tool_use.web_search_requests == 1
         assert usage.server_tool_use.tool_search_requests == 3
 
+    def test_build_usage_only_recovers_cache_creation_from_message_delta(self):
+        """Bedrock Invoke lands the whole cache breakdown on the final message_delta
+        (promoted from amazon-bedrock-invocationMetrics) with nothing on message_start;
+        cache-write tokens must not be billed at zero (issue #34497)"""
+        chunks = [
+            _sse_bytes(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-3-5-haiku-20241022",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                }
+            ),
+            _sse_bytes(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 162,
+                        "cache_read_input_tokens": 421714,
+                        "cache_creation_input_tokens": 1139,
+                    },
+                }
+            ),
+        ]
+        response = (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=chunks, model="claude-3-5-haiku-20241022"
+            )
+        )
+        assert response is not None
+        usage = response.usage
+        assert usage.prompt_tokens == 422854
+        assert usage.completion_tokens == 162
+        assert usage._cache_read_input_tokens == 421714
+        assert usage._cache_creation_input_tokens == 1139
+
     @pytest.mark.parametrize(
         "event_str,expected",
         [

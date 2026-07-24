@@ -898,6 +898,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             yield pending_delta
 
 
+_INVOCATION_METRICS_TO_ANTHROPIC_USAGE: Dict[str, str] = {
+    "inputTokenCount": "input_tokens",
+    "outputTokenCount": "output_tokens",
+    "cacheReadInputTokenCount": "cache_read_input_tokens",
+    "cacheWriteInputTokenCount": "cache_creation_input_tokens",
+}
+
+
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
     def __init__(
         self,
@@ -915,14 +923,18 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
 
         Bedrock returns usage metrics using camelCase keys. Convert these to
         the Anthropic `/v1/messages` specification so callers receive a
-        consistent response shape when streaming.
+        consistent response shape when streaming. Cache counts only ever appear
+        in this camelCase block on the Invoke path, so dropping them would bill
+        cached tokens as fresh input.
         """
         amazon_bedrock_invocation_metrics = chunk_data.pop("amazon-bedrock-invocationMetrics", {})
         if amazon_bedrock_invocation_metrics:
-            anthropic_usage = {}
-            if "inputTokenCount" in amazon_bedrock_invocation_metrics:
-                anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics["inputTokenCount"]
-            if "outputTokenCount" in amazon_bedrock_invocation_metrics:
-                anthropic_usage["output_tokens"] = amazon_bedrock_invocation_metrics["outputTokenCount"]
-            chunk_data["usage"] = anthropic_usage
+            chunk_data["usage"] = {
+                **(chunk_data.get("usage") or {}),
+                **{
+                    anthropic_key: amazon_bedrock_invocation_metrics[bedrock_key]
+                    for bedrock_key, anthropic_key in _INVOCATION_METRICS_TO_ANTHROPIC_USAGE.items()
+                    if bedrock_key in amazon_bedrock_invocation_metrics
+                },
+            }
         return chunk_data
