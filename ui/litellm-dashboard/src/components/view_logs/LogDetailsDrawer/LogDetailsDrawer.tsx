@@ -127,7 +127,7 @@ export function LogDetailsDrawer({
   const { data: sessionData } = useQuery({
     queryKey: ["sessionLogs", sessionId],
     queryFn: async () => {
-      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
+      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0, aggregate: undefined };
 
       // Fetch the first page, then page through the rest so sessions with more
       // than one page of logs are shown in full (capped for safety).
@@ -155,13 +155,14 @@ export function LogDetailsDrawer({
       // Fall back to the accumulated row count (not just the first page) when the
       // backend omits total, so the truncation note reflects what was fetched.
       const total: number = firstPage.total ?? rows.length;
+      const aggregate = firstPage.aggregate;
 
       const logs = rows.map((row) => ({
         ...row,
         request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
       }));
 
-      return { logs, total };
+      return { logs, total, aggregate };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
@@ -174,6 +175,7 @@ export function LogDetailsDrawer({
   // exceeds sessionLogs.length, which drives the "showing most recent" note.
   const sessionTotalCount = sessionData?.total ?? sessionLogs.length;
   const sessionTruncated = sessionTotalCount > sessionLogs.length;
+  const sessionAggregate = sessionData?.aggregate;
 
   // Default selection for a freshly opened session: the most recent log (latest
   // startTime). The list is ordered by the selected sort mode, so the latest
@@ -265,18 +267,42 @@ export function LogDetailsDrawer({
   const statusColor = metadata.status === "failure" ? ("error" as const) : ("success" as const);
   const environment = metadata?.user_api_key_team_alias || "default";
 
-  const totalSessionCost = sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);
-  const sessionStart =
-    sessionLogs.length > 0 ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime()))) : null;
-  const sessionEnd =
-    sessionLogs.length > 0 ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime()))) : null;
+  const totalSessionCost = sessionAggregate
+    ? Number(sessionAggregate.total_spend ?? 0)
+    : sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);
+  const sessionStart = sessionAggregate?.first_start_time
+    ? new Date(sessionAggregate.first_start_time)
+    : sessionLogs.length > 0
+      ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime())))
+      : null;
+  const sessionEnd = sessionAggregate?.last_end_time
+    ? new Date(sessionAggregate.last_end_time)
+    : sessionLogs.length > 0
+      ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime())))
+      : null;
   const sessionDurationSeconds =
     sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
-  const llmCount = sessionLogs.filter(
-    (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
-  ).length;
-  const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
-  const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+
+  let llmCount: number;
+  let agentCount: number;
+  let mcpCount: number;
+  if (sessionAggregate?.call_type_counts) {
+    llmCount = 0;
+    agentCount = 0;
+    mcpCount = 0;
+    for (const [callType, count] of Object.entries(sessionAggregate.call_type_counts)) {
+      const n = Number(count) || 0;
+      if (MCP_CALL_TYPES.includes(callType)) mcpCount += n;
+      else if (AGENT_CALL_TYPES.includes(callType)) agentCount += n;
+      else llmCount += n;
+    }
+  } else {
+    llmCount = sessionLogs.filter(
+      (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+    ).length;
+    agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
+    mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+  }
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
@@ -355,7 +381,7 @@ export function LogDetailsDrawer({
                 </div>
               </div>
               <div className="mt-1 text-[11px] text-slate-500 font-mono">
-                {logsForList.length} req
+                {isSessionMode ? sessionTotalCount : logsForList.length} req
                 {[
                   isSessionMode
                     ? llmCount
