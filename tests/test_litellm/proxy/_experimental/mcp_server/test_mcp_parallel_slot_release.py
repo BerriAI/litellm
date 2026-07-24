@@ -13,8 +13,10 @@ Covers:
 1. Sequential successful tool calls on a limit-1 key never 429 and leave the
    in-flight gauge at 0 (the exact field repro).
 2. A tool call that raises still releases its slot (finally path).
-3. A downstream pre-call hook raising after the limiter acquired a slot
-   releases the slot before the exception propagates (guardrail-block path).
+3. An arbitrary (non-guardrail) exception from a custom pre-call hook after
+   the limiter's +1 releases the slot before the exception propagates.
+4. A downstream pre-call hook raising a guardrail exception after the limiter
+   acquired a slot releases the slot before the exception propagates.
 """
 
 import asyncio
@@ -55,9 +57,7 @@ def _wire_proxy_logging(monkeypatch, extra_callbacks: Optional[list] = None):
     ``proxy_hook_mapping`` (resolved by the slot release).
     """
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-    limiter = _PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=proxy_logging.internal_usage_cache
-    )
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=proxy_logging.internal_usage_cache)
     proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = limiter
     monkeypatch.setattr(litellm, "callbacks", [limiter] + (extra_callbacks or []))
     return proxy_logging, limiter
@@ -168,6 +168,53 @@ class _BlockingPreCallHook(CustomLogger):
         raise HTTPException(status_code=400, detail={"error": "blocked by guardrail"})
 
 
+class _CrashingPreCallHook(CustomLogger):
+    """Simulates a custom hook failing with an arbitrary (non-guardrail) error."""
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        raise RuntimeError("custom hook exploded")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_arbitrary_hook_error_releases_parallel_slot(monkeypatch):
+    """
+    An arbitrary (non-guardrail) exception from a custom pre-call hook after
+    the limiter's +1 must also release the slot: the exception escapes before
+    call_tool enters its release-protected try/finally, so the release has to
+    happen in pre_call_tool_check itself — for any exception type, not just
+    the expected guardrail ones.
+    """
+    proxy_logging, limiter = _wire_proxy_logging(monkeypatch, extra_callbacks=[_CrashingPreCallHook()])
+    manager = MCPServerManager()
+    server = _make_server()
+    _api_key = hash_token("sk-mcp-hook-crash")
+    user_api_key_auth = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+
+    patches = _call_tool_patches(manager, server, tool_result=MagicMock())
+    for p in patches:
+        p.start()
+    try:
+        with pytest.raises(RuntimeError):
+            await manager.call_tool(
+                server_name="test_server",
+                name="test_tool",
+                arguments={"key": "val"},
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging,
+            )
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert await _in_flight_gauge(proxy_logging, limiter, _api_key) == 0
+
+
 @pytest.mark.asyncio
 async def test_pre_call_guardrail_block_releases_parallel_slot(monkeypatch):
     """
@@ -175,9 +222,7 @@ async def test_pre_call_guardrail_block_releases_parallel_slot(monkeypatch):
     slot: ``async_post_call_failure_hook`` never runs for the MCP path, so
     ``pre_call_tool_check`` itself has to release before re-raising.
     """
-    proxy_logging, limiter = _wire_proxy_logging(
-        monkeypatch, extra_callbacks=[_BlockingPreCallHook()]
-    )
+    proxy_logging, limiter = _wire_proxy_logging(monkeypatch, extra_callbacks=[_BlockingPreCallHook()])
     manager = MCPServerManager()
     server = _make_server()
     _api_key = hash_token("sk-mcp-blocked")

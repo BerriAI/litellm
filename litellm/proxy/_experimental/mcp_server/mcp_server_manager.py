@@ -4518,24 +4518,24 @@ class MCPServerManager:
                 if modified_kwargs.get("extra_headers"):
                     hook_result["extra_headers"] = modified_kwargs["extra_headers"]
 
-        except (
-            BlockedPiiEntityError,
-            GuardrailRaisedException,
-            HTTPException,
-        ) as e:
+        except BaseException as e:
             # Release the parallel-request slot if the rate limiter acquired
             # one before a later hook in the chain raised — the exception
             # never reaches call_tool's release, and async_post_call_failure_hook
-            # does not run for the MCP path. No-op when nothing was acquired
-            # (e.g. the limiter itself raised the 429: its check is
-            # all-or-nothing and stashes no acquisition on rejection).
+            # does not run for the MCP path. Catches BaseException so an
+            # arbitrary custom-hook failure (or a cancellation) releases too,
+            # not just the expected guardrail exception types. No-op when
+            # nothing was acquired (e.g. the limiter itself raised the 429:
+            # its check is all-or-nothing and stashes no acquisition on
+            # rejection).
             if user_api_key_auth is not None:
                 await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(
                     user_api_key_auth, synthetic_llm_data
                 )
-            # Re-raise guardrail exceptions to properly fail the MCP call
-            verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
-            raise e
+            if isinstance(e, (BlockedPiiEntityError, GuardrailRaisedException, HTTPException)):
+                # Re-raise guardrail exceptions to properly fail the MCP call
+                verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
+            raise
 
         return hook_result
 
