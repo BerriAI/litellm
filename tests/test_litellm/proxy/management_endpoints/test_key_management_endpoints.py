@@ -9719,6 +9719,75 @@ async def test_update_key_max_budget_rejected_for_internal_user(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_key_budget_duration_rejected_for_internal_user(monkeypatch):
+    """A non-admin must not re-arm a key's budget window via budget_duration.
+
+    Re-arming resets accumulated spend, so it is a budget-enforcement change and
+    must be gated by _is_budget_change exactly like max_budget.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    test_hashed_token = (
+        "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    )
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "internal_user"
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.budget_duration = "7d"
+    mock_existing_key.models = []
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "internal_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_existing_key
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-internal",
+        user_id="internal_user",
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=test_hashed_token, budget_duration="30d"),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins, team admins, or org admins" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
 async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatch):
     """Internal users should still be able to update non-budget fields on their own keys."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -15105,3 +15174,24 @@ async def test_prepare_key_update_preserves_spend_on_unchanged_window_resend():
     data = UpdateKeyRequest(key="sk-test", budget_duration="30d", metadata={"note": "x"})
     result = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
     assert "spend" not in result
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_explicit_spend_takes_precedence_over_window_reset():
+    """A caller-supplied explicit spend must not be clobbered by the window reset."""
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    existing_key_row = MagicMock(
+        token="hashed_key",
+        budget_duration=None,
+        budget_reset_at=None,
+        team_id=None,
+    )
+    # Newly-armed window would normally zero spend, but an explicit spend wins.
+    data = UpdateKeyRequest(key="sk-test", budget_duration="30d", spend=50.0)
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
+    assert result["spend"] == 50.0
+    assert result["budget_duration"] == "30d"

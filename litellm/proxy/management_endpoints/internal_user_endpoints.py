@@ -1198,6 +1198,9 @@ async def _invalidate_user_spend_counter_if_changed(
 def _reset_spend_if_budget_window_newly_armed(non_default_values: dict, existing_user_row: "BaseModel | None") -> None:
     if existing_user_row is None or "budget_duration" not in non_default_values:
         return
+    if non_default_values.get("spend") is not None:
+        # A caller-supplied explicit spend takes precedence over the window reset.
+        return
     from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
 
     if is_budget_window_newly_armed(

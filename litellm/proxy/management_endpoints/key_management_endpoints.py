@@ -1919,6 +1919,9 @@ def _apply_key_budget_window(non_default_values: dict, existing_key_row: LiteLLM
 
     non_default_values["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
     non_default_values["budget_duration"] = budget_duration
+    if non_default_values.get("spend") is not None:
+        # A caller-supplied explicit spend takes precedence over the window reset.
+        return
     if is_budget_window_newly_armed(
         new_duration=budget_duration,
         existing_duration=existing_key_row.budget_duration,
@@ -2377,6 +2380,7 @@ async def _validate_update_key_data(
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
+        or data.budget_duration is not None
     )
 
     _existing_metadata = getattr(existing_key_row, "metadata", None)
