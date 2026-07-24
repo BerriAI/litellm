@@ -2096,6 +2096,62 @@ def _complete_gigachat(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     return response
 
 
+def _complete_command_code(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion = ctx.acompletion
+    api_base = ctx.api_base
+    api_key = ctx.api_key
+    client = ctx.client
+    custom_llm_provider = ctx.custom_llm_provider
+    headers = ctx.headers
+    litellm_params = ctx.litellm_params
+    logging = ctx.logging
+    messages = ctx.messages
+    model = ctx.model
+    model_response = ctx.model_response
+    optional_params = ctx.optional_params
+    provider_config = ctx.provider_config
+    shared_session = ctx.shared_session
+    stream = ctx.stream
+    timeout = ctx.timeout
+
+    api_key = api_key or litellm.api_key or litellm.command_code_key or get_secret("COMMANDCODE_API_KEY")
+
+    headers = headers or litellm.headers or {}
+
+    ## COMPLETION CALL
+    try:
+        response = base_llm_http_handler.completion(
+            model=model,
+            messages=messages,
+            headers=headers,
+            model_response=model_response,
+            api_key=api_key,
+            api_base=api_base,
+            acompletion=acompletion,
+            logging_obj=logging,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            shared_session=shared_session,
+            timeout=timeout,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            encoding=_get_encoding(),
+            stream=stream,
+            provider_config=provider_config,
+        )
+    except Exception as e:
+        ## LOGGING - log the original exception returned
+        logging.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=str(e),
+            additional_args={"headers": headers},
+        )
+        raise e
+
+    return response
+
+
 def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
@@ -5520,6 +5576,10 @@ def completion(  # type: ignore
         elif custom_llm_provider == "gigachat":
             # GigaChat - Sber AI's LLM (Russia)
             response = _complete_gigachat(_dispatch_ctx)
+
+        elif custom_llm_provider == "command_code":
+            # Command Code - coding-model aggregator (api.commandcode.ai)
+            response = _complete_command_code(_dispatch_ctx)
 
         elif custom_llm_provider == "sap":
             response = _complete_sap(_dispatch_ctx)

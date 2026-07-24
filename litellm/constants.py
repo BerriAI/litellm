@@ -511,6 +511,7 @@ LITELLM_CHAT_PROVIDERS = [
     "mistral",
     "groq",
     "gigachat",
+    "command_code",
     "nvidia_nim",
     "cerebras",
     "baseten",

@@ -2450,6 +2450,16 @@
         "embeddings": true
       }
     },
+    "command_code": {
+      "display_name": "Command Code (`command_code`)",
+      "url": "https://docs.litellm.ai/docs/providers/command_code",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false
+      }
+    },
     "google_pse": {
       "display_name": "Google PSE (`google_pse`)",
       "url": "https://docs.litellm.ai/docs/search/google_pse",
