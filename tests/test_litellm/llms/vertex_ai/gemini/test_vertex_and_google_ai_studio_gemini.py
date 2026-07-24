@@ -5404,3 +5404,116 @@ def test_process_candidates_merges_thought_signatures_and_server_side_tools():
     fields = model_response.choices[-1].message.provider_specific_fields
     assert fields["thought_signatures"] == ["sig-text"]
     assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"
+
+
+def _accumulating_gemini_iterator():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+    )
+    iterator.chunk_type = "accumulated_json"
+    return iterator
+
+
+def test_accumulated_json_chunk_multi_value_buffer_does_not_wedge():
+    """Two complete Gemini objects buffered together must both surface.
+
+    A whole-buffer json.loads raises "Extra data" on concatenated values and, since
+    the buffer was never reset on failure, returned None forever while growing without
+    bound. Peeling one value from the front keeps the remainder for the next call.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+
+    first = iterator.handle_accumulated_json_chunk(chunk=obj + obj)
+    assert first is not None
+    assert first.choices[0].delta.content == "a"
+
+    second = iterator.handle_accumulated_json_chunk(chunk="")
+    assert second is not None
+    assert second.choices[0].delta.content == "a"
+
+    assert iterator.accumulated_json.strip() == ""
+
+
+def test_accumulated_json_end_of_stream_drains_all_buffered_values():
+    """End of stream must drain every buffered value and then terminate.
+
+    With concatenated values a whole-buffer parse never succeeds, so __next__ kept
+    returning None without shrinking the buffer - an unrecoverable per-request spin.
+    The bounded loop asserts the iterator both surfaces all values and terminates.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.response_iterator = iter([])
+    iterator.accumulated_json = obj + obj + obj
+
+    out = []
+    terminated = False
+    for _ in range(100):
+        try:
+            chunk = iterator.__next__()
+        except StopIteration:
+            terminated = True
+            break
+        if chunk is not None:
+            out.append(chunk)
+
+    assert terminated, "iterator did not terminate - accumulated buffer wedged"
+    assert len(out) == 3
+    assert iterator.accumulated_json.strip() == ""
+
+
+def test_accumulated_json_end_of_stream_surfaces_leading_value_before_truncated_tail():
+    """A complete leading value must survive a truncated trailing value at end of stream.
+
+    The mid-stream perf guard only inspects the buffer's last byte, so a complete leading
+    object followed by a truncated one (a server that cut the stream mid-object, last byte
+    not a closer) would keep the guard from ever parsing and drop the complete value. At end
+    of stream the drain ignores that guard, surfaces the complete value, and discards only
+    the truncated tail.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.response_iterator = iter([])
+    iterator.accumulated_json = obj + '{"candidates":'
+
+    out = []
+    for _ in range(100):
+        try:
+            chunk = iterator.__next__()
+        except StopIteration:
+            break
+        if chunk is not None:
+            out.append(chunk)
+
+    assert len(out) == 1
+    assert out[0].choices[0].delta.content == "a"
+
+
+def test_accumulated_json_skips_non_dict_leading_value():
+    """A non-dict value at the front must not block the dict values behind it.
+
+    raw_decode advances past a decoded value, so a leading non-dict (a JSON array or scalar,
+    which Gemini never emits but a malformed stream could) must be consumed and skipped. If
+    the drain stopped on it, the trailing objects would be lost at end of stream.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.response_iterator = iter([])
+    iterator.accumulated_json = "[1, 2]" + obj
+
+    out = []
+    for _ in range(100):
+        try:
+            chunk = iterator.__next__()
+        except StopIteration:
+            break
+        if chunk is not None:
+            out.append(chunk)
+
+    assert len(out) == 1
+    assert out[0].choices[0].delta.content == "a"
