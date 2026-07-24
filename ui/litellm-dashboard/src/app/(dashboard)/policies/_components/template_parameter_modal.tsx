@@ -387,8 +387,6 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               )}
             </>
           )}
-
-          {!hasEnrichment && parameters.map(renderParameterField)}
         </div>
 
         <DialogFooter>

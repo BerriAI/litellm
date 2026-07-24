@@ -75,13 +75,15 @@ describe("TemplateParameterModal", () => {
     expect(screen.getByText("Configure competitor blocking for your brand")).toBeInTheDocument();
   });
 
-  it("renders a labelled field per template parameter and marks the required ones", async () => {
+  it("renders exactly one labelled field per template parameter", async () => {
     renderModal();
 
-    expect((await screen.findAllByText("Organization Name")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Note").length).toBeGreaterThan(0);
-    expect(screen.getAllByPlaceholderText("e.g. Contoso").length).toBeGreaterThan(0);
-    expect(screen.getAllByPlaceholderText("optional note").length).toBeGreaterThan(0);
+    // Exactly one: a plain template used to render every parameter twice, once from
+    // the shared list and again from a duplicate no-enrichment branch.
+    expect(await screen.findByText("Organization Name")).toBeInTheDocument();
+    expect(screen.getByText("Note")).toBeInTheDocument();
+    expect(screen.getAllByPlaceholderText("e.g. Contoso")).toHaveLength(1);
+    expect(screen.getAllByPlaceholderText("optional note")).toHaveLength(1);
   });
 
   it("keeps Continue disabled until every required parameter is filled", async () => {
@@ -91,7 +93,7 @@ describe("TemplateParameterModal", () => {
     await screen.findByText("Basic Redaction");
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
 
-    await user.type(screen.getAllByPlaceholderText("e.g. Contoso")[0], "Contoso");
+    await user.type(screen.getByPlaceholderText("e.g. Contoso"), "Contoso");
 
     expect(screen.getByRole("button", { name: "Continue" })).not.toBeDisabled();
   });
@@ -102,7 +104,7 @@ describe("TemplateParameterModal", () => {
     renderModal({ onConfirm });
 
     await screen.findByText("Basic Redaction");
-    await user.type(screen.getAllByPlaceholderText("e.g. Contoso")[0], "Contoso");
+    await user.type(screen.getByPlaceholderText("e.g. Contoso"), "Contoso");
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(onConfirm).toHaveBeenCalledTimes(1);
