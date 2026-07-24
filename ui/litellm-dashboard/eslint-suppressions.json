@@ -4,11 +4,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/access-groups/_components/AccessGroupsDetailsPage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/access-groups/_components/AccessGroupsModal/AccessGroupBaseForm.tsx": {
     "no-restricted-imports": {
       "count": 2
@@ -20,11 +15,6 @@
     }
   },
   "src/app/(dashboard)/access-groups/_components/AccessGroupsModal/AccessGroupEditModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/access-groups/_components/AccessGroupsPage.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2054,11 +2044,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/TestVectorStoreTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/VectorStoreForm.tsx": {
     "no-nested-ternary": {
       "count": 2
@@ -2070,16 +2055,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreTester.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -3017,20 +2994,7 @@
     }
   },
   "src/components/common_components/Filters/FilterInput.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/Filters/FiltersButton.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/Filters/ResetFiltersButton.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -3595,7 +3559,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 1
     }
   },
   "src/components/page_utils.test.ts": {
