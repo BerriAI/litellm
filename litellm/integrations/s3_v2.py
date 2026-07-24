@@ -9,8 +9,11 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 import asyncio
 import time
 from datetime import datetime
-from typing import List, Optional, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, cast
 from urllib.parse import quote
+
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -279,13 +282,13 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     def _sign_s3_request(
         self,
-        credentials,
+        credentials: "Credentials",
         method: str,
         url: str,
-        headers: dict,
+        headers: Dict[str, str],
         region: str,
         data: Optional[str] = None,
-    ) -> dict:
+    ) -> Dict[str, str]:
         try:
             from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
