@@ -187,7 +187,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
                 result.append({"type": "web_search_preview"})
                 continue
-            func_tool: Dict[str, Any] = {"type": "function", "name": tool_name}
+            func_tool: Dict[str, Any] = {
+                "type": "function",
+                "name": tool_name,
+                "strict": tool_dict.get("strict", False),
+            }
             if "description" in tool_dict:
                 func_tool["description"] = tool_dict["description"]
             if "input_schema" in tool_dict:
