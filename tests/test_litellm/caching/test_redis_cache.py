@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -582,19 +583,20 @@ async def test_async_register_script_namespaces_keys(
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace=namespace)
 
-    registered_script = AsyncMock(return_value="ok")
+    script_text = "return 1"
     mock_redis_instance = MagicMock()
-    mock_redis_instance.register_script = MagicMock(return_value=registered_script)
+    mock_redis_instance.evalsha = AsyncMock(return_value="ok")
 
     with patch.object(
         redis_cache, "init_async_client", return_value=mock_redis_instance
     ):
-        script = redis_cache.async_register_script("return 1")
+        script = redis_cache.async_register_script(script_text)
         result = await script(keys=raw_keys, args=[60])
 
     assert result == "ok"
-    registered_script.assert_awaited_once_with(
-        keys=tuple(expected_keys), args=[60], client=None
+    expected_sha = hashlib.sha1(script_text.encode()).hexdigest()
+    mock_redis_instance.evalsha.assert_awaited_once_with(
+        expected_sha, len(expected_keys), *expected_keys, 60
     )
 
 
@@ -616,11 +618,13 @@ def test_async_register_script_binds_per_event_loop(namespace, monkeypatch):
 
     def make_client():
         client = MagicMock()
-        client.register_script = MagicMock(return_value=AsyncMock(return_value="ok"))
+        client.evalsha = AsyncMock(return_value="ok")
         clients_built.append(client)
         return client
 
     unique_script = "return 'lit3298'"
+    expected_key = f"{namespace}:{{k:v}}:tokens" if namespace else "{k:v}:tokens"
+    expected_sha = hashlib.sha1(unique_script.encode()).hexdigest()
 
     with patch.object(redis_cache, "init_async_client", side_effect=make_client):
         script = redis_cache.async_register_script(unique_script)
@@ -647,7 +651,7 @@ def test_async_register_script_binds_per_event_loop(namespace, monkeypatch):
     assert result_b == "ok"
     assert len(clients_built) == 2
     for client in clients_built:
-        client.register_script.assert_called_once_with(unique_script)
+        client.evalsha.assert_awaited_once_with(expected_sha, 1, expected_key, 60)
 
 
 @pytest.mark.asyncio
@@ -661,14 +665,13 @@ async def test_async_register_script_not_shared_across_namespaces(
     cache_a = RedisCache(namespace="ns_a")
     cache_b = RedisCache(namespace="ns_b")
 
-    reg_a = AsyncMock(return_value="a")
     client_a = MagicMock()
-    client_a.register_script = MagicMock(return_value=reg_a)
-    reg_b = AsyncMock(return_value="b")
+    client_a.evalsha = AsyncMock(return_value="a")
     client_b = MagicMock()
-    client_b.register_script = MagicMock(return_value=reg_b)
+    client_b.evalsha = AsyncMock(return_value="b")
 
     same_script = "return redis.call('GET', KEYS[1])"
+    expected_sha = hashlib.sha1(same_script.encode()).hexdigest()
     with patch.object(
         cache_a, "init_async_client", return_value=client_a
     ), patch.object(cache_b, "init_async_client", return_value=client_b):
@@ -678,8 +681,8 @@ async def test_async_register_script_not_shared_across_namespaces(
         result_b = await script_b(keys=["k"], args=[])
 
     assert (result_a, result_b) == ("a", "b")
-    reg_a.assert_awaited_once_with(keys=("ns_a:k",), args=[], client=None)
-    reg_b.assert_awaited_once_with(keys=("ns_b:k",), args=[], client=None)
+    client_a.evalsha.assert_awaited_once_with(expected_sha, 1, "ns_a:k")
+    client_b.evalsha.assert_awaited_once_with(expected_sha, 1, "ns_b:k")
 
 
 @pytest.mark.asyncio
@@ -722,6 +725,130 @@ async def test_async_register_script_raises_for_unsupported_client(
         script = redis_cache.async_register_script("return 'x'")
         with pytest.raises(ValueError, match="does not support Lua script"):
             await script(keys=["k"], args=[1])
+
+
+def _make_script_blocking_proxy_client(eval_result):
+    """Async Redis client backed by a SCRIPT-blocking proxy (Codis, Twemproxy,
+    Kedis, ...). Such a proxy presents a single standalone endpoint, so the
+    client exposes register_script; redis-py's Script.__call__ recovers from an
+    uncached script by issuing SCRIPT LOAD, which the proxy rejects with
+    "unknown command 'SCRIPT'". register_script here returns a real redis-py
+    AsyncScript so the pre-fix path drives EVALSHA -> SCRIPT LOAD and blows up
+    exactly as it would in production; EVALSHA on the uncached sha returns
+    NOSCRIPT, SCRIPT LOAD is rejected, and only EVAL succeeds.
+    """
+    from redis._parsers.encoders import Encoder
+    from redis.commands.core import AsyncScript
+    from redis.exceptions import NoScriptError, ResponseError
+
+    client = MagicMock()
+    client.connection_pool.get_encoder.return_value = Encoder("utf-8", "strict", False)
+    client.register_script = lambda script: AsyncScript(client, script)
+    client.evalsha = AsyncMock(
+        side_effect=NoScriptError("No matching script. Please use EVAL.")
+    )
+    client.script_load = AsyncMock(
+        side_effect=ResponseError("unknown command 'SCRIPT'")
+    )
+    client.eval = AsyncMock(return_value=eval_result)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_async_register_script_proxy_falls_back_to_eval_not_script_load(
+    monkeypatch, redis_no_ping
+):
+    """On NOSCRIPT the executor must retry with EVAL, never SCRIPT LOAD, so it
+    survives proxies that block the SCRIPT command. Without this the rate
+    limiter, pod-lock release, and budget limiters silently drop to per-pod
+    in-memory limits behind such a proxy."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    script_text = "return 1"
+    client = _make_script_blocking_proxy_client(eval_result="proxy-ok")
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        script = redis_cache.async_register_script(script_text)
+        result = await script(keys=["{k:v}:tokens"], args=[5, 60])
+
+    expected_sha = hashlib.sha1(script_text.encode()).hexdigest()
+    assert result == "proxy-ok"
+    client.evalsha.assert_awaited_once_with(expected_sha, 1, "ns:{k:v}:tokens", 5, 60)
+    client.eval.assert_awaited_once_with(script_text, 1, "ns:{k:v}:tokens", 5, 60)
+    client.script_load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_register_script_falls_back_on_noscript_response_error(
+    monkeypatch, redis_no_ping
+):
+    """Some proxies surface the miss as a bare ResponseError whose message
+    contains NOSCRIPT rather than the typed NoScriptError; that must still fall
+    back to EVAL."""
+    from redis.exceptions import ResponseError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    script_text = "return 2"
+    client = MagicMock()
+    client.evalsha = AsyncMock(
+        side_effect=ResponseError("NOSCRIPT No matching script. Please use EVAL.")
+    )
+    client.eval = AsyncMock(return_value="evaled")
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        script = redis_cache.async_register_script(script_text)
+        result = await script(keys=["k"], args=[7])
+
+    assert result == "evaled"
+    client.eval.assert_awaited_once_with(script_text, 1, "ns:k", 7)
+
+
+@pytest.mark.asyncio
+async def test_async_register_script_propagates_non_noscript_error(
+    monkeypatch, redis_no_ping
+):
+    """A non-NOSCRIPT failure (e.g. WRONGTYPE) must propagate untouched; the EVAL
+    fallback exists only for the missing-script case, not to mask every error."""
+    from redis.exceptions import ResponseError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = MagicMock()
+    client.evalsha = AsyncMock(
+        side_effect=ResponseError("WRONGTYPE Operation against a key")
+    )
+    client.eval = AsyncMock(return_value="should-not-be-used")
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        script = redis_cache.async_register_script("return 3")
+        with pytest.raises(ResponseError, match="WRONGTYPE"):
+            await script(keys=["k"], args=[1])
+
+    client.eval.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_register_script_uses_evalsha_when_script_cached(
+    monkeypatch, redis_no_ping
+):
+    """When the script is already cached server-side, EVALSHA succeeds and EVAL
+    is never issued; keys are still namespaced."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    script_text = "return 4"
+    client = MagicMock()
+    client.evalsha = AsyncMock(return_value="cached-ok")
+    client.eval = AsyncMock(return_value="should-not-be-used")
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        script = redis_cache.async_register_script(script_text)
+        result = await script(keys=["{k:v}:tokens"], args=[9])
+
+    expected_sha = hashlib.sha1(script_text.encode()).hexdigest()
+    assert result == "cached-ok"
+    client.evalsha.assert_awaited_once_with(expected_sha, 1, "ns:{k:v}:tokens", 9)
+    client.eval.assert_not_called()
 
 
 @pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
