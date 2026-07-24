@@ -65,7 +65,7 @@ _GCHUNK_FIELDS: frozenset = frozenset(GChunk.__annotations__)
 
 
 class _SyncToAsyncQueueIterator:
-    __slots__ = ("_sync_iter", "_queue", "_loop", "_exhausted", "_closed", "_done")
+    __slots__ = ("_sync_iter", "_queue", "_loop", "_exhausted", "_closed", "_done", "_producer_future")
 
     def __init__(self, sync_iter: Any) -> None:
         from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
@@ -79,7 +79,7 @@ class _SyncToAsyncQueueIterator:
         self._exhausted = False
         self._closed = threading.Event()
         self._done = threading.Event()
-        sync_stream_producer_executor.submit(self._producer)
+        self._producer_future = sync_stream_producer_executor.submit(self._producer)
 
     def _producer(self) -> None:
         def _put(item: Any) -> None:
@@ -90,6 +90,10 @@ class _SyncToAsyncQueueIterator:
                 pass
             except concurrent.futures.CancelledError:
                 pass
+
+        if self._closed.is_set():
+            self._done.set()
+            return
 
         try:
             for item in self._sync_iter:
@@ -129,6 +133,11 @@ class _SyncToAsyncQueueIterator:
     async def aclose(self) -> None:
         self._exhausted = True
         self._closed.set()
+
+        if self._producer_future.cancel():
+            # The producer was still queued behind other work on the shared
+            # executor and never started, so it will never set _done itself.
+            self._done.set()
 
         async def _drain_until_done() -> None:
             while True:

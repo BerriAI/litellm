@@ -3601,6 +3601,37 @@ async def test_sync_to_async_queue_iterator_aclose_does_not_deadlock_on_full_que
 
 
 @pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_aclose_cancels_queued_producer():
+    """
+    Regression: if the shared producer executor is saturated, the producer task
+    can still be queued (not yet started) when aclose() runs. In that case the
+    task's own _closed check never executes, so _done would never be set unless
+    aclose() cancels the still-queued future itself.
+    """
+    import concurrent.futures
+
+    class NeverCalledIter:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise AssertionError("producer must not run once its future is cancelled")
+
+    wrapper = object.__new__(_SyncToAsyncQueueIterator)
+    wrapper._sync_iter = NeverCalledIter()
+    wrapper._loop = asyncio.get_running_loop()
+    wrapper._queue = asyncio.Queue()
+    wrapper._exhausted = False
+    wrapper._closed = threading.Event()
+    wrapper._done = threading.Event()
+    wrapper._producer_future = concurrent.futures.Future()  # never started, still cancellable
+
+    await asyncio.wait_for(wrapper.aclose(), timeout=2)
+
+    assert wrapper._producer_future.cancelled()
+
+
+@pytest.mark.asyncio
 async def test_sync_to_async_queue_iterator_aclose_swallows_close_exception():
     class ExplodingCloseIter:
         def __iter__(self):
