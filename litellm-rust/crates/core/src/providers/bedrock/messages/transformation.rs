@@ -288,4 +288,92 @@ mod tests {
         assert!(output.get("model").is_none());
         assert!(output.get("stream").is_none());
     }
+
+    #[test]
+    fn transform_matches_python_fixture_for_supported_bedrock_fields() {
+        let input = request(json!({
+            "model": "bedrock/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "hello",
+                    "cache_control": {
+                        "type": "ephemeral",
+                        "scope": "global",
+                        "ttl": "1h"
+                    }
+                }]
+            }],
+            "max_tokens": 32,
+            "stream": true,
+            "anthropic_version": "custom-version",
+            "system": [{
+                "type": "text",
+                "text": "system",
+                "cache_control": {
+                    "type": "ephemeral",
+                    "scope": "global",
+                    "ttl": "1h"
+                }
+            }],
+            "tools": [{
+                "name": "tool",
+                "description": "d",
+                "input_schema": {"type": "object"},
+                "custom": {"defer_loading": true},
+                "cache_control": {
+                    "type": "ephemeral",
+                    "scope": "global",
+                    "ttl": "1h"
+                }
+            }],
+            "context_management": {
+                "edits": [
+                    {"type": "compact_20260112"},
+                    {"type": "unsupported_edit"}
+                ]
+            },
+            "unsupported_top": "drop-me",
+            "metadata": {"x": "y"},
+            "temperature": 0.2
+        }));
+        let output = transform_bedrock_request(
+            "bedrock/us-west-2/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            input,
+        )
+        .expect("transform");
+        assert_eq!(
+            output,
+            json!({
+                "anthropic_beta": ["compact-2026-01-12"],
+                "anthropic_version": "custom-version",
+                "context_management": {
+                    "edits": [{"type": "compact_20260112"}]
+                },
+                "max_tokens": 32,
+                "messages": [{
+                    "content": [{
+                        "cache_control": {"ttl": "1h", "type": "ephemeral"},
+                        "text": "hello",
+                        "type": "text"
+                    }],
+                    "role": "user"
+                }],
+                "metadata": {"x": "y"},
+                "system": [{
+                    "cache_control": {"ttl": "1h", "type": "ephemeral"},
+                    "text": "system",
+                    "type": "text"
+                }],
+                "temperature": 0.2,
+                "tools": [{
+                    "cache_control": {"ttl": "1h", "type": "ephemeral"},
+                    "description": "d",
+                    "input_schema": {"type": "object"},
+                    "name": "tool"
+                }]
+            })
+        );
+    }
 }
