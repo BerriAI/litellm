@@ -313,7 +313,12 @@ class OllamaConfig(BaseConfig):
             response_text = response_json.get("response", "")
             content = None
             reasoning_content = None
-            if response_text is not None and isinstance(response_text, str):
+            # Check for top-level "thinking" field (Ollama returns this for
+            # reasoning models like Qwen3/DeepSeek-R1 via /api/generate)
+            if "thinking" in response_json:
+                reasoning_content = response_json["thinking"]
+                content = response_text
+            elif response_text is not None and isinstance(response_text, str):
                 reasoning_content, content = _parse_content_for_reasoning(response_text)
             else:
                 content = response_text  # type: ignore
