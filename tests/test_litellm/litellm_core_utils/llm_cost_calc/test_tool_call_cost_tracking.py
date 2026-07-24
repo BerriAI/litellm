@@ -1,5 +1,7 @@
+import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -600,6 +602,70 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
         "A non-Gemini provider-prefixed model with no web search pricing must not be charged "
         f"the vertex_ai per_prompt default via the prefix fallback, got ${cost}"
     )
+
+
+@pytest.mark.parametrize(
+    "web_search_options",
+    [
+        None,
+        WebSearchOptions(search_context_size="low"),
+        WebSearchOptions(search_context_size="medium"),
+        WebSearchOptions(search_context_size="high"),
+    ],
+)
+def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
+    web_search_options, local_model_cost_map
+):
+    """
+    gpt-4o-mini-2024-07-18 is the dated snapshot of gpt-4o-mini and must bill web search
+    identically. It kept a search_context_cost_per_query from the March 2025 launch tiers that the
+    May 2025 cleanup missed, because that sweep selected on supports_web_search and the snapshot
+    never carried the flag. The result was $0.0275 per query on one name and nothing on the other
+    for the same underlying model. Neither entry declares web search support, so both resolve to $0
+    at every search context size.
+    """
+    alias_info = litellm.get_model_info("gpt-4o-mini")
+    snapshot_info = litellm.get_model_info("gpt-4o-mini-2024-07-18")
+
+    assert not alias_info.get("supports_web_search")
+    assert not snapshot_info.get("supports_web_search")
+    assert not snapshot_info.get("search_context_cost_per_query")
+
+    snapshot_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=snapshot_info
+    )
+    alias_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=alias_info
+    )
+
+    assert snapshot_cost == alias_cost == 0.0, (
+        f"gpt-4o-mini-2024-07-18 must not carry a web search fee its alias does not: "
+        f"got ${snapshot_cost} vs ${alias_cost} on gpt-4o-mini"
+    )
+
+
+def test_gpt_4o_mini_snapshot_web_search_price_absent_from_both_cost_maps():
+    """
+    The fixture above only sees the bundled backup, but the map served to running deployments is
+    the canonical file fetched from the repo, so the removal has to hold in both. They already
+    differ in a handful of unrelated entries, which is how one name kept a price its alias had lost.
+    """
+    repo_root = Path(__file__).parents[4]
+    entries = tuple(
+        json.loads((repo_root / path).read_text(encoding="utf-8"))[
+            "gpt-4o-mini-2024-07-18"
+        ]
+        for path in (
+            "model_prices_and_context_window.json",
+            "litellm/model_prices_and_context_window_backup.json",
+        )
+    )
+
+    canonical, backup = entries
+    assert "search_context_cost_per_query" not in canonical
+    assert (
+        canonical == backup
+    ), "gpt-4o-mini-2024-07-18 differs between the two cost maps"
 
 
 # Note: File search integration test removed due to complex annotation detection logic
