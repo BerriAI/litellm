@@ -1,6 +1,7 @@
 import React from "react";
 import { Input, Button } from "antd";
 import { ArrowUpOutlined } from "@ant-design/icons";
+import { isImeComposing } from "../../../utils/keyboard";
 
 const { TextArea } = Input;
 
@@ -17,6 +18,7 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
   const canSend = !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImeComposing(e)) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (canSend) {
