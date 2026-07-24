@@ -62,6 +62,7 @@ export const OrgCreateDialog = ({
   });
 
   const onSubmit = form.handleSubmit((values) => {
+    if (mutation.isPending) return;
     mutation.mutate(buildOrgCreateBody(values));
   });
 

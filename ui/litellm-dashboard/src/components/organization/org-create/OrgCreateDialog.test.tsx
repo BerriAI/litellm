@@ -145,4 +145,37 @@ describe("OrgCreateDialog", () => {
     await user.click(screen.getByRole("button", { name: "reopen" }));
     expect(screen.getByLabelText("Organization Name")).toHaveValue("");
   });
+
+  it("resets the form when the dialog is dismissed with Escape and reopened", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.type(screen.getByLabelText("Organization Name"), "abandoned");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByLabelText("Organization Name")).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "reopen" }));
+    expect(screen.getByLabelText("Organization Name")).toHaveValue("");
+  });
+
+  it("does not fire a second create while one is pending", async () => {
+    const user = userEvent.setup();
+    let resolveCreate: (value: unknown) => void = () => {};
+    const createOrganization = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    renderDialog({ createOrganization });
+
+    await user.type(screen.getByLabelText("Organization Name"), "new-org");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(createOrganization).toHaveBeenCalledTimes(1));
+    await user.keyboard("{Enter}");
+
+    expect(createOrganization).toHaveBeenCalledTimes(1);
+    resolveCreate({});
+    await waitFor(() => expect(screen.queryByLabelText("Organization Name")).not.toBeInTheDocument());
+  });
 });
