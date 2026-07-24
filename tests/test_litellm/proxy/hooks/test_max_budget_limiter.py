@@ -206,3 +206,85 @@ async def test_no_max_budget_passes():
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Regression: zero-cost (free / on-prem) models must NOT be blocked by the
+# personal-budget hook when the user is over budget.
+#
+# common_checks already exempts zero-cost models via skip_budget_checks
+# (_is_model_cost_zero). This hook is a *separate* enforcement point that
+# currently ignores model cost, so it blocks free models too. These tests pin
+# the intended behavior: free model -> allowed, paid model -> still blocked.
+# ---------------------------------------------------------------------------
+
+
+def _zero_and_paid_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {
+                    "model": "openai/free",
+                    "api_key": "x",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "openai/paid",
+                    "api_key": "x",
+                    "input_cost_per_token": 0.00001,
+                    "output_cost_per_token": 0.00001,
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_cost_model_exempt_from_personal_budget():
+    """Over-budget user requesting a ZERO-COST model must be allowed (regression)."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
+    router = _zero_and_paid_router()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=10.0),
+    ), patch("litellm.proxy.proxy_server.llm_router", router):
+        result = await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"model": "free-model"},
+            call_type="completion",
+        )
+
+    assert result is None  # zero-cost model is exempt despite over-budget
+
+
+@pytest.mark.asyncio
+async def test_paid_model_still_blocked_when_over_budget():
+    """Over-budget user requesting a PAID model must still be blocked (guard)."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
+    router = _zero_and_paid_router()
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=10.0),
+    ), patch("litellm.proxy.proxy_server.llm_router", router):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={"model": "paid-model"},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+    assert "Max budget limit reached." in exc_info.value.detail
