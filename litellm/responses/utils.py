@@ -99,10 +99,17 @@ class ResponsesAPIRequestUtils:
         `forward_client_headers_to_llm_api` is enabled) into `extra_headers`.
 
         `extra_headers` wins on conflicts, since it is set explicitly by the caller.
+        Header names are compared case-insensitively, as HTTP defines them.
         """
         if not client_headers:
             return extra_headers
-        return {**client_headers, **(extra_headers or {})}
+        if not extra_headers:
+            return dict(client_headers)
+        explicit_names = frozenset(name.lower() for name in extra_headers)
+        return {
+            **{name: value for name, value in client_headers.items() if name.lower() not in explicit_names},
+            **extra_headers,
+        }
 
     @staticmethod
     def _check_valid_arg(
