@@ -2745,6 +2745,73 @@ async def test_custom_stream_wrapper_anext_drains_sync_iterator_concurrently(
     )
 
 
+@pytest.mark.asyncio
+async def test_aiter_sync_stream_in_thread_yields_then_propagates_error():
+    """The thread pump yields every item emitted before the sync iterator raises,
+    then re-raises that original exception on the consuming loop so __anext__'s
+    error handling still sees the real provider error type."""
+    from litellm.litellm_core_utils.streaming_handler import (
+        _aiter_sync_stream_in_thread,
+    )
+
+    class UpstreamBoom(Exception):
+        pass
+
+    def _sync_gen():
+        yield "a"
+        yield "b"
+        raise UpstreamBoom("provider stream broke")
+
+    received = []
+    with pytest.raises(UpstreamBoom, match="provider stream broke"):
+        async for item in _aiter_sync_stream_in_thread(_sync_gen()):
+            received.append(item)
+
+    assert received == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_stops_sync_pump(logging_obj: Logging):
+    """aclose() must tear down the background sync-stream pump (and be safe to call)
+    after it has been lazily created by a first __anext__ on a sync iterator."""
+
+    class SlowInfiniteIterator:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            time.sleep(0.01)
+            return ModelResponseStream(
+                id="chatcmpl-pump",
+                created=int(time.time()),
+                model="test-model",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content="x", role="assistant"),
+                        logprobs=None,
+                    )
+                ],
+                usage=None,
+            )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=SlowInfiniteIterator(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    first = await wrapper.__anext__()
+    assert isinstance(first, ModelResponseStream)
+    assert wrapper._threaded_sync_stream is not None
+
+    await wrapper.aclose()
+    assert wrapper._threaded_sync_stream is None
+
+
 # Azure streaming chunks that reproduce issue #24221:
 # Azure sends an initial chunk with prompt_filter_results and choices=[],
 # then a chunk with role='assistant' and content='', then content chunks.
