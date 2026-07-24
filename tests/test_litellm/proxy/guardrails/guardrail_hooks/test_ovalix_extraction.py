@@ -315,3 +315,48 @@ def test_raw_base64_file_data_without_data_url_prefix_decoded():
 def test_images_field_raw_base64_without_data_url_prefix_decoded():
     parts = extract_file_parts_from_images([_b64(b"rawimg")], size_limit=1000)
     assert len(parts) == 1 and parts[0].data == b"rawimg"
+
+
+def test_whitespace_only_base64_payload_yields_no_bytes():
+    block = {"type": "file", "file": {"filename": "n.txt", "file_data": "data:text/plain;base64,    "}}
+    parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)
+    assert len(parts) == 1 and parts[0].data is None and parts[0].inline is False and parts[0].name == "n.txt"
+
+
+def test_base64_invalid_even_after_urlsafe_translate_yields_no_bytes():
+    block = {"type": "file", "file": {"filename": "b.bin", "file_data": "_@@@"}}
+    parts = extract_file_parts_from_messages(_msgs(block), size_limit=1000)
+    assert len(parts) == 1 and parts[0].data is None and parts[0].inline is False and parts[0].name == "b.bin"
+
+
+def test_file_oversize_detected_after_decode_when_estimate_passes():
+    block = {"type": "file", "file": {"filename": "s.bin", "file_data": _b64(b"abc")}}
+    parts = extract_file_parts_from_messages(_msgs(block), size_limit=2)
+    assert len(parts) == 1 and parts[0].oversize is True and parts[0].data is None
+
+
+def test_image_http_url_that_urlparse_rejects_is_dropped():
+    parts = extract_file_parts_from_images(["http://["], size_limit=1000)
+    assert parts == []
+
+
+def test_message_content_not_a_list_is_skipped():
+    parts = extract_file_parts_from_messages(
+        [{"role": "user", "content": "just a plain string prompt"}], size_limit=1000
+    )
+    assert parts == []
+
+
+def test_tool_call_dict_arguments_non_serializable_falls_back_to_str():
+    td = tool_call_to_tool_data({"function": {"name": "f", "arguments": {"a": {1, 2}}}})
+    assert isinstance(td["content"], str) and td["tool_input"] == {"a": {1, 2}}
+
+
+def test_tool_call_non_serializable_other_arguments_falls_back_to_str():
+    td = tool_call_to_tool_data({"function": {"name": "f", "arguments": {1, 2}}})
+    assert isinstance(td["content"], str) and td["tool_input"] == {}
+
+
+def test_tool_result_dict_content_non_serializable_falls_back_to_str():
+    results = extract_tool_results([{"role": "tool", "tool_call_id": "c1", "content": {"x": {1, 2}}}])
+    assert len(results) == 1 and isinstance(results[0][1], str) and results[0][1].strip()
