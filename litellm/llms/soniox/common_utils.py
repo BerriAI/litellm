@@ -2,6 +2,7 @@
 Shared utilities for the Soniox provider (https://soniox.com).
 """
 
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -121,7 +122,35 @@ _CUE_MAX_DURATION_MS: int = 7000
 
 _CUE_GAP_MS: int = 700
 
-_SENTENCE_END_CHARS = (".", "!", "?", "。", "！", "？")
+_SENTENCE_END_CHARS = (".", "!", "?", "。", "！", "？", "؟", "۔", "।", "॥", "։", "።")
+
+_CJK_RANGES = (
+    (0x3400, 0x4DBF),
+    (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF),
+    (0x3040, 0x309F),
+    (0x30A0, 0x30FF),
+    (0x31F0, 0x31FF),
+)
+
+_CJK_NO_BREAK_BEFORE = "、。，．！？：；・ー…」』）〉》】〕"
+
+_CJK_NO_BREAK_AFTER = "「『（〈《【〔"
+
+
+def _is_cjk(ch: str) -> bool:
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _CJK_RANGES)
+
+
+def _is_cjk_word_boundary(prev_ch: str, next_ch: str) -> bool:
+    if not (_is_cjk(prev_ch) or _is_cjk(next_ch)):
+        return False
+    return next_ch not in _CJK_NO_BREAK_BEFORE and prev_ch not in _CJK_NO_BREAK_AFTER
+
+
+def _text_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
 
 
 def _format_timestamp_srt(ms: int) -> str:
@@ -155,7 +184,10 @@ def _merge_tokens_into_words(tokens: list[dict[str, Any]]) -> list[dict[str, Any
     Merge Soniox subword tokens (e.g. ``"Hel"``, ``"lo"``) into whole words.
 
     A token starts a new word when its text begins with whitespace, when the
-    previous token's text ends with whitespace, or when the speaker changes.
+    previous token's text ends with whitespace, when the speaker changes, or
+    at a CJK character boundary (CJK scripts carry no spaces, so without this
+    an entire utterance would fuse into a single unbreakable "word"; CJK
+    punctuation stays attached to the preceding character per kinsoku rules).
     Each word carries the first/last available timestamps of its tokens.
 
     Translation tokens (``translation_status == "translation"``) are excluded:
@@ -174,6 +206,7 @@ def _merge_tokens_into_words(tokens: list[dict[str, Any]]) -> list[dict[str, Any
             and not text[0].isspace()
             and not words[-1]["text"][-1:].isspace()
             and token.get("speaker") == words[-1]["speaker"]
+            and not _is_cjk_word_boundary(words[-1]["text"][-1:], text[0])
         )
         if is_continuation:
             last = words[-1]
@@ -210,8 +243,8 @@ def _group_tokens_into_cues(
       - the speaker changes (if diarization is on),
       - a silence gap of at least _CUE_GAP_MS separates two words, so
         subtitles never bridge pauses in speech,
-      - adding the next word would exceed _CUE_MAX_CHARS (~two subtitle
-        lines), or
+      - adding the next word would exceed _CUE_MAX_CHARS of display width
+        (~two subtitle lines; East-Asian wide characters count double), or
       - the cue would span more than _CUE_MAX_DURATION_MS.
     A cue also ends after sentence-final punctuation, which keeps cue breaks
     at natural seams. Cue timestamps come straight from token timestamps;
@@ -246,7 +279,7 @@ def _group_tokens_into_cues(
                 w["speaker"] is not None and w["speaker"] != word["speaker"] for w in current
             )
             gap_exceeded = start_ms is not None and cue_end is not None and (start_ms - cue_end) >= _CUE_GAP_MS
-            chars_exceeded = len(_cue_text(current)) + len(word["text"]) > _CUE_MAX_CHARS
+            chars_exceeded = _text_width(_cue_text(current)) + _text_width(word["text"]) > _CUE_MAX_CHARS
             duration_exceeded = (
                 start_ms is not None and cue_start is not None and (start_ms - cue_start) >= _CUE_MAX_DURATION_MS
             )
