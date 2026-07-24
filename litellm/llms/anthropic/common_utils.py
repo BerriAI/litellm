@@ -1063,7 +1063,7 @@ def _sanitize_tool_use_id_content_block(block: Any, *, preserve_kimi_k2_ids: boo
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any], model: Optional[str] = None) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any], model: str | None = None) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
