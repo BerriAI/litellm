@@ -1283,27 +1283,29 @@ class AWSEventStreamDecoder:
 
         self.model = model
         self.parser = EventStreamJSONParser()
-        self.content_blocks: List[ContentBlockDeltaEvent] = []
+        # Bedrock associates streamed deltas with content blocks by this index.
+        self._content_blocks_by_content_block_index: dict[int, list[ContentBlockDeltaEvent]] = {}
+        self._tool_names_by_content_block_index: dict[int, str] = {}
         self.tool_calls_index: Optional[int] = None
         self.response_id: Optional[str] = None
         self.json_mode = json_mode
-        self._current_tool_name: Optional[str] = None
 
-    def check_empty_tool_call_args(self) -> bool:
+    def check_empty_tool_call_args(self, content_block_index: int) -> bool:
         """
         Check if the tool call block so far has been an empty string
         """
         args = ""
         # if text content block -> skip
-        if len(self.content_blocks) == 0:
+        content_blocks = self._content_blocks_by_content_block_index.get(content_block_index, [])
+        if len(content_blocks) == 0:
             return False
 
         if (
-            "toolUse" not in self.content_blocks[0]
+            "toolUse" not in content_blocks[0]
         ):  # be explicit - only do this if tool use block, as this is to prevent json decoding errors
             return False
 
-        for block in self.content_blocks:
+        for block in content_blocks:
             if "toolUse" in block:
                 args += block["toolUse"]["input"]
 
@@ -1357,6 +1359,7 @@ class AWSEventStreamDecoder:
     def _handle_converse_start_event(
         self,
         start_obj: ContentBlockStartEvent,
+        content_block_index: int = 0,
     ) -> Tuple[
         Optional[ChatCompletionToolCallChunk],
         dict,
@@ -1367,16 +1370,15 @@ class AWSEventStreamDecoder:
         provider_specific_fields: dict = {}
         thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None
 
-        self.content_blocks = []  # reset
+        self._content_blocks_by_content_block_index[content_block_index] = []
         if start_obj is not None:
             if "toolUse" in start_obj and start_obj["toolUse"] is not None:
                 ## check tool name was formatted by litellm
                 _response_tool_name = start_obj["toolUse"]["name"]
                 response_tool_name = get_bedrock_tool_name(response_tool_name=_response_tool_name)
-                self._current_tool_name = response_tool_name
+                self._tool_names_by_content_block_index[content_block_index] = response_tool_name
 
-                # When json_mode is True, suppress the internal json_tool_call
-                # and convert its content to text in delta events instead
+                # response_format is represented by an internal tool call.
                 if self.json_mode is True and response_tool_name == RESPONSE_FORMAT_TOOL_NAME:
                     return tool_use, provider_specific_fields, thinking_blocks
 
@@ -1417,13 +1419,14 @@ class AWSEventStreamDecoder:
         reasoning_content: Optional[str] = None
         thinking_blocks: Optional[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = None
 
-        self.content_blocks.append(delta_obj)
+        self._content_blocks_by_content_block_index.setdefault(index, []).append(delta_obj)
         if "text" in delta_obj:
             text = delta_obj["text"]
         elif "toolUse" in delta_obj:
-            # When json_mode is True and this is the internal json_tool_call,
-            # convert tool input to text content instead of tool call arguments
-            if self.json_mode is True and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME:
+            if (
+                self.json_mode is True
+                and self._tool_names_by_content_block_index.get(index) == RESPONSE_FORMAT_TOOL_NAME
+            ):
                 text = delta_obj["toolUse"]["input"]
             else:
                 tool_use = {
@@ -1460,14 +1463,13 @@ class AWSEventStreamDecoder:
         """Handle stop/contentBlockIndex event in converse chunk parsing."""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
 
-        # If the ending block was the internal json_tool_call, skip emitting
-        # the empty-args tool chunk and reset tracking state
-        if self.json_mode is True and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME:
-            self._current_tool_name = None
+        tool_name = self._tool_names_by_content_block_index.pop(index, None)
+        if self.json_mode is True and tool_name == RESPONSE_FORMAT_TOOL_NAME:
+            self._content_blocks_by_content_block_index.pop(index, None)
             return tool_use
 
-        self._current_tool_name = None
-        is_empty = self.check_empty_tool_call_args()
+        is_empty = self.check_empty_tool_call_args(index)
+        self._content_blocks_by_content_block_index.pop(index, None)
         if is_empty:
             tool_use = {
                 "id": None,
@@ -1504,7 +1506,7 @@ class AWSEventStreamDecoder:
                     tool_use,
                     provider_specific_fields,
                     thinking_blocks,
-                ) = self._handle_converse_start_event(start_obj)
+                ) = self._handle_converse_start_event(start_obj, content_block_index)
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
                 (
@@ -1735,10 +1737,29 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: Optional[ChatCompletionToolCallChunk] = None
         if self.json_mode is True and tool_calls is not None:
-            message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
-            if message is not None:
-                text = message.content or ""
-                tool_use = None
+            # Bedrock represents response_format as an internal json_tool_call.
+            json_mode_tool_calls = [
+                tool_call for tool_call in tool_calls if tool_call["function"].get("name") == RESPONSE_FORMAT_TOOL_NAME
+            ]
+            regular_tool_calls = [
+                tool_call for tool_call in tool_calls if tool_call["function"].get("name") != RESPONSE_FORMAT_TOOL_NAME
+            ]
+
+            if json_mode_tool_calls:
+                message = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=json_mode_tool_calls)
+                if message is not None:
+                    text = message.content or ""
+            if regular_tool_calls:
+                regular_tool_call = regular_tool_calls[0]
+                tool_use = ChatCompletionToolCallChunk(
+                    id=regular_tool_call.id,
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=regular_tool_call.function.name,
+                        arguments=regular_tool_call.function.arguments,
+                    ),
+                    index=0,
+                )
         elif tool_calls is not None and len(tool_calls) > 0:
             tool_use = tool_calls[0]
         return text, tool_use
