@@ -97,9 +97,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
-from litellm.proxy.hooks.sensitive_data_routing import (
-    _PROXY_SensitiveDataRoutingHandler,
-)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -129,7 +126,9 @@ from litellm.proxy.db.exception_handler import (
 )
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import (
+    AZURE_POSTGRESQL_AUTH_MARKER_ENV,
     PrismaWrapper,
+    build_database_token_auth_url,
     parse_iam_endpoint_from_url,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
@@ -144,6 +143,9 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
+)
+from litellm.proxy.hooks.sensitive_data_routing import (
+    _PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
@@ -2788,6 +2790,7 @@ class PrismaClient:
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
         self.iam_token_db_auth: Optional[bool] = str_to_bool(os.getenv("IAM_TOKEN_DB_AUTH"))
+        azure_postgresql_auth = str_to_bool(os.getenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV)) is True
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
@@ -2797,6 +2800,7 @@ class PrismaClient:
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         iam_flag = self.iam_token_db_auth if self.iam_token_db_auth is not None else False
+        token_auth_enabled = bool(iam_flag or azure_postgresql_auth)
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved IAM refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
@@ -2805,14 +2809,16 @@ class PrismaClient:
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=iam_flag,
+                iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
+                azure_postgresql_auth=azure_postgresql_auth,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=iam_flag,
+                iam_token_db_auth=token_auth_enabled,
                 log_prefix=writer_log_prefix,
+                azure_postgresql_auth=azure_postgresql_auth,
             )
 
         # Optional read-replica routing. When DATABASE_URL_READ_REPLICA is set,
@@ -2827,7 +2833,7 @@ class PrismaClient:
                 # the same cadence as the writer. We parse the static endpoint
                 # pieces (host/port/user/db) once from the reader URL — only
                 # the IAM token rotates after that.
-                reader_iam_endpoint = parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
+                reader_iam_endpoint = parse_iam_endpoint_from_url(read_replica_url) if token_auth_enabled else None
                 # Mint a fresh IAM token for the reader BEFORE constructing the
                 # Prisma client. Mirrors what `proxy_cli.py` already does for
                 # the writer (proxy_cli.py:812-832) — without this, the reader
@@ -2836,17 +2842,11 @@ class PrismaClient:
                 # to the synchronous fallback path in
                 # `PrismaWrapper.__getattr__`, which deadlocks the event loop
                 # and times out after 30s.
-                if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
-                        generate_iam_auth_token,
+                if token_auth_enabled and reader_iam_endpoint is not None:
+                    read_replica_url = build_database_token_auth_url(
+                        reader_iam_endpoint,
+                        azure_postgresql_auth=azure_postgresql_auth,
                     )
-
-                    reader_token = generate_iam_auth_token(
-                        db_host=reader_iam_endpoint.host,
-                        db_port=reader_iam_endpoint.port,
-                        db_user=reader_iam_endpoint.user,
-                    )
-                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Dict[str, Any] = {"datasource": {"url": read_replica_url}}
                 if http_client is not None:
@@ -2855,16 +2855,17 @@ class PrismaClient:
                     reader_prisma = Prisma(**reader_kwargs)
                 reader_wrapper = PrismaWrapper(
                     original_prisma=reader_prisma,
-                    iam_token_db_auth=iam_flag,
+                    iam_token_db_auth=token_auth_enabled,
                     db_url_env_var="DATABASE_URL_READ_REPLICA",
                     iam_endpoint=reader_iam_endpoint,
                     recreate_uses_datasource=True,
                     log_prefix="[reader]",
+                    azure_postgresql_auth=azure_postgresql_auth,
                 )
                 self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(
                     "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
-                    + (" (with IAM token auto-refresh)" if iam_flag else "")
+                    + (" (with token auto-refresh)" if token_auth_enabled else "")
                 )
             except Exception as e:
                 # Reader is opt-in; never let its construction fail proxy

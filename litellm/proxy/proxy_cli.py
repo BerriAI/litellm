@@ -706,6 +706,12 @@ class ProxyInitializationHelpers:
     help="Connects to RDS DB with IAM token",
 )
 @click.option(
+    "--azure_postgresql_auth",
+    default=False,
+    is_flag=True,
+    help="Connects to Azure PostgreSQL with Microsoft Entra token auth",
+)
+@click.option(
     "--num_requests",
     default=10,
     type=int,
@@ -865,6 +871,7 @@ def run_server(
     granian_threads,
     test_async,
     iam_token_db_auth,
+    azure_postgresql_auth,
     num_requests,
     use_queue,
     health,
@@ -994,29 +1001,21 @@ def run_server(
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
-            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+        if azure_postgresql_auth or iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
+            from litellm.proxy.db.prisma_client import (
+                AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+                build_database_token_auth_url,
+                get_database_auth_endpoint_from_env,
+            )
 
-            db_host = os.getenv("DATABASE_HOST")
-            # Default to the Postgres standard port. Without a default,
-            # `db_port=None` flows into `boto.generate_db_auth_token(Port=None)`
-            # and botocore stringifies it to `"None"` while building the
-            # presigned URL, which then blows up with `ValueError: Port could
-            # not be cast to integer value as 'None'` during signing.
-            db_port = os.getenv("DATABASE_PORT", "5432")
-            db_user = os.getenv("DATABASE_USER")
-            db_name = os.getenv("DATABASE_NAME")
-            db_schema = os.getenv("DATABASE_SCHEMA")
-
-            token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
-
-            # print(f"token: {token}")
-            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
-
+            _db_url = build_database_token_auth_url(
+                get_database_auth_endpoint_from_env(),
+                azure_postgresql_auth=azure_postgresql_auth,
+            )
             os.environ["DATABASE_URL"] = _db_url
             os.environ["IAM_TOKEN_DB_AUTH"] = "True"
+            if azure_postgresql_auth:
+                os.environ[AZURE_POSTGRESQL_AUTH_MARKER_ENV] = "True"
 
         ### DECRYPT ENV VAR ###
 

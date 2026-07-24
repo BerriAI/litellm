@@ -6,14 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
-import fastapi
 import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
-import builtins
 import types
 
 import uvicorn
@@ -1552,8 +1550,6 @@ class TestProxyInitializationHelpers:
     @patch("builtins.print")
     def test_run_server_no_config_passed(self, mock_print, mock_uvicorn_run):
         """Test that run_server properly handles the case when no config is passed"""
-        import asyncio
-
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
@@ -1805,6 +1801,97 @@ class TestRunServerDbSetup:
             mock_setup_database.assert_called_with(
                 use_migrate=False, use_v2_resolver=False
             )
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_azure_postgresql_auth_builds_token_database_url(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        from litellm.proxy.db.prisma_client import (
+            AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+            IAMEndpoint,
+        )
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        endpoint = IAMEndpoint(
+            host="server.postgres.database.azure.com",
+            port="5432",
+            user="managed-identity",
+            name="litellm",
+        )
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in (
+                "DATABASE_URL",
+                "DIRECT_URL",
+                "IAM_TOKEN_DB_AUTH",
+                AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+            )
+        }
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.db.prisma_client.get_database_auth_endpoint_from_env",
+                return_value=endpoint,
+            ) as mock_get_endpoint,
+            patch(
+                "litellm.proxy.db.prisma_client.build_database_token_auth_url",
+                return_value=(
+                    "postgresql://managed-identity:token@"
+                    "server.postgres.database.azure.com:5432/litellm"
+                ),
+            ) as mock_build_url,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(
+                ["--local", "--skip_server_startup", "--azure_postgresql_auth"],
+                standalone_mode=False,
+            )
+
+            assert os.environ["IAM_TOKEN_DB_AUTH"] == "True"
+            assert os.environ[AZURE_POSTGRESQL_AUTH_MARKER_ENV] == "True"
+            assert os.environ["DATABASE_URL"].startswith(
+                "postgresql://managed-identity:token@"
+            )
+
+        mock_get_endpoint.assert_called_once()
+        mock_build_url.assert_called_once_with(endpoint, azure_postgresql_auth=True)
 
     @patch("subprocess.run")
     @patch("atexit.register")

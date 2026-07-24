@@ -6,7 +6,10 @@ import redis
 import redis.asyncio as async_redis
 
 from litellm._redis import (
+    _get_credential_provider_from_connect_func,
+    _get_redis_client_logic,
     _get_redis_cluster_kwargs,
+    create_azure_ad_redis_connect_func,
     get_redis_async_client,
     get_redis_client,
     get_redis_connection_pool,
@@ -14,6 +17,7 @@ from litellm._redis import (
 )
 from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 from litellm._redis_credential_provider import (
+    AzureADCredentialProvider,
     GCPIAMCredentialProvider,
     _token_cache,
 )
@@ -25,6 +29,41 @@ def clear_gcp_iam_token_cache():
     _token_cache.clear()
     yield
     _token_cache.clear()
+
+
+def _mock_azure_identity(mock_credential):
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = MagicMock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = MagicMock(
+        return_value=mock_credential
+    )
+    return mock_azure_identity
+
+
+def test_azure_redis_workload_identity_uses_default_credential(monkeypatch):
+    from litellm._redis import _build_azure_credential
+
+    default_credential = object()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(
+        return_value=default_credential
+    )
+    mock_azure_identity.ClientSecretCredential = MagicMock()
+    mock_azure_identity.ManagedIdentityCredential = MagicMock()
+    monkeypatch.setenv("AZURE_CLIENT_ID", "client-id")
+    monkeypatch.setenv("AZURE_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        credential = _build_azure_credential()
+
+    assert credential is default_credential
+    mock_azure_identity.DefaultAzureCredential.assert_called_once_with()
+    mock_azure_identity.ManagedIdentityCredential.assert_not_called()
 
 
 def test_get_redis_url_from_environment_single_url(monkeypatch):
@@ -383,6 +422,267 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     assert (
         "password" not in cluster_call_kwargs
     ), "async GCP cluster must not use a static password (expires after 1h)"
+
+
+def test_redis_connect_func_rejects_mixed_credential_markers():
+    mock_connect_func = MagicMock()
+    mock_connect_func._gcp_service_account = "service-account"
+    mock_connect_func._azure_credential = MagicMock()
+
+    with pytest.raises(ValueError, match="both GCP and Azure"):
+        _get_credential_provider_from_connect_func(mock_connect_func, {})
+
+
+def test_redis_connect_func_without_markers_has_no_credential_provider():
+    assert _get_credential_provider_from_connect_func(lambda _: None, {}) is None
+
+
+def test_redis_connect_func_conflict_precedes_tls_validation():
+    mock_connect_func = MagicMock()
+    mock_connect_func._gcp_service_account = "service-account"
+    mock_connect_func._azure_credential = MagicMock()
+
+    with pytest.raises(ValueError, match="both GCP and Azure"):
+        get_redis_client(
+            url="redis://plain-redis.example.com:6379",
+            redis_connect_func=mock_connect_func,
+        )
+
+
+@pytest.mark.parametrize(
+    "client_factory",
+    [get_redis_client, get_redis_async_client, get_redis_connection_pool],
+)
+@pytest.mark.parametrize(
+    "iam_kwargs",
+    [
+        {"gcp_service_account": "projects/-/serviceAccounts/test@example.com"},
+        {"azure_redis_ad_token": "true"},
+    ],
+)
+@pytest.mark.parametrize(
+    "target_kwargs",
+    [
+        {"url": "redis://plain-redis.example.com:6379"},
+        {"url": "ReDiSs://secure-redis.example.com:6380"},
+        {"url": "rediss://"},
+        {"host": "plain-redis.example.com", "port": 6379},
+        {"host": "plain-redis.example.com", "port": 6379, "ssl": False},
+    ],
+)
+def test_redis_iam_requires_tls(client_factory, iam_kwargs, target_kwargs):
+    with pytest.raises(ValueError, match="Redis IAM authentication requires TLS"):
+        client_factory(**target_kwargs, **iam_kwargs)
+
+
+@pytest.mark.parametrize(
+    "redis_kwargs",
+    [
+        {
+            "url": "rediss://secure-redis.example.com:6380",
+            "gcp_service_account": "projects/-/serviceAccounts/test@example.com",
+        },
+        {
+            "host": "secure-redis.example.com",
+            "port": 6380,
+            "ssl": True,
+            "gcp_service_account": "projects/-/serviceAccounts/test@example.com",
+        },
+        {
+            "url": "redis://plain-redis.example.com:6379",
+            "password": "password",
+        },
+    ],
+)
+def test_redis_tls_validation_accepts_valid_configuration(redis_kwargs):
+    _get_redis_client_logic(**redis_kwargs)
+
+
+@pytest.mark.parametrize("client_factory", [get_redis_client, get_redis_async_client])
+def test_redis_iam_cluster_requires_ssl_when_explicit_url_is_present(client_factory):
+    startup_nodes = [{"host": "cluster-node.example.com", "port": 6380}]
+
+    with pytest.raises(ValueError, match="Redis IAM authentication requires TLS"):
+        client_factory(
+            url="rediss://fallback.example.com:6380",
+            startup_nodes=startup_nodes,
+            gcp_service_account="projects/-/serviceAccounts/test@example.com",
+        )
+
+
+@pytest.mark.parametrize("client_factory", [get_redis_client, get_redis_async_client])
+def test_redis_iam_cluster_requires_ssl_when_url_and_nodes_are_from_environment(
+    client_factory, monkeypatch
+):
+    monkeypatch.setenv("REDIS_URL", "rediss://fallback.example.com:6380")
+    monkeypatch.setenv(
+        "REDIS_CLUSTER_NODES",
+        json.dumps([{"host": "cluster-node.example.com", "port": 6380}]),
+    )
+    monkeypatch.setenv(
+        "REDIS_GCP_SERVICE_ACCOUNT",
+        "projects/-/serviceAccounts/test@example.com",
+    )
+    monkeypatch.delenv("REDIS_SSL", raising=False)
+
+    with pytest.raises(ValueError, match="Redis IAM authentication requires TLS"):
+        client_factory()
+
+
+def test_azure_ad_connect_func_sends_username_auth_argument():
+    mock_credential = MagicMock()
+    mock_credential.get_token.return_value.token = "access-token"
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        connect_func = create_azure_ad_redis_connect_func(username="redis-user")
+
+    connection = MagicMock()
+    connection.read_response.return_value = b"OK"
+
+    connect_func(connection)
+
+    connection.send_command.assert_called_once_with(
+        "AUTH", "redis-user", "access-token", check_health=False
+    )
+
+
+def test_sync_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):
+    """URL-based Azure Redis clients must keep token auth instead of filtering
+    it out before Redis.from_url."""
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.redis.Redis.from_url") as mock_from_url,
+    ):
+        get_redis_client(
+            url="rediss://cache.redis.cache.windows.net:6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_from_url.call_args.kwargs
+    assert call_kwargs["url"] == "rediss://cache.redis.cache.windows.net:6380"
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert "redis_connect_func" not in call_kwargs
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
+def test_async_url_client_azure_ad_auth_uses_credential_provider(monkeypatch):
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.async_redis.Redis.from_url") as mock_from_url,
+    ):
+        get_redis_async_client(
+            url="rediss://cache.redis.cache.windows.net:6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_from_url.call_args.kwargs
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
+def test_async_client_azure_ad_auth_uses_credential_provider(monkeypatch):
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.async_redis.Redis") as mock_redis,
+    ):
+        get_redis_async_client(
+            host="cache.redis.cache.windows.net",
+            port=6380,
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_redis.call_args.kwargs
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
+def test_connection_pool_url_azure_ad_auth_uses_credential_provider(monkeypatch):
+    """Connection pools built from Redis URLs need Azure AD credential_provider
+    too, otherwise pooled connections authenticate with no token."""
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch(
+            "litellm._redis.async_redis.BlockingConnectionPool.from_url"
+        ) as mock_from_url,
+    ):
+        get_redis_connection_pool(
+            url="rediss://cache.redis.cache.windows.net:6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_from_url.call_args.kwargs
+    assert call_kwargs["url"] == "rediss://cache.redis.cache.windows.net:6380"
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
+
+
+def test_connection_pool_azure_ad_auth_uses_credential_provider(monkeypatch):
+    mock_credential = MagicMock()
+    mock_azure_identity = _mock_azure_identity(mock_credential)
+    monkeypatch.setenv("REDIS_USERNAME", "managed-identity-object-id")
+
+    with (
+        patch.dict(
+            "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+        ),
+        patch("litellm._redis.async_redis.BlockingConnectionPool") as mock_pool,
+    ):
+        get_redis_connection_pool(
+            host="cache.redis.cache.windows.net",
+            port=6380,
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+    call_kwargs = mock_pool.call_args.kwargs
+    assert isinstance(call_kwargs["credential_provider"], AzureADCredentialProvider)
+    assert call_kwargs["credential_provider"].get_credentials() == (
+        "managed-identity-object-id",
+        mock_credential.get_token.return_value.token,
+    )
 
 
 @patch("litellm._redis.init_redis_cluster")

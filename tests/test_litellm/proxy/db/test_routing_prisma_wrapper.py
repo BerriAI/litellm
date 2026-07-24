@@ -569,6 +569,25 @@ async def test_iam_refresh_logs_carry_log_prefix(caplog):
     )
 
 
+@pytest.mark.asyncio
+async def test_iam_refresh_loop_logs_refresh_and_cancellation(caplog):
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    wrapper = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+    )
+    wrapper._calculate_seconds_until_refresh = MagicMock(return_value=0)
+    wrapper._safe_refresh_token = AsyncMock(side_effect=asyncio.CancelledError)
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        await wrapper._token_refresh_loop()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "Proactively refreshing RDS IAM token..." in messages
+    assert "RDS IAM token refresh loop cancelled" in messages
+
+
 def test_get_rds_iam_token_returns_none_when_iam_disabled():
     """`get_rds_iam_token` short-circuits to None when iam_token_db_auth is
     False — covers the early-return guard at the top of the method."""
@@ -756,6 +775,366 @@ def test_reader_iam_refresh_uses_parsed_endpoint(monkeypatch):
     # The reader updates its OWN env var; writer's DATABASE_URL is left alone.
     assert os.environ["DATABASE_URL_READ_REPLICA"] == new_url
     assert os.environ["DATABASE_URL"] == "writer-url-untouched"
+
+
+def test_azure_postgres_token_helper_uses_entra_scope(monkeypatch):
+    """Azure PostgreSQL passwordless auth must request the Azure Database for
+    PostgreSQL scope and URL-encode the access token before placing it in a
+    Postgres URL password slot."""
+    from litellm.proxy.auth.azure_postgres_token import (
+        AZURE_POSTGRES_SCOPE,
+        generate_azure_postgres_auth_token,
+    )
+
+    captured: Dict[str, Any] = {}
+
+    class FakeCredential:
+        def get_token(self, scope: str):
+            captured["scope"] = scope
+            return type(
+                "Token",
+                (),
+                {"token": "raw/token?with&chars=1"},
+            )()
+
+    token = generate_azure_postgres_auth_token(credential=FakeCredential())
+
+    assert captured["scope"] == AZURE_POSTGRES_SCOPE
+    assert token == "raw%2Ftoken%3Fwith%26chars%3D1"
+
+
+def test_azure_postgres_workload_identity_uses_default_credential(monkeypatch):
+    from litellm.proxy.auth.azure_postgres_token import (
+        _build_azure_postgres_credential,
+    )
+
+    default_credential = object()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(
+        return_value=default_credential
+    )
+    mock_azure_identity.ClientSecretCredential = MagicMock()
+    mock_azure_identity.ManagedIdentityCredential = MagicMock()
+    monkeypatch.setenv("AZURE_CLIENT_ID", "client-id")
+    monkeypatch.setenv("AZURE_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        credential = _build_azure_postgres_credential()
+
+    assert credential is default_credential
+    mock_azure_identity.DefaultAzureCredential.assert_called_once_with()
+    mock_azure_identity.ManagedIdentityCredential.assert_not_called()
+
+
+def test_azure_postgres_service_principal_uses_client_secret_credential(
+    monkeypatch,
+):
+    from litellm.proxy.auth.azure_postgres_token import (
+        _build_azure_postgres_credential,
+    )
+
+    client_secret_credential = object()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.ClientSecretCredential = MagicMock(
+        return_value=client_secret_credential
+    )
+    mock_azure_identity.DefaultAzureCredential = MagicMock()
+    mock_azure_identity.ManagedIdentityCredential = MagicMock()
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        credential = _build_azure_postgres_credential(
+            azure_client_id="client-id",
+            azure_tenant_id="tenant-id",
+            azure_client_secret="client-secret",
+        )
+
+    assert credential is client_secret_credential
+    mock_azure_identity.ClientSecretCredential.assert_called_once_with(
+        client_id="client-id",
+        tenant_id="tenant-id",
+        client_secret="client-secret",
+    )
+    mock_azure_identity.DefaultAzureCredential.assert_not_called()
+    mock_azure_identity.ManagedIdentityCredential.assert_not_called()
+
+
+def test_azure_postgres_managed_identity_uses_client_id(monkeypatch):
+    from litellm.proxy.auth.azure_postgres_token import (
+        _build_azure_postgres_credential,
+    )
+
+    managed_identity_credential = object()
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.ClientSecretCredential = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock()
+    mock_azure_identity.ManagedIdentityCredential = MagicMock(
+        return_value=managed_identity_credential
+    )
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        credential = _build_azure_postgres_credential(
+            azure_client_id="managed-client-id"
+        )
+
+    assert credential is managed_identity_credential
+    mock_azure_identity.ManagedIdentityCredential.assert_called_once_with(
+        client_id="managed-client-id"
+    )
+    mock_azure_identity.ClientSecretCredential.assert_not_called()
+    mock_azure_identity.DefaultAzureCredential.assert_not_called()
+
+
+def test_generate_azure_postgres_auth_token_builds_default_credential(
+    monkeypatch,
+):
+    from litellm.proxy.auth.azure_postgres_token import (
+        AZURE_POSTGRES_SCOPE,
+        generate_azure_postgres_auth_token,
+    )
+
+    default_credential = MagicMock()
+    default_credential.get_token.return_value.token = "raw/default token"
+    mock_azure_identity = MagicMock()
+    mock_azure_identity.ClientSecretCredential = MagicMock()
+    mock_azure_identity.DefaultAzureCredential = MagicMock(
+        return_value=default_credential
+    )
+    mock_azure_identity.ManagedIdentityCredential = MagicMock()
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_FEDERATED_TOKEN_FILE", raising=False)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": MagicMock()}
+    ):
+        token = generate_azure_postgres_auth_token()
+
+    assert token == "raw%2Fdefault%20token"
+    mock_azure_identity.DefaultAzureCredential.assert_called_once_with()
+    default_credential.get_token.assert_called_once_with(AZURE_POSTGRES_SCOPE)
+
+
+def test_azure_postgres_auth_requires_azure_identity(monkeypatch):
+    import builtins
+
+    from litellm.proxy.auth.azure_postgres_token import (
+        _build_azure_postgres_credential,
+    )
+
+    real_import = builtins.__import__
+
+    def fail_azure_identity_import(name, *args, **kwargs):
+        if name == "azure.identity":
+            raise ImportError("missing azure.identity")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_azure_identity_import)
+
+    with pytest.raises(ImportError, match="azure-identity is required"):
+        _build_azure_postgres_credential()
+
+
+@pytest.mark.parametrize(
+    ("schema", "expected_url"),
+    (
+        (
+            "public",
+            "postgresql://u:TOKEN@h:5432/db?schema=public&sslmode=require&sslaccept=strict",
+        ),
+        (None, "postgresql://u:TOKEN@h:5432/db?sslmode=require&sslaccept=strict"),
+    ),
+)
+def test_build_database_token_auth_url_requires_strict_tls_for_azure(
+    monkeypatch, schema, expected_url
+):
+    from litellm.proxy.db.prisma_client import (
+        IAMEndpoint,
+        build_database_token_auth_url,
+    )
+
+    fake_module = MagicMock()
+    fake_module.generate_azure_postgres_auth_token.return_value = "TOKEN"
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.auth.azure_postgres_token", fake_module
+    )
+
+    url = build_database_token_auth_url(
+        IAMEndpoint(host="h", port="5432", user="u", name="db", schema=schema),
+        azure_postgresql_auth=True,
+    )
+
+    assert url == expected_url
+
+
+def test_writer_get_azure_postgres_token_uses_database_env_vars(
+    monkeypatch, unset_database_url
+):
+    """Writer Azure passwordless auth reads the same DATABASE_HOST/PORT/USER/NAME
+    env vars as the existing RDS IAM path, but mints an Entra token instead of
+    an AWS presigned token."""
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    monkeypatch.setenv("DATABASE_HOST", "server.postgres.database.azure.com")
+    monkeypatch.setenv("DATABASE_PORT", "5432")
+    monkeypatch.setenv("DATABASE_USER", "managed-identity-name")
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.setenv("DATABASE_SCHEMA", "public")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    fake_module = MagicMock()
+    fake_module.generate_azure_postgres_auth_token.return_value = "AZURE%2FTOKEN"
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.auth.azure_postgres_token", fake_module
+    )
+
+    writer = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+        azure_postgresql_auth=True,
+    )
+
+    new_url = writer.get_rds_iam_token()
+
+    assert new_url == (
+        "postgresql://managed-identity-name:AZURE%2FTOKEN@"
+        "server.postgres.database.azure.com:5432/litellm?"
+        "schema=public&sslmode=require&sslaccept=strict"
+    )
+    assert os.environ["DATABASE_URL"] == new_url
+    fake_module.generate_azure_postgres_auth_token.assert_called_once()
+
+
+def test_azure_postgres_jwt_expiration_is_used_for_refresh_timing():
+    """Azure PostgreSQL tokens are JWTs; the wrapper should read exp so the
+    existing proactive refresh loop can schedule before token expiry."""
+    from datetime import datetime
+
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    exp = 1893456000
+    token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE4OTM0NTYwMDB9.signature"
+    wrapper = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+        azure_postgresql_auth=True,
+    )
+
+    assert wrapper._parse_token_expiration(token) == datetime.utcfromtimestamp(exp)
+
+
+def test_azure_postgres_token_auth_log_name():
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    wrapper = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+        azure_postgresql_auth=True,
+    )
+
+    assert wrapper._token_auth_log_name() == "Azure PostgreSQL Entra token"
+
+
+def test_jwt_expiration_parse_returns_none_without_exp():
+    from litellm.proxy.db.prisma_client import _parse_jwt_expiration_claim
+
+    assert _parse_jwt_expiration_claim("header.e30.signature") is None
+
+
+def test_jwt_expiration_parse_returns_none_for_non_object_payload():
+    from litellm.proxy.db.prisma_client import _parse_jwt_expiration_claim
+
+    assert _parse_jwt_expiration_claim("header.W10.signature") is None
+
+
+def test_jwt_expiration_parse_returns_none_for_invalid_payload():
+    from litellm.proxy.db.prisma_client import _parse_jwt_expiration_claim
+
+    assert _parse_jwt_expiration_claim("header.invalid-payload.signature") is None
+
+
+def test_rds_token_expiration_parse_returns_none_for_invalid_query():
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+
+    wrapper = PrismaWrapper(
+        original_prisma=MagicMock(),
+        iam_token_db_auth=True,
+    )
+
+    assert (
+        wrapper._parse_token_expiration("token?X-Amz-Date=not-a-date&X-Amz-Expires=900")
+        is None
+    )
+
+
+def test_prisma_client_uses_azure_marker_not_jwt_shape(monkeypatch):
+    import urllib.parse
+
+    from litellm.proxy.db.prisma_client import (
+        AZURE_POSTGRESQL_AUTH_MARKER_ENV,
+        PrismaWrapper,
+    )
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    token = "eyJhbGciOiJub25lIn0.eyJleHAiOjE4OTM0NTYwMDB9.signature"
+    jwt_url = (
+        "postgresql://managed-identity:"
+        f"{urllib.parse.quote(token, safe='')}@server.postgres.database.azure.com:5432/litellm"
+    )
+
+    class FakePrisma:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def connect(self):
+            return None
+
+    fake_module = MagicMock()
+    fake_module.Prisma = FakePrisma
+    monkeypatch.setitem(sys.modules, "prisma", fake_module)
+    monkeypatch.delenv("IAM_TOKEN_DB_AUTH", raising=False)
+    monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+    monkeypatch.delenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV, raising=False)
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = PrismaClient(database_url=jwt_url, proxy_logging_obj=MagicMock())
+    assert isinstance(client.db, PrismaWrapper)
+    assert client.db.iam_token_db_auth is False
+    assert client.db._azure_postgresql_auth is False
+
+    monkeypatch.setenv(AZURE_POSTGRESQL_AUTH_MARKER_ENV, "True")
+    replica_url = (
+        "postgresql://reader@server-replica.postgres.database.azure.com:5432/litellm"
+    )
+    refreshed_url = replica_url.replace("reader@", "reader:token@")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", replica_url)
+
+    with patch(
+        "litellm.proxy.utils.build_database_token_auth_url",
+        return_value=refreshed_url,
+    ):
+        client = PrismaClient(database_url=jwt_url, proxy_logging_obj=MagicMock())
+
+    assert isinstance(client.db, RoutingPrismaWrapper)
+    assert client.db.reader.iam_token_db_auth is True
+    assert client.db.reader._azure_postgresql_auth is True
+    assert client.db.reader._original_prisma.kwargs == {
+        "datasource": {"url": refreshed_url}
+    }
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == refreshed_url
 
 
 @pytest.mark.asyncio
