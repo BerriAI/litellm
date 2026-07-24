@@ -11,9 +11,11 @@ from typing import Literal
 from pydantic import BaseModel
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
-from e2e_http import NoBody, Result, Success, unwrap
+from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from lifecycle import ResourceManager
 from models import (
+    AnthropicMessagesBody,
+    AnthropicMessagesResponse,
     ChatBody,
     ChatMessage,
     ChatResponse,
@@ -109,6 +111,12 @@ class ApplyGuardrailResponse(BaseModel):
     response_text: str
 
 
+class _ResponsesGuardrailBody(BaseModel):
+    model: str
+    input: str
+    guardrails: list[str] | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class GuardrailsClient:
     proxy: ProxyClient
@@ -163,15 +171,22 @@ class GuardrailsClient:
             )
         ).guardrail_id
 
-    def create_backend_model(self, resources: ResourceManager, prefix: str = "e2e-guard-backend") -> str:
-        """Register a gemini chat deployment for a guardrail test to run against
+    def create_backend_model(
+        self,
+        resources: ResourceManager,
+        prefix: str = "e2e-guard-backend",
+        *,
+        backend: str = "gemini/gemini-2.5-flash",
+        api_key: str = "os.environ/GEMINI_API_KEY",
+    ) -> str:
+        """Register a chat deployment for a guardrail test to run against
         (deleted on teardown). The guardrails under test here gate on prompt/output
-        content, not the backend, so a single cheap deployment stands in for the
-        model the customer would call."""
+        content, not the backend, so a cheap deployment stands in for the model the
+        customer would call. Messages/responses suites pass an Anthropic/OpenAI backend."""
         model_name = f"{prefix}-{unique_marker()}"
         model_id = self.proxy.create_model(
             model_name,
-            LiteLLMParamsBody(model="gemini/gemini-2.5-flash", api_key="os.environ/GEMINI_API_KEY"),
+            LiteLLMParamsBody(model=backend, api_key=api_key),
         )
         resources.defer(lambda: self.proxy.delete_model(model_id))
         return model_name
@@ -249,6 +264,41 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
                 guardrails=guardrails,
+            ),
+        )
+
+    def messages(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 16,
+    ) -> Result[AnthropicMessagesResponse]:
+        return self.proxy.messages(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                guardrails=guardrails,
+            ),
+        )
+
+    def responses(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/v1/responses",
+            headers=self.proxy.transport.bearer(key),
+            json=_ResponsesGuardrailBody(
+                model=model, input=text, guardrails=guardrails
             ),
         )
 

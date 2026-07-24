@@ -373,6 +373,7 @@ class AnthropicMessagesBody(BaseModel):
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    guardrails: list[str] | None = None
 
 
 class CountTokensBody(BaseModel):

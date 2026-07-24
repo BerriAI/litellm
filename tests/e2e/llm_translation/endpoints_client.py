@@ -24,6 +24,8 @@ __all__ = [
     "TextBlock",
     "ImageEditForm",
     "ImagesResult",
+    "TranscriptionForm",
+    "TranscriptionResult",
 ]
 
 
@@ -72,6 +74,7 @@ class ResponsesRequest(BaseModel):
     instructions: str | None = None
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
+    guardrails: list[str] | None = None
 
 
 class MessagesRequest(BaseModel):
@@ -273,7 +276,13 @@ class EndpointsClient:
         )
 
     def responses(
-        self, key: str, model: str, text: str, *, stream: bool = False
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        stream: bool = False,
+        guardrails: list[str] | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
@@ -283,6 +292,7 @@ class EndpointsClient:
                 input=text,
                 instructions="You are a helpful assistant",
                 stream=stream,
+                guardrails=guardrails,
             ),
             stream=stream,
         )

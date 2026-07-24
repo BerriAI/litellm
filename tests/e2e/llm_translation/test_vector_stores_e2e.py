@@ -1,16 +1,19 @@
 """Vendor §9.17: OpenAI vector store CRUD through the gateway (LIT-4778).
 
 Create -> list -> retrieve -> delete against a live OpenAI-backed deployment.
+Also covers upload file, attach to store, poll until ready, and search.
 Negatives pin missing search query and invalid store id handling.
 """
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from pydantic import BaseModel
 
-from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
+from e2e_http import FileUploadForm, NoBody, unwrap
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -47,8 +50,27 @@ class VectorStoreSearchBody(BaseModel):
     max_num_results: int | None = None
 
 
-class VectorStoreUpdateBody(BaseModel):
-    name: str | None = None
+class VectorStoreFileCreateBody(BaseModel):
+    file_id: str
+    attributes: dict[str, str] | None = None
+
+
+class VectorStoreFileObject(BaseModel):
+    id: str
+    object: str | None = None
+    status: str | None = None
+    vector_store_id: str | None = None
+
+
+class FileObject(BaseModel):
+    id: str
+    object: str | None = None
+    purpose: str | None = None
+
+
+class VectorStoreSearchResponse(BaseModel):
+    object: str | None = None
+    data: list[dict[str, object]] = []
 
 
 def _register_openai_model(proxy: ProxyClient, resources: ResourceManager) -> str:
@@ -59,6 +81,42 @@ def _register_openai_model(proxy: ProxyClient, resources: ResourceManager) -> st
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return resources.key()
+
+
+def _delete_store_later(proxy: ProxyClient, resources: ResourceManager, key: str, store_id: str) -> None:
+    def _delete() -> None:
+        _ = proxy.transport.delete(
+            f"/v1/vector_stores/{store_id}",
+            headers=proxy.transport.bearer(key),
+            json=NoBody(),
+            response_type=VectorStoreDeleteResponse,
+        )
+
+    resources.defer(_delete)
+
+
+def _poll_vector_store_file(
+    proxy: ProxyClient, *, key: str, store_id: str, file_id: str
+) -> VectorStoreFileObject:
+    deadline = time.monotonic() + POLL_TIMEOUT
+    last: VectorStoreFileObject | None = None
+    while time.monotonic() < deadline:
+        last = unwrap(
+            proxy.transport.get(
+                f"/v1/vector_stores/{store_id}/files/{file_id}",
+                headers=proxy.transport.bearer(key),
+                params=NoBody(),
+                response_type=VectorStoreFileObject,
+            )
+        )
+        if last.status in ("completed", "failed", "cancelled"):
+            return last
+        time.sleep(POLL_INTERVAL)
+    raise AssertionError(
+        f"vector store file {file_id} never reached a terminal status within "
+        f"{POLL_TIMEOUT}s; last={last}"
+    )
+
 
 
 class TestVectorStores:
@@ -79,17 +137,7 @@ class TestVectorStores:
             )
         )
         assert created.id, f"create returned no id: {created}"
-        store_id = created.id
-
-        def _delete_store() -> None:
-            _ = proxy.transport.delete(
-                f"/v1/vector_stores/{store_id}",
-                headers=proxy.transport.bearer(key),
-                json=NoBody(),
-                response_type=VectorStoreDeleteResponse,
-            )
-
-        resources.defer(_delete_store)
+        _delete_store_later(proxy, resources, key, created.id)
 
         listed = unwrap(
             proxy.transport.get(
@@ -137,23 +185,95 @@ class TestVectorStores:
                 response_type=VectorStoreObject,
             )
         )
-        store_id = created.id
-
-        def _delete_search_store() -> None:
-            _ = proxy.transport.delete(
-                f"/v1/vector_stores/{store_id}",
-                headers=proxy.transport.bearer(key),
-                json=NoBody(),
-                response_type=VectorStoreDeleteResponse,
-            )
-
-        resources.defer(_delete_search_store)
+        _delete_store_later(proxy, resources, key, created.id)
         result = proxy.transport.send(
             f"/v1/vector_stores/{created.id}/search",
             headers=proxy.transport.bearer(key),
             json=VectorStoreSearchBody(max_num_results=10),
         )
         assert_error_or_server_known(result, "vector store search missing query")
+
+    @pytest.mark.covers("llm.vector_stores.openai.basic.nonstream.works")
+    def test_file_attach_poll_and_search(
+        self, proxy: ProxyClient, resources: ResourceManager
+    ) -> None:
+        key = _register_openai_model(proxy, resources)
+        marker = f"azure-falcon-{unique_marker()}"
+        content = (
+            b"LiteLLM e2e vector store document.\n"
+            b"The secret project codename is "
+            + marker.encode()
+            + b".\nSearch should find that codename when queried.\n"
+        )
+        uploaded = unwrap(
+            proxy.transport.upload(
+                "/v1/files",
+                headers=proxy.transport.bearer(key),
+                form=FileUploadForm(purpose="assistants"),
+                filename="vs_doc.txt",
+                content=content,
+                file_content_type="text/plain",
+                response_type=FileObject,
+            )
+        )
+        assert uploaded.id, f"file upload returned no id: {uploaded}"
+        file_id = uploaded.id
+
+        def _delete_file() -> None:
+            _ = proxy.transport.delete(
+                f"/v1/files/{file_id}",
+                headers=proxy.transport.bearer(key),
+                json=NoBody(),
+                response_type=NoBody,
+            )
+
+        resources.defer(_delete_file)
+
+        store = unwrap(
+            proxy.transport.post(
+                "/v1/vector_stores",
+                headers=proxy.transport.bearer(key),
+                json=VectorStoreCreateBody(name=f"e2e-vs-files-{unique_marker()}"),
+                response_type=VectorStoreObject,
+            )
+        )
+        _delete_store_later(proxy, resources, key, store.id)
+
+        attached = unwrap(
+            proxy.transport.post(
+                f"/v1/vector_stores/{store.id}/files",
+                headers=proxy.transport.bearer(key),
+                json=VectorStoreFileCreateBody(
+                    file_id=uploaded.id, attributes={"source": "e2e"}
+                ),
+                response_type=VectorStoreFileObject,
+            )
+        )
+        assert attached.id, f"attach returned no file id: {attached}"
+        ready = _poll_vector_store_file(
+            proxy, key=key, store_id=store.id, file_id=attached.id
+        )
+        assert ready.status == "completed", f"file did not complete indexing: {ready}"
+
+        search = unwrap(
+            proxy.transport.post(
+                f"/v1/vector_stores/{store.id}/search",
+                headers=proxy.transport.bearer(key),
+                json=VectorStoreSearchBody(query=marker, max_num_results=5),
+                response_type=VectorStoreSearchResponse,
+            )
+        )
+        assert search.data is not None, f"search returned no data field: {search}"
+
+        deleted_file = unwrap(
+            proxy.transport.delete(
+                f"/v1/vector_stores/{store.id}/files/{attached.id}",
+                headers=proxy.transport.bearer(key),
+                json=NoBody(),
+                response_type=VectorStoreDeleteResponse,
+            )
+        )
+        assert deleted_file.deleted is True or deleted_file.id == attached.id
 
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
     def test_search_empty_query_returns_error_or_empty(
@@ -168,17 +288,7 @@ class TestVectorStores:
                 response_type=VectorStoreObject,
             )
         )
-        store_id = created.id
-
-        def _delete_empty_store() -> None:
-            _ = proxy.transport.delete(
-                f"/v1/vector_stores/{store_id}",
-                headers=proxy.transport.bearer(key),
-                json=NoBody(),
-                response_type=VectorStoreDeleteResponse,
-            )
-
-        resources.defer(_delete_empty_store)
+        _delete_store_later(proxy, resources, key, created.id)
         result = proxy.transport.send(
             f"/v1/vector_stores/{created.id}/search",
             headers=proxy.transport.bearer(key),
