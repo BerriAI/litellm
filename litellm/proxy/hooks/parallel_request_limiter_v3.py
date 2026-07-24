@@ -339,6 +339,74 @@ _LITELLM_STASH_KEYS: Tuple[str, ...] = (
 )
 
 
+# Block types whose binary payload (base64 or URL) should not be counted as
+# text characters.  audio/video/file have no meaningful text representation;
+# image blocks get a conservative floor below instead of 0.
+_BINARY_CONTENT_BLOCK_TYPES = frozenset(("input_audio", "input_video", "input_file"))
+
+# Conservative per-image char floor used for token pre-reservation.
+# Accurate counting requires image dimensions + detail level (provider-specific);
+# this floor (~250 tokens at 4 chars/token) avoids both the base64-blob
+# inflation this PR fixes and zero-cost image batching that bypasses TPM limits.
+_IMAGE_BLOCK_CHAR_FLOOR = 1000
+
+# Text-bearing fields across known Responses API block types:
+#   input_text / output_text → "text"
+#   function_call_output     → "output"
+#   refusal                  → "refusal"
+# Summing all three is safe — each typed block only populates one of them.
+_TEXT_BEARING_FIELDS: tuple[str, ...] = ("text", "output", "refusal")
+
+
+def _chars_from_content_block(block: dict) -> int:
+    """Return estimated text char count for one Responses API content block.
+
+    - ``input_image``: returns a conservative per-image floor so image-heavy
+      requests are not zero-cost for TPM reservation purposes.
+    - ``input_audio``/``input_video``/``input_file``: returns 0 (no text).
+    - All other types: sums ``text``, ``output``, and ``refusal`` fields so
+      that ``input_text``, ``output_text``, ``function_call_output``,
+      ``refusal``, and future text-bearing block types are all counted.
+    """
+    block_type = block.get("type", "")
+    if block_type == "input_image":
+        return _IMAGE_BLOCK_CHAR_FLOOR
+    if block_type in _BINARY_CONTENT_BLOCK_TYPES:
+        return 0
+    return sum(len(v) for field in _TEXT_BEARING_FIELDS if isinstance(v := block.get(field, ""), str))
+
+
+def _chars_from_input_list(items: list) -> int:
+    """Count text chars from a Responses API ``input`` list, skipping image/audio/video blobs.
+
+    The Responses API sends ``input`` as a list of message objects, each with a
+    ``content`` array whose blocks are typed (``input_text``, ``input_image``,
+    ``input_audio``, …).  Serialising an ``input_image`` block with ``str()``
+    includes the raw base64 payload and massively inflates the char count, causing
+    false-positive 429s on TPM-limited keys.  This helper counts only text content
+    and falls back to ``len(str(item))`` for plain-string items (embeddings format).
+    """
+    total = 0
+    for item in items:
+        if isinstance(item, str):
+            total += len(item)
+        elif isinstance(item, dict):
+            content = item.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, str):
+                        total += len(block)
+                    elif isinstance(block, dict):
+                        total += _chars_from_content_block(block)
+            elif isinstance(content, str):
+                total += len(content)
+            else:
+                total += _chars_from_content_block(item)
+        else:
+            total += len(str(item))
+    return total
+
+
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: Optional[int]
     tokens_per_unit: Optional[int]
@@ -511,7 +579,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             case (_, _, str() as t):
                 total_chars = len(t)
             case (_, _, list() as t):
-                total_chars = sum(len(str(item)) for item in t)
+                total_chars = _chars_from_input_list(t)
             case _:
                 total_chars = 0
 
