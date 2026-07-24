@@ -31,6 +31,7 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -904,3 +905,64 @@ async def test_async_streaming_completion_does_not_reset_context_before_iteratio
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_stream_wrapper_del_restores_correlation_context():
+    """CustomStreamWrapper.__del__ is the best-effort fallback for an abandoned
+    stream (caller never exhausts it, so the normal terminal-handler restore
+    never fires). Testing this via real garbage collection is unreliable in
+    practice - CPython's per-chunk logging submits work to a thread pool
+    executor whose worker thread transiently holds its own reference to the
+    wrapper (a bound method argument) until that task completes, so refcount
+    doesn't reliably hit zero on a deterministic schedule even with polling.
+    Call __del__ directly instead: it's a plain method, calling it early
+    doesn't run actual finalization, and this exercises exactly the logic that
+    real garbage collection would eventually trigger.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-abandoned")
+    session_id_var.set("outer-session-abandoned")
+    try:
+        log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="abandoned-stream-call",
+            function_id="fn-abandoned-stream",
+            kwargs={"litellm_session_id": "abandoned-stream-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=log_obj,
+        )
+        wrapper.__del__()
+
+        assert trace_id_var.get() == "outer-trace-abandoned"
+        assert session_id_var.get() == "outer-session-abandoned"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
+def test_stream_wrapper_del_never_raises_with_broken_logging_obj():
+    """__del__ runs during garbage collection, possibly at interpreter
+    shutdown - it must never raise regardless of what's wrong with logging_obj,
+    or Python prints an ignored "exception in __del__" warning and, worse,
+    could mask the real error a caller is in the middle of handling."""
+
+    class ExplodingLogging:
+        model_call_details: dict = {}
+
+        def _restore_correlation_context(self):
+            raise RuntimeError("logging_obj is in a bad state")
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-3.5-turbo",
+        logging_obj=ExplodingLogging(),
+    )
+    wrapper.__del__()  # must not raise

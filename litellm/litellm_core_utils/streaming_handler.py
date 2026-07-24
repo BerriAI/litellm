@@ -213,6 +213,29 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
+    def __del__(self) -> None:
+        """Best-effort correlation-context cleanup for an abandoned stream.
+
+        wrapper()/wrapper_async() deliberately skip restoring trace_id/session_id
+        when they return a stream, so log lines emitted while the caller iterates
+        it still carry this call's ids (see request_correlation_in_logs). If the
+        caller never fully consumes the stream - stops early, drops the
+        reference, cancels it - the terminal handler that normally does the
+        restore never fires. This is a best-effort fallback, not a guarantee:
+        __del__ timing is unpredictable (delayed by cyclic GC, not guaranteed at
+        interpreter shutdown, and may run on a different thread), so this can
+        only reduce how long the leak persists, not eliminate it. Never let a
+        finalizer raise.
+        """
+        try:
+            logging_obj = getattr(self, "logging_obj", None)
+            if logging_obj is not None:
+                restore = getattr(logging_obj, "_restore_correlation_context", None)
+                if restore is not None:
+                    restore()
+        except Exception:
+            pass
+
     async def aclose(self):
         if self.completion_stream is not None:
             stream_to_close: Final = self.completion_stream
