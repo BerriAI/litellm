@@ -324,6 +324,8 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("POE_API_KEY")
                     elif endpoint == "https://llm.chutes.ai/v1/":
                         custom_llm_provider = "chutes"
+                    elif endpoint == "https://api.gondola-ai.com/v1":
+                        custom_llm_provider = "gondola"
                         dynamic_api_key = get_secret_str("CHUTES_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
