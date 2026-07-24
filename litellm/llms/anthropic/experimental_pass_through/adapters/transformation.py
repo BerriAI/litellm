@@ -1476,7 +1476,7 @@ class LiteLLMAnthropicMessagesAdapter:
         applied_edits: Optional[List[AppliedEdit]] = None,
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
-        if response.choices[0].finish_reason is not None:
+        if response.choices and response.choices[0].finish_reason is not None:
             delta = MessageDelta(
                 stop_reason=self._translate_openai_finish_reason_to_anthropic(response.choices[0].finish_reason),
             )
