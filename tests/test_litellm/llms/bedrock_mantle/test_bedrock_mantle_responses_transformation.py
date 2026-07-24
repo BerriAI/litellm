@@ -769,6 +769,53 @@ class TestBedrockMantleNamespaceRestoration:
         )
         assert "namespace" not in restored
 
+    def test_non_stream_top_level_function_collision_is_not_assigned_namespace(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        tools = [
+            {"type": "function", "name": "spawn_agent"},
+            *self._NAMESPACE_TOOLS,
+        ]
+        response = httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://example.com/v1/responses"),
+            json={
+                "id": "resp_123",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "completed",
+                "model": "openai.gpt-5.6-luna",
+                "output": [self._function_call()],
+            },
+        )
+
+        parsed = cfg.transform_response_api_response(
+            model="openai.gpt-5.6-luna",
+            raw_response=response,
+            logging_obj=self._logging_obj(tools),
+        )
+
+        assert "namespace" not in parsed.output[0].model_dump(exclude_none=True)
+
+    def test_streaming_top_level_function_collision_is_not_assigned_namespace(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        tools = [
+            {"type": "function", "name": "spawn_agent"},
+            *self._NAMESPACE_TOOLS,
+        ]
+
+        parsed = cfg.transform_streaming_response(
+            model="openai.gpt-5.6-luna",
+            parsed_chunk={
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": self._function_call(),
+            },
+            logging_obj=self._logging_obj(tools),
+        )
+
+        assert "namespace" not in parsed.model_dump(exclude_none=True)["item"]
+
 
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self, local_cost_map):

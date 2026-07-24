@@ -196,6 +196,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             return {}
 
         namespaces_by_tool_name: dict[str, set[str]] = {}
+        top_level_function_names = frozenset(
+            tool["name"]
+            for tool in tools
+            if isinstance(tool, dict) and tool.get("type") == "function" and isinstance(tool.get("name"), str)
+        )
         for namespace_tool in tools:
             if not isinstance(namespace_tool, dict) or namespace_tool.get("type") != "namespace":
                 continue
@@ -213,7 +218,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return {
             tool_name: next(iter(namespaces))
             for tool_name, namespaces in namespaces_by_tool_name.items()
-            if len(namespaces) == 1
+            if len(namespaces) == 1 and tool_name not in top_level_function_names
         }
 
     @classmethod
