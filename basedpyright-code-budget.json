@@ -84,7 +84,7 @@
     "limit": 77
   },
   "reportPrivateUsage": {
-    "limit": 2438
+    "limit": 2437
   },
   "reportRedeclaration": {
     "limit": 12
@@ -111,7 +111,7 @@
     "limit": 20403
   },
   "reportUnknownVariableType": {
-    "limit": 32141
+    "limit": 32139
   },
   "reportUnnecessaryCast": {
     "limit": 177
@@ -135,7 +135,7 @@
     "limit": 33
   },
   "reportUnusedFunction": {
-    "limit": 206
+    "limit": 205
   },
   "reportUnusedImport": {
     "limit": 1005
