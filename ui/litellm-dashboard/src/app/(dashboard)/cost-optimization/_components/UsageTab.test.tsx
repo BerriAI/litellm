@@ -155,6 +155,27 @@ describe("UsageTab", () => {
     expect(series[1]["Prompt caching"]).toBeCloseTo(0.016, 5);
   });
 
+  it("plots the daily series oldest first even though the rollup arrives newest first", async () => {
+    // The daily activity endpoint returns days newest first; the chart must
+    // still read left to right in time, and the running total must climb toward
+    // the newest day, not fall away from it.
+    const newestFirst = [
+      day("2026-07-13", { prompt_caching_savings_spend: 0.1 }),
+      day("2026-07-12", { prompt_caching_savings_spend: 0.04 }),
+    ];
+    const { getByTestId, getByRole } = renderWith(newestFirst);
+
+    const cumulative = readSeries(getByTestId("area-chart"));
+    expect(cumulative.map((p: { date: string }) => p.date)).toEqual(["Jul 12", "Jul 13"]);
+    expect(cumulative[0]["Prompt caching"]).toBeCloseTo(0.04, 5);
+    expect(cumulative[1]["Prompt caching"]).toBeCloseTo(0.14, 5);
+    expect(cumulative[1]["Prompt caching"]).toBeGreaterThan(cumulative[0]["Prompt caching"]);
+
+    await userEvent.click(getByRole("tab", { name: "Per day" }));
+    const perDay = readSeries(getByTestId("area-chart"));
+    expect(perDay.map((p: { date: string }) => p.date)).toEqual(["Jul 12", "Jul 13"]);
+  });
+
   it("drops back to the raw per-interval readings on the other tab", async () => {
     const { getByRole, getByTestId } = renderWith(twoDays());
 

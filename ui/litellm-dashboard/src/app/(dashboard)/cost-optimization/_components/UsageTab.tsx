@@ -136,11 +136,17 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   const perInterval = useMemo<SavingsPoint[]>(() => {
     if (!hourly) {
-      return results.map((d) => ({
-        date: shortDate(d.date),
-        Compression: compressionOf(d.metrics),
-        "Prompt caching": cachingOf(d.metrics),
-      }));
+      // The daily rollup arrives newest first; sort on the raw ISO date so the
+      // axis reads oldest to newest and the running total accumulates forward
+      // in time rather than backward. Sort here, before shortDate() drops the
+      // year and makes the labels unsortable.
+      return [...results]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((d) => ({
+          date: shortDate(d.date),
+          Compression: compressionOf(d.metrics),
+          "Prompt caching": cachingOf(d.metrics),
+        }));
     }
     const withDate = !!startTime && !!endTime && spanInDays(startTime, endTime) > 1;
     return hourly.buckets.map((b) => ({
