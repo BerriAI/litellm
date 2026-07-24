@@ -644,12 +644,14 @@ async def test_create__unified_file_id_db_error_fails_closed_503(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_with_loadbalancing_uses_resolving_branch(harness):
-    """A unified file must not take the raw load-balanced dispatch branch even
-    when load balancing is enabled and a router model is present; it takes the
-    unified branch that resolves the storage_url and restores the response, so
-    the opaque id never reaches the provider and model_file_id_mapping (keyed on
-    the original id) is not clobbered on the load-balanced path."""
+async def test_create__multi_model_unified_file_with_loadbalancing_keeps_router_branch(harness):
+    """Regression guard: a multi-model managed file dispatched with an explicit
+    router model under load balancing must keep taking the load-balanced router
+    branch, exactly as on the base revision, where the managed-files deployment
+    hook remaps the unified id per model. Routing it into the unified branch
+    instead would trip that branch's "exactly one model" 400 and break a path
+    that works today, so the unified-file resolution must not steal the
+    load-balanced branch."""
     set_body(
         harness,
         {
@@ -661,32 +663,17 @@ async def test_create__unified_file_id_with_loadbalancing_uses_resolving_branch(
     )
     harness.is_known_model.return_value = True
 
-    fake_db_file = MagicMock(
-        storage_url="gs://bucket/litellm-vertex-files/publishers/google/models/gemini-2.0/abc",
-        created_by="user-1",
-        team_id=None,
-    )
-    find_first = AsyncMock(return_value=fake_db_file)
-    fake_repo_instance = MagicMock()
-    fake_repo_instance.table.find_first = find_first
-    fake_repo_cls = MagicMock(return_value=fake_repo_instance)
-
     with (
         patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True),
         patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
-        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gemini-2.0"]),
-        patch.object(proxy_server, "prisma_client", MagicMock()),
-        patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
+        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["model-a", "model-b"]),
     ):
-        resp = await call_create(harness, user=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"))
+        await call_create(harness)
 
+    # Load-balanced router branch fired with the request unchanged; the unified
+    # branch (and its single-model 400) was not reached.
     assert harness.router_acreate.call_count == 1
-    # The resolving branch fired: model injected from the unified id, storage_url
-    # forwarded, response restored to the unified id (not the internal storage_url).
-    assert harness.router_kwargs()["model"] == "gemini-2.0"
-    assert harness.router_kwargs()["input_file_id"] == fake_db_file.storage_url
-    assert resp.input_file_id == "litellm_proxy_unified_id"
-    assert resp._hidden_params["unified_file_id"] == "unified-xyz"
+    assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
     harness.litellm_acreate.assert_not_called()
 
 

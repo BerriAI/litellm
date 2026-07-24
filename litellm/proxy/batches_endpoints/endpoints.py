@@ -244,12 +244,7 @@ async def create_batch(
 
             response.input_file_id = input_file_id
 
-        elif (
-            litellm.enable_loadbalancing_on_batch_endpoints is True
-            and is_router_model
-            and router_model is not None
-            and not unified_file_id
-        ):
+        elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
