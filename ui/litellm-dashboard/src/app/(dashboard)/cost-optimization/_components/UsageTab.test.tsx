@@ -68,7 +68,7 @@ interface RenderOptions {
   toolSpend?: ToolSpendResponse;
   from?: Date;
   to?: Date;
-  isAdmin?: boolean;
+  canViewGlobalSavings?: boolean;
 }
 
 const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
@@ -76,7 +76,7 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
     toolSpend = emptyToolSpend,
     from = new Date(2026, 6, 1),
     to = new Date(2026, 6, 14),
-    isAdmin = true,
+    canViewGlobalSavings = true,
   } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
   return render(
@@ -88,7 +88,7 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
         results,
         loading: false,
         isFetchingMore: false,
-        isAdmin,
+        canViewGlobalSavings,
       }}
     />,
   );
@@ -272,12 +272,14 @@ describe("UsageTab", () => {
     expect(readSeries(getByTestId("area-chart"))).toHaveLength(2);
   });
 
-  it("does not ask for hourly savings as a non-admin, who cannot read them", async () => {
+  it("does not ask for hourly savings when the caller cannot read deployment-wide data", async () => {
+    // e.g. an org admin: the endpoint refuses anything below proxy admin, so
+    // firing the request would only 401 before the daily rollup fallback.
     const oneDay = new Date(2026, 6, 23);
     const { getByTestId } = renderWith([day("2026-07-23", { compression_savings_spend: 0.04 })], {
       from: oneDay,
       to: oneDay,
-      isAdmin: false,
+      canViewGlobalSavings: false,
     });
 
     await waitFor(() => expect(mockGetToolSpend).toHaveBeenCalled());

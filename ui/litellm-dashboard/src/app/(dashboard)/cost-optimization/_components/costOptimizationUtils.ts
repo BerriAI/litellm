@@ -1,3 +1,5 @@
+import { differenceInCalendarDays } from "date-fns";
+
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -155,12 +157,11 @@ export const HOURLY_SAVINGS_MAX_SPAN_DAYS = 2;
 export const localIsoDay = (d: Date): string =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-export const spanInDays = (from: Date, to: Date): number =>
-  Math.floor(
-    (new Date(to.getFullYear(), to.getMonth(), to.getDate()).getTime() -
-      new Date(from.getFullYear(), from.getMonth(), from.getDate()).getTime()) /
-      86_400_000,
-  ) + 1;
+// Calendar days the range covers, inclusive of both ends. differenceInCalendarDays
+// compares local calendar dates, so a span that crosses a DST transition still
+// counts a whole day; subtracting raw millisecond timestamps would undercount a
+// 23-hour spring-forward day.
+export const spanInDays = (from: Date, to: Date): number => differenceInCalendarDays(to, from) + 1;
 
 /**
  * The daily rollup is keyed by date, so a range this short plots as one or two

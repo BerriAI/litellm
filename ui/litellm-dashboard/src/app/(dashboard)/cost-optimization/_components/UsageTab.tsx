@@ -98,7 +98,7 @@ const SummaryCard = ({ label, value, hint }: { label: string; value: string; hin
 );
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore, isAdmin } = activity;
+  const { dateValue, onDateChange, results, loading, isFetchingMore, canViewGlobalSavings } = activity;
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
@@ -130,7 +130,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
   const totalSaved = compressionTotal + cachingTotal;
 
-  const hourly = useHourlySavings(accessToken, startTime ?? undefined, endTime ?? undefined, isAdmin);
+  const hourly = useHourlySavings(accessToken, startTime ?? undefined, endTime ?? undefined, canViewGlobalSavings);
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isAdminRole,
   isProxyAdminRole,
+  isProxyAdminViewRole,
   isUserTeamAdminForAnyTeam,
   isUserTeamAdminForSingleTeam,
   rolesAllowedToViewWriteScopedPages,
@@ -10,6 +11,28 @@ import {
 import { Team } from "@/components/networking";
 
 describe("roles", () => {
+  describe("isProxyAdminViewRole", () => {
+    it("accepts proxy admin and proxy admin viewer, in stored and legacy forms", () => {
+      expect(isProxyAdminViewRole("proxy_admin")).toBe(true);
+      expect(isProxyAdminViewRole("proxy_admin_viewer")).toBe(true);
+      expect(isProxyAdminViewRole("Admin")).toBe(true);
+      expect(isProxyAdminViewRole("Admin Viewer")).toBe(true);
+    });
+
+    it("rejects org_admin, whose view is scoped to one org", () => {
+      // This is the whole reason the predicate exists: org_admin passes
+      // isAdminRole but must not reach deployment-wide, proxy-admin-only data.
+      expect(isAdminRole("org_admin")).toBe(true);
+      expect(isProxyAdminViewRole("org_admin")).toBe(false);
+    });
+
+    it("rejects internal and unknown roles", () => {
+      expect(isProxyAdminViewRole("internal_user")).toBe(false);
+      expect(isProxyAdminViewRole("Internal Viewer")).toBe(false);
+      expect(isProxyAdminViewRole("")).toBe(false);
+    });
+  });
+
   describe("isAdminRole", () => {
     it("should return true for all admin roles", () => {
       expect(isAdminRole("Admin")).toBe(true);

@@ -44,6 +44,14 @@ MAX_HOURLY_SPAN_DAYS = 7
 # in the window via `generate_series` so quiet hours plot as $0 instead of a
 # gap. Walking the spine in UTC and labelling in local time is what makes it
 # DST-correct: a spring-forward day yields 23 labels, a fall-back day 24.
+#
+# The bucket key is the local wall-clock hour, so on a fall-back night the two
+# elapsed 01:00 hours share one label and their savings are summed into a single
+# "1am" point. That is intentional: the chart reads on a wall clock, where "1am"
+# is one thing, and the day total and the cumulative line stay exact because
+# summation is associative. A separate bucket per elapsed hour would need the
+# offset baked into the axis label to stay unambiguous, which is not worth it
+# for one hour a year; revisit only if sub-hour DST resolution is ever asked for.
 _HOURLY_SAVINGS_QUERY = f"""
 SELECT
     bucket_start,

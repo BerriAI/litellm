@@ -23,6 +23,16 @@ export const isProxyAdminRole = (role: string): boolean => {
   return role === "proxy_admin" || role === "Admin";
 };
 
+// Roles with unscoped read of deployment-wide data, mirroring the backend's
+// user_api_key_has_admin_view (proxy admin / proxy admin viewer). Unlike
+// all_admin_roles this excludes org_admin, whose view is scoped to one org, so
+// it is the correct gate for endpoints that refuse anything below proxy admin.
+export const proxy_admin_view_roles = [...old_admin_roles, "proxy_admin", "proxy_admin_viewer"];
+
+export const isProxyAdminViewRole = (role: string): boolean => {
+  return proxy_admin_view_roles.includes(role);
+};
+
 export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string): boolean => {
   if (teams == null) {
     return false;

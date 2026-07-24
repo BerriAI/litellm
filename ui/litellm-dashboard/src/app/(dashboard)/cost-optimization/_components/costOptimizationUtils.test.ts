@@ -243,6 +243,15 @@ describe("spanInDays", () => {
   it("ignores the time of day, so a range picked at 11pm is still one day", () => {
     expect(spanInDays(new Date(2026, 6, 23, 0, 1), new Date(2026, 6, 23, 23, 59))).toBe(1);
   });
+
+  it("counts a full day across a DST transition, not the 23 or 25 elapsed hours", () => {
+    // US spring-forward (Mar 8) and fall-back (Nov 1). Subtracting raw
+    // timestamps would read the short day as fewer than its calendar days and
+    // wrongly route a 3-day range to the hourly view.
+    expect(spanInDays(new Date(2026, 2, 8), new Date(2026, 2, 9))).toBe(2);
+    expect(spanInDays(new Date(2026, 2, 7), new Date(2026, 2, 9))).toBe(3);
+    expect(spanInDays(new Date(2026, 9, 31), new Date(2026, 10, 2))).toBe(3);
+  });
 });
 
 describe("shouldUseHourlySavings", () => {

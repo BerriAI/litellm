@@ -122,10 +122,22 @@ async def test_spring_forward_day_is_twenty_three_hours(db):
     assert "2026-03-08T03:00" in labels
 
 
-async def test_fall_back_day_is_twenty_four_hours(db):
-    # 2026-11-01: clocks fall 02:00 -> 01:00, so 01:00 occurs twice in UTC but
-    # collapses to one local label, leaving 24 distinct hours.
+async def test_fall_back_repeated_hour_merges_into_one_wall_clock_bucket(db, insert_cache_read):
+    # 2026-11-01: clocks fall 02:00 -> 01:00, so the local 01:00 hour happens
+    # twice. By design the chart buckets on the wall clock, so both elapsed
+    # hours share the single "01:00" label and their savings sum into it. The
+    # day therefore has 24 labels, not 25, and no label repeats.
     buckets = await _buckets(db, "2026-11-01", "2026-11-02")
     labels = [b.bucket_start for b in buckets]
     assert len(labels) == 24
     assert len(set(labels)) == 24
+
+    # Traffic in each of the two distinct 01:00 hours lands on the same bucket.
+    # 08:30 UTC is 01:30 PDT (first pass); 09:30 UTC is 01:30 PST (second pass).
+    before = await _caching_by_hour(db, "2026-11-01", "2026-11-02")
+    await insert_cache_read("fallback-pdt", "2026-11-01T08:30:00", 5000)
+    await insert_cache_read("fallback-pst", "2026-11-01T09:30:00", 4000)
+    after = await _caching_by_hour(db, "2026-11-01", "2026-11-02")
+
+    assert _hours_that_grew(before, after) == ["2026-11-01T01:00"]
+    assert after["2026-11-01T01:00"] - before.get("2026-11-01T01:00", 0.0) > 0

@@ -14,14 +14,15 @@ export const useHourlySavings = (
   accessToken: string | null,
   from: Date | undefined,
   to: Date | undefined,
-  isAdmin: boolean,
+  canViewGlobalSavings: boolean,
 ): HourlySavingsResponse | null => {
-  const eligible = !!accessToken && isAdmin && shouldUseHourlySavings(from, to);
+  const eligible = !!accessToken && canViewGlobalSavings && shouldUseHourlySavings(from, to);
   const rangeKey = eligible && from && to ? `${localIsoDay(from)}|${localIsoDay(to)}` : "";
   const [state, setState] = useState<{ key: string; data: HourlySavingsResponse | null } | null>(null);
 
   useEffect(() => {
-    if (!eligible || !accessToken || !from || !to) return;
+    if (!eligible) return;
+    if (!accessToken || !from || !to) return;
     let cancelled = false;
     getHourlySavings(accessToken, localIsoDay(from), localIsoDay(to), Intl.DateTimeFormat().resolvedOptions().timeZone)
       .then((data) => {
