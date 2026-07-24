@@ -295,10 +295,16 @@ async def add_new_member(
         # same new user is provisioned concurrently), seeding teams on create.
         # The teams append lives in the filtered update below rather than the
         # upsert's update branch so an already-existing user does not get a
-        # duplicate team id.
+        # duplicate team id. The update branch still has to write something:
+        # Prisma only compiles an upsert down to INSERT ... ON CONFLICT when it
+        # is non-empty, and falls back to a racy SELECT-then-INSERT when it is
+        # not, so this re-states user_id as a no-op rather than being empty.
         _returned_user = await UserRepository(prisma_client).table.upsert(
             where={"user_id": new_member.user_id},
-            data={"create": {"teams": [team_id], **new_user_defaults}, "update": {}},
+            data={
+                "create": {"teams": [team_id], **new_user_defaults},
+                "update": {"user_id": new_member.user_id},
+            },
         )
         await _append_team_id_if_absent(prisma_client, new_member.user_id, team_id)
         if _returned_user is not None:
