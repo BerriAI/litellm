@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 import litellm
 import pytest
@@ -15067,3 +15068,40 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         prisma_client=mock_prisma_client,
         new_master_key="sk-new-master-key",
     )
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_zeroes_spend_on_new_budget_window():
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    existing_key_row = MagicMock(
+        token="hashed_key",
+        budget_duration=None,
+        budget_reset_at=None,
+        team_id=None,
+    )
+    data = UpdateKeyRequest(key="sk-test", budget_duration="30d")
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
+    assert result["spend"] == 0.0
+    assert result["budget_duration"] == "30d"
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_preserves_spend_on_unchanged_window_resend():
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_key_update_data,
+    )
+
+    existing_key_row = MagicMock(
+        token="hashed_key",
+        budget_duration="30d",
+        budget_reset_at=datetime.now(timezone.utc) + timedelta(days=15),
+        team_id=None,
+    )
+    data = UpdateKeyRequest(key="sk-test", budget_duration="30d", metadata={"note": "x"})
+    result = await prepare_key_update_data(data=data, existing_key_row=existing_key_row)
+    assert "spend" not in result

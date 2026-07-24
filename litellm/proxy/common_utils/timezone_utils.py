@@ -78,3 +78,25 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     `BudgetResetSettings` by injection (creation/update endpoints, startup backfill).
     """
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
+
+
+def is_budget_window_newly_armed(
+    new_duration: "str | None",
+    existing_duration: "str | None",
+    existing_reset_at: "datetime | None",
+) -> bool:
+    """Decide whether applying `new_duration` on an update starts a fresh budget window.
+
+    A window is newly armed when the entity has no active window (no reset time),
+    the reset time has already passed, or the duration changes from what the entity
+    already had. A no-op re-send of the same duration while a window is still active
+    is NOT a fresh arm, so accumulated spend must be preserved.
+    """
+    if not new_duration:
+        return False
+    if existing_reset_at is None:
+        return True
+    now = datetime.now(existing_reset_at.tzinfo)
+    if existing_reset_at < now:
+        return True
+    return new_duration != existing_duration
