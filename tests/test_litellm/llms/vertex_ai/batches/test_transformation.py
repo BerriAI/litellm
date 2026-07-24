@@ -227,11 +227,6 @@ def test_get_output_file_id_empty_output_info_falls_through_to_output_config():
 
 
 def test_get_output_file_id_output_info_explicit_none_falls_through_to_output_config():
-    # Vertex AI can return "outputInfo": null in a 200 response (e.g. before it has
-    # asynchronously assigned the output directory). dict.get(key, default) does NOT
-    # substitute default when the key is present but explicitly None, so this must be
-    # handled explicitly instead of crashing with AttributeError: 'NoneType' object
-    # has no attribute 'get'.
     resp = {
         "outputInfo": None,
         "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://b/cfg"}},
