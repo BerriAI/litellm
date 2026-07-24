@@ -67,9 +67,10 @@ test.describe("Clear custom pricing on a deployment", () => {
     await page.goto("/ui");
     await page.getByText("Models + Endpoints").click();
 
-    const modelRow = page.locator("tr", { hasText: modelName }).first();
-    await expect(modelRow).toBeVisible({ timeout: 15_000 });
-    await modelRow.click();
+    // The Model ID cell is the drill-in control; the row itself is not clickable.
+    const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
+    await expect(modelIdCell).toBeVisible({ timeout: 15_000 });
+    await modelIdCell.click();
     await expect(page.getByText("Back to Models").first()).toBeVisible({
       timeout: 10_000,
     });
