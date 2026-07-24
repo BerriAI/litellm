@@ -2660,6 +2660,91 @@ async def test_custom_stream_wrapper_anext_exhaustion_raises_stop_async_iteratio
         pytest.fail(f"PEP 479 regression: StopIteration leaked as RuntimeError: {e}")
 
 
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_anext_drains_sync_iterator_concurrently(
+    logging_obj: Logging,
+):
+    """
+    Regression for #34502: a synchronous (boto3-style) stream must be drained in a
+    single background thread so the provider keeps emitting chunks while the async
+    consumer is still processing earlier ones. With the previous per-chunk
+    asyncio.to_thread dispatch the sync iterator only advances when the consumer
+    calls __anext__, so a slow consumer stalls the provider and chunks arrive in
+    bursts. This test asserts the provider races ahead of a slow consumer.
+    """
+
+    def _make_chunk(content: str) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-concurrent",
+            created=int(time.time()),
+            model="test-model",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=content,
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields={},
+            usage=None,
+        )
+
+    class TimestampingIterator:
+        """Fast sync producer that records when each chunk leaves the iterator."""
+
+        def __init__(self, chunks, produced_at: list):
+            self._it = iter(chunks)
+            self._produced_at = produced_at
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            chunk = next(self._it)  # raises StopIteration when exhausted
+            self._produced_at.append(time.monotonic())
+            return chunk
+
+    n_chunks = 5
+    produced_at: list = []
+    wrapper = CustomStreamWrapper(
+        completion_stream=TimestampingIterator(
+            [_make_chunk(str(i)) for i in range(n_chunks)], produced_at
+        ),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    consumer_delay = 0.05
+    consumed_at: list = []
+    async for _ in wrapper:
+        consumed_at.append(time.monotonic())
+        await asyncio.sleep(consumer_delay)  # simulate a slow downstream client
+
+    assert len(produced_at) == n_chunks
+    assert len(consumed_at) >= n_chunks  # finalize appends a trailing finish chunk
+    # The single-thread pump produces every chunk while the consumer is still
+    # draining the first couple, so production completes well before the consumer
+    # reaches the tail. Per-chunk dispatch would interleave the two, making the
+    # last production timestamp land right before each corresponding consumption.
+    reference_consumption = consumed_at[n_chunks - 2]
+    assert max(produced_at) < reference_consumption, (
+        f"provider did not race ahead of slow consumer "
+        f"(last produced at {max(produced_at):.3f}, "
+        f"reference consumption at {reference_consumption:.3f})"
+    )
+
+
 # Azure streaming chunks that reproduce issue #24221:
 # Azure sends an initial chunk with prompt_filter_results and choices=[],
 # then a chunk with role='assistant' and content='', then content chunks.
