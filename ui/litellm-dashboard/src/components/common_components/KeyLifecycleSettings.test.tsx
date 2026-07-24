@@ -36,6 +36,7 @@ const Harness: React.FC<HarnessProps> = ({ isCreateMode = true, onFinish = () =>
       <button type="button" onClick={() => form.resetFields()}>
         reset
       </button>
+      <span data-testid="rotation-interval-value">{rotationInterval}</span>
     </Form>
   );
 };
@@ -155,6 +156,59 @@ describe("KeyLifecycleSettings", () => {
       await user.click(await screen.findByText("90 days"));
 
       await waitFor(() => expect(document.querySelector(".ant-select-selection-item")?.textContent).toBe("90 days"));
+      expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("90d");
+    });
+
+    it("shows the custom interval input when Custom interval is selected, without propagating yet", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<Harness />);
+
+      await user.click(screen.getByRole("switch"));
+      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+
+      await user.click(screen.getByRole("combobox"));
+      await user.click(await screen.findByText("Custom interval"));
+
+      expect(await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d")).toBeInTheDocument();
+      expect(screen.getByText("Supported formats: seconds (s), minutes (m), hours (h), days (d)")).toBeInTheDocument();
+      expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("");
+    });
+
+    it("propagates a typed custom interval to the parent", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<Harness />);
+
+      await user.click(screen.getByRole("switch"));
+      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+
+      await user.click(screen.getByRole("combobox"));
+      await user.click(await screen.findByText("Custom interval"));
+
+      const customInput = await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d");
+      await user.type(customInput, "14d");
+
+      await waitFor(() => expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("14d"));
+      expect((customInput as HTMLInputElement).value).toBe("14d");
+    });
+
+    it("hides the custom input and propagates the value when switching back to a predefined interval", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<Harness />);
+
+      await user.click(screen.getByRole("switch"));
+      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+
+      await user.click(screen.getByRole("combobox"));
+      await user.click(await screen.findByText("Custom interval"));
+      const customInput = await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d");
+      await user.type(customInput, "14d");
+      await waitFor(() => expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("14d"));
+
+      await user.click(screen.getByRole("combobox"));
+      await user.click(await screen.findByText("7 days"));
+
+      await waitFor(() => expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("7d"));
+      expect(screen.queryByPlaceholderText("e.g., 1s, 5m, 2h, 14d")).not.toBeInTheDocument();
     });
   });
 });
