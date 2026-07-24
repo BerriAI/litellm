@@ -257,6 +257,32 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
             </pre>
           </div>
 
+          {/* Shown when the marketplace catalog is stale and the plugin isn't found yet */}
+          <div
+            style={{
+              border: "1px solid #fce8b2",
+              borderRadius: 8,
+              padding: "12px 16px",
+              backgroundColor: "#fefce8",
+              marginBottom: 16,
+            }}
+          >
+            <p style={{ fontSize: 13, color: "#5f6368", lineHeight: 1.6, margin: "0 0 8px 0" }}>
+              If you see &quot;Plugin {skill.name} not found in marketplace&quot;, update the catalog first:
+            </p>
+            <pre
+              style={{
+                margin: 0,
+                fontSize: 13,
+                fontFamily: "monospace",
+                color: "#202124",
+                backgroundColor: "transparent",
+              }}
+            >
+              /plugin marketplace update litellm
+            </pre>
+          </div>
+
           <p style={{ fontSize: 13, color: "#5f6368", lineHeight: 1.6, margin: 0 }}>
             Don&apos;t have the marketplace configured yet?{" "}
             <span onClick={() => setActiveTab("setup")} style={{ color: "#1a73e8", cursor: "pointer" }}>
@@ -272,12 +298,73 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
           <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 8px 0" }}>
             One-time marketplace setup
           </h2>
-          <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 24px 0", lineHeight: 1.6 }}>
-            Add this to{" "}
+
+          {/* Option 1: single command — fastest path for most users */}
+          <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 12px 0", lineHeight: 1.6 }}>
+            Run this command in Claude Code to register the marketplace:
+          </p>
+          <div
+            style={{
+              border: "1px solid #dadce0",
+              borderRadius: 8,
+              overflow: "hidden",
+              marginBottom: 24,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 16px",
+                backgroundColor: "#f8f9fa",
+                borderBottom: "1px solid #dadce0",
+              }}
+            >
+              <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>Run in Claude Code</span>
+              <button
+                onClick={() => {
+                  const origin = typeof window !== "undefined" ? window.location.origin : "";
+                  copyToClipboard(`/plugin marketplace add ${origin}/claude-code/marketplace.json`, "marketplace-cmd");
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 12,
+                  color: copiedKey === "marketplace-cmd" ? "#137333" : "#1a73e8",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                }}
+              >
+                {copiedKey === "marketplace-cmd" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "marketplace-cmd" ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <pre
+              style={{
+                margin: 0,
+                padding: "14px 16px",
+                fontSize: 13,
+                fontFamily: "monospace",
+                color: "#202124",
+                backgroundColor: "#fff",
+              }}
+            >
+              {`/plugin marketplace add ${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`}
+            </pre>
+          </div>
+
+          {/* Option 2: settings.json — for persistent config or managed deployments.
+              extraKnownMarketplaces requires source to be a nested object, not a flat string. */}
+          <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 12px 0", lineHeight: 1.6 }}>
+            Or add this to{" "}
             <code style={{ fontSize: 13, backgroundColor: "#f1f3f4", padding: "1px 6px", borderRadius: 4 }}>
               ~/.claude/settings.json
             </code>{" "}
-            to point Claude Code at your proxy:
+            for a persistent configuration:
           </p>
           <div
             style={{
@@ -302,9 +389,11 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   const snippet = JSON.stringify(
                     {
                       extraKnownMarketplaces: {
-                        "my-org": {
-                          source: "url",
-                          url: `${typeof window !== "undefined" ? window.location.origin : ""}/claude-code/marketplace.json`,
+                        litellm: {
+                          source: {
+                            source: "url",
+                            url: `${typeof window !== "undefined" ? window.location.origin : ""}/claude-code/marketplace.json`,
+                          },
                         },
                       },
                     },
@@ -342,9 +431,11 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
               {JSON.stringify(
                 {
                   extraKnownMarketplaces: {
-                    "my-org": {
-                      source: "url",
-                      url: `${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`,
+                    litellm: {
+                      source: {
+                        source: "url",
+                        url: `${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`,
+                      },
                     },
                   },
                 },
