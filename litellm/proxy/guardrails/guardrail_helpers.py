@@ -23,48 +23,66 @@ def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
     return True
 
 
+def _callbacks_for_request_guardrails(request_guardrails: Dict[str, bool], should_run: bool) -> "frozenset[str]":
+    """
+    Collects the callback names of every guardrail the caller explicitly toggled
+    to `should_run` in a per-request override
+    """
+    return frozenset(
+        callback
+        for _guardrail_name, _should_run in request_guardrails.items()
+        if (_should_run is not False) is should_run and _guardrail_name in litellm.guardrail_name_config_map
+        for callback in litellm.guardrail_name_config_map[_guardrail_name].callbacks
+    )
+
+
+def _guardrail_callback_default_on(guardrail_name: str) -> bool:
+    """
+    Returns True if any configured guardrail owning this callback is default_on
+    """
+    return any(
+        guardrail_item.default_on
+        for guardrail_item in litellm.guardrail_name_config_map.values()
+        if guardrail_name in guardrail_item.callbacks
+    )
+
+
 async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> bool:
     """
     checks if this guardrail should be applied to this call
+
+    A per-request `metadata.guardrails` override only affects the guardrails the
+    caller actually named. Any guardrail the caller did not mention falls back to
+    its configured default, so `default_on` guardrails keep running even when the
+    request names a different guardrail (or names none at all)
     """
-    if "metadata" in data and isinstance(data["metadata"], dict):
-        if "guardrails" in data["metadata"]:
-            # expect users to pass
-            # guardrails: { prompt_injection: true, rail_2: false }
-            request_guardrails = data["metadata"]["guardrails"]
-            verbose_proxy_logger.debug(
-                "Guardrails %s passed in request - checking which to apply",
-                request_guardrails,
-            )
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict) or "guardrails" not in metadata:
+        return True
 
-            requested_callback_names = []
+    # expect users to pass
+    # guardrails: { prompt_injection: true, rail_2: false }
+    request_guardrails = metadata["guardrails"]
+    verbose_proxy_logger.debug(
+        "Guardrails %s passed in request - checking which to apply",
+        request_guardrails,
+    )
 
-            # v1 implementation of this
-            if isinstance(request_guardrails, dict):
-                # get guardrail configs from `init_guardrails.py`
-                # for all requested guardrails -> get their associated callbacks
-                for _guardrail_name, should_run in request_guardrails.items():
-                    if should_run is False:
-                        verbose_proxy_logger.debug(
-                            "Guardrail %s skipped because request set to False",
-                            _guardrail_name,
-                        )
-                        continue
+    # v1 implementation of this only understands the dict form
+    if not isinstance(request_guardrails, dict):
+        return True
 
-                    # lookup the guardrail in guardrail_name_config_map
-                    guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[_guardrail_name]
+    enabled_callback_names = _callbacks_for_request_guardrails(request_guardrails, should_run=True)
+    disabled_callback_names = _callbacks_for_request_guardrails(request_guardrails, should_run=False)
+    verbose_proxy_logger.debug("enabled_callback_names %s", enabled_callback_names)
 
-                    guardrail_callbacks = guardrail_item.callbacks
-                    requested_callback_names.extend(guardrail_callbacks)
+    if guardrail_name in enabled_callback_names:
+        return True
 
-                verbose_proxy_logger.debug("requested_callback_names %s", requested_callback_names)
-                if guardrail_name in requested_callback_names:
-                    return True
+    if guardrail_name in disabled_callback_names:
+        return False
 
-                # Do no proceeed if - "metadata": { "guardrails": { "lakera_prompt_injection": false } }
-                return False
-
-    return True
+    return _guardrail_callback_default_on(guardrail_name)
 
 
 async def should_proceed_based_on_api_key(user_api_key_dict: UserAPIKeyAuth, guardrail_name: str) -> bool:
