@@ -83,6 +83,8 @@ class MCPServer(BaseModel):
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
     aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
     aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
+    gcp_credentials: Optional[str] = None
+    gcp_project_id: Optional[str] = None
     # Token Exchange (OBO) fields
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None

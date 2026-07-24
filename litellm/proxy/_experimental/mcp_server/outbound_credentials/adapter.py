@@ -103,8 +103,8 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
             return ServerSpec(server_id=server.server_id, resource=resource, config=PassthroughConfig())
         case MCPAuth.oauth2_token_exchange:
             return _token_exchange_spec(server, resource)
-        case MCPAuth.aws_sigv4:
-            return None  # SigV4 is not migrated yet -> defer to v1
+        case MCPAuth.aws_sigv4 | MCPAuth.gcp_service_account:
+            return None  # per-request cloud-provider signing is not migrated yet -> defer to v1
     assert_never(auth_type)
 
 

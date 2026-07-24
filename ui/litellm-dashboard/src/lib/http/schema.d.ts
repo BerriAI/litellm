@@ -27423,7 +27423,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "gcp_service_account" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;

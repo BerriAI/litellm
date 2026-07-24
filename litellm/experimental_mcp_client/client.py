@@ -6,7 +6,9 @@ import asyncio
 import base64
 import os
 from typing import (
+    TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Awaitable,
     Callable,
     Dict,
@@ -51,6 +53,9 @@ from litellm.types.mcp import (
     MCPTransport,
     MCPTransportType,
 )
+
+if TYPE_CHECKING:
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -192,6 +197,51 @@ class MCPSigV4Auth(httpx.Auth):
         yield request
 
 
+class MCPGoogleAuth(httpx.Auth):
+    """
+    httpx Auth class that attaches a Google OAuth 2.0 access token to each request.
+
+    Used for GCP-managed MCP servers (e.g. https://bigquery.googleapis.com/mcp), which
+    authenticate with a Google access token. Credentials come from an explicit service
+    account JSON (inline or file path) or, when none is given, Application Default
+    Credentials, so a proxy running in GKE authenticates with its workload identity.
+    Tokens are cached and refreshed by the shared Vertex auth layer.
+    """
+
+    def __init__(
+        self,
+        gcp_credentials: Union[str, Dict[str, str], None] = None,
+        gcp_project_id: str | None = None,
+        vertex_base: "VertexBase | None" = None,
+    ):
+        from litellm.llms.vertex_ai.vertex_llm_base import VertexBase as _VertexBase
+
+        self.gcp_credentials = gcp_credentials
+        self.gcp_project_id = gcp_project_id
+        self._vertex_base = vertex_base if vertex_base is not None else _VertexBase()
+
+    def _apply_token(self, request: httpx.Request, token: str) -> None:
+        request.headers["Authorization"] = f"Bearer {token}"
+        if self.gcp_project_id:
+            request.headers["x-goog-user-project"] = self.gcp_project_id
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        token, _ = self._vertex_base.get_access_token(
+            credentials=self.gcp_credentials,
+            project_id=self.gcp_project_id,
+        )
+        self._apply_token(request, token)
+        yield request
+
+    async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        token, _ = await self._vertex_base.get_access_token_async(
+            credentials=self.gcp_credentials,
+            project_id=self.gcp_project_id,
+        )
+        self._apply_token(request, token)
+        yield request
+
+
 class MCPClient:
     """
     MCP Client supporting:
@@ -213,6 +263,7 @@ class MCPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
         aws_auth: Optional[httpx.Auth] = None,
+        google_auth: httpx.Auth | None = None,
         resolved_auth: Optional[httpx.Auth] = None,
         sampling_callback: Optional[Callable] = None,
         elicitation_callback: Optional[Callable] = None,
@@ -227,6 +278,7 @@ class MCPClient:
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         self._aws_auth: Optional[httpx.Auth] = aws_auth
+        self._google_auth: httpx.Auth | None = google_auth
         # A pre-resolved httpx.Auth (e.g. from the v2 credential resolver) attached to the
         # upstream client's auth= slot, taking precedence over the SigV4 aws_auth.
         self._resolved_auth: Optional[httpx.Auth] = resolved_auth
@@ -442,9 +494,10 @@ class MCPClient:
                     headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
-        # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
-        # signing (including the body hash), so it uses httpx.Auth flow instead
-        # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
+        # Note: aws_sigv4 and gcp_service_account auth are not handled here — SigV4
+        # requires per-request signing (including the body hash) and Google tokens
+        # need per-request refresh, so both use the httpx.Auth flow instead of static
+        # headers. See MCPSigV4Auth, MCPGoogleAuth and _create_httpx_client_factory().
         # update the headers with the extra headers
         if self.extra_headers:
             headers.update(self.extra_headers)
@@ -473,7 +526,7 @@ class MCPClient:
             # The MCP SDK's sse_client and streamable_http_client call this factory without
             # passing auth=, so the fallback is used: a v2-resolved auth if present, else the
             # SigV4 aws_auth. Both are None for the common case — no behavior change.
-            fallback_auth = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
+            fallback_auth = self._resolved_auth or self._aws_auth or self._google_auth
             effective_auth = auth if auth is not None else fallback_auth
             return httpx.AsyncClient(
                 headers=headers,

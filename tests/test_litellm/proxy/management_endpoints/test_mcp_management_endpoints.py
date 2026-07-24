@@ -1428,6 +1428,8 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_session_token = None
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
+        existing_server.gcp_credentials = None
+        existing_server.gcp_project_id = None
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = existing_server
@@ -1686,6 +1688,8 @@ class TestTemporaryMCPSessionEndpoints:
             aws_session_token=None,
             aws_region_name=None,
             aws_service_name=None,
+            gcp_credentials=None,
+            gcp_project_id=None,
         )
         built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
         mock_manager = MagicMock()
