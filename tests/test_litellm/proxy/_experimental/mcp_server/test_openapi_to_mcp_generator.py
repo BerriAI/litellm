@@ -411,6 +411,37 @@ class TestBuildInputSchema:
         # Required should include original names
         assert "repository-id" in schema["required"]
 
+    def test_header_and_cookie_params_excluded(self):
+        """Regression for LIT-1420: header/cookie OpenAPI params must not leak into
+        the MCP tool input schema. They are HTTP-transport concerns forwarded from
+        the MCP client's header config, not arguments the model should fill. Before
+        the fix, an auth header param was exposed as a tool arg and passed as a
+        function kwarg, breaking tool invocation."""
+        operation = {
+            "parameters": [
+                {"name": "orderId", "in": "path", "required": True, "schema": {"type": "string"}},
+                {"name": "expand", "in": "query", "required": False, "schema": {"type": "string"}},
+                {"name": "accessss-Token", "in": "header", "required": False, "schema": {"type": "string"}},
+                {"name": "session", "in": "cookie", "required": False, "schema": {"type": "string"}},
+            ],
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {"type": "object", "properties": {"note": {"type": "string"}}}
+                    }
+                },
+            },
+        }
+
+        schema = build_input_schema(operation)
+
+        assert "accessss-Token" not in schema["properties"]
+        assert "session" not in schema["properties"]
+        assert "accessss-Token" not in schema["required"]
+        assert "orderId" in schema["properties"]
+        assert "expand" in schema["properties"]
+        assert "body" in schema["properties"]
+
 
 class TestExtractParameters:
     """Test parameter extraction from OpenAPI operations."""

@@ -261,6 +261,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
         for param in operation["parameters"]:
             if "name" not in param:
                 continue
+            if param.get("in") in ("header", "cookie"):
+                continue
             param_name = param["name"]
             param_schema = param.get("schema", {})
             param_type = param_schema.get("type", "string")
