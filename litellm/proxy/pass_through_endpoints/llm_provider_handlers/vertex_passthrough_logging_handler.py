@@ -804,7 +804,7 @@ class VertexPassthroughLoggingHandler:
                 _request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
 
                 user_api_key_dict = UserAPIKeyAuth(
-                    user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
+                    user_id=_request_metadata.get("user_api_key_user_id") or "default-user",
                     api_key="",
                     team_id=_request_metadata.get("user_api_key_team_id"),
                     team_alias=None,
@@ -825,6 +825,42 @@ class VertexPassthroughLoggingHandler:
                     model_max_budget={},  # Set to empty dict instead of None
                     model_spend={},  # Set to empty dict instead of None
                 )
+
+                # Snapshot the authenticated identity + request tags onto the managed
+                # object's file_object so CheckBatchCost can attribute the batch-cost spend
+                # log at poll time with no per-batch DB lookup. These identity fields are
+                # re-asserted from the authenticated key in the passthrough (after the
+                # client-metadata merge), so they are the key's own values and cannot be
+                # spoofed by the request body. The snapshot rides along in file_object jsonb.
+                # Request tags come from the request itself (metadata/header) when present,
+                # otherwise from the key's own tags, which auth exposes in-memory as
+                # user_api_key_auth_metadata (a tagged key does not put its tags in the
+                # top-level metadata "tags" on the passthrough path).
+                _litellm_metadata = (kwargs.get("litellm_params", {}) or {}).get("litellm_metadata", {}) or {}
+                _key_auth_metadata = _request_metadata.get("user_api_key_auth_metadata") or {}
+                _raw_tags = (
+                    _request_metadata.get("tags")
+                    or _litellm_metadata.get("tags")
+                    or (_key_auth_metadata.get("tags") if isinstance(_key_auth_metadata, dict) else None)
+                    or []
+                )
+                request_tags = [tag for tag in _raw_tags if isinstance(tag, str)] if isinstance(_raw_tags, list) else []
+                batch_attribution = {
+                    "user_api_key": _request_metadata.get("user_api_key"),
+                    "user_api_key_user_id": _request_metadata.get("user_api_key_user_id"),
+                    "user_api_key_team_id": _request_metadata.get("user_api_key_team_id"),
+                    "user_api_key_alias": _request_metadata.get("user_api_key_alias"),
+                    "user_api_key_team_alias": _request_metadata.get("user_api_key_team_alias"),
+                    "user_api_key_user_email": _request_metadata.get("user_api_key_user_email"),
+                    "request_tags": request_tags,
+                }
+                try:
+                    batch_object.metadata = {
+                        **(batch_object.metadata or {}),
+                        "litellm_batch_attribution": batch_attribution,
+                    }
+                except Exception as stash_err:
+                    verbose_proxy_logger.warning(f"CheckBatchCost: could not stash batch attribution: {stash_err}")
 
                 # Store the unified object for batch cost tracking
                 import asyncio

@@ -315,6 +315,132 @@ class TestVertexAIBatchPassthroughHandler:
             assert call_kwargs["user_api_key_dict"].user_id == expected_user_id
             assert call_kwargs["user_api_key_dict"].team_id == expected_team_id
 
+    def test_store_batch_managed_object_stashes_key_and_tags(
+        self, mock_logging_obj, mock_managed_files_hook
+    ):
+        """Regression (#33316): the authenticated identity + request tags are snapshotted
+        onto the batch file_object metadata at create time, so CheckBatchCost can attribute
+        the batch-cost spend log at poll time with no per-batch DB lookup. The identity
+        fields come from metadata that the passthrough re-asserts from the authenticated key
+        after the client merge, so they are not request-spoofable."""
+        from litellm.types.utils import LiteLLMBatch
+
+        batch_object = LiteLLMBatch(
+            id="123456789",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="gs://bucket/in.jsonl",
+            object="batch",
+            status="validating",
+        )
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+
+            VertexPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object=batch_object,
+                model_object_id="123456789",
+                logging_obj=mock_logging_obj,
+                litellm_params={
+                    "metadata": {
+                        "user_api_key": "sk-hash",
+                        "user_api_key_user_id": "u1",
+                        "user_api_key_team_id": "team-456",
+                        "user_api_key_alias": "repro-key",
+                        "user_api_key_team_alias": "repro-team",
+                        "user_api_key_user_email": "u@example.com",
+                        "tags": ["tag-a", "tag-b"],
+                    }
+                },
+            )
+
+            attribution = batch_object.metadata["litellm_batch_attribution"]
+            assert attribution["user_api_key"] == "sk-hash"
+            assert attribution["user_api_key_user_id"] == "u1"
+            assert attribution["user_api_key_team_id"] == "team-456"
+            assert attribution["user_api_key_alias"] == "repro-key"
+            assert attribution["user_api_key_team_alias"] == "repro-team"
+            assert attribution["user_api_key_user_email"] == "u@example.com"
+            assert attribution["request_tags"] == ["tag-a", "tag-b"]
+
+    def test_store_batch_managed_object_stashes_key_tags_when_no_request_tags(
+        self, mock_logging_obj, mock_managed_files_hook
+    ):
+        """A tagged key that sends no request tags: the key's own tags (exposed in-memory
+        as user_api_key_auth_metadata) are snapshotted, so the batch-cost row is still
+        tagged without any DB lookup."""
+        from litellm.types.utils import LiteLLMBatch
+
+        batch_object = LiteLLMBatch(
+            id="123456789",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="gs://bucket/in.jsonl",
+            object="batch",
+            status="validating",
+        )
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+
+            VertexPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object=batch_object,
+                model_object_id="123456789",
+                logging_obj=mock_logging_obj,
+                litellm_params={
+                    "metadata": {
+                        "user_api_key": "sk-hash",
+                        "user_api_key_auth_metadata": {"tags": ["key-tag-a", "key-tag-b"]},
+                    }
+                },
+            )
+
+            attribution = batch_object.metadata["litellm_batch_attribution"]
+            assert attribution["request_tags"] == ["key-tag-a", "key-tag-b"]
+
+    def test_store_batch_managed_object_stash_failure_is_swallowed(
+        self, mock_logging_obj, mock_managed_files_hook
+    ):
+        """The attribution stash is best-effort: if the batch_object metadata cannot be
+        written, it is logged and batch storage still proceeds (no exception escapes)."""
+
+        class _RaisesOnMetadata:
+            status = "validating"
+
+            @property
+            def metadata(self):
+                raise RuntimeError("boom")
+
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ) as mock_logger,
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+
+            VertexPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object=_RaisesOnMetadata(),
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                litellm_params={"metadata": {"user_api_key": "sk-hash"}},
+            )
+
+            assert mock_logger.warning.called
+
     def test_batch_cost_calculation_integration(self):
         """Single Vertex AI response → non-zero cost with correct token counts."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage

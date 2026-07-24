@@ -35,6 +35,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     normalize_mime_type_for_provider,
+    strip_internal_batch_attribution,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -341,7 +342,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     if isinstance(batch.file_object, str)
                     else batch.file_object
                 )
-                batch_obj = LiteLLMBatch(**batch_data)
+                batch_obj = LiteLLMBatch(**strip_internal_batch_attribution(batch_data))
                 batch_obj.id = batch.unified_object_id
                 batch_objects.append(batch_obj)
 
