@@ -467,6 +467,91 @@ class TestCueGroupingAlignment:
         assert "00:00:00,100 --> 00:00:00,500" in result
 
 
+def _cue_texts(srt: str) -> list:
+    return [cue.split("\n", 2)[2] for cue in srt.strip().split("\n\n")]
+
+
+class TestMultilingualCueGrouping:
+    def test_should_split_spaceless_chinese_on_width_budget(self):
+        from litellm.llms.soniox.common_utils import _text_width, render_soniox_tokens_as_srt
+
+        tokens = [{"text": "你好", "start_ms": i * 100, "end_ms": i * 100 + 90} for i in range(60)]
+        result = render_soniox_tokens_as_srt(tokens)
+        texts = _cue_texts(result)
+        assert len(texts) >= 3
+        for text in texts:
+            assert _text_width(text) <= 84
+            assert set(text) <= {"你", "好"}
+
+    def test_should_split_japanese_after_sentence_end_and_keep_punctuation_attached(self):
+        from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
+
+        tokens = [
+            {"text": "今日は", "start_ms": 0, "end_ms": 300},
+            {"text": "いい", "start_ms": 300, "end_ms": 500},
+            {"text": "天気です", "start_ms": 500, "end_ms": 900},
+            {"text": "。", "start_ms": 900, "end_ms": 950},
+            {"text": "明日も", "start_ms": 1000, "end_ms": 1300},
+            {"text": "晴れ", "start_ms": 1300, "end_ms": 1500},
+        ]
+        texts = _cue_texts(render_soniox_tokens_as_srt(tokens))
+        assert texts == ["今日はいい天気です。", "明日も晴れ"]
+
+    def test_should_split_arabic_after_arabic_question_mark(self):
+        from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
+
+        tokens = [
+            {"text": " كيف", "start_ms": 0, "end_ms": 300},
+            {"text": " حالك؟", "start_ms": 300, "end_ms": 700},
+            {"text": " أنا", "start_ms": 800, "end_ms": 1000},
+            {"text": " بخير", "start_ms": 1000, "end_ms": 1300},
+        ]
+        texts = _cue_texts(render_soniox_tokens_as_srt(tokens))
+        assert texts == ["كيف حالك؟", "أنا بخير"]
+
+    def test_should_split_after_devanagari_and_urdu_terminators(self):
+        from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
+
+        tokens = [
+            {"text": " नमस्ते।", "start_ms": 0, "end_ms": 400},
+            {"text": " آپ", "start_ms": 500, "end_ms": 700},
+            {"text": " ٹھیک۔", "start_ms": 700, "end_ms": 1100},
+            {"text": " शुभ", "start_ms": 1200, "end_ms": 1400},
+        ]
+        texts = _cue_texts(render_soniox_tokens_as_srt(tokens))
+        assert texts == ["नमस्ते।", "آپ ٹھیک۔", "शुभ"]
+
+    def test_should_split_russian_after_sentence_end(self):
+        from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
+
+        tokens = [
+            {"text": " Как", "start_ms": 0, "end_ms": 200},
+            {"text": " дела?", "start_ms": 200, "end_ms": 600},
+            {"text": " Хорошо.", "start_ms": 700, "end_ms": 1200},
+        ]
+        texts = _cue_texts(render_soniox_tokens_as_srt(tokens))
+        assert texts == ["Как дела?", "Хорошо."]
+
+    def test_should_not_split_latin_text_within_width_budget(self):
+        from litellm.llms.soniox.common_utils import render_soniox_tokens_as_srt
+
+        tokens = [{"text": f" word{i}", "start_ms": i * 100, "end_ms": i * 100 + 90} for i in range(12)]
+        texts = _cue_texts(render_soniox_tokens_as_srt(tokens))
+        assert len(texts) == 1
+
+    def test_should_merge_subword_tokens_inside_cjk_run(self):
+        from litellm.llms.soniox.common_utils import _merge_tokens_into_words
+
+        tokens = [
+            {"text": "編", "start_ms": 0, "end_ms": 100},
+            {"text": "集", "start_ms": 100, "end_ms": 200},
+            {"text": "、", "start_ms": 200, "end_ms": 250},
+            {"text": "保存", "start_ms": 250, "end_ms": 400},
+        ]
+        words = _merge_tokens_into_words(tokens)
+        assert [w["text"] for w in words] == ["編", "集、", "保存"]
+
+
 class TestRenderSonioxTokensAsVtt:
     def test_should_render_basic_vtt_with_header(self):
         from litellm.llms.soniox.common_utils import render_soniox_tokens_as_vtt
