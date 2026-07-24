@@ -19,6 +19,9 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_managed_object_utils import (
+    store_batch_managed_object,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -966,65 +969,13 @@ class AnthropicPassthroughLoggingHandler:
         Store batch managed object for cost tracking.
         This will be picked up by the check_batch_cost polling mechanism.
         """
-        try:
-            # Get the managed files hook from the logging object
-            # This is a bit of a hack, but we need access to the proxy logging system
-            from litellm.proxy.proxy_server import proxy_logging_obj
-
-            managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
-            if managed_files_hook is not None and hasattr(managed_files_hook, "store_unified_object_id"):
-                # Create a mock user API key dict for the managed object storage
-                from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
-                _request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
-
-                user_api_key_dict = UserAPIKeyAuth(
-                    user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
-                    api_key="",
-                    team_id=_request_metadata.get("user_api_key_team_id"),
-                    team_alias=None,
-                    user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
-                    user_email=None,
-                    max_budget=None,
-                    spend=0.0,  # Set to 0.0 instead of None
-                    models=[],  # Set to empty list instead of None
-                    tpm_limit=None,
-                    rpm_limit=None,
-                    budget_duration=None,
-                    budget_reset_at=None,
-                    max_parallel_requests=None,
-                    allowed_model_region=None,
-                    metadata={},  # Set to empty dict instead of None
-                    key_alias=None,
-                    permissions={},  # Set to empty dict instead of None
-                    model_max_budget={},  # Set to empty dict instead of None
-                    model_spend={},  # Set to empty dict instead of None
-                )
-
-                # Store the unified object for batch cost tracking
-                import asyncio
-
-                asyncio.create_task(
-                    managed_files_hook.store_unified_object_id(  # type: ignore
-                        unified_object_id=unified_object_id,
-                        file_object=batch_object,
-                        litellm_parent_otel_span=None,
-                        model_object_id=model_object_id,
-                        file_purpose="batch",
-                        user_api_key_dict=user_api_key_dict,
-                    )
-                )
-
-                verbose_proxy_logger.info(
-                    f"Stored Anthropic batch managed object with unified_object_id={unified_object_id}, batch_id={model_object_id}"
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "Managed files hook not available, cannot store batch object for cost tracking"
-                )
-
-        except Exception as e:
-            verbose_proxy_logger.error(f"Error storing Anthropic batch managed object: {e}")
+        request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
+        store_batch_managed_object(
+            unified_object_id=unified_object_id,
+            batch_object=batch_object,
+            model_object_id=model_object_id,
+            request_metadata=request_metadata,
+        )
 
     @staticmethod
     def get_actual_model_id_from_router(model_name: str) -> str:

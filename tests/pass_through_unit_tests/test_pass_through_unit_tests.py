@@ -239,6 +239,52 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
     assert metadata["user_api_key"] == "test-key"
 
 
+def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(
+    mock_request, mock_user_api_key_dict
+):
+    """
+    Regression (#33319): a request body must not be able to override the authenticated
+    identity fields used for spend attribution. Downstream consumers (e.g. Vertex batch
+    cost) snapshot these from metadata, so they are re-asserted from user_api_key_dict
+    after the client-metadata merge.
+    """
+    request = mock_request()
+    parsed_body = {
+        "litellm_metadata": {
+            "user_api_key_user_id": "victim-user",
+            "user_api_key_team_id": "victim-team",
+            "user_api_key_team_alias": "victim-team-alias",
+            "user_api_key_alias": "victim-key-alias",
+            "user_api_key_user_email": "victim@example.com",
+        }
+    }
+    passthrough_payload = PassthroughStandardLoggingPayload(url="https://test.com", request_body={})
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=parsed_body,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+    )
+
+    metadata = result["litellm_params"]["metadata"]
+    assert metadata["user_api_key_user_id"] == "test-user"
+    assert metadata["user_api_key_team_id"] == "test-team"
+    assert metadata["user_api_key_team_alias"] is None
+    assert metadata["user_api_key_alias"] is None
+    assert metadata["user_api_key_user_email"] is None
+
+
 def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
     """
     Tags should be added to metadata if they exist in headers

@@ -1,4 +1,5 @@
 import base64
+import json
 import mimetypes
 import re
 from dataclasses import dataclass, field
@@ -609,8 +610,6 @@ def get_content_type_from_file_object(file_object: Optional[dict]) -> str:
 
     # Handle JSON string
     if isinstance(file_object, str):
-        import json
-
         try:
             file_object = json.loads(file_object)
         except json.JSONDecodeError:
@@ -949,7 +948,6 @@ async def get_batch_from_database(
         - db_batch_object: Raw database object (or None)
         - response_batch: Parsed LiteLLMBatch object (or None)
     """
-    import json
 
     from litellm.types.utils import LiteLLMBatch
 

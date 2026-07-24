@@ -977,6 +977,8 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   created_at DateTime @default(now())
   created_by String?
   team_id String?
+  user_api_key String?
+  request_tags Json?
   updated_at DateTime @updatedAt
   updated_by String?
 
