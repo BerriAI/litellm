@@ -436,3 +436,94 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def test_hosted_vllm_prefill_translation_injects_continue_final_message():
+    """Trailing assistant message with prefix:True translates into vLLM's
+    continue_final_message + add_generation_prompt flags inside extra_body."""
+    config = HostedVLLMChatConfig()
+    messages = [
+        {"role": "user", "content": "Count to three, comma-separated."},
+        {"role": "assistant", "content": "1, 2,", "prefix": True},
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3.6-35b-a3b",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "extra_body" in transformed
+    assert transformed["extra_body"]["continue_final_message"] is True
+    assert transformed["extra_body"]["add_generation_prompt"] is False
+
+
+def test_hosted_vllm_prefill_translation_no_prefix_marker_is_noop():
+    """A trailing assistant message WITHOUT prefix:True must not inject
+    continuation flags — the caller did not opt in."""
+    config = HostedVLLMChatConfig()
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello!"},
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3.6-35b-a3b",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "extra_body" not in transformed or transformed.get("extra_body", {}) == {}
+
+
+def test_hosted_vllm_prefill_translation_user_ending_is_noop():
+    """Requests ending in a user message must be unaffected."""
+    config = HostedVLLMChatConfig()
+    messages = [{"role": "user", "content": "Say hello in one word."}]
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3.6-35b-a3b",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "extra_body" not in transformed or transformed.get("extra_body", {}) == {}
+
+
+def test_hosted_vllm_prefill_translation_preserves_existing_extra_body():
+    """If the caller already set extra_body keys, prefill translation must
+    merge — not overwrite."""
+    config = HostedVLLMChatConfig()
+    messages = [
+        {"role": "user", "content": "Continue."},
+        {"role": "assistant", "content": "X", "prefix": True},
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3.6-35b-a3b",
+        messages=messages,
+        optional_params={"extra_body": {"guided_choice": ["yes", "no"]}},
+        litellm_params={},
+        headers={},
+    )
+    eb = transformed["extra_body"]
+    assert eb["continue_final_message"] is True
+    assert eb["add_generation_prompt"] is False
+    assert eb["guided_choice"] == ["yes", "no"]
+
+
+def test_hosted_vllm_prefill_translation_respects_explicit_caller_value():
+    """If the caller already pinned continue_final_message=False, the helper
+    must not override their explicit choice (setdefault semantics)."""
+    config = HostedVLLMChatConfig()
+    messages = [
+        {"role": "user", "content": "Continue."},
+        {"role": "assistant", "content": "X", "prefix": True},
+    ]
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3.6-35b-a3b",
+        messages=messages,
+        optional_params={"extra_body": {"continue_final_message": False}},
+        litellm_params={},
+        headers={},
+    )
+    assert transformed["extra_body"]["continue_final_message"] is False

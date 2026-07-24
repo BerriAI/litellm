@@ -434,6 +434,18 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             Logging as LiteLLMLoggingObject,
         )
 
+        # Anthropic /v1/messages prefill contract: when the last message is
+        # role:"assistant" the model continues from there. The Anthropic
+        # provider config implements this via `prefix:true` (see #4881 +
+        # `litellm/llms/anthropic/chat/transformation.py::get_prefix_prompt`).
+        # When this adapter routes the call to a non-Anthropic provider (the
+        # whole reason this adapter exists), tag the trailing assistant
+        # message with prefix:true so provider configs that understand the
+        # unified marker — currently hosted_vllm — can translate it into
+        # their native continuation flag. Idempotent: setdefault only.
+        if messages and isinstance(messages[-1], dict) and messages[-1].get("role") == "assistant":
+            messages[-1].setdefault("prefix", True)
+
         request_data = {
             "model": model,
             "messages": messages,

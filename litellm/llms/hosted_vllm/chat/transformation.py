@@ -92,6 +92,76 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         params.extend(["reasoning_effort", "thinking"])
         return params
 
+    @staticmethod
+    def _apply_prefill_translation(
+        messages: List[AllMessageValues], optional_params: dict
+    ) -> None:
+        """Translate LiteLLM's unified prefill marker to vLLM's native flags.
+
+        When the last message is ``role:"assistant"`` and carries ``prefix: True``
+        (the unified prefill marker introduced in #4881), vLLM's chat completions
+        endpoint expects ``continue_final_message: true`` and
+        ``add_generation_prompt: false`` to actually continue the assistant turn
+        rather than start a fresh one. Neither flag is part of the standard
+        OpenAI surface, so we inject them via ``extra_body`` — the openai SDK
+        forwards extra_body verbatim into the HTTP request body, and vLLM
+        honors them.
+
+        Does not override caller-set values. No-op if the trigger pattern is
+        absent. Refs: #4881 (defines prefill API), upstream issue tracking the
+        hosted_vllm coverage gap.
+        """
+        if not messages:
+            return
+        last_message = messages[-1]
+        if not isinstance(last_message, dict):
+            return
+        if last_message.get("role") != "assistant":
+            return
+        if not last_message.get("prefix"):
+            return
+
+        extra_body = optional_params.get("extra_body")
+        if not isinstance(extra_body, dict):
+            extra_body = {}
+        extra_body.setdefault("continue_final_message", True)
+        extra_body.setdefault("add_generation_prompt", False)
+        optional_params["extra_body"] = extra_body
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        self._apply_prefill_translation(messages, optional_params)
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        self._apply_prefill_translation(messages, optional_params)
+        return await super().async_transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def map_openai_params(
         self,
         non_default_params: dict,
