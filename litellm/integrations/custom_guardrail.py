@@ -107,6 +107,8 @@ class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
 
+    records_own_guardrail_information: ClassVar[bool] = False
+
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
@@ -1256,6 +1258,14 @@ def log_guardrail_information(func):
     so it stays correct when guardrails run concurrently (asyncio copies the
     context into each gathered task): counting shared entries would let one
     guardrail's append hide another guardrail's missing record.
+
+    A guardrail that only records an entry when it actually runs (e.g.
+    ``HeadroomGuardrail``, which returns the inputs untouched on an endpoint
+    whose payload it cannot act on) sets ``records_own_guardrail_information =
+    True`` so the auto-record is skipped even on the return paths where it
+    recorded nothing; otherwise a no-op early return would be logged as an
+    "allow"/"success" run even though the guardrail did nothing. The exception
+    branch below still records so a genuine failure is not lost.
     """
     import functools
     import inspect
@@ -1291,7 +1301,7 @@ def log_guardrail_information(func):
         self_recorded_token = _guardrail_self_recorded.set(False)
         try:
             response = await func(*args, **kwargs)
-            if _guardrail_self_recorded.get():
+            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
                 return response
             return self._process_response(
                 response=response,
@@ -1333,7 +1343,7 @@ def log_guardrail_information(func):
         self_recorded_token = _guardrail_self_recorded.set(False)
         try:
             response = func(*args, **kwargs)
-            if _guardrail_self_recorded.get():
+            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
                 return response
             return self._process_response(
                 response=response,
