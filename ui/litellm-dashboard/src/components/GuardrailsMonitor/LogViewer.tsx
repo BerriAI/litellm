@@ -74,7 +74,11 @@ export function LogViewer({
     ? moment(endDate).endOf("day").utc().format("YYYY-MM-DD HH:mm:ss")
     : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-  const { data: fullLogResponse, isFetching: isFetchingFullLog, isError: isFullLogError } = useQuery({
+  const {
+    data: fullLogResponse,
+    isFetching: isFetchingFullLog,
+    isError: isFullLogError,
+  } = useQuery({
     queryKey: ["spend-log-by-request", selectedRequestId, startTime, endTime],
     queryFn: async () => {
       if (!accessToken || !selectedRequestId) return null;

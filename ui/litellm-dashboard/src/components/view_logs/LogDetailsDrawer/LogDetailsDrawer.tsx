@@ -128,7 +128,11 @@ export function LogDetailsDrawer({
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
-  const { data: sessionData, isFetching: isFetchingSession, isError: isSessionError } = useQuery({
+  const {
+    data: sessionData,
+    isFetching: isFetchingSession,
+    isError: isSessionError,
+  } = useQuery({
     queryKey: ["sessionLogs", sessionId],
     queryFn: async () => {
       if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
