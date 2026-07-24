@@ -1,25 +1,24 @@
-import {
-  Card,
-  Col,
-  DateRangePickerValue,
-  Grid,
-  Icon,
-  MultiSelect,
-  MultiSelectItem,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-} from "@tremor/react";
+import { DateRangePickerValue } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import UsageDatePicker from "@/components/shared/usage_date_picker";
 import { BarChart } from "@/components/shared/charts";
-import { Card as ChartCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+} from "@/components/ui/combobox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { RefreshIcon } from "@heroicons/react/outline";
+import { RefreshCw } from "lucide-react";
 import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/networking";
 
 // Import the new component
@@ -258,31 +257,42 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     }
   };
 
+  const statCards = [
+    { label: "Cache Hit Ratio", value: `${cacheHitRatio}%` },
+    { label: "Cache Hits", value: cachedResponses },
+    { label: "Cached Completion Tokens", value: cachedTokens },
+  ];
+
   return (
-    <TabGroup className="gap-2 p-8 h-full w-full mt-2 mb-8">
-      <TabList className="flex justify-between mt-2 w-full items-center">
-        <div className="flex">
-          <Tab>Cache Analytics</Tab>
-          <Tab>Cache Health</Tab>
-          <Tab>Cache Settings</Tab>
-          <Tab>Coordination Redis</Tab>
-        </div>
+    <Tabs defaultValue="analytics" className="mt-2 mb-8 w-full gap-2 p-8">
+      <div className="mt-2 flex w-full items-center justify-between">
+        <TabsList>
+          <TabsTrigger value="analytics" className="flex-none">
+            Cache Analytics
+          </TabsTrigger>
+          <TabsTrigger value="health" className="flex-none">
+            Cache Health
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="flex-none">
+            Cache Settings
+          </TabsTrigger>
+          <TabsTrigger value="coordination" className="flex-none">
+            Coordination Redis
+          </TabsTrigger>
+        </TabsList>
 
         <div className="flex items-center space-x-2">
-          {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-          <Icon
-            icon={RefreshIcon} // Modify as necessary for correct icon name
-            variant="shadow"
-            size="xs"
-            className="self-center"
-            onClick={handleRefreshClick}
-          />
+          {lastRefreshed && <p className="text-sm text-muted-foreground">Last Refreshed: {lastRefreshed}</p>}
+          <Button variant="outline" size="icon-sm" onClick={handleRefreshClick} aria-label="Refresh">
+            <RefreshCw />
+          </Button>
         </div>
-      </TabList>
-      <TabPanels>
-        <TabPanel>
-          <Card>
-            <Text className="text-tremor-content dark:text-dark-tremor-content">
+      </div>
+
+      <TabsContent value="analytics">
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
               Analytics for LiteLLM&apos;s{" "}
               <a
                 href="https://docs.litellm.ai/docs/proxy/caching"
@@ -303,76 +313,92 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               </a>{" "}
               (cached input tokens from Anthropic, OpenAI, etc.) is not shown here; see &quot;Prompt Caching
               Metrics&quot; on the Usage page or individual requests in the Logs page.
-            </Text>
-            <Grid numItems={3} className="gap-4 mt-4">
-              <Col>
-                <MultiSelect
-                  placeholder="Select Virtual Keys"
-                  value={selectedApiKeys}
-                  onValueChange={setSelectedApiKeys}
-                >
-                  {uniqueApiKeys.map((key) => (
-                    <MultiSelectItem key={key} value={key}>
-                      {key}
-                    </MultiSelectItem>
-                  ))}
-                </MultiSelect>
-              </Col>
-              <Col>
-                <MultiSelect placeholder="Select Models" value={selectedModels} onValueChange={setSelectedModels}>
-                  {uniqueModels.map((model) => (
-                    <MultiSelectItem key={model} value={model}>
-                      {model}
-                    </MultiSelectItem>
-                  ))}
-                </MultiSelect>
-              </Col>
-              <Col>
-                <UsageDatePicker
-                  value={dateValue}
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateCachingData(value.from, value.to);
-                  }}
-                />
-              </Col>
-            </Grid>
+            </p>
 
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cache Hit Ratio
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cacheHitRatio}%
-                  </p>
-                </div>
-              </Card>
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cache Hits
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cachedResponses}
-                  </p>
-                </div>
-              </Card>
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+              <Combobox
+                multiple
+                items={uniqueApiKeys}
+                value={selectedApiKeys}
+                onValueChange={(keys: string[]) => setSelectedApiKeys(keys)}
+              >
+                <ComboboxChips>
+                  <ComboboxValue>
+                    {(keys: string[]) =>
+                      keys.map((key) => (
+                        <ComboboxChip key={key} aria-label={key}>
+                          {key}
+                        </ComboboxChip>
+                      ))
+                    }
+                  </ComboboxValue>
+                  <ComboboxChipsInput placeholder="Select Virtual Keys" className="border-0 bg-transparent" />
+                </ComboboxChips>
+                <ComboboxContent>
+                  <ComboboxEmpty>No virtual keys found</ComboboxEmpty>
+                  <ComboboxList>
+                    {(key: string) => (
+                      <ComboboxItem key={key} value={key}>
+                        {key}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
 
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cached Completion Tokens
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cachedTokens}
-                  </p>
-                </div>
-              </Card>
+              <Combobox
+                multiple
+                items={uniqueModels}
+                value={selectedModels}
+                onValueChange={(models: string[]) => setSelectedModels(models)}
+              >
+                <ComboboxChips>
+                  <ComboboxValue>
+                    {(models: string[]) =>
+                      models.map((model) => (
+                        <ComboboxChip key={model} aria-label={model}>
+                          {model}
+                        </ComboboxChip>
+                      ))
+                    }
+                  </ComboboxValue>
+                  <ComboboxChipsInput placeholder="Select Models" className="border-0 bg-transparent" />
+                </ComboboxChips>
+                <ComboboxContent>
+                  <ComboboxEmpty>No models found</ComboboxEmpty>
+                  <ComboboxList>
+                    {(model: string) => (
+                      <ComboboxItem key={model} value={model}>
+                        {model}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+
+              <UsageDatePicker
+                value={dateValue}
+                onValueChange={(value) => {
+                  setDateValue(value);
+                  updateCachingData(value.from, value.to);
+                }}
+              />
             </div>
 
-            <ChartCard className="mt-4">
+            <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {statCards.map((stat) => (
+                <Card key={stat.label}>
+                  <CardContent>
+                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
+                    <div className="mt-2 flex items-baseline space-x-2.5">
+                      <p className="text-3xl font-semibold">{stat.value}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            <Card className="mt-4">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">Cache Hits vs API Requests</CardTitle>
               </CardHeader>
@@ -387,9 +413,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   yAxisWidth={48}
                 />
               </CardContent>
-            </ChartCard>
+            </Card>
 
-            <ChartCard className="mt-6">
+            <Card className="mt-6">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">
                   Cached Completion Tokens vs Generated Completion Tokens
@@ -406,24 +432,27 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   yAxisWidth={48}
                 />
               </CardContent>
-            </ChartCard>
-          </Card>
-        </TabPanel>
-        <TabPanel>
-          <CacheHealthTab
-            accessToken={accessToken}
-            healthCheckResponse={healthCheckResponse}
-            runCachingHealthCheck={runCachingHealthCheck}
-          />
-        </TabPanel>
-        <TabPanel>
-          <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-        </TabPanel>
-        <TabPanel>
-          <CoordinationRedisSettings />
-        </TabPanel>
-      </TabPanels>
-    </TabGroup>
+            </Card>
+          </CardContent>
+        </Card>
+      </TabsContent>
+
+      <TabsContent value="health">
+        <CacheHealthTab
+          accessToken={accessToken}
+          healthCheckResponse={healthCheckResponse}
+          runCachingHealthCheck={runCachingHealthCheck}
+        />
+      </TabsContent>
+
+      <TabsContent value="settings">
+        <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
+      </TabsContent>
+
+      <TabsContent value="coordination">
+        <CoordinationRedisSettings />
+      </TabsContent>
+    </Tabs>
   );
 };
 

@@ -177,17 +177,9 @@
   "src/app/(dashboard)/caching/_components/cache_health.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/caching/_components/cache_settings/CacheFormField.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/caching/_components/cache_settings/RedisTypeSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -209,11 +201,6 @@
     }
   },
   "src/app/(dashboard)/caching/_components/coordination_redis_settings/CoordinationRedisFormField.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/caching/_components/coordination_redis_settings/CoordinationRedisTypeSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1469,9 +1456,6 @@
     "no-nested-ternary": {
       "count": 10
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     }
@@ -1481,9 +1465,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -1509,9 +1490,6 @@
   "src/app/(dashboard)/policies/_components/impact_preview_alert.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/policies/_components/index.test.tsx": {
@@ -1525,9 +1503,6 @@
     },
     "local/no-complex-jsx-arrow": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1543,9 +1518,6 @@
     "no-nested-ternary": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1554,18 +1526,12 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/app/(dashboard)/policies/_components/policy_templates.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1583,9 +1549,6 @@
   "src/app/(dashboard)/policies/_components/template_parameter_modal.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "react-hooks/immutability": {
       "count": 1
@@ -2218,22 +2181,7 @@
       "count": 1
     }
   },
-  "src/components/CloudZeroCostTracking/CloudZeroCostTracking.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/CloudZeroCostTracking/CloudZeroCreateModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/CloudZeroCostTracking/CloudZeroEmptyPlaceholder.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/CloudZeroCostTracking/CloudZeroIntegrationSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3240,9 +3188,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     }
@@ -3250,9 +3195,6 @@
   "src/components/email_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     },
     "prefer-const": {
       "count": 1
@@ -4112,6 +4054,11 @@
     }
   },
   "src/components/ui/popover.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/ui/radio-group.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

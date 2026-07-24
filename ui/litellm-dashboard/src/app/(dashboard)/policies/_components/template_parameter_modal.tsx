@@ -1,6 +1,19 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Spin, Radio, Select } from "antd";
-import { Button, TextInput } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { X } from "lucide-react";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import { modelHubCall, enrichPolicyTemplateStream } from "@/components/networking";
 
 interface TemplateParameter {
@@ -43,6 +56,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
   const [isRefining, setIsRefining] = useState(false);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
+  const [tagDraft, setTagDraft] = useState("");
 
   const parameters: TemplateParameter[] = template?.parameters || [];
   const hasEnrichment = !!template?.llm_enrichment;
@@ -66,6 +80,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       setIsRefining(false);
       setHasGenerated(false);
       setStatusMessage("");
+      setTagDraft("");
     }
   }, [visible, template]);
 
@@ -181,205 +196,209 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     ? allNonEnrichmentFilled && brandNameFilled && competitorTags.length > 0
     : allNonEnrichmentFilled && brandNameFilled;
 
+  const addCompetitorTags = (raw: string) => {
+    const additions = raw
+      .split(",")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0 && !competitorTags.some((t) => t.toLowerCase() === name.toLowerCase()));
+    if (additions.length > 0) setCompetitorTags([...competitorTags, ...additions]);
+    setTagDraft("");
+  };
+
+  const handleTagDraftKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addCompetitorTags(tagDraft);
+      return;
+    }
+    if (e.key === "Backspace" && tagDraft === "" && competitorTags.length > 0) {
+      setCompetitorTags(competitorTags.slice(0, -1));
+    }
+  };
+
   const handleConfirm = () => {
     onConfirm(parameterValues, { competitors: competitorTags });
   };
 
+  const renderParameterField = (param: TemplateParameter) => (
+    <div key={param.name}>
+      <label className="mb-1 block text-sm font-medium">
+        {param.label}
+        {param.required && <span className="ml-1 text-destructive">*</span>}
+      </label>
+      <Input
+        placeholder={param.placeholder || ""}
+        value={parameterValues[param.name] || ""}
+        onChange={(e) =>
+          setParameterValues((prev) => ({
+            ...prev,
+            [param.name]: e.target.value,
+          }))
+        }
+      />
+    </div>
+  );
+
   return (
-    <Modal
-      title={
-        <div>
-          <h3 className="text-lg font-semibold mb-1">{template?.title}</h3>
-          <p className="text-sm text-gray-500 font-normal">Configure competitor blocking for your brand</p>
-        </div>
-      }
-      open={visible}
-      onCancel={onCancel}
-      width={700}
-      footer={[
-        <Button key="cancel" variant="secondary" onClick={onCancel} disabled={isLoading}>
-          Cancel
-        </Button>,
-        <Button key="confirm" onClick={handleConfirm} loading={isLoading} disabled={!canContinue || isLoading}>
-          {isLoading ? "Creating guardrails..." : "Continue"}
-        </Button>,
-      ]}
-    >
-      <div className="py-4 space-y-4">
-        {nonEnrichmentParams.map((param) => (
-          <div key={param.name}>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              {param.label}
-              {param.required && <span className="text-red-500 ml-1">*</span>}
-            </label>
-            <TextInput
-              placeholder={param.placeholder || ""}
-              value={parameterValues[param.name] || ""}
-              onChange={(e) =>
-                setParameterValues((prev) => ({
-                  ...prev,
-                  [param.name]: e.target.value,
-                }))
-              }
-            />
-          </div>
-        ))}
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="sm:max-w-175">
+        <DialogHeader>
+          <DialogTitle className="text-lg">{template?.title}</DialogTitle>
+          <DialogDescription>Configure competitor blocking for your brand</DialogDescription>
+        </DialogHeader>
 
-        {hasEnrichment && (
-          <>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Competitor Discovery</label>
-              <Radio.Group
-                value={competitorMode}
-                onChange={(e) => setCompetitorMode(e.target.value)}
-                className="w-full"
-              >
-                <div className="flex gap-3">
-                  <Radio.Button value="ai" className="flex-1 text-center">
-                    ✨ Use AI
-                  </Radio.Button>
-                  <Radio.Button value="manual" className="flex-1 text-center">
-                    Enter Manually
-                  </Radio.Button>
-                </div>
-              </Radio.Group>
-            </div>
+        <div className="space-y-4 py-4">
+          {nonEnrichmentParams.map(renderParameterField)}
 
-            {/* Brand Name */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Your Brand Name
-                <span className="text-red-500 ml-1">*</span>
-              </label>
-              <TextInput
-                placeholder="e.g. Acme Airlines"
-                value={parameterValues[enrichmentParam || "brand_name"] || ""}
-                onChange={(e) =>
-                  setParameterValues((prev) => ({
-                    ...prev,
-                    [enrichmentParam || "brand_name"]: e.target.value,
-                  }))
-                }
-              />
-            </div>
-
-            {competitorMode === "ai" && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Select Model
-                    <span className="text-red-500 ml-1">*</span>
-                  </label>
-                  <Select
-                    placeholder="Select a model to generate names"
-                    value={selectedModel}
-                    onChange={(value) => setSelectedModel(value)}
-                    loading={isLoadingModels}
-                    showSearch
-                    className="w-full"
-                    options={availableModels.map((m) => ({ label: m, value: m }))}
-                    filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-                  />
-                </div>
-
-                <Button
-                  onClick={handleGenerateNames}
-                  loading={isGenerating}
-                  disabled={!selectedModel || !brandNameFilled || isGenerating}
-                  className="w-full"
-                >
-                  {isGenerating ? "✨ Generating names..." : "✨ Generate Competitor Names"}
-                </Button>
-              </>
-            )}
-
-            {/* Competitor Tags */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Competitor Names
-                {competitorTags.length > 0 && (
-                  <span className="text-gray-400 font-normal ml-2">({competitorTags.length})</span>
-                )}
-              </label>
-              <Select
-                mode="tags"
-                style={{ width: "100%" }}
-                placeholder="Type a name and press Enter to add"
-                value={competitorTags}
-                onChange={(values) => setCompetitorTags(values)}
-                tokenSeparators={[","]}
-                open={false}
-                suffixIcon={null}
-              />
-              <p className="text-xs text-gray-500 mt-1">Type a name and press Enter to add. Click ✕ to remove.</p>
-              {statusMessage && (
-                <div className="flex items-center gap-2 mt-2 p-2 bg-blue-50 rounded-sm border border-blue-100">
-                  <Spin size="small" />
-                  <span className="text-xs text-blue-700">{statusMessage}</span>
-                </div>
-              )}
-              {Object.keys(variationsMap).length > 0 && !statusMessage && (
-                <p className="text-xs text-green-600 mt-1">
-                  ✓ {Object.values(variationsMap).flat().length} alternate spellings & variations auto-generated for
-                  guardrail matching
-                </p>
-              )}
-            </div>
-
-            {/* Refinement input — shown after initial generation in AI mode */}
-            {competitorMode === "ai" && hasGenerated && competitorTags.length > 0 && (
+          {hasEnrichment && (
+            <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Refine List</label>
-                <div className="flex gap-2">
-                  <TextInput
-                    placeholder="e.g. add 10 more from Asia, increase to 50 total..."
-                    value={refinementInput}
-                    onChange={(e) => setRefinementInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && refinementInput.trim() && !isRefining) {
-                        handleRefine();
-                      }
-                    }}
-                    disabled={isRefining}
-                  />
-                  <Button
-                    onClick={handleRefine}
-                    loading={isRefining}
-                    disabled={!refinementInput.trim() || isRefining}
-                    size="xs"
-                  >
-                    {isRefining ? "..." : "Send"}
-                  </Button>
-                </div>
-                <p className="text-xs text-gray-400 mt-1">
-                  Give instructions to add, remove, or change competitors. Press Enter to send.
-                </p>
+                <label className="mb-2 block text-sm font-medium">Competitor Discovery</label>
+                <RadioGroup
+                  value={competitorMode}
+                  onValueChange={(value) => setCompetitorMode(value as "ai" | "manual")}
+                  className="grid-cols-2"
+                >
+                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-input px-3 py-2 text-sm">
+                    <RadioGroupItem value="ai" />✨ Use AI
+                  </label>
+                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-input px-3 py-2 text-sm">
+                    <RadioGroupItem value="manual" />
+                    Enter Manually
+                  </label>
+                </RadioGroup>
               </div>
-            )}
-          </>
-        )}
 
-        {!hasEnrichment &&
-          parameters.map((param) => (
-            <div key={param.name}>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                {param.label}
-                {param.required && <span className="text-red-500 ml-1">*</span>}
-              </label>
-              <TextInput
-                placeholder={param.placeholder || ""}
-                value={parameterValues[param.name] || ""}
-                onChange={(e) =>
-                  setParameterValues((prev) => ({
-                    ...prev,
-                    [param.name]: e.target.value,
-                  }))
-                }
-              />
-            </div>
-          ))}
-      </div>
-    </Modal>
+              {/* Brand Name */}
+              <div>
+                <label className="mb-1 block text-sm font-medium">
+                  Your Brand Name
+                  <span className="ml-1 text-destructive">*</span>
+                </label>
+                <Input
+                  placeholder="e.g. Acme Airlines"
+                  value={parameterValues[enrichmentParam || "brand_name"] || ""}
+                  onChange={(e) =>
+                    setParameterValues((prev) => ({
+                      ...prev,
+                      [enrichmentParam || "brand_name"]: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              {competitorMode === "ai" && (
+                <>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">
+                      Select Model
+                      <span className="ml-1 text-destructive">*</span>
+                    </label>
+                    <SearchSelect
+                      options={availableModels.map((m) => ({ label: m, value: m }))}
+                      value={selectedModel}
+                      onValueChange={(value) => setSelectedModel(value || undefined)}
+                      placeholder={isLoadingModels ? "Loading models..." : "Select a model to generate names"}
+                      emptyText="No models found"
+                      disabled={isLoadingModels}
+                    />
+                  </div>
+
+                  <Button
+                    onClick={handleGenerateNames}
+                    disabled={!selectedModel || !brandNameFilled || isGenerating}
+                    className="w-full"
+                  >
+                    {isGenerating ? "✨ Generating names..." : "✨ Generate Competitor Names"}
+                  </Button>
+                </>
+              )}
+
+              {/* Competitor Tags */}
+              <div>
+                <label className="mb-1 block text-sm font-medium">
+                  Competitor Names
+                  {competitorTags.length > 0 && (
+                    <span className="ml-2 font-normal text-muted-foreground">({competitorTags.length})</span>
+                  )}
+                </label>
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-input p-2">
+                  {competitorTags.map((tag) => (
+                    <Badge key={tag} variant="secondary" className="gap-1">
+                      {tag}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${tag}`}
+                        onClick={() => setCompetitorTags(competitorTags.filter((t) => t !== tag))}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                  <input
+                    className="min-w-40 flex-1 bg-transparent text-sm outline-none"
+                    placeholder="Type a name and press Enter to add"
+                    value={tagDraft}
+                    onChange={(e) => setTagDraft(e.target.value)}
+                    onKeyDown={handleTagDraftKeyDown}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Type a name and press Enter to add. Click ✕ to remove.
+                </p>
+                {statusMessage && (
+                  <div className="mt-2 flex items-center gap-2 rounded-sm border border-border bg-muted p-2">
+                    <UiLoadingSpinner className="size-3" />
+                    <span className="text-xs text-muted-foreground">{statusMessage}</span>
+                  </div>
+                )}
+                {Object.keys(variationsMap).length > 0 && !statusMessage && (
+                  <p className="mt-1 text-xs text-green-600">
+                    ✓ {Object.values(variationsMap).flat().length} alternate spellings &amp; variations auto-generated
+                    for guardrail matching
+                  </p>
+                )}
+              </div>
+
+              {/* Refinement input — shown after initial generation in AI mode */}
+              {competitorMode === "ai" && hasGenerated && competitorTags.length > 0 && (
+                <div>
+                  <label className="mb-1 block text-sm font-medium">Refine List</label>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="e.g. add 10 more from Asia, increase to 50 total..."
+                      value={refinementInput}
+                      onChange={(e) => setRefinementInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && refinementInput.trim() && !isRefining) {
+                          handleRefine();
+                        }
+                      }}
+                      disabled={isRefining}
+                    />
+                    <Button onClick={handleRefine} disabled={!refinementInput.trim() || isRefining} size="sm">
+                      {isRefining ? "..." : "Send"}
+                    </Button>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Give instructions to add, remove, or change competitors. Press Enter to send.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="secondary" onClick={onCancel} disabled={isLoading}>
+            Cancel
+          </Button>
+          <Button onClick={handleConfirm} disabled={!canContinue || isLoading}>
+            {isLoading ? "Creating guardrails..." : "Continue"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
