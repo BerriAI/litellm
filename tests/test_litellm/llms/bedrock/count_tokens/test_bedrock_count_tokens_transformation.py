@@ -258,3 +258,52 @@ def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
         endpoint
         == "https://bedrock-runtime.us-east-1.amazonaws.com/model/..%2F..%2Fmodel%2Fother%3Fx%3D1%23frag/count-tokens"
     )
+
+
+def test_count_tokens_endpoint_keeps_cross_region_inference_profile_prefix(monkeypatch):
+    """Cross-region inference-profile prefixes (global./us./eu./apac./...) must be
+    preserved in the count-tokens URL. Those models are inference-profile-only and
+    Bedrock rejects the bare foundation-model ID with a 400 on the count-tokens
+    route (issue #32683)."""
+    config = BedrockCountTokensConfig()
+
+    monkeypatch.setattr(
+        config,
+        "get_runtime_endpoint",
+        lambda **kwargs: ("https://bedrock-runtime.eu-central-1.amazonaws.com", None),
+    )
+
+    assert (
+        config.get_bedrock_count_tokens_endpoint(
+            model="bedrock/global.anthropic.claude-opus-4-8",
+            aws_region_name="eu-central-1",
+        )
+        == "https://bedrock-runtime.eu-central-1.amazonaws.com/model/global.anthropic.claude-opus-4-8/count-tokens"
+    )
+
+    assert (
+        config.get_bedrock_count_tokens_endpoint(
+            model="bedrock/eu.anthropic.claude-sonnet-4-6",
+            aws_region_name="eu-central-1",
+        )
+        == "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-sonnet-4-6/count-tokens"
+    )
+
+
+def test_count_tokens_endpoint_strips_throughput_suffix(monkeypatch):
+    """Throughput / context-window suffixes are not part of the Bedrock model ID."""
+    config = BedrockCountTokensConfig()
+
+    monkeypatch.setattr(
+        config,
+        "get_runtime_endpoint",
+        lambda **kwargs: ("https://bedrock-runtime.us-east-1.amazonaws.com", None),
+    )
+
+    assert (
+        config.get_bedrock_count_tokens_endpoint(
+            model="anthropic.claude-3-5-sonnet-20241022-v2:0:51k",
+            aws_region_name="us-east-1",
+        )
+        == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20241022-v2%3A0/count-tokens"
+    )
