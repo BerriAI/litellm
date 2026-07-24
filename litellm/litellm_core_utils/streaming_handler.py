@@ -213,7 +213,7 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
-    def _restore_consumer_correlation_context(self) -> None:
+    def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
         """Restore trace_id/session_id in the *consuming* thread/task/context.
 
         wrapper()/wrapper_async() deliberately skip restoring correlation context
@@ -227,13 +227,20 @@ class CustomStreamWrapper:
         returns to that consuming context: natural exhaustion (StopIteration/
         StopAsyncIteration), a raised failure, or explicit aclose(). Never let
         this raise - it must not break the caller's actual stream handling.
+
+        guarded=True (only __del__ uses this) skips the restore unless the
+        contextvars still hold the ids this stream's own call set, so a
+        delayed finalizer never overwrites a different, still-active call
+        that has since taken over the same Task/thread's context.
         """
         try:
             logging_obj = getattr(self, "logging_obj", None)
-            if logging_obj is not None:
-                restore = getattr(logging_obj, "_restore_correlation_context", None)
-                if restore is not None:
-                    restore()
+            if logging_obj is None:
+                return
+            method_name = "_restore_correlation_context_if_unclaimed" if guarded else "_restore_correlation_context"
+            restore = getattr(logging_obj, method_name, None)
+            if restore is not None:
+                restore()
         except Exception:
             pass
 
@@ -246,9 +253,11 @@ class CustomStreamWrapper:
         is a best-effort fallback, not a guarantee: __del__ timing is
         unpredictable (delayed by cyclic GC, not guaranteed at interpreter
         shutdown, and may run on a different thread), so this can only reduce
-        how long the leak persists, not eliminate it.
+        how long the leak persists, not eliminate it. guarded=True additionally
+        ensures it never clobbers a different, still-active call's context if
+        this fires late.
         """
-        self._restore_consumer_correlation_context()
+        self._restore_consumer_correlation_context(guarded=True)
 
     async def aclose(self):
         self._restore_consumer_correlation_context()

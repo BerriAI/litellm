@@ -2024,6 +2024,20 @@ class Logging(LiteLLMLoggingBaseClass):
         set_trace_id(self._pre_call_trace_id)
         set_session_id(self._pre_call_session_id)
 
+    def _restore_correlation_context_if_unclaimed(self) -> None:
+        """Guarded variant for __del__-triggered cleanup only.
+
+        __del__ can fire arbitrarily late (delayed by cyclic GC, possibly
+        after the consuming Task/thread has already moved on to a different,
+        still-active call). Unconditionally restoring in that case would
+        stomp the active call's trace_id/session_id with this abandoned
+        stream's stale pre-call snapshot. Only restore if the contextvars
+        still hold the ids *this* call set - i.e. nothing has claimed them
+        since - so an unrelated active call is never overwritten.
+        """
+        if trace_id_var.get() == self.litellm_trace_id and session_id_var.get() == self.litellm_session_id:
+            self._restore_correlation_context()
+
     def success_handler(self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""

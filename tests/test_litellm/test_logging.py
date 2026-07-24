@@ -980,6 +980,59 @@ def test_stream_wrapper_del_never_raises_with_broken_logging_obj():
     wrapper.__del__()  # must not raise
 
 
+def test_stream_wrapper_del_does_not_clobber_a_newer_active_call():
+    """A delayed finalizer must never stomp a different, still-active call's
+    context. If an abandoned stream's __del__ fires late - after a new call
+    has already started in the same Task/thread and claimed the contextvars -
+    unconditionally restoring the abandoned stream's own pre-call snapshot
+    would corrupt the active call's subsequent log lines with stale ids."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("outer-trace-before-abandoned-call")
+    session_id_var.set("outer-session-before-abandoned-call")
+    try:
+        abandoned_log_obj = Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="abandoned-stream-call",
+            function_id="fn-abandoned-stream",
+            kwargs={"litellm_session_id": "abandoned-stream-session"},
+        )
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-3.5-turbo",
+            logging_obj=abandoned_log_obj,
+        )
+
+        # A new, unrelated call starts in this same Task/thread before the
+        # abandoned stream's __del__ ever fires, and claims the contextvars.
+        Logging(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="newer-active-call",
+            function_id="fn-newer-active-call",
+            kwargs={"litellm_session_id": "newer-active-session"},
+        )
+        assert trace_id_var.get() != abandoned_log_obj.litellm_trace_id
+        assert session_id_var.get() == "newer-active-session"
+
+        # The delayed finalizer for the abandoned stream must not clobber
+        # the newer call's still-active ids.
+        wrapper.__del__()
+
+        assert trace_id_var.get() != abandoned_log_obj.litellm_trace_id
+        assert session_id_var.get() == "newer-active-session"
+    finally:
+        trace_id_var.set("")
+        session_id_var.set("")
+
+
 @pytest.mark.asyncio
 async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
     """Explicit early termination (aclose(), e.g. on client disconnect or a
