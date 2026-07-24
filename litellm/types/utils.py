@@ -2810,6 +2810,10 @@ class CostBreakdown(TypedDict, total=False):
     margin_percent: float  # Margin percentage applied (e.g., 0.10 = 10%) (optional)
     margin_fixed_amount: float  # Fixed margin amount in USD (optional)
     margin_total_amount: float  # Total margin added in USD (optional)
+    cache_read_cost: float  # Cost attributable to cache-read tokens (optional)
+    cache_creation_cost: (
+        float  # Cost attributable to cache-write/creation tokens (optional)
+    )
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):

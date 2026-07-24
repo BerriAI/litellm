@@ -1377,6 +1377,8 @@ class Logging(LiteLLMLoggingBaseClass):
         margin_percent: Optional[float] = None,
         margin_fixed_amount: Optional[float] = None,
         margin_total_amount: Optional[float] = None,
+        cache_read_cost: Optional[float] = None,
+        cache_creation_cost: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1393,6 +1395,8 @@ class Logging(LiteLLMLoggingBaseClass):
             margin_percent: Margin percentage applied (0.10 = 10%)
             margin_fixed_amount: Fixed margin amount in USD
             margin_total_amount: Total margin added in USD
+            cache_read_cost: Cost attributable to cache-read tokens (additive annotation, overlaps input_cost)
+            cache_creation_cost: Cost attributable to cache-write/creation tokens (additive annotation, overlaps input_cost)
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1425,6 +1429,12 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["margin_fixed_amount"] = margin_fixed_amount
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
+
+        # Store cache cost itemization if provided
+        if cache_read_cost is not None:
+            self.cost_breakdown["cache_read_cost"] = cache_read_cost
+        if cache_creation_cost is not None:
+            self.cost_breakdown["cache_creation_cost"] = cache_creation_cost
 
     def _response_cost_calculator(
         self,

@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
+    _get_cost_per_unit,
     _get_service_tier_cost_key,
     _parse_prompt_tokens_details,
     calculate_cost_component,
@@ -952,6 +953,58 @@ def _apply_cost_margin(
     return base_cost, margin_percent, margin_fixed_amount, margin_total_amount
 
 
+def _compute_cache_cost_itemization(
+    model: Optional[str],
+    custom_llm_provider: Optional[str],
+    cache_read_input_tokens: Optional[int],
+    cache_creation_input_tokens: Optional[int],
+    service_tier: Optional[str] = None,
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Compute itemized cache-read and cache-creation costs from token counts and model pricing.
+
+    These are additive annotations that overlap ``input_cost`` (same convention as the
+    Anthropic path): the grand total is unaffected.
+
+    Returns:
+        Tuple[Optional[float], Optional[float]] - (cache_read_cost, cache_creation_cost)
+        Either value is None when the corresponding token count is absent/zero or when
+        no pricing entry exists for the model.
+    """
+    if not model:
+        return None, None
+    if not (cache_read_input_tokens or cache_creation_input_tokens):
+        return None, None
+
+    try:
+        model_info = _cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except Exception:
+        return None, None
+
+    cache_read_cost: Optional[float] = None
+    cache_creation_cost: Optional[float] = None
+
+    if cache_read_input_tokens:
+        _cr_key = _get_service_tier_cost_key(
+            "cache_read_input_token_cost", service_tier
+        )
+        _cr_rate = _get_cost_per_unit(model_info, _cr_key, None)
+        if _cr_rate is not None:
+            cache_read_cost = float(cache_read_input_tokens) * float(_cr_rate)
+
+    if cache_creation_input_tokens:
+        _cc_key = _get_service_tier_cost_key(
+            "cache_creation_input_token_cost", service_tier
+        )
+        _cc_rate = _get_cost_per_unit(model_info, _cc_key, None)
+        if _cc_rate is not None:
+            cache_creation_cost = float(cache_creation_input_tokens) * float(_cc_rate)
+
+    return cache_read_cost, cache_creation_cost
+
+
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: Optional[LitellmLoggingObject],
     prompt_tokens_cost_usd_dollar: float,
@@ -965,6 +1018,8 @@ def _store_cost_breakdown_in_logging_obj(
     margin_percent: Optional[float] = None,
     margin_fixed_amount: Optional[float] = None,
     margin_total_amount: Optional[float] = None,
+    cache_read_cost: Optional[float] = None,
+    cache_creation_cost: Optional[float] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -982,6 +1037,8 @@ def _store_cost_breakdown_in_logging_obj(
         margin_percent: Margin percentage applied (0.10 = 10%)
         margin_fixed_amount: Fixed margin amount in USD
         margin_total_amount: Total margin added in USD
+        cache_read_cost: Cost attributable to cache-read tokens (additive annotation, overlaps input_cost)
+        cache_creation_cost: Cost attributable to cache-write/creation tokens (additive annotation, overlaps input_cost)
     """
     if litellm_logging_obj is None:
         return
@@ -1000,6 +1057,8 @@ def _store_cost_breakdown_in_logging_obj(
             margin_percent=margin_percent,
             margin_fixed_amount=margin_fixed_amount,
             margin_total_amount=margin_total_amount,
+            cache_read_cost=cache_read_cost,
+            cache_creation_cost=cache_creation_cost,
         )
 
     except Exception as breakdown_error:
@@ -1195,6 +1254,13 @@ def completion_cost(  # noqa: PLR0915
                         cache_read_input_tokens = prompt_tokens_details.get(
                             "cached_tokens", 0
                         )
+                        # Fall back to prompt_tokens_details for cache creation tokens
+                        # (used by OpenAI Responses API which reports via cache_write_tokens
+                        # or cache_creation_tokens under prompt_tokens_details)
+                        if not cache_creation_input_tokens:
+                            cache_creation_input_tokens = prompt_tokens_details.get(
+                                "cache_creation_tokens", 0
+                            ) or prompt_tokens_details.get("cache_write_tokens", 0)
 
                     total_time = getattr(completion_response, "_response_ms", 0)
 
@@ -1589,6 +1655,16 @@ def completion_cost(  # noqa: PLR0915
 
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
+                    (
+                        _cache_read_cost,
+                        _cache_creation_cost,
+                    ) = _compute_cache_cost_itemization(
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        cache_read_input_tokens=cache_read_input_tokens,
+                        cache_creation_input_tokens=cache_creation_input_tokens,
+                        service_tier=service_tier,
+                    )
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
                         prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
@@ -1602,6 +1678,8 @@ def completion_cost(  # noqa: PLR0915
                         margin_percent=margin_percent,
                         margin_fixed_amount=margin_fixed_amount,
                         margin_total_amount=margin_total_amount,
+                        cache_read_cost=_cache_read_cost,
+                        cache_creation_cost=_cache_creation_cost,
                     )
 
                 return _final_cost
