@@ -206,3 +206,153 @@ class TestTransformToAnthropicError:
         )
         assert result["type"] == "error"
         assert result["error"]["message"] == '["error1", "error2"]'
+
+    def test_passthrough_through_litellm_provider_prefixes(self):
+        """
+        Upstream Anthropic JSON wrapped in `litellm.X: ProviderException - {...}`
+        (the real shape of `exception.message`) should be unwrapped and passed
+        through with the upstream error.type preserved.
+        """
+        anthropic_error = {
+            "type": "error",
+            "error": {
+                "type": "rate_limit_error",
+                "message": "Number of request tokens has exceeded your rate limit",
+            },
+        }
+        raw = "litellm.RateLimitError: AnthropicException - " + json.dumps(
+            anthropic_error
+        )
+        result = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=429,
+            raw_message=raw,
+        )
+        assert result["type"] == "error"
+        # Upstream enum preserved, not derived from status code.
+        assert result["error"]["type"] == "rate_limit_error"
+        assert (
+            result["error"]["message"]
+            == "Number of request tokens has exceeded your rate limit"
+        )
+
+    def test_wrap_strips_class_prefix_from_router_error(self):
+        """
+        A plain Router-side error string (no embedded JSON) still gets the
+        `litellm.X:` class prefix stripped before being wrapped.
+        """
+        result = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=429,
+            raw_message="litellm.RateLimitError: No deployments available",
+        )
+        assert result["type"] == "error"
+        assert result["error"]["type"] == "rate_limit_error"
+        assert result["error"]["message"] == "No deployments available"
+
+    def test_extracts_nested_openai_compat_error_message(self):
+        """
+        Upstream errors shaped `{"error":{"code","message","type"}}` (OpenAI,
+        new-api, OpenAI-compat gateways) need their nested `error.message`
+        extracted — falling back to the raw stringified JSON drags a
+        provider-specific envelope into the Anthropic envelope.
+        """
+        upstream = json.dumps(
+            {
+                "error": {
+                    "code": "model_not_found",
+                    "message": "model 'foo' not available",
+                    "type": "new_api_error",
+                }
+            }
+        )
+        result = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=503,
+            raw_message=upstream,
+        )
+        assert result["type"] == "error"
+        # 503 → api_error per status map; nested message lifted out cleanly.
+        assert result["error"]["type"] == "api_error"
+        assert result["error"]["message"] == "model 'foo' not available"
+
+    def test_passthrough_recovers_anthropic_json_with_trailing_garbage(self):
+        """
+        When the Router appends debug suffixes after the upstream Anthropic
+        JSON body (`{"type":"error",...}. Received Model Group=...`), we
+        should still detect and passthrough the leading Anthropic envelope
+        instead of falling back to wrap-with-status-derived-type.
+        """
+        anthropic_body = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"field messages is required"}}'
+        )
+        raw = anthropic_body + (
+            ". Received Model Group=claude-sonnet-cache"
+            "\nAvailable Model Group Fallbacks=None"
+        )
+        result = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=500,  # wrong status (LiteLLM lost upstream 400)
+            raw_message=raw,
+        )
+        # Upstream type preserved even though status_code says 500.
+        assert result["error"]["type"] == "invalid_request_error"
+        assert result["error"]["message"] == "field messages is required"
+
+
+class TestStripLitellmWrapperPrefixes:
+    """Tests for AnthropicExceptionMapping._strip_litellm_wrapper_prefixes()"""
+
+    def test_plain_text_unchanged(self):
+        assert (
+            AnthropicExceptionMapping._strip_litellm_wrapper_prefixes("just a message")
+            == "just a message"
+        )
+
+    def test_empty_string(self):
+        assert AnthropicExceptionMapping._strip_litellm_wrapper_prefixes("") == ""
+
+    def test_single_litellm_prefix(self):
+        assert (
+            AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(
+                "litellm.RateLimitError: slow down"
+            )
+            == "slow down"
+        )
+
+    def test_stacked_litellm_prefixes(self):
+        assert (
+            AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(
+                "litellm.ContextWindowExceededError: litellm.BadRequestError: too long"
+            )
+            == "too long"
+        )
+
+    def test_provider_exception_prefix(self):
+        assert (
+            AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(
+                'AnthropicException - {"type":"error"}'
+            )
+            == '{"type":"error"}'
+        )
+
+    def test_combined_litellm_and_provider_prefix(self):
+        assert (
+            AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(
+                'litellm.RateLimitError: AnthropicException - {"type":"error"}'
+            )
+            == '{"type":"error"}'
+        )
+
+    def test_exception_suffix_variant(self):
+        """`litellm.XxxException:` (not Error) is also stripped."""
+        assert (
+            AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(
+                "litellm.APIException: boom"
+            )
+            == "boom"
+        )
+
+    def test_idempotent(self):
+        once = AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(
+            "litellm.RateLimitError: AnthropicException - inner"
+        )
+        twice = AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(once)
+        assert once == twice == "inner"

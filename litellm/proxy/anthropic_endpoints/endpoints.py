@@ -61,6 +61,14 @@ def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
         usage.pop("total_tokens", None)
 
 
+def _anthropic_error_response(status_code: int, raw_message: str) -> JSONResponse:
+    body = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code,
+        raw_message=raw_message,
+    )
+    return JSONResponse(status_code=status_code, content=body)
+
+
 @router.post(
     "/v1/messages",
     tags=["[beta] Anthropic `/v1/messages`"],
@@ -211,12 +219,32 @@ async def anthropic_response(
             litellm_logging_obj=None,
         )
 
-        error_msg = f"{str(e)}"
-        raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+        # Return an Anthropic-shaped error body (not the OpenAI-shaped
+        # ProxyException envelope) so Anthropic SDK clients can switch on
+        # error.error.type. Use JSONResponse directly: HTTPException(detail=...)
+        # would wrap the dict in a spurious {"detail": ...} envelope.
+        # ProxyException stores its HTTP code on `.code` (string), litellm
+        # provider exceptions store it on `.status_code` (int). Read both,
+        # matching the `count_tokens` handler below.
+        proxy_code = getattr(e, "code", None)
+        if isinstance(proxy_code, str) and proxy_code.isdigit():
+            status_code = int(proxy_code)
+        else:
+            status_code = int(getattr(e, "status_code", 500) or 500)
+        # `getattr(e, "message", str(e))` returns None when .message is
+        # explicitly None (e.g. `litellm.BadRequestError(message=None)`).
+        # That None would crash `re.sub(..., None)` in
+        # `_strip_litellm_wrapper_prefixes`.
+        raw_message = getattr(e, "message", None)
+        if raw_message is None:
+            raw_message = str(e)
+        anthropic_error = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=status_code,
+            raw_message=raw_message,
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content=anthropic_error,
             headers=headers,
         )
 
@@ -261,10 +289,10 @@ async def count_tokens(
         messages = data.get("messages", [])
 
         if not model_name:
-            raise HTTPException(status_code=400, detail={"error": "model parameter is required"})
+            return _anthropic_error_response(400, "model parameter is required")
 
         if not messages:
-            raise HTTPException(status_code=400, detail={"error": "messages parameter is required"})
+            return _anthropic_error_response(400, "messages parameter is required")
 
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
@@ -290,23 +318,21 @@ async def count_tokens(
         # Convert the internal response to Anthropic API format
         return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
 
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        if isinstance(e.detail, dict):
+            raw_message = str(e.detail.get("error") or e.detail.get("message") or e.detail)
+        else:
+            raw_message = str(e.detail)
+        return _anthropic_error_response(e.status_code, raw_message)
     except ProxyException as e:
         status_code = int(e.code) if e.code and e.code.isdigit() else 500
-        detail = AnthropicExceptionMapping.transform_to_anthropic_error(
-            status_code=status_code,
-            raw_message=e.message,
-        )
-        raise HTTPException(
-            status_code=status_code,
-            detail=detail,
-        )
+        raw_message = e.message if e.message is not None else str(e)
+        return _anthropic_error_response(status_code, raw_message)
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
         )
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
+        return _anthropic_error_response(500, str(e))
 
 
 @router.post(
