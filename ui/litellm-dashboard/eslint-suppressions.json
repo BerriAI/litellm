@@ -4304,7 +4304,7 @@
   },
   "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.tsx": {
     "no-nested-ternary": {
-      "count": 3
+      "count": 2
     },
     "no-restricted-imports": {
       "count": 1
