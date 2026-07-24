@@ -5,9 +5,9 @@ answers or when credentials/env are missing; they never skip. Pure unit coverage
 of the harness itself carries no `e2e` marker and runs regardless of whether a
 proxy is up.
 
-Lifecycle: the `resources` fixture maps the init -> run -> teardown contract
-(lifecycle.E2ECase) onto pytest - setup is init(), the test body is run(), and
-teardown deletes every resource the test created on the long-lived proxy.
+Lifecycle: the `resources` fixture hands each test a lifecycle.ResourceManager -
+the test registers a cleanup for every resource it creates, and the fixture's
+teardown deletes them all on the long-lived proxy, even when the test fails.
 
 Each suite provides its own `client` fixture (a lifecycle.ResourceClient); these
 shared fixtures build on it.
@@ -42,6 +42,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
+    )
+    config.addinivalue_line(
+        "markers",
+        "weekly: real-provider anomaly load test that spends real money; deselected unless E2E_WEEKLY_ANOMALY is set",
     )
 
 

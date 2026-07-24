@@ -48,27 +48,22 @@ def _base_config(**overrides: Any) -> AutorouteConfig:
 class TestParseDiscoveredModels:
     def test_parses_valid_raw_list_into_typed_tuple(self):
         raw = [
-            {
-                "model_group": "gpt-4o",
-                "mode": "chat",
-                "input_cost_per_token": 0.01,
-                "output_cost_per_token": 0.02,
-            },
-            {"model_group": "text-embedding-3-small", "mode": "embedding"},
+            {"id": "gpt-4o", "object": "model", "mode": "chat"},
+            {"id": "text-embedding-3-small", "object": "model", "mode": "embedding"},
         ]
         result = parse_discovered_models(raw)
         assert result == (
-            DiscoveredModel(name="gpt-4o", mode="chat", input_cost_per_token=0.01, output_cost_per_token=0.02),
+            DiscoveredModel(name="gpt-4o", mode="chat"),
             DiscoveredModel(name="text-embedding-3-small", mode="embedding"),
         )
 
     def test_ignores_unknown_extra_fields(self):
-        raw = [{"model_group": "gpt-4o", "mode": "chat", "totally_unknown_field": "whatever"}]
+        raw = [{"id": "gpt-4o", "mode": "chat", "created": 123, "owned_by": "openai", "max_input_tokens": 128000}]
         result = parse_discovered_models(raw)
         assert result == (DiscoveredModel(name="gpt-4o", mode="chat"),)
 
     def test_missing_mode_defaults_to_chat(self):
-        raw = [{"model_group": "gpt-4o"}]
+        raw = [{"id": "gpt-4o", "object": "model"}]
         result = parse_discovered_models(raw)
         assert result[0].mode == "chat"
 

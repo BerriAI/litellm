@@ -106,8 +106,8 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install UI deps and Chromium
-        working-directory: ui/litellm-dashboard
+      - name: Install e2e deps and Chromium
+        working-directory: tests/e2e/ui
         run: |
           retry() {
             local attempt=1
@@ -131,17 +131,17 @@ jobs:
           retry npx playwright install --with-deps chromium
 
       - name: Run SERVER_ROOT_PATH redirect e2e
-        working-directory: ui/litellm-dashboard
+        working-directory: tests/e2e/ui
         env:
           SERVER_ROOT_PATH: ${{ matrix.root_path }}
-        run: npx playwright test --config=e2e_tests/serverRootPath.config.ts
+        run: npx playwright test --config=serverRootPath.config.ts
 
       - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-trace-${{ strategy.job-index }}
-          path: ui/litellm-dashboard/test-results/
+          path: tests/e2e/ui/test-results/
           retention-days: 7
 
       - name: Cleanup

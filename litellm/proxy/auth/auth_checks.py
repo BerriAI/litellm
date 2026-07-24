@@ -2661,6 +2661,15 @@ async def get_managed_vector_store_rows_by_uuids(
     return result
 
 
+class OrganizationNotFoundError(Exception):
+    """The organization row is CONFIRMED absent, as opposed to a lookup that failed.
+
+    Subclasses Exception so every existing except Exception caller keeps its current
+    behavior; it exists so a caller that wants to treat "no such org" as "no restriction" can do
+    that WITHOUT also swallowing an outage and silently dropping a real org ceiling.
+    """
+
+
 @log_db_metrics
 async def get_org_object(
     org_id: str,
@@ -2707,24 +2716,29 @@ async def get_org_object(
             query_kwargs["include"] = {"litellm_budget_table": True}
 
         response = await OrganizationRepository(prisma_client).table.find_unique(**query_kwargs)
-
-        if response is None:
-            raise Exception
-
-        _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
-        # Cache the result
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=_org_obj,
-            model_type=LiteLLM_OrganizationTable,
-            ttl=DEFAULT_IN_MEMORY_TTL,
-        )
-
-        return _org_obj
     except Exception:
-        raise Exception(
+        # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
+        # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
+        # apart — a caller that treats absence as "this org places no restriction" then drops a real
+        # org ceiling during an outage. Propagate the real error; callers that already catch
+        # Exception are unaffected.
+        raise
+
+    if response is None:
+        raise OrganizationNotFoundError(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
+
+    _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
+    # Cache the result
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=_org_obj,
+        model_type=LiteLLM_OrganizationTable,
+        ttl=DEFAULT_IN_MEMORY_TTL,
+    )
+
+    return _org_obj
 
 
 async def _get_resources_from_access_groups(
