@@ -85,6 +85,7 @@ class A2ABridgeParams(BaseModel):
 
     custom_llm_provider: str
     model: str
+    api_key: str | None = None
 
 
 class AgentRegisterBody(BaseModel):
