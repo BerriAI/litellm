@@ -631,6 +631,40 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should keep mcp_toolsets when saving an edit that does not touch the MCP selector", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithToolset = {
+      ...MOCK_KEY_DATA,
+      object_permission: {
+        ...MOCK_KEY_DATA.object_permission!,
+        mcp_toolsets: ["ts-1"],
+      },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithToolset}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken="test-token"
+        userID="test-user"
+        userRole="admin"
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Save Changes")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    expect(onSubmitMock.mock.calls[0][0].mcp_servers_and_groups.toolsets).toEqual(["ts-1"]);
+  });
+
   it("should submit budget_limits: [] when the last budget window is deleted", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataWithWindow = {

@@ -443,6 +443,36 @@ describe("CreateKey", () => {
     });
   });
 
+  it("should include mcp_toolsets in keyCreateCall payload when only toolsets are selected", async () => {
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /create key/i })).toBeInTheDocument();
+    });
+
+    act(() => {
+      formMock.setFieldValue("key_alias", "Test Key");
+      formMock.setFieldValue("allowed_mcp_servers_and_groups", {
+        servers: [],
+        accessGroups: [],
+        toolsets: ["ts-1"],
+      });
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create key/i }));
+    });
+
+    await waitFor(() => {
+      expect(mockKeyCreateCall).toHaveBeenCalled();
+    });
+    expect(mockKeyCreateCall.mock.calls[0][2].object_permission?.mcp_toolsets).toEqual(["ts-1"]);
+  });
+
   it("should prefill models when provided without team_id", async () => {
     renderWithProviders(
       <CreateKey

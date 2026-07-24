@@ -200,6 +200,7 @@ export function KeyEditView({
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
+      toolsets: keyData.object_permission?.mcp_toolsets || [],
     },
     mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
     agents_and_groups: {
@@ -233,6 +234,7 @@ export function KeyEditView({
       mcp_servers_and_groups: {
         servers: keyData.object_permission?.mcp_servers || [],
         accessGroups: keyData.object_permission?.mcp_access_groups || [],
+        toolsets: keyData.object_permission?.mcp_toolsets || [],
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
       throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
