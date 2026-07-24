@@ -30,9 +30,13 @@ const emptyInfiniteQuery = {
   isLoading: false,
 };
 
+const LOGS_WINDOW = { start_date: "2026-07-23 00:00:00", end_date: "2026-07-24 00:00:00" };
+
 function renderFilters(filters: Record<string, string> = {}) {
   const set = vi.fn();
-  renderWithProviders(<RequestLogsFilters get={(id: string) => filters[id]} set={set} teams={[]} />);
+  renderWithProviders(
+    <RequestLogsFilters get={(id: string) => filters[id]} set={set} teams={[]} logsWindow={LOGS_WINDOW} />,
+  );
   return { set };
 }
 
@@ -91,11 +95,11 @@ describe("RequestLogsFilters", () => {
     expect(useInfiniteModelInfo).toHaveBeenCalledWith(50, undefined);
   });
 
-  it("asks the server for a bounded page of end users instead of the whole customer table", async () => {
+  it("asks the server for a bounded page of end users scoped to the visible time window", async () => {
     renderFilters();
 
     await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalled());
-    expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(50, undefined);
+    expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(LOGS_WINDOW, 50, undefined);
   });
 
   it("pushes the End User query to the server rather than filtering a preloaded list", async () => {
@@ -106,7 +110,7 @@ describe("RequestLogsFilters", () => {
     await user.click(input);
     await user.type(input, "acme");
 
-    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(50, "acme"));
+    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(LOGS_WINDOW, 50, "acme"));
   });
 
   it("renders only the end users the current page returned", async () => {
@@ -142,5 +146,12 @@ describe("RequestLogsFilters", () => {
     list.dispatchEvent(new Event("scroll", { bubbles: true }));
 
     await waitFor(() => expect(fetchNextPage).toHaveBeenCalled());
+  });
+
+  it("scopes the End User lookup to the window the logs table is showing", async () => {
+    const otherWindow = { start_date: "2026-01-01 00:00:00", end_date: "2026-01-02 00:00:00" };
+    renderWithProviders(<RequestLogsFilters get={() => undefined} set={vi.fn()} teams={[]} logsWindow={otherWindow} />);
+
+    await waitFor(() => expect(useInfiniteEndUserAliases).toHaveBeenCalledWith(otherWindow, 50, undefined));
   });
 });

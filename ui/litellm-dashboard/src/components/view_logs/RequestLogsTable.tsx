@@ -8,7 +8,7 @@ import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
-import { LOG_FILTER_LABELS } from "./log_filter_logic";
+import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
 
@@ -30,6 +30,7 @@ interface RequestLogsTableProps {
   onKeyHashClick: (keyHash: string) => void;
   onSessionClick: (sessionId: string) => void;
   teams: Team[];
+  logsWindow: LogsWindow;
   toolbarChildren?: ReactNode;
 }
 
@@ -67,6 +68,7 @@ export function RequestLogsTable({
   onKeyHashClick,
   onSessionClick,
   teams,
+  logsWindow,
   toolbarChildren,
 }: RequestLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -120,7 +122,7 @@ export function RequestLogsTable({
             title="Filters"
             description="Narrow down request logs"
           >
-            {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} />}
+            {({ get, set }) => <RequestLogsFilters get={get} set={set} teams={teams} logsWindow={logsWindow} />}
           </DataTableFilterDrawer>
         </>
       )}

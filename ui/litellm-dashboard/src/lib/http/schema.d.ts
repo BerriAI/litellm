@@ -2781,16 +2781,20 @@ export interface paths {
         };
         /**
          * List Customer Aliases
-         * @description [Admin-only] List customer ids with pagination and optional search.
+         * @description List the end users seen in spend logs over a time window, for UI filter dropdowns.
          *
-         *     Lightweight counterpart to `/customer/list`, for UI filter dropdowns.
-         *     `/customer/list` returns every customer with its budget and object-permission
-         *     relations eagerly loaded, which is unusable once LiteLLM_EndUserTable grows
-         *     (end-user rows are created automatically per distinct `user` seen in traffic).
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     Reads spend logs rather than LiteLLM_EndUserTable because only spend logs carry
+         *     the team attribution this scoping needs. The window is required and the inner
+         *     scan is capped at MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS rows, so the query
+         *     cannot degrade into a full-table scan the way `/global/all_end_users` does.
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/aliases?page=1&size=50&search=acme'         --header 'Authorization: Bearer sk-1234'
+         *     curl --location 'http://0.0.0.0:4000/customer/aliases?start_date=2026-07-23%2000:00:00&end_date=2026-07-24%2000:00:00&size=50&search=acme'         --header 'Authorization: Bearer sk-1234'
          *     ```
          */
         get: operations["list_customer_aliases_customer_aliases_get"];
@@ -38450,7 +38454,11 @@ export interface operations {
     };
     list_customer_aliases_customer_aliases_get: {
         parameters: {
-            query?: {
+            query: {
+                /** @description Window start, 'YYYY-MM-DD HH:MM:SS' (UTC) */
+                start_date: string;
+                /** @description Window end, 'YYYY-MM-DD HH:MM:SS' (UTC) */
+                end_date: string;
                 /** @description Page number */
                 page?: number;
                 /** @description Page size */

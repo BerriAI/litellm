@@ -12,7 +12,7 @@ import { keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import type { LogEntry } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
-import { DEFAULT_LOGS_SORTING, LOG_FILTER_IDS, useLogFilterLogic } from "./log_filter_logic";
+import { DEFAULT_LOGS_SORTING, formatLogsWindow, LOG_FILTER_IDS, useLogFilterLogic } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
@@ -75,6 +75,11 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     isCustomDate,
     sorting,
   });
+
+  const logsWindow = useMemo(
+    () => formatLogsWindow(startTime, endTime, isCustomDate),
+    [startTime, endTime, isCustomDate],
+  );
 
   const keyInfoQueryOptions: UseQueryOptions<KeyResponse | null> = {
     queryKey: ["requestLogsKeyInfo", selectedKeyIdInfoView, accessToken],
@@ -232,6 +237,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         onKeyHashClick={handleKeyHashClick}
         onSessionClick={handleSessionClick}
         teams={allTeams ?? []}
+        logsWindow={logsWindow}
         toolbarChildren={
           <LogsTableToolbar
             startTime={startTime}
