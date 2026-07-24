@@ -1,0 +1,290 @@
+import { describe, it, expect } from "vitest";
+import {
+  AUTH_TYPE,
+  OAUTH_FLOW,
+  MCP_OAUTH2_FLOW_M2M,
+  TRANSPORT,
+  handleTransport,
+  handleAuth,
+  getMcpOAuthMode,
+  gatewayMintsClientFor,
+  getOAuthAuthorizationIdentity,
+  isHeldOAuthTokenStale,
+  oauth2FlowToFormValue,
+  preservedDeclaredAppCredentials,
+  withoutMintedTokenCredentials,
+  credentialAuthClass,
+  isUnsupportedOnGatewayConnect,
+} from "./types";
+
+describe("getOAuthAuthorizationIdentity", () => {
+  // Regression: the identity used to pick the audience from spec_path only when values.transport was
+  // OPENAPI, but the create form keeps transport in component state, so values.transport was absent and
+  // spec_path edits on OpenAPI servers never invalidated a held token.
+  it("changes when spec_path changes even when transport is absent from form values", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, spec_path: "https://a.example.com/openapi.json" };
+    const edited = { auth_type: AUTH_TYPE.OAUTH2, spec_path: "https://b.example.com/openapi.json" };
+    expect(getOAuthAuthorizationIdentity(edited)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(isHeldOAuthTokenStale(edited, getOAuthAuthorizationIdentity(authorized))).toBe(true);
+  });
+
+  it("changes when url changes", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp" };
+    const edited = { auth_type: AUTH_TYPE.OAUTH2, url: "https://b.example.com/mcp" };
+    expect(getOAuthAuthorizationIdentity(edited)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+  });
+
+  it("is stable across non-mint fields", () => {
+    const authorized = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp", server_name: "one" };
+    const renamed = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp", server_name: "two" };
+    expect(getOAuthAuthorizationIdentity(renamed)).toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(isHeldOAuthTokenStale(renamed, getOAuthAuthorizationIdentity(authorized))).toBe(false);
+  });
+});
+
+describe("handleTransport", () => {
+  it("should default to SSE when transport is null", () => {
+    expect(handleTransport(null)).toBe(TRANSPORT.SSE);
+  });
+
+  it("should default to SSE when transport is undefined", () => {
+    expect(handleTransport(undefined)).toBe(TRANSPORT.SSE);
+  });
+
+  it("should return openapi when specPath is present and transport is not stdio", () => {
+    expect(handleTransport("http", "/spec.yaml")).toBe(TRANSPORT.OPENAPI);
+  });
+
+  it("should keep stdio even when specPath is present", () => {
+    expect(handleTransport(TRANSPORT.STDIO, "/spec.yaml")).toBe(TRANSPORT.STDIO);
+  });
+
+  it("should return the transport as-is when no specPath", () => {
+    expect(handleTransport("http")).toBe("http");
+  });
+});
+
+describe("handleAuth", () => {
+  it("should default to NONE when authType is null", () => {
+    expect(handleAuth(null)).toBe(AUTH_TYPE.NONE);
+  });
+
+  it("should default to NONE when authType is undefined", () => {
+    expect(handleAuth(undefined)).toBe(AUTH_TYPE.NONE);
+  });
+
+  it("should return the provided auth type", () => {
+    expect(handleAuth(AUTH_TYPE.OAUTH2)).toBe("oauth2");
+  });
+});
+
+describe("constants", () => {
+  it("should define all expected auth types", () => {
+    expect(AUTH_TYPE.NONE).toBe("none");
+    expect(AUTH_TYPE.API_KEY).toBe("api_key");
+    expect(AUTH_TYPE.BEARER_TOKEN).toBe("bearer_token");
+    expect(AUTH_TYPE.OAUTH2).toBe("oauth2");
+  });
+
+  it("should define all expected transport types", () => {
+    expect(TRANSPORT.SSE).toBe("sse");
+    expect(TRANSPORT.HTTP).toBe("http");
+    expect(TRANSPORT.STDIO).toBe("stdio");
+    expect(TRANSPORT.OPENAPI).toBe("openapi");
+  });
+
+  it("should define OAuth flow types", () => {
+    expect(OAUTH_FLOW.INTERACTIVE).toBe("interactive");
+    expect(OAUTH_FLOW.M2M).toBe("m2m");
+  });
+
+  it("should define the backend M2M flow value", () => {
+    expect(MCP_OAUTH2_FLOW_M2M).toBe("client_credentials");
+  });
+});
+
+describe("gatewayMintsClientFor", () => {
+  // The authoritative client-acquisition matrix: for each (auth_type, dcr_bridge) cell, does the
+  // gateway mint the OAuth client at /authorize (browser skips its own register) or not (browser
+  // registers)? This MUST equal the backend resolve_ephemeral_dcr_client mint set exactly, which
+  // test_discoverable_endpoints.py::test_resolve_ephemeral_dcr_client_mint_set_is_exact pins against
+  // the same predicate. A divergence in either direction dead-ends a mode (skip a register the
+  // gateway never performs) or double-registers, so both sides are enumerated against this table.
+  const MATRIX: Array<{ auth_type: string; dcr_bridge: boolean | null | undefined; mints: boolean }> = [
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: true, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: undefined, mints: true },
+    // The one interactive-sign-in cell the gateway must NOT mint (browser front-door register).
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.API_KEY, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BEARER_TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BASIC, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.NONE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.AWS_SIGV4, dcr_bridge: false, mints: false },
+  ];
+
+  it.each(MATRIX)(
+    "mints=$mints for auth_type=$auth_type dcr_bridge=$dcr_bridge",
+    ({ auth_type, dcr_bridge, mints }) => {
+      expect(gatewayMintsClientFor({ auth_type, dcr_bridge })).toBe(mints);
+    },
+  );
+});
+
+describe("getMcpOAuthMode", () => {
+  it("returns null for non-OAuth2 servers", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.API_KEY })).toBeNull();
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.NONE })).toBeNull();
+    expect(getMcpOAuthMode({})).toBeNull();
+  });
+
+  it("classifies client_credentials as m2m", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: MCP_OAUTH2_FLOW_M2M })).toBe("m2m");
+  });
+
+  it("classifies oauth2_token_exchange as token_exchange regardless of the oauth2 secondary fields", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE })).toBe("token_exchange");
+    expect(
+      getMcpOAuthMode({
+        auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
+        oauth2_flow: MCP_OAUTH2_FLOW_M2M,
+        delegate_auth_to_upstream: true,
+      }),
+    ).toBe("token_exchange");
+  });
+
+  it("treats m2m as m2m even when delegate_auth_to_upstream is true", () => {
+    expect(
+      getMcpOAuthMode({
+        auth_type: AUTH_TYPE.OAUTH2,
+        oauth2_flow: MCP_OAUTH2_FLOW_M2M,
+        delegate_auth_to_upstream: true,
+      }),
+    ).toBe("m2m");
+  });
+
+  it("classifies an interactive server with delegate_auth_to_upstream as passthrough", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: null, delegate_auth_to_upstream: true })).toBe(
+      "passthrough",
+    );
+  });
+
+  it("classifies an interactive server without delegation as authorization_code", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: null, delegate_auth_to_upstream: false })).toBe(
+      "authorization_code",
+    );
+  });
+
+  it("defaults to authorization_code when delegate_auth_to_upstream is undefined", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2 })).toBe("authorization_code");
+  });
+
+  it("treats explicit authorization_code as interactive, not m2m", () => {
+    expect(
+      getMcpOAuthMode({
+        auth_type: AUTH_TYPE.OAUTH2,
+        oauth2_flow: "authorization_code",
+        delegate_auth_to_upstream: false,
+      }),
+    ).toBe("authorization_code");
+  });
+
+  // Regression: the old heuristic labeled any OAuth2 server with a token endpoint
+  // as M2M. getMcpOAuthMode ignores token_url, so an interactive server that
+  // legitimately carries one is classified by oauth2_flow + delegate, never M2M.
+  it("does not treat an interactive server with a token endpoint as m2m", () => {
+    expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.OAUTH2, oauth2_flow: null, delegate_auth_to_upstream: false })).toBe(
+      "authorization_code",
+    );
+  });
+});
+
+describe("oauth2FlowToFormValue", () => {
+  it("maps client_credentials to the M2M select value", () => {
+    expect(oauth2FlowToFormValue(MCP_OAUTH2_FLOW_M2M)).toBe(OAUTH_FLOW.M2M);
+  });
+
+  it("maps authorization_code to the Interactive select value", () => {
+    expect(oauth2FlowToFormValue("authorization_code")).toBe(OAUTH_FLOW.INTERACTIVE);
+  });
+
+  it("returns undefined for a null/unset flow so the select shows its placeholder", () => {
+    expect(oauth2FlowToFormValue(null)).toBeUndefined();
+    expect(oauth2FlowToFormValue(undefined)).toBeUndefined();
+  });
+});
+
+describe("preservedDeclaredAppCredentials", () => {
+  it("keeps only non-empty string declared-app keys and never token-shaped keys", () => {
+    expect(preservedDeclaredAppCredentials(undefined)).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({})).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: 123 })).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: "" })).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: "a", access_token: "t", scopes: ["s"] })).toEqual({
+      client_id: "a",
+    });
+    expect(preservedDeclaredAppCredentials({ client_secret: "s" })).toEqual({ client_secret: "s" });
+    expect(preservedDeclaredAppCredentials({ client_id: "a", client_secret: "b", refresh_token: "r" })).toEqual({
+      client_id: "a",
+      client_secret: "b",
+    });
+  });
+});
+
+describe("withoutMintedTokenCredentials", () => {
+  it("drops token keys and keeps the declared app and other config", () => {
+    expect(withoutMintedTokenCredentials(undefined)).toBeUndefined();
+    const mixed = {
+      client_id: "a",
+      client_secret: "b",
+      access_token: "t",
+      refresh_token: "r",
+      expires_in: 3600,
+      scope: "read",
+      scopes: ["read"],
+    };
+    expect(withoutMintedTokenCredentials(mixed)).toEqual({ client_id: "a", client_secret: "b", scopes: ["read"] });
+  });
+
+  it("returns undefined (not {}) when only minted keys are present, so a restore never blanks the fields", () => {
+    expect(withoutMintedTokenCredentials({ access_token: "t", refresh_token: "r", expires_in: 3600 })).toBeUndefined();
+    // A declared client is always kept, so a stored client_id can never be overwritten with empty.
+    expect(withoutMintedTokenCredentials({ client_id: "x", access_token: "t" })).toEqual({ client_id: "x" });
+  });
+});
+
+describe("credentialAuthClass", () => {
+  it("collapses the client-forwarded modes to one class and leaves others distinct", () => {
+    expect(credentialAuthClass(AUTH_TYPE.TRUE_PASSTHROUGH)).toBe("client_forwarded");
+    expect(credentialAuthClass(AUTH_TYPE.OAUTH_DELEGATE)).toBe("client_forwarded");
+    expect(credentialAuthClass(AUTH_TYPE.OAUTH2)).toBe(AUTH_TYPE.OAUTH2);
+    expect(credentialAuthClass(null)).toBeNull();
+  });
+});
+
+describe("isUnsupportedOnGatewayConnect", () => {
+  it("flags the modes that need a caller-supplied upstream token or subject", () => {
+    // client-forwarded: caller presents the upstream Authorization per call
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.TRUE_PASSTHROUGH)).toBe(true);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH_DELEGATE)).toBe(true);
+    // OBO: caller's own IdP token is the exchange subject, which the session bearer is not
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE)).toBe(true);
+  });
+
+  it("does not flag modes the gateway can serve from server-side state or interactive vaulting", () => {
+    // interactive authorization_code is the one mode the connect grid vaults per user
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2)).toBe(false);
+    // server-configured credentials need no per-user connect
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.API_KEY)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.NONE)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(null)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(undefined)).toBe(false);
+  });
+});

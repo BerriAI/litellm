@@ -1,7 +1,18 @@
+import os
+import sys
+import traceback
+
 import pytest
 import requests
 
-from litellm.proxy.client.exceptions import UnauthorizedError
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
+
+import responses
+
+from litellm.proxy.client.exceptions import NotFoundError, UnauthorizedError
 from litellm.proxy.client.keys import KeysManagementClient
 
 
@@ -121,7 +132,8 @@ def test_list_request_all_parameters(client):
     }
 
 
-def test_list_mock_response_pagination(client, requests_mock):
+@responses.activate
+def test_list_mock_response_pagination(client):
     """Test list with a mocked paginated response"""
     mock_response = {
         "data": {
@@ -147,17 +159,19 @@ def test_list_mock_response_pagination(client, requests_mock):
         }
     }
 
-    requests_mock.get(
-        f"{client._base_url}/key/list",
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/list?page=1&size=2",
         json=mock_response,
-        additional_matcher=lambda r: r.qs == {"page": ["1"], "size": ["2"]},
+        status=200,
     )
 
     response = client.list(page=1, size=2)
     assert response == mock_response
 
 
-def test_list_mock_response_filtered(client, requests_mock):
+@responses.activate
+def test_list_mock_response_filtered(client):
     """Test list with a mocked filtered response"""
     mock_response = {
         "keys": [
@@ -173,22 +187,25 @@ def test_list_mock_response_filtered(client, requests_mock):
         ]
     }
 
-    requests_mock.get(
-        f"{client._base_url}/key/list",
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/list?user_id=user123&team_id=team456",
         json=mock_response,
-        additional_matcher=lambda r: (
-            r.qs.get("user_id") == ["user123"] and r.qs.get("team_id") == ["team456"]
-        ),
+        status=200,
     )
 
     response = client.list(user_id="user123", team_id="team456")
     assert response == mock_response
 
 
-def test_list_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_list_unauthorized_error(client):
     """Test that list raises UnauthorizedError for 401 responses"""
-    requests_mock.get(
-        f"{client._base_url}/key/list", status_code=401, json={"error": "Unauthorized"}
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/list",
+        status=401,
+        json={"error": "Unauthorized"},
     )
 
     with pytest.raises(UnauthorizedError):
@@ -233,7 +250,8 @@ def test_generate_request_full(client):
     }
 
 
-def test_generate_mock_response(client, requests_mock):
+@responses.activate
+def test_generate_mock_response(client):
     """Test generate with a mocked successful response"""
     mock_response = {
         "key": "new-test-key",
@@ -248,7 +266,12 @@ def test_generate_mock_response(client, requests_mock):
         "config": {"max_parallel_requests": 5},
     }
 
-    requests_mock.post(f"{client._base_url}/key/generate", json=mock_response)
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/key/generate",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.generate(
         key_alias="test-key-alias",
@@ -260,11 +283,13 @@ def test_generate_mock_response(client, requests_mock):
     assert response == mock_response
 
 
-def test_generate_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_generate_unauthorized_error(client):
     """Test that generate raises UnauthorizedError for 401 responses"""
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/key/generate",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -310,24 +335,32 @@ def test_delete_request_with_keys_and_aliases(client):
     assert request.json == {"keys": keys_to_delete, "key_aliases": aliases_to_delete}
 
 
-def test_delete_mock_response(client, requests_mock):
+@responses.activate
+def test_delete_mock_response(client):
     """Test delete with a mocked successful response"""
     mock_response = {
         "status": "success",
         "deleted_keys": ["key1", "key2"],
         "deleted_aliases": ["alias1"],
     }
-    requests_mock.post(f"{client._base_url}/key/delete", json=mock_response)
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/key/delete",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.delete(keys=["key1", "key2"], key_aliases=["alias1"])
     assert response == mock_response
 
 
-def test_delete_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_delete_unauthorized_error(client):
     """Test that delete raises UnauthorizedError for 401 responses"""
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/key/delete",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -339,12 +372,13 @@ def test_info_request_minimal(client, base_url, api_key):
     """Test info request with minimal parameters"""
     request = client.info(key="test-key", return_request=True)
     assert request.method == "GET"
-    assert request.url == f"{base_url}/keys/info?key=test-key"
+    assert request.url == f"{base_url}/key/info?key=test-key"
     assert request.headers["Content-Type"] == "application/json"
     assert request.headers["Authorization"] == f"Bearer {api_key}"
 
 
-def test_info_mock_response(client, requests_mock):
+@responses.activate
+def test_info_mock_response(client):
     """Test info with a mocked successful response"""
     mock_response = {
         "key": "test-key",
@@ -353,28 +387,130 @@ def test_info_mock_response(client, requests_mock):
         "models": ["gpt-4"],
         "spend": 100.0,
     }
-    requests_mock.get(f"{client._base_url}/keys/info?key=test-key", json=mock_response)
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/info?key=test-key",
+        json=mock_response,
+        status=200,
+    )
     response = client.info(key="test-key")
     assert response == mock_response
 
 
-def test_info_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_info_unauthorized_error(client):
     """Test that info raises UnauthorizedError for 401 responses"""
-    requests_mock.get(
-        f"{client._base_url}/keys/info?key=test-key",
-        status_code=401,
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/info?key=test-key",
+        status=401,
         json={"error": "Unauthorized"},
     )
     with pytest.raises(UnauthorizedError):
         client.info(key="test-key")
 
 
-def test_info_server_error(client, requests_mock):
+@responses.activate
+def test_info_server_error(client):
     """Test that info raises HTTPError for server errors"""
-    requests_mock.get(
-        f"{client._base_url}/keys/info?key=test-key",
-        status_code=500,
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/info?key=test-key",
+        status=500,
         json={"error": "Internal Server Error"},
     )
     with pytest.raises(requests.exceptions.HTTPError):
         client.info(key="test-key")
+
+
+LEAKY_KEY = "sk-1234567890abcdefghijklmnop"
+
+
+def _render_full_traceback(exc: BaseException) -> str:
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+
+@responses.activate
+def test_info_not_found_redacts_key_everywhere(client):
+    """A 404 must not echo the raw key embedded in the request URL.
+
+    Covers str(exc) and the rendered traceback, since the chain through
+    __cause__ / __context__ is what logging.exception() and the default
+    excepthook print.
+    """
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/info?key={LEAKY_KEY}",
+        status=404,
+        json={"error": {"message": "Key not found", "code": "404"}},
+    )
+    with pytest.raises(requests.exceptions.HTTPError) as excinfo:
+        client.info(key=LEAKY_KEY)
+
+    exc = excinfo.value
+    assert LEAKY_KEY not in str(exc)
+    assert "REDACTED" in str(exc)
+    assert LEAKY_KEY not in _render_full_traceback(exc)
+    assert exc.__cause__ is None and exc.__suppress_context__
+    assert exc.response is not None
+    assert exc.response.status_code == 404
+    assert exc.request is not None
+    # Known residual: the live request URL still carries the key, since the
+    # response is preserved so callers keep status_code / text. str(exc) and the
+    # traceback are scrubbed; the URL-borne key is the root issue tracked in
+    # LIT-4013 (move the lookup key out of the query string server-side).
+    assert LEAKY_KEY in exc.response.request.url
+
+
+@responses.activate
+def test_info_unauthorized_redacts_key_everywhere(client):
+    """A 401 surfaced as UnauthorizedError must not echo the raw key in the
+    message, the retained original, or the rendered traceback chain."""
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/key/info?key={LEAKY_KEY}",
+        status=401,
+        json={"error": "Unauthorized"},
+    )
+    with pytest.raises(UnauthorizedError) as excinfo:
+        client.info(key=LEAKY_KEY)
+
+    exc = excinfo.value
+    assert LEAKY_KEY not in str(exc)
+    assert "REDACTED" in str(exc)
+    assert LEAKY_KEY not in str(exc.orig_exception)
+    assert LEAKY_KEY not in _render_full_traceback(exc)
+    assert exc.__cause__ is None and exc.__suppress_context__
+    assert isinstance(exc.orig_exception, requests.exceptions.HTTPError)
+    assert exc.orig_exception.response is not None
+    assert exc.orig_exception.response.status_code == 401
+
+
+def _http_error_with_key(prefix: str, status: int) -> requests.exceptions.HTTPError:
+    resp = requests.Response()
+    resp.status_code = status
+    return requests.exceptions.HTTPError(
+        f"{prefix} for url: http://x/key/info?key={LEAKY_KEY}", response=resp
+    )
+
+
+def test_unauthorized_error_redacts_wrapped_key():
+    """UnauthorizedError scrubs the key in str(exc) and in the retained
+    orig_exception, while preserving the response for structured access."""
+    wrapped = UnauthorizedError(
+        _http_error_with_key("401 Client Error: Unauthorized", 401)
+    )
+    assert LEAKY_KEY not in str(wrapped)
+    assert "REDACTED" in str(wrapped)
+    assert LEAKY_KEY not in str(wrapped.orig_exception)
+    assert wrapped.orig_exception.response.status_code == 401
+
+
+def test_not_found_error_redacts_wrapped_key():
+    """NotFoundError scrubs the key in str(exc) and in the retained
+    orig_exception, while preserving the response for structured access."""
+    wrapped = NotFoundError(_http_error_with_key("404 Client Error: Not Found", 404))
+    assert LEAKY_KEY not in str(wrapped)
+    assert "REDACTED" in str(wrapped)
+    assert LEAKY_KEY not in str(wrapped.orig_exception)
+    assert wrapped.orig_exception.response.status_code == 404

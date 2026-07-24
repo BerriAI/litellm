@@ -40,23 +40,17 @@ class TraceloopLogger:
         from opentelemetry.trace import SpanKind, Status, StatusCode
 
         try:
-            print_verbose(
-                f"Traceloop Logging - Enters logging function for model {kwargs}"
-            )
+            print_verbose(f"Traceloop Logging - Enters logging function for model {kwargs}")
 
             tracer = self.tracer_wrapper.get_tracer()
 
             optional_params = kwargs.get("optional_params", {})
             start_time = int(start_time.timestamp())
             end_time = int(end_time.timestamp())
-            span = tracer.start_span(
-                "litellm.completion", kind=SpanKind.CLIENT, start_time=start_time
-            )
+            span = tracer.start_span("litellm.completion", kind=SpanKind.CLIENT, start_time=start_time)
 
             if span.is_recording():
-                span.set_attribute(
-                    SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model")
-                )
+                span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))
                 if "stop" in optional_params:
                     span.set_attribute(
                         SpanAttributes.LLM_CHAT_STOP_SEQUENCES,
@@ -73,18 +67,14 @@ class TraceloopLogger:
                         optional_params.get("presence_penalty"),
                     )
                 if "top_p" in optional_params:
-                    span.set_attribute(
-                        SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p")
-                    )
+                    span.set_attribute(SpanAttributes.LLM_REQUEST_TOP_P, optional_params.get("top_p"))
                 if "tools" in optional_params or "functions" in optional_params:
                     span.set_attribute(
                         SpanAttributes.LLM_REQUEST_FUNCTIONS,
                         optional_params.get("tools", optional_params.get("functions")),
                     )
                 if "user" in optional_params:
-                    span.set_attribute(
-                        SpanAttributes.LLM_USER, optional_params.get("user")
-                    )
+                    span.set_attribute(SpanAttributes.LLM_USER, optional_params.get("user"))
                 if "max_tokens" in optional_params:
                     span.set_attribute(
                         SpanAttributes.LLM_REQUEST_MAX_TOKENS,
@@ -106,9 +96,7 @@ class TraceloopLogger:
                         prompt.get("content"),
                     )
 
-                span.set_attribute(
-                    SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model")
-                )
+                span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model"))
                 usage = response_obj.get("usage")
                 if usage:
                     span.set_attribute(
@@ -138,11 +126,7 @@ class TraceloopLogger:
                         choice.get("message").get("content"),
                     )
 
-            if (
-                level == "ERROR"
-                and status_message is not None
-                and isinstance(status_message, str)
-            ):
+            if level == "ERROR" and status_message is not None and isinstance(status_message, str):
                 span.record_exception(Exception(status_message))
                 span.set_status(Status(StatusCode.ERROR, status_message))
 

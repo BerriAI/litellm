@@ -1,0 +1,984 @@
+import asyncio
+import json
+import os
+import sys
+from datetime import datetime, timedelta
+from typing import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+
+import pytest
+
+sys.path.insert(0, os.path.abspath("../.."))
+
+import httpx
+import pytest
+from respx import MockRouter
+
+import litellm
+
+# Import at the top to make the patch work correctly
+import litellm.llms.github_copilot.chat.transformation
+from litellm import Choices, Message, ModelResponse, Usage, acompletion, completion
+from litellm.exceptions import AuthenticationError
+from litellm.llms.github_copilot.authenticator import Authenticator
+from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+from litellm.llms.github_copilot.common_utils import (
+    APIKeyExpiredError,
+    GetAccessTokenError,
+    GetAPIKeyError,
+    GetDeviceCodeError,
+    RefreshAPIKeyError,
+)
+
+
+def test_github_copilot_config_get_openai_compatible_provider_info():
+    """Test the GitHub Copilot configuration provider info retrieval."""
+
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator to avoid actual API calls
+    mock_api_key = "gh.test-key-123456789"
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = mock_api_key
+    # Test with dynamic endpoint
+    config.authenticator.get_api_base.return_value = (
+        "https://api.enterprise.githubcopilot.com"
+    )
+
+    # Test with default values
+    model = "github_copilot/gpt-4"
+    (
+        api_base,
+        dynamic_api_key,
+        custom_llm_provider,
+    ) = config._get_openai_compatible_provider_info(
+        model=model,
+        api_base=None,
+        api_key=None,
+        custom_llm_provider="github_copilot",
+    )
+
+    assert api_base == "https://api.enterprise.githubcopilot.com"
+    assert dynamic_api_key == mock_api_key
+    assert custom_llm_provider == "github_copilot"
+
+    # Test fallback to default if no dynamic endpoint
+    config.authenticator.get_api_base.return_value = None
+    (
+        api_base,
+        dynamic_api_key,
+        custom_llm_provider,
+    ) = config._get_openai_compatible_provider_info(
+        model=model,
+        api_base=None,
+        api_key=None,
+        custom_llm_provider="github_copilot",
+    )
+    assert api_base == "https://api.githubcopilot.com"
+
+    # Test with authentication failure
+    config.authenticator.get_api_key.side_effect = GetAPIKeyError(
+        message="Failed to get API key",
+        status_code=401,
+    )
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        config._get_openai_compatible_provider_info(
+            model=model,
+            api_base=None,
+            api_key=None,
+            custom_llm_provider="github_copilot",
+        )
+
+    assert "Failed to get API key" in str(excinfo.value)
+
+
+@patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_key")
+@patch("litellm.main.openai_chat_completions.completion")
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
+def test_completion_github_copilot_mock_response(
+    mock_class_completion, mock_instance_completion, mock_get_api_key, monkeypatch
+):
+    """Test the completion function with GitHub Copilot provider."""
+
+    # Force chat path through the patched openai_chat_completions instance even if
+    # a previous test left EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER set in the env.
+    monkeypatch.delenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", raising=False)
+
+    mock_api_key = "gh.test-key-123456789"
+    mock_get_api_key.return_value = mock_api_key
+
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "Hello, I'm GitHub Copilot!"
+    # Patch both the class method and the live module-level instance to survive
+    # conftest module reloads that can swap which class object is in use.
+    mock_class_completion.return_value = mock_response
+    mock_instance_completion.return_value = mock_response
+
+    messages = [
+        {"role": "system", "content": "You're GitHub Copilot, an AI assistant."},
+        {"role": "user", "content": "Hello, who are you?"},
+    ]
+
+    headers = {
+        "editor-version": "Neovim/0.9.0",
+        "Copilot-Integration-Id": "vscode-chat",
+    }
+
+    response = completion(
+        model="github_copilot/gpt-4",
+        messages=messages,
+        extra_headers=headers,
+    )
+
+    assert response is not None
+
+    assert mock_get_api_key.call_count >= 1
+
+    # Exactly one of the two patched targets should have been used.
+    invoked = [m for m in (mock_class_completion, mock_instance_completion) if m.called]
+    assert len(invoked) == 1
+    invoked[0].assert_called_once()
+    _, kwargs = invoked[0].call_args
+
+    assert "headers" in kwargs
+    assert kwargs.get("model") == "gpt-4"
+    assert kwargs.get("messages") == messages
+
+
+def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
+    """Test that system messages are converted to assistant unless disable_copilot_system_to_assistant is True."""
+    import litellm
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+
+    # Save original value
+    original_flag = litellm.disable_copilot_system_to_assistant
+    try:
+        # Case 1: Flag is False (default, conversion happens)
+        litellm.disable_copilot_system_to_assistant = False
+        config = GithubCopilotConfig()
+        messages = [
+            {"role": "system", "content": "System message."},
+            {"role": "user", "content": "User message."},
+        ]
+        out = config._transform_messages(
+            [m.copy() for m in messages], model="github_copilot/gpt-4"
+        )
+        assert out[0]["role"] == "assistant"
+        assert out[1]["role"] == "user"
+
+        # Case 2: Flag is True (conversion does not happen)
+        litellm.disable_copilot_system_to_assistant = True
+        out = config._transform_messages(
+            [m.copy() for m in messages], model="github_copilot/gpt-4"
+        )
+        assert out[0]["role"] == "system"
+        assert out[1]["role"] == "user"
+
+        # Case 3: Flag is False again (conversion happens)
+        litellm.disable_copilot_system_to_assistant = False
+        out = config._transform_messages(
+            [m.copy() for m in messages], model="github_copilot/gpt-4"
+        )
+        assert out[0]["role"] == "assistant"
+        assert out[1]["role"] == "user"
+    finally:
+        # Restore original value
+        litellm.disable_copilot_system_to_assistant = original_flag
+
+
+def test_x_initiator_header_user_request():
+    """Test that user-only messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "user", "content": "Hello!"},
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_agent_request_with_assistant():
+    """Test that messages with assistant role result in X-Initiator: agent header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "assistant", "content": "I can help you."},
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["X-Initiator"] == "agent"
+
+
+def test_x_initiator_header_agent_request_with_tool():
+    """Test that messages with tool role result in X-Initiator: agent header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "tool", "content": "Tool response.", "tool_call_id": "123"},
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["X-Initiator"] == "agent"
+
+
+def test_x_initiator_header_mixed_messages_with_agent_roles():
+    """Test that mixed messages with agent roles (assistant/tool) result in X-Initiator: agent header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Previous response."},
+        {"role": "user", "content": "Follow up question."},
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["X-Initiator"] == "agent"
+
+
+def test_x_initiator_header_user_only_messages():
+    """Test that user + system only messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "user", "content": "Hello"},
+        {"role": "user", "content": "Follow up question."},
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_empty_messages():
+    """Test that empty messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = []
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_system_only_messages():
+    """Test that system-only messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["X-Initiator"] == "user"
+
+
+def test_get_supported_openai_params_claude_model():
+    """Test that Claude models with extended thinking support have thinking and reasoning parameters."""
+    config = GithubCopilotConfig()
+
+    # Test Claude 4 model supports thinking and reasoning_effort parameters
+    supported_params = config.get_supported_openai_params("claude-sonnet-4-20250514")
+    assert "thinking" in supported_params
+    assert "reasoning_effort" in supported_params
+
+    # Test Claude 3-7 model supports thinking and reasoning_effort parameters
+    supported_params_claude37 = config.get_supported_openai_params(
+        "claude-3-7-sonnet-20250219"
+    )
+    assert "thinking" in supported_params_claude37
+    assert "reasoning_effort" in supported_params_claude37
+
+    # Test Claude 3.5 model does NOT support thinking parameters (no extended thinking)
+    supported_params_claude35 = config.get_supported_openai_params("claude-3.5-sonnet")
+    assert "thinking" not in supported_params_claude35
+    assert "reasoning_effort" not in supported_params_claude35
+
+    # Test non-Claude model doesn't include thinking parameters but may include reasoning_effort
+    supported_params_gpt = config.get_supported_openai_params("gpt-4o")
+    assert "thinking" not in supported_params_gpt
+    # gpt-4o should NOT have reasoning_effort (not a reasoning model)
+    assert "reasoning_effort" not in supported_params_gpt
+
+    # Test O-series reasoning models include reasoning_effort but not thinking
+    supported_params_o3 = config.get_supported_openai_params("o3-mini")
+    assert "thinking" not in supported_params_o3
+    # o3-mini should have reasoning_effort (it's an O-series reasoning model)
+    assert "reasoning_effort" in supported_params_o3
+
+
+def test_get_supported_openai_params_case_insensitive():
+    """Test that Claude model detection is case-insensitive for models with extended thinking."""
+    config = GithubCopilotConfig()
+
+    # Test uppercase Claude 4 model with full model name
+    supported_params_upper = config.get_supported_openai_params(
+        "CLAUDE-SONNET-4-20250514"
+    )
+    assert "thinking" in supported_params_upper
+    assert "reasoning_effort" in supported_params_upper
+
+    # Test mixed case Claude 3-7 model (has extended thinking) with full model name
+    supported_params_mixed = config.get_supported_openai_params(
+        "Claude-3-7-Sonnet-20250219"
+    )
+    assert "thinking" in supported_params_mixed
+    assert "reasoning_effort" in supported_params_mixed
+
+    # Test that Claude 3.5 models don't have thinking support (case insensitive)
+    supported_params_35 = config.get_supported_openai_params("CLAUDE-3.5-SONNET")
+    assert "thinking" not in supported_params_35
+    assert "reasoning_effort" not in supported_params_35
+
+
+def test_copilot_vision_request_header_with_image():
+    """Test that Copilot-Vision-Request header is added when messages contain images"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,abc123"},
+                },
+            ],
+        }
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4-vision-preview",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["Copilot-Vision-Request"] == "true"
+    assert headers["X-Initiator"] == "user"
+
+
+def test_copilot_vision_request_header_text_only():
+    """Test that Copilot-Vision-Request header is not added for text-only messages"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "user", "content": "Just a text message"},
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert "Copilot-Vision-Request" not in headers
+    assert headers["X-Initiator"] == "user"
+
+
+def test_copilot_vision_request_header_with_type_image_url():
+    """Test that Copilot-Vision-Request header is added for content with type: image_url"""
+    config = GithubCopilotConfig()
+
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this image"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.jpg"},
+                },
+            ],
+        }
+    ]
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4-vision-preview",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert headers["Copilot-Vision-Request"] == "true"
+    assert headers["X-Initiator"] == "user"
+
+
+class TestGithubCopilotTransformResponse:
+    """
+    Tests for GithubCopilotConfig.transform_response handling of Anthropic-native
+    responses from newer Copilot models (e.g. claude-opus-4.7, claude-opus-4.8).
+
+    See: https://github.com/BerriAI/litellm/issues/29391
+    """
+
+    def _make_mock_response(self, json_data: dict, status_code: int = 200):
+        """Create a mock httpx.Response with the given JSON body."""
+        response = httpx.Response(
+            status_code=status_code,
+            json=json_data,
+            headers={"content-type": "application/json"},
+        )
+        return response
+
+    def _make_logging_obj(self):
+        """Create a mock logging object."""
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        return logging_obj
+
+    def test_transform_response_with_standard_choices(self):
+        """Standard OpenAI-format response with choices should work normally."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "github_copilot/claude-opus-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.5",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "Hello!"
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_transform_response_no_choices_anthropic_native(self):
+        """
+        Newer Copilot models (opus-4.7, 4.8) may return Anthropic-native format
+        without choices. This must not crash with IndexError.
+        """
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_01ABC",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.7",
+            "content": [{"type": "text", "text": "H"}],
+            "stop_reason": "max_tokens",
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 1,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.7",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "H"
+        assert result.choices[0].finish_reason == "length"
+
+    def test_transform_response_empty_choices(self):
+        """Response with choices=[] should not crash."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_01ABC",
+            "model": "github_copilot/claude-opus-4.7",
+            "choices": [],
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 1,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.7",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(result.choices) >= 1
+        assert result.choices[0].finish_reason == "length"
+
+    def test_transform_response_no_choices_no_content(self):
+        """
+        Response with neither choices nor content (usage-only) should not crash.
+        This is the exact case triggered by max_tokens=1 on newer models.
+        """
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_01ABC",
+            "model": "github_copilot/claude-opus-4.8",
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 1,
+                "total_tokens": 15,
+            },
+            "copilot_usage": {
+                "token_details": [],
+                "total_nano_aiu": 9500000,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(result.choices) >= 1
+        assert result.choices[0].message.content == ""
+        assert result.choices[0].finish_reason == "length"
+
+    def test_transform_response_anthropic_native_tool_use(self):
+        """tool_use blocks must be converted to OpenAI tool_calls on the message."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_tool",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.8",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01ABC",
+                    "name": "get_weather",
+                    "input": {"location": "Boston, MA"},
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "What's the weather?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].message.tool_calls is not None
+        assert len(result.choices[0].message.tool_calls) == 1
+        assert result.choices[0].message.tool_calls[0]["id"] == "toolu_01ABC"
+        assert (
+            result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+        )
+        assert (
+            '"Boston, MA"'
+            in result.choices[0].message.tool_calls[0]["function"]["arguments"]
+        )
+
+    def test_transform_response_anthropic_native_multiple_text_blocks(self):
+        """All text blocks must be concatenated, not only the first."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_multi_text",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.7",
+            "content": [
+                {"type": "text", "text": "Hello "},
+                {"type": "text", "text": "world!"},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3,
+                "total_tokens": 8,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.7",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "Hello world!"
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_transform_response_anthropic_native_thinking_then_text(self):
+        """Thinking blocks are preserved; following text is still extracted."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_thinking",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.8",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me reason about this.",
+                    "signature": "sig123",
+                },
+                {"type": "text", "text": "The answer is 42."},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "total_tokens": 30,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "What is the answer?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "The answer is 42."
+        assert result.choices[0].message.thinking_blocks is not None
+        assert len(result.choices[0].message.thinking_blocks) == 1
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_transform_response_invalid_json_falls_through_to_super(self):
+        """
+        When raw_response.json() raises an exception (e.g. non-JSON body),
+        transform_response should delegate to super() without crashing.
+        """
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        raw_response = httpx.Response(
+            status_code=200,
+            content=b"not valid json at all",
+            headers={"content-type": "text/plain"},
+        )
+        model_response = ModelResponse()
+
+        with pytest.raises(Exception):
+            config.transform_response(
+                model="github_copilot/claude-opus-4.7",
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=self._make_logging_obj(),
+                request_data={},
+                messages=[{"role": "user", "content": "Hi"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+
+class TestGithubCopilotTransformParsedResponseDict:
+    """
+    Tests for GithubCopilotConfig.transform_parsed_response_dict, the hook the
+    OpenAI SDK handler calls on its parsed response. That handler bypasses
+    transform_response, so this is the seam that repairs empty-choices responses
+    from newer Copilot Claude models on the live completion path.
+
+    See: https://github.com/BerriAI/litellm/issues/30927
+    """
+
+    def test_synthesizes_choices_from_anthropic_content(self):
+        config = GithubCopilotConfig()
+
+        parsed = {
+            "id": "msg_vrtx_01",
+            "model": "claude-opus-4.8",
+            "object": "chat.completion",
+            "choices": [],
+            "content": [{"type": "text", "text": "Hello!"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+
+        repaired = config.transform_parsed_response_dict(parsed)
+
+        assert len(repaired["choices"]) == 1
+        choice = repaired["choices"][0]
+        assert choice["message"]["content"] == "Hello!"
+        assert choice["finish_reason"] == "stop"
+        assert repaired["usage"]["prompt_tokens"] == 10
+        assert repaired["usage"]["completion_tokens"] == 5
+        assert repaired["usage"]["total_tokens"] == 15
+
+    def test_passthrough_when_choices_present(self):
+        config = GithubCopilotConfig()
+
+        parsed = {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        assert config.transform_parsed_response_dict(parsed) is parsed
+
+
+@patch("litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client")
+@patch(
+    "litellm.llms.openai.openai.OpenAIChatCompletion.make_sync_openai_chat_completion_request"
+)
+def test_openai_handler_repairs_github_copilot_empty_choices(
+    mock_request, mock_get_client
+):
+    """
+    The OpenAI SDK handler calls convert_to_model_response_object directly on the
+    SDK's parsed output, bypassing transform_response. convert raises APIError on
+    empty choices, so the handler must route github_copilot responses through
+    transform_parsed_response_dict first. Removing that wiring (or resolving a
+    config without the override) fails this test with APIError.
+
+    See: https://github.com/BerriAI/litellm/issues/30927
+    """
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    mock_get_client.return_value = MagicMock()
+
+    class _FakeSDKResponse:
+        def model_dump(self):
+            return {
+                "id": "msg_vrtx_01",
+                "model": "claude-opus-4.8",
+                "object": "chat.completion",
+                "choices": [],
+                "content": [{"type": "text", "text": "Hi there"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 12, "output_tokens": 3},
+            }
+
+    mock_request.return_value = ({}, _FakeSDKResponse())
+
+    result = OpenAIChatCompletion().completion(
+        model="claude-opus-4.8",
+        messages=[{"role": "user", "content": "Hi"}],
+        model_response=ModelResponse(),
+        timeout=60.0,
+        optional_params={},
+        litellm_params={},
+        logging_obj=MagicMock(),
+        custom_llm_provider="github_copilot",
+        client=MagicMock(),
+        api_key="gh.test-key-123456789",
+        acompletion=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "Hi there"
+    assert result.choices[0].finish_reason == "stop"
+    mock_request.assert_called_once()

@@ -1,0 +1,16 @@
+[
+  {
+    "user_content": "explain this",
+    "assistant_content": "Here is the answer to your question. The capital of France is Paris.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  },
+  {
+    "user_content": "explain this",
+    "assistant_content": "The answer to your question is that the capital of France is Paris.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  }
+]

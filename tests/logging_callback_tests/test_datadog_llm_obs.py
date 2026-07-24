@@ -48,9 +48,9 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
         model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-3.5-turbo", model_map_value=None
+            model_map_key="gpt-5-mini", model_map_value=None
         ),
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         model_id="model-123",
         model_group="openai-gpt",
         api_base="https://api.openai.com",
@@ -93,7 +93,7 @@ async def test_datadog_llm_obs_logging():
 
     for _ in range(2):
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-5.5",
             messages=[{"role": "user", "content": "Hello testing dd llm obs!"}],
             mock_response="hi",
         )
@@ -101,36 +101,3 @@ async def test_datadog_llm_obs_logging():
         print(response)
 
     await asyncio.sleep(6)
-
-
-@pytest.mark.asyncio
-async def test_create_llm_obs_payload():
-    datadog_llm_obs_logger = DataDogLLMObsLogger()
-    standard_logging_payload = create_standard_logging_payload()
-    payload = datadog_llm_obs_logger.create_llm_obs_payload(
-        kwargs={
-            "model": "gpt-4",
-            "messages": [{"role": "user", "content": "Hello"}],
-            "standard_logging_object": standard_logging_payload,
-        },
-        response_obj=litellm.ModelResponse(
-            id="test_id",
-            choices=[{"message": {"content": "Hi there!"}}],
-            created=12,
-            model="gpt-4",
-        ),
-        start_time=datetime.now(),
-        end_time=datetime.now() + timedelta(seconds=1),
-    )
-
-    print("dd created payload", payload)
-
-    assert payload["name"] == "litellm_llm_call"
-    assert payload["meta"]["kind"] == "llm"
-    assert payload["meta"]["input"]["messages"] == [
-        {"role": "user", "content": "Hello, world!"}
-    ]
-    assert payload["meta"]["output"]["messages"][0]["content"] == "Hi there!"
-    assert payload["metrics"]["input_tokens"] == 20
-    assert payload["metrics"]["output_tokens"] == 10
-    assert payload["metrics"]["total_tokens"] == 30

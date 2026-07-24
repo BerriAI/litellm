@@ -1,7 +1,7 @@
 import sys, os
 import traceback
 import json
-import uuid
+from litellm._uuid import uuid
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
@@ -16,6 +16,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
+import litellm.proxy
+import litellm.proxy.proxy_server
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     add_new_model,
     update_model,
@@ -72,7 +74,7 @@ async def test_add_new_model(prisma_client):
 
     await litellm.proxy.proxy_server.prisma_client.connect()
     from litellm.proxy.proxy_server import user_api_key_cache
-    import uuid
+    from litellm._uuid import uuid
 
     _new_model_id = f"local-test-{uuid.uuid4().hex}"
 
@@ -121,7 +123,7 @@ async def test_add_update_model(prisma_client):
 
     await litellm.proxy.proxy_server.prisma_client.connect()
     from litellm.proxy.proxy_server import user_api_key_cache
-    import uuid
+    from litellm._uuid import uuid
 
     _new_model_id = f"local-test-{uuid.uuid4().hex}"
 
@@ -217,6 +219,7 @@ async def _create_new_team(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_add_team_model_to_db(prisma_client):
     """
     Test adding a team model and verifying the team_public_model_name is stored correctly
@@ -230,7 +233,7 @@ async def test_add_team_model_to_db(prisma_client):
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         _add_team_model_to_db,
     )
-    import uuid
+    from litellm._uuid import uuid
 
     new_team = await _create_new_team(prisma_client)
     team_id = new_team.team_id

@@ -5,17 +5,16 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 """
 
 from typing import Any, Dict, List
+
 import litellm
 from litellm.types.utils import EmbeddingResponse
 
+
 def _prepare_ollama_embedding_payload(
-    model: str,
-    prompts: List[str],
-    optional_params: Dict[str, Any]
+    model: str, prompts: List[str], optional_params: Dict[str, Any]
 ) -> Dict[str, Any]:
-   
     data: Dict[str, Any] = {"model": model, "input": prompts}
-    special_optional_params = ["truncate", "options", "keep_alive"]
+    special_optional_params = ["truncate", "options", "keep_alive", "dimensions"]
 
     for k, v in optional_params.items():
         if k in special_optional_params:
@@ -26,13 +25,14 @@ def _prepare_ollama_embedding_payload(
                 data["options"].update({k: v})
     return data
 
+
 def _process_ollama_embedding_response(
     response_json: dict,
     prompts: List[str],
     model: str,
     model_response: EmbeddingResponse,
     logging_obj: Any,
-    encoding: Any
+    encoding: Any,
 ) -> EmbeddingResponse:
     output_data = []
     embeddings: List[List[float]] = response_json["embeddings"]
@@ -64,6 +64,7 @@ def _process_ollama_embedding_response(
     )
     return model_response
 
+
 async def ollama_aembeddings(
     api_base: str,
     model: str,
@@ -79,7 +80,7 @@ async def ollama_aembeddings(
     data = _prepare_ollama_embedding_payload(model, prompts, optional_params)
 
     response = await litellm.module_level_aclient.post(url=api_base, json=data)
-    response_json = await response.json()
+    response_json = response.json()
 
     return _process_ollama_embedding_response(
         response_json=response_json,
@@ -87,8 +88,9 @@ async def ollama_aembeddings(
         model=model,
         model_response=model_response,
         logging_obj=logging_obj,
-        encoding=encoding
+        encoding=encoding,
     )
+
 
 def ollama_embeddings(
     api_base: str,
@@ -113,5 +115,5 @@ def ollama_embeddings(
         model=model,
         model_response=model_response,
         logging_obj=logging_obj,
-        encoding=encoding
+        encoding=encoding,
     )

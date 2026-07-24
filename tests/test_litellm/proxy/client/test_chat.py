@@ -1,8 +1,51 @@
+import importlib
+import importlib.util
+from importlib.machinery import PathFinder
+import site
+import sys
+
 import pytest
 import requests
-
 from litellm.proxy.client.chat import ChatClient
 from litellm.proxy.client.exceptions import UnauthorizedError
+
+
+def _load_http_mocking_responses():
+    """Load the third-party `responses` package even if test collection creates
+    a top-level `responses` namespace package from `tests/test_litellm/responses`.
+    """
+    module = importlib.import_module("responses")
+    if hasattr(module, "activate"):
+        return module
+
+    for module_name in list(sys.modules):
+        if module_name == "responses" or module_name.startswith("responses."):
+            sys.modules.pop(module_name, None)
+
+    search_paths = []
+    try:
+        search_paths.extend(site.getsitepackages())
+    except AttributeError:
+        pass
+    user_site = site.getusersitepackages()
+    if isinstance(user_site, str):
+        search_paths.append(user_site)
+    else:
+        search_paths.extend(user_site)
+
+    spec = PathFinder.find_spec("responses", search_paths)
+    if spec is None or spec.loader is None:
+        raise ImportError("Unable to load the third-party `responses` package")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["responses"] = module
+    spec.loader.exec_module(module)
+
+    if not hasattr(module, "activate"):
+        raise ImportError("Unable to load the third-party `responses` package")
+    return module
+
+
+responses = _load_http_mocking_responses()
 
 
 @pytest.fixture
@@ -117,7 +160,8 @@ def test_completions_all_parameters(client, sample_messages):
     }
 
 
-def test_completions_mock_response(client, sample_messages, requests_mock):
+@responses.activate
+def test_completions_mock_response(client, sample_messages):
     """Test completions with a mocked successful response"""
     mock_response = {
         "id": "chatcmpl-123",
@@ -138,7 +182,12 @@ def test_completions_mock_response(client, sample_messages, requests_mock):
     }
 
     # Mock the POST request
-    requests_mock.post(f"{client._base_url}/chat/completions", json=mock_response)
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/chat/completions",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.completions(model="gpt-4", messages=sample_messages)
 
@@ -149,12 +198,14 @@ def test_completions_mock_response(client, sample_messages, requests_mock):
     )
 
 
-def test_completions_unauthorized_error(client, sample_messages, requests_mock):
+@responses.activate
+def test_completions_unauthorized_error(client, sample_messages):
     """Test that completions raises UnauthorizedError for 401 responses"""
     # Mock a 401 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/chat/completions",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -162,12 +213,14 @@ def test_completions_unauthorized_error(client, sample_messages, requests_mock):
         client.completions(model="gpt-4", messages=sample_messages)
 
 
-def test_completions_other_errors(client, sample_messages, requests_mock):
+@responses.activate
+def test_completions_other_errors(client, sample_messages):
     """Test that completions raises HTTPError for other error responses"""
     # Mock a 500 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/chat/completions",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 

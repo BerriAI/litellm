@@ -6,7 +6,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 import pytest
@@ -58,7 +58,7 @@ def test_guardrail_masking_logging_only():
         litellm.callbacks = [callback]
         messages = [{"role": "user", "content": "Hey, my name is Peter."}]
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, mock_response="Hi Peter!"
+            model="gpt-5-mini", messages=messages, mock_response="Hi Peter!"
         )
 
         assert response.choices[0].message.content == "Hi Peter!"  # type: ignore
@@ -82,7 +82,7 @@ def test_guardrail_list_of_event_hooks():
         guardrail_name="custom-guard", event_hook=["pre_call", "post_call"]
     )
 
-    data = {"model": "gpt-3.5-turbo", "metadata": {"guardrails": ["custom-guard"]}}
+    data = {"model": "gpt-5-mini", "metadata": {"guardrails": ["custom-guard"]}}
     assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
 
     assert cg.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call)
@@ -93,11 +93,14 @@ def test_guardrail_list_of_event_hooks():
 
 
 def test_guardrail_info_response():
-    from litellm.types.guardrails import GuardrailInfoResponse, LitellmParams, GuardrailInfoLiteLLMParamsResponse
+    from litellm.types.guardrails import (
+        GuardrailInfoResponse,
+        LitellmParams,
+    )
 
     guardrail_info = GuardrailInfoResponse(
         guardrail_name="aporia-pre-guard",
-        litellm_params=GuardrailInfoLiteLLMParamsResponse(
+        litellm_params=LitellmParams(
             guardrail="aporia",
             mode="pre_call",
         ),

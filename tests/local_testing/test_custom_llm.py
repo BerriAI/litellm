@@ -44,7 +44,14 @@ from litellm import (
     image_generation,
 )
 from litellm.utils import ModelResponseIterator
-from litellm.types.utils import ImageResponse, ImageObject, EmbeddingResponse
+from litellm.types.utils import (
+    ImageResponse,
+    ImageObject,
+    EmbeddingResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Delta,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
@@ -309,6 +316,44 @@ class MyCustomLLM(CustomLLM):
 
         return model_response
 
+    def image_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout=None,
+        client: Optional[HTTPHandler] = None,
+    ) -> ImageResponse:
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/edited-image.png")],
+            response_ms=1000,
+        )
+
+    async def aimage_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout=None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> ImageResponse:
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/edited-image.png")],
+            response_ms=1000,
+        )
+
 
 def test_get_llm_provider():
     """"""
@@ -451,6 +496,73 @@ async def test_image_generation_async_additional_params():
         }
 
 
+def test_simple_image_edit():
+    """Test sync image_edit with custom handler"""
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = litellm.image_edit(
+        model="custom_llm/my-fake-model",
+        image=b"fake_image_bytes",
+        prompt="Edit this image",
+    )
+
+    print(resp)
+    assert resp.data[0].url == "https://example.com/edited-image.png"
+
+
+@pytest.mark.asyncio
+async def test_simple_image_edit_async():
+    """Test async image_edit with custom handler"""
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.aimage_edit(
+        model="custom_llm/my-fake-model",
+        image=b"fake_image_bytes",
+        prompt="Edit this image",
+    )
+
+    print(resp)
+    assert resp.data[0].url == "https://example.com/edited-image.png"
+
+
+@pytest.mark.asyncio
+async def test_image_edit_async_additional_params():
+    """Test that additional params are passed to custom handler"""
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+
+    with patch.object(
+        my_custom_llm,
+        "aimage_edit",
+        new=AsyncMock(
+            return_value=ImageResponse(
+                created=int(time.time()),
+                data=[ImageObject(url="https://example.com/edited-image.png")],
+            )
+        ),
+    ) as mock_client:
+        resp = await litellm.aimage_edit(
+            model="custom_llm/my-fake-model",
+            image=b"fake_image_bytes",
+            prompt="Edit this image",
+            api_key="my-api-key",
+            api_base="my-api-base",
+            my_custom_param="my-custom-param",
+        )
+
+        print(resp)
+
+        mock_client.assert_awaited_once()
+        assert mock_client.call_args.kwargs["api_key"] == "my-api-key"
+        assert mock_client.call_args.kwargs["api_base"] == "my-api-base"
+
+
 def test_get_supported_openai_params():
 
     class MyCustomLLM(CustomLLM):
@@ -505,6 +617,7 @@ def test_get_supported_openai_params():
     response = get_supported_openai_params(model="my-custom-llm/my-fake-model")
     assert response is not None
 
+
 def test_simple_embedding():
     my_custom_llm = MyCustomLLM()
     litellm.custom_provider_map = [
@@ -512,7 +625,7 @@ def test_simple_embedding():
     ]
     resp = litellm.embedding(
         model="custom_llm/my-fake-model",
-        input=["good morning from litellm", "good night from litellm"]
+        input=["good morning from litellm", "good night from litellm"],
     )
 
     assert resp.data[1] == {
@@ -520,6 +633,7 @@ def test_simple_embedding():
         "embedding": [0.1, 0.2, 0.3],
         "index": 1,
     }
+
 
 @pytest.mark.asyncio
 async def test_simple_aembedding():
@@ -529,7 +643,7 @@ async def test_simple_aembedding():
     ]
     resp = await litellm.aembedding(
         model="custom_llm/my-fake-model",
-        input=["good morning from litellm", "good night from litellm"]
+        input=["good morning from litellm", "good night from litellm"],
     )
 
     assert resp.data[1] == {
@@ -537,3 +651,82 @@ async def test_simple_aembedding():
         "embedding": [0.1, 0.2, 0.3],
         "index": 1,
     }
+
+
+# ── Tests for ModelResponseStream passthrough in custom providers (issue #27389) ──
+
+
+class ModelResponseStreamLLM(MyCustomLLM):
+    """Subclass that overrides streaming/astreaming to yield ModelResponseStream directly."""
+
+    def __init__(self, finish_reason: str = "stop"):
+        self._finish_reason = finish_reason
+
+    def streaming(self, *args, **kwargs) -> Iterator[ModelResponseStream]:  # type: ignore
+        yield ModelResponseStream(
+            id="test-stream-id",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Hello world"),
+                    finish_reason=self._finish_reason,
+                )
+            ],
+        )
+
+    async def astreaming(self, *args, **kwargs) -> AsyncIterator[ModelResponseStream]:  # type: ignore
+        yield ModelResponseStream(
+            id="test-stream-id",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Hello world"),
+                    finish_reason=self._finish_reason,
+                )
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
+)
+def test_custom_llm_streaming_model_response_stream(finish_reason):
+    my_custom_llm = ModelResponseStreamLLM(finish_reason=finish_reason)
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = completion(
+        model="custom_llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
+    )
+
+    for chunk in resp:
+        print(chunk)
+        if chunk.choices[0].finish_reason is None:
+            assert isinstance(chunk.choices[0].delta.content, str)
+        else:
+            assert chunk.choices[0].finish_reason == finish_reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
+)
+async def test_custom_llm_astreaming_model_response_stream(finish_reason):
+    my_custom_llm = ModelResponseStreamLLM(finish_reason=finish_reason)
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.acompletion(
+        model="custom_llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
+    )
+
+    async for chunk in resp:
+        print(chunk)
+        if chunk.choices[0].finish_reason is None:
+            assert isinstance(chunk.choices[0].delta.content, str)
+        else:
+            assert chunk.choices[0].finish_reason == finish_reason

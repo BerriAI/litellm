@@ -2,12 +2,12 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
-import io
 from typing import List, Optional, Union
 from urllib.parse import urlencode
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -17,16 +17,14 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ...base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
-    LiteLLMLoggingObj,
 )
 from ..common_utils import DeepgramException
 
 
 class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         return ["language"]
 
     def map_openai_params(
@@ -42,12 +40,8 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 optional_params[k] = v
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return DeepgramException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return DeepgramException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
         self,
@@ -55,59 +49,28 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, bytes]:
+    ) -> AudioTranscriptionRequestData:
         """
-        Processes the audio file input based on its type and returns the binary data.
+        Processes the audio file input based on its type and returns AudioTranscriptionRequestData.
+
+        For Deepgram, the binary audio data is sent directly as the request body.
 
         Args:
             audio_file: Can be a file path (str), a tuple (filename, file_content), or binary data (bytes).
 
         Returns:
-            The binary data of the audio file.
+            AudioTranscriptionRequestData with binary data and no files.
         """
-        binary_data: bytes  # Explicitly declare the type
+        # Use common utility to process the audio file
+        processed_audio = process_audio_file(audio_file)
 
-        # Handle the audio file based on type
-        if isinstance(audio_file, str):
-            # If it's a file path
-            with open(audio_file, "rb") as f:
-                binary_data = f.read()  # `f.read()` always returns `bytes`
-        elif isinstance(audio_file, tuple):
-            # Handle tuple case
-            _, file_content = audio_file[:2]
-            if isinstance(file_content, str):
-                with open(file_content, "rb") as f:
-                    binary_data = f.read()  # `f.read()` always returns `bytes`
-            elif isinstance(file_content, bytes):
-                binary_data = file_content
-            else:
-                raise TypeError(
-                    f"Unexpected type in tuple: {type(file_content)}. Expected str or bytes."
-                )
-        elif isinstance(audio_file, bytes):
-            # Assume it's already binary data
-            binary_data = audio_file
-        elif isinstance(audio_file, io.BufferedReader) or isinstance(
-            audio_file, io.BytesIO
-        ):
-            # Handle file-like objects
-            binary_data = audio_file.read()
-
-        else:
-            raise TypeError(f"Unsupported type for audio_file: {type(audio_file)}")
-
-        return binary_data
+        # Return structured data with binary content and no files
+        # For Deepgram, we send binary data directly as request body
+        return AudioTranscriptionRequestData(data=processed_audio.file_content, files=None)
 
     def transform_audio_transcription_response(
         self,
-        model: str,
         raw_response: Response,
-        model_response: TranscriptionResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: Optional[str] = None,
     ) -> TranscriptionResponse:
         """
         Transforms the raw response from Deepgram to the TranscriptionResponse format
@@ -119,17 +82,32 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             first_channel = response_json["results"]["channels"][0]
             first_alternative = first_channel["alternatives"][0]
 
-            # Extract the full transcript
-            text = first_alternative["transcript"]
+            # Detect if diarization is active by checking if words have 'speaker' field
+            has_diarization = False
+            if "words" in first_alternative and len(first_alternative["words"]) > 0:
+                has_diarization = "speaker" in first_alternative["words"][0]
+
+            # Extract the transcript based on diarization mode
+            if not has_diarization:
+                # No diarization: use the standard transcript
+                text = first_alternative["transcript"]
+            elif "paragraphs" in first_alternative:
+                # Diarization with paragraphs: use the pre-formatted diarized transcript
+                text = first_alternative["paragraphs"]["transcript"]
+            else:
+                # Diarization without paragraphs: reconstruct from words
+                text = self._reconstruct_diarized_transcript(first_alternative["words"])
 
             # Create TranscriptionResponse object
             response = TranscriptionResponse(text=text)
 
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
-            response["language"] = (
-                "english"  # Deepgram auto-detects but doesn't return language
-            )
+
+            # Use detected_language if available, otherwise default to "en"
+            detected_language = first_channel.get("detected_language")
+            response["language"] = detected_language if detected_language else "en"
+
             response["duration"] = response_json["metadata"]["duration"]
 
             # Transform words to match OpenAI format
@@ -145,9 +123,45 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return response
 
         except Exception as e:
-            raise ValueError(
-                f"Error transforming Deepgram response: {str(e)}\nResponse: {raw_response.text}"
-            )
+            raise ValueError(f"Error transforming Deepgram response: {str(e)}\nResponse: {raw_response.text}")
+
+    def _reconstruct_diarized_transcript(self, words: list) -> str:
+        """
+        Reconstructs a diarized transcript from words with speaker information.
+
+        Args:
+            words: List of word objects with speaker, word, and optionally punctuated_word
+
+        Returns:
+            Formatted transcript with speaker labels
+        """
+        if not words:
+            return ""
+
+        segments = []
+        current_speaker = None
+        current_words: list[str] = []
+
+        for word_obj in words:
+            speaker = word_obj.get("speaker")
+            # Use punctuated_word if available, otherwise fall back to word
+            word_text = word_obj.get("punctuated_word", word_obj.get("word", ""))
+
+            if speaker != current_speaker:
+                # New speaker: save previous segment and start new one
+                if current_words:
+                    segments.append(f"Speaker {current_speaker}: {' '.join(current_words)}")
+                current_speaker = speaker
+                current_words = [word_text]
+            else:
+                # Same speaker: add word to current segment
+                current_words.append(word_text)
+
+        # Add the last segment
+        if current_words:
+            segments.append(f"\nSpeaker {current_speaker}: {' '.join(current_words)}\n")
+
+        return "\n".join(segments)
 
     def get_complete_url(
         self,
@@ -159,9 +173,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         stream: Optional[bool] = None,
     ) -> str:
         if api_base is None:
-            api_base = (
-                get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
-            )
+            api_base = get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
         # Build query parameters including the model
@@ -177,37 +189,6 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         url = f"{base_url}?{query_string}"
 
         return url
-
-    def _should_exclude_param(
-        self,
-        param_name: str,
-        model: str,
-    ) -> bool:
-        """
-        Determines if a parameter should be excluded from the query string.
-
-        Args:
-            param_name: Parameter name
-            model: Model name
-
-        Returns:
-            True if the parameter should be excluded
-        """
-        # Parameters that are handled elsewhere or not relevant to Deepgram API
-        excluded_params = {
-            "model",  # Already in the URL path
-            "OPENAI_TRANSCRIPTION_PARAMS",  # Internal litellm parameter
-        }
-
-        # Skip if it's an excluded parameter
-        if param_name in excluded_params:
-            return True
-
-        # Skip if it's an OpenAI-specific parameter that we handle separately
-        if param_name in self.get_supported_openai_params(model):
-            return True
-
-        return False
 
     def _format_param_value(self, value) -> str:
         """
@@ -235,19 +216,13 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             Dictionary of filtered and formatted query parameters
         """
         query_params = {}
+        provider_specific_params = self.get_provider_specific_params(
+            optional_params=optional_params,
+            model=model,
+            openai_params=self.get_supported_openai_params(model),
+        )
 
-        for key, value in optional_params.items():
-            # Skip None values
-            if value is None:
-                continue
-
-            # Skip excluded parameters
-            if self._should_exclude_param(
-                param_name=key,
-                model=model,
-            ):
-                continue
-
+        for key, value in provider_specific_params.items():
             # Format and add the parameter
             formatted_value = self._format_param_value(value)
             query_params[key] = formatted_value

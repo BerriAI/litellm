@@ -11,6 +11,8 @@ Has 4 methods:
 import json
 import sys
 import time
+import heapq
+import threading
 from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
@@ -36,16 +38,16 @@ class InMemoryCache(BaseCache):
         max_size_in_memory [int]: Maximum number of items in cache. done to prevent memory leaks. Use 200 items as a default
         """
         self.max_size_in_memory = (
-            max_size_in_memory or 200
+            max_size_in_memory if max_size_in_memory is not None else 200
         )  # set an upper bound of 200 items in-memory
         self.default_ttl = default_ttl or 600
-        self.max_size_per_item = (
-            max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
-        )  # 1MB = 1024KB
+        self.max_size_per_item = max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB  # 1MB = 1024KB
 
         # in-memory cache
         self.cache_dict: dict = {}
         self.ttl_dict: dict = {}
+        self.expiration_heap: list[tuple[float, str]] = []
+        self._increment_lock = threading.Lock()
 
     def check_value_size(self, value: Any):
         """
@@ -56,8 +58,7 @@ class InMemoryCache(BaseCache):
             # Fast path for common primitive types that are typically small
             if (
                 isinstance(value, (bool, int, float, str))
-                and len(str(value))
-                < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
+                and len(str(value)) < self.max_size_per_item * MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB
             ):  # Conservative estimate
                 return True
 
@@ -71,9 +72,7 @@ class InMemoryCache(BaseCache):
                 return size <= self.max_size_per_item
 
             # Fallback for complex types
-            if isinstance(value, BaseModel) and hasattr(
-                value, "model_dump"
-            ):  # Pydantic v2
+            if isinstance(value, BaseModel) and hasattr(value, "model_dump"):  # Pydantic v2
                 value = value.model_dump()
             elif hasattr(value, "isoformat"):  # datetime objects
                 return True  # datetime strings are always small
@@ -103,23 +102,44 @@ class InMemoryCache(BaseCache):
     def evict_cache(self):
         """
         Eviction policy:
-        - check if any items in ttl_dict are expired -> remove them from ttl_dict and cache_dict
+        1. First, remove expired items from ttl_dict and cache_dict
+        2. If cache is still at or above max_size_in_memory, evict items with earliest expiration times
 
 
         This guarantees the following:
-        - 1. When item ttl not set: At minimumm each item will remain in memory for 5 minutes
-        - 2. When ttl is set: the item will remain in memory for at least that amount of time
+        - 1. When item ttl not set: At minimum each item will remain in memory for the default ttl
+        - 2. When ttl is set: the item will remain in memory for at least that amount of time, unless cache size requires eviction
         - 3. the size of in-memory cache is bounded
 
         """
-        for key in list(self.ttl_dict.keys()):
-            if self._is_key_expired(key):
+        current_time = time.time()
+
+        # Step 1: Remove expired or outdated items
+        while self.expiration_heap:
+            expiration_time, key = self.expiration_heap[0]
+
+            # Case 1: Heap entry is outdated
+            if expiration_time != self.ttl_dict.get(key):
+                heapq.heappop(self.expiration_heap)
+            # Case 2: Entry is valid but expired
+            elif expiration_time <= current_time:
+                heapq.heappop(self.expiration_heap)
+                self._remove_key(key)
+            else:
+                # Case 3: Entry is valid and not expired
+                break
+
+        # Step 2: Evict if cache is still full
+        while len(self.cache_dict) >= self.max_size_in_memory:
+            expiration_time, key = heapq.heappop(self.expiration_heap)
+            # Skip if key was removed or updated
+            if self.ttl_dict.get(key) == expiration_time:
                 self._remove_key(key)
 
-                # de-reference the removed item
-                # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
-                # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
-                # This can occur when an object is referenced by another object, but the reference is never removed.
+        # de-reference the removed item
+        # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
+        # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
+        # This can occur when an object is referenced by another object, but the reference is never removed.
 
     def allow_ttl_override(self, key: str) -> bool:
         """
@@ -134,9 +154,14 @@ class InMemoryCache(BaseCache):
             return False
 
     def set_cache(self, key, value, **kwargs):
-        if len(self.cache_dict) >= self.max_size_in_memory:
-            # only evict when cache is full
-            self.evict_cache()
+        # Handle the edge case where max_size_in_memory is 0
+        if self.max_size_in_memory == 0:
+            return  # Don't cache anything if max size is 0
+
+        # Always prune expired/outdated heap roots before inserting.
+        # This keeps expiration_heap bounded even when the live cache stays
+        # below max_size_in_memory and keys are reinserted after TTL expiry.
+        self.evict_cache()
         if not self.check_value_size(value):
             return
 
@@ -144,8 +169,10 @@ class InMemoryCache(BaseCache):
         if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
             if "ttl" in kwargs and kwargs["ttl"] is not None:
                 self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
+                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
             else:
                 self.ttl_dict[key] = time.time() + self.default_ttl
+                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -198,12 +225,13 @@ class InMemoryCache(BaseCache):
             return_val.append(val)
         return return_val
 
-    def increment_cache(self, key, value: int, **kwargs) -> int:
-        # get the value
-        init_value = self.get_cache(key=key) or 0
-        value = init_value + value
-        self.set_cache(key, value, **kwargs)
-        return value
+    def increment_cache(self, key, value: float, **kwargs) -> float:
+        with self._increment_lock:
+            # keep read-modify-write atomic
+            init_value = self.get_cache(key=key) or 0
+            value = init_value + value
+            self.set_cache(key, value, **kwargs)
+            return value
 
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
@@ -216,26 +244,21 @@ class InMemoryCache(BaseCache):
         return return_val
 
     async def async_increment(self, key, value: float, **kwargs) -> float:
-        # get the value
-        init_value = await self.async_get_cache(key=key) or 0
-        value = init_value + value
-        await self.async_set_cache(key, value, **kwargs)
-        return value
+        return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
         self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
     ) -> Optional[List[float]]:
         results = []
         for increment in increment_list:
-            result = await self.async_increment(
-                increment["key"], increment["increment_value"], **kwargs
-            )
+            result = await self.async_increment(increment["key"], increment["increment_value"], **kwargs)
             results.append(result)
         return results
 
     def flush_cache(self):
         self.cache_dict.clear()
         self.ttl_dict.clear()
+        self.expiration_heap.clear()
 
     async def disconnect(self):
         pass

@@ -11,7 +11,21 @@ from litellm.utils import _add_path_to_api_base
 
 
 class VLLMError(BaseLLMException):
-    pass
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        request: Optional[httpx.Request] = None,
+        response: Optional[httpx.Response] = None,
+        headers: Optional[Union[httpx.Headers, dict]] = None,
+    ):
+        super().__init__(
+            status_code=status_code,
+            message=message,
+            request=request,
+            response=response,
+            headers=headers,
+        )
 
 
 class VLLMModelInfo(BaseLLMModelInfo):
@@ -25,7 +39,8 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        """Google AI Studio sends api key in query params"""
+        if api_key is not None:
+            headers["x-api-key"] = api_key
         return headers
 
     @staticmethod
@@ -45,15 +60,13 @@ class VLLMModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> Optional[str]:
         return model
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         api_base = VLLMModelInfo.get_api_base(api_base)
         api_key = VLLMModelInfo.get_api_key(api_key)
         endpoint = "/v1/models"
         if api_base is None or api_key is None:
             raise ValueError(
-                "GEMINI_API_BASE or GEMINI_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
+                "VLLM_API_BASE or VLLM_API_KEY is not set. Please set the environment variable, to query VLLM's `/models` endpoint."
             )
 
         url = _add_path_to_api_base(api_base, endpoint)
@@ -70,6 +83,4 @@ class VLLMModelInfo(BaseLLMModelInfo):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
-        return VLLMError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return VLLMError(status_code=status_code, message=error_message, headers=headers)

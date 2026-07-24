@@ -40,6 +40,32 @@ class VertexImageGeneration(VertexLLM):
         model_response.data = response_data
         return model_response
 
+    def transform_optional_params(self, optional_params: Optional[dict]) -> dict:
+        """
+        Transform the optional params to the format expected by the Vertex AI API.
+        For example, "aspect_ratio" is transformed to "aspectRatio".
+        """
+        default_params = {
+            "sampleCount": 1,
+        }
+        if optional_params is None:
+            return default_params
+
+        def snake_to_camel(snake_str: str) -> str:
+            """Convert snake_case to camelCase"""
+            components = snake_str.split("_")
+            return components[0] + "".join(word.capitalize() for word in components[1:])
+
+        transformed_params = default_params.copy()
+        for key, value in optional_params.items():
+            if "_" in key:
+                camel_case_key = snake_to_camel(key)
+                transformed_params[camel_case_key] = value
+            else:
+                transformed_params[key] = value
+
+        return transformed_params
+
     def image_generation(
         self,
         prompt: str,
@@ -105,9 +131,10 @@ class VertexImageGeneration(VertexLLM):
             should_use_v1beta1_features=False,
             mode="image_generation",
         )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
+        optional_params = optional_params or {"sampleCount": 1}  # default optional params
+
+        # Transform optional params to camelCase format
+        optional_params = self.transform_optional_params(optional_params)
 
         request_data = {
             "instances": [{"prompt": prompt}],
@@ -136,9 +163,7 @@ class VertexImageGeneration(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         json_response = response.json()
-        return self.process_image_generation_response(
-            json_response, model_response, model
-        )
+        return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
         self,
@@ -147,7 +172,7 @@ class VertexImageGeneration(VertexLLM):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        model_response: litellm.ImageResponse,
+        model_response: ImageResponse,
         logging_obj: Any,
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Optional[AsyncHTTPHandler] = None,
@@ -211,9 +236,9 @@ class VertexImageGeneration(VertexLLM):
             should_use_v1beta1_features=False,
             mode="image_generation",
         )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
+
+        # Transform optional params to camelCase format
+        optional_params = self.transform_optional_params(optional_params)
 
         request_data = {
             "instances": [{"prompt": prompt}],
@@ -242,9 +267,7 @@ class VertexImageGeneration(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         json_response = response.json()
-        return self.process_image_generation_response(
-            json_response, model_response, model
-        )
+        return self.process_image_generation_response(json_response, model_response, model)
 
     def is_image_generation_response(self, json_response: Dict[str, Any]) -> bool:
         if "predictions" in json_response:

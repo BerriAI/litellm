@@ -6,11 +6,11 @@ import sys
 from unittest.mock import AsyncMock, patch, call
 
 import pytest
-from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
-from litellm.proxy.guardrails.guardrail_hooks.aim import (
+from litellm.proxy._types import ProxyException
+from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
     AimGuardrail,
     AimGuardrailMissingSecrets,
 )
@@ -101,7 +101,7 @@ async def test_block_callback(mode: str):
         ],
     }
 
-    with pytest.raises(HTTPException, match="Jailbreak detected"):
+    with pytest.raises(ProxyException, match="Jailbreak detected") as exc_info:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=Response(
@@ -134,6 +134,137 @@ async def test_block_callback(mode: str):
                     user_api_key_dict=UserAPIKeyAuth(),
                     call_type="completion",
                 )
+
+    exc = exc_info.value
+    assert exc.code == "400"
+    assert exc.type == "invalid_request_error"
+    assert exc.param is None
+    assert exc.openai_code == "content_policy_violation"
+
+
+@pytest.mark.asyncio
+async def test_output_block_raises_proxy_exception():
+    """An output-side block is a content-policy violation, like the input block:
+    it must surface a conformant ProxyException, not a bare HTTPException whose
+    type/param serialize as the literal string "None". Regression for LIT-3751."""
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": "post_call",
+                    "api_key": "hs-aim-key",
+                },
+            },
+        ],
+        config_file_path="",
+    )
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
+    assert len(aim_guardrails) == 1
+    aim_guardrail = aim_guardrails[0]
+
+    block_on_output = Response(
+        json={
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {
+                "action_type": "block_action",
+                "detection_message": "Output blocked: leaked secret",
+                "policy_name": "blocking policy",
+            },
+        },
+        status_code=200,
+        request=Request(method="POST", url="http://aim"),
+    )
+    response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "here is the secret", "role": "assistant"},
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=block_on_output,
+    ):
+        with pytest.raises(ProxyException, match="Output blocked") as exc_info:
+            await aim_guardrail.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "tell me a secret"}]},
+                response=response,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    exc = exc_info.value
+    assert exc.code == "400"
+    assert exc.type == "invalid_request_error"
+    assert exc.param is None
+    assert exc.openai_code == "content_policy_violation"
+
+
+@pytest.mark.asyncio
+async def test_anonymize_multimodal_rejection_raises_proxy_exception():
+    """Anonymize on multimodal input degrades to a 400 because mask-in-place would
+    drop non-text parts. That is a usage error, not a content-policy violation, so
+    it must raise a conformant ProxyException WITHOUT the content_policy_violation
+    code. Regression for LIT-3751."""
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": "pre_call",
+                    "api_key": "hs-aim-key",
+                },
+            },
+        ],
+        config_file_path="",
+    )
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
+    assert len(aim_guardrails) == 1
+    aim_guardrail = aim_guardrails[0]
+
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hi my name is Brian"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                    },
+                ],
+            },
+        ],
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response_with_detections,
+    ):
+        with pytest.raises(
+            ProxyException, match="anonymize action requested for multimodal"
+        ) as exc_info:
+            await aim_guardrail.async_pre_call_hook(
+                data=data,
+                cache=DualCache(),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+
+    exc = exc_info.value
+    assert exc.code == "400"
+    assert exc.type == "invalid_request_error"
+    assert exc.param is None
+    assert exc.openai_code != "content_policy_violation"
 
 
 @pytest.mark.asyncio
@@ -185,7 +316,7 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
 
 
 @pytest.mark.asyncio
-async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
+async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output():
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -209,6 +340,7 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
         "messages": [
             {"role": "user", "content": "Hi my name id Brian"},
         ],
+        "litellm_call_id": "test-call-id",
     }
 
     with patch(
@@ -216,19 +348,27 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
     ) as mock_post:
 
         def mock_post_detect_side_effect(url, *args, **kwargs):
-            if url.endswith("/detect/openai/v2"):
+            request_body = kwargs.get("json", {})
+            request_headers = kwargs.get("headers", {})
+            assert (
+                request_headers["x-aim-call-id"] == "test-call-id"
+            ), "Wrong header: x-aim-call-id"
+            assert (
+                request_headers["x-aim-gateway-key-alias"] == "test-key"
+            ), "Wrong header: x-aim-gateway-key-alias"
+            if request_body["messages"][-1]["role"] == "user":
                 return response_with_detections
-            elif url.endswith("/detect/output/v2"):
+            elif request_body["messages"][-1]["role"] == "assistant":
                 return response_without_detections
             else:
-                raise ValueError("Unexpected URL: {}".format(url))
+                raise ValueError("Unexpected request: {}".format(request_body))
 
         mock_post.side_effect = mock_post_detect_side_effect
 
         data = await aim_guardrail.async_pre_call_hook(
             data=data,
             cache=DualCache(),
-            user_api_key_dict=UserAPIKeyAuth(),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
             call_type="completion",
         )
         assert data["messages"][0]["content"] == "Hi my name is [NAME_1]"
@@ -248,9 +388,13 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
             )
 
         result = await aim_guardrail.async_post_call_success_hook(
-            data=data, response=llm_response(), user_api_key_dict=UserAPIKeyAuth()
+            data=data,
+            response=llm_response(),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
         )
-        assert result["choices"][0]["message"]["content"] == "Hello Brian! How are you?"
+        assert (
+            result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
+        )
 
 
 @pytest.mark.asyncio
@@ -298,7 +442,7 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
         yield websocket_mock
 
     monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
     )
 
     results = []
@@ -316,6 +460,8 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
 @pytest.mark.asyncio
 async def test_post_call_stream__blocked_chunks(monkeypatch):
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -357,17 +503,27 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
         yield websocket_mock
 
     monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
     )
 
     results = []
-    with pytest.raises(StreamingCallbackError, match="Jailbreak detected"):
+    # For async generators, we need to manually iterate and catch the exception
+    exception_caught = False
+    try:
         async for result in aim_guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
             response=llm_response(),
             request_data=data,
         ):
             results.append(result)
+    except StreamingCallbackError:
+        exception_caught = True
+    except Exception as e:
+        print("INSIDE EXCEPTION")
+        raise e
+
+    # Assert that the exception was caught
+    assert exception_caught, "StreamingCallbackError should have been raised"
 
     # Chunks that were received before the blocking message should be returned as usual.
     assert len(results) == 1
@@ -420,23 +576,23 @@ response_with_detections = Response(
         "required_action": {
             "action_type": "anonymize_action",
             "policy_name": "PII",
-            "chat_redaction_result": {
-                "all_redacted_messages": [
-                    {
-                        "content": "Hi my name is [NAME_1]",
-                        "role": "user",
-                        "additional_contents": [],
-                        "received_message_id": "0",
-                        "extra_fields": {},
-                    }
-                ],
-                "redacted_new_message": {
+        },
+        "redacted_chat": {
+            "all_redacted_messages": [
+                {
                     "content": "Hi my name is [NAME_1]",
                     "role": "user",
                     "additional_contents": [],
                     "received_message_id": "0",
                     "extra_fields": {},
-                },
+                }
+            ],
+            "redacted_new_message": {
+                "content": "Hi my name is [NAME_1]",
+                "role": "user",
+                "additional_contents": [],
+                "received_message_id": "0",
+                "extra_fields": {},
             },
         },
     },

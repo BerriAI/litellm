@@ -1,9 +1,17 @@
 """Tests for the HTTP client."""
 
 import json
+import os
+import sys
 
 import pytest
 import requests
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
+
 import responses
 
 from litellm.proxy.client.http_client import HTTPClient
@@ -131,7 +139,7 @@ def test_request_invalid_json(client):
     )
 
     # Check that request raises exception
-    with pytest.raises(json.JSONDecodeError) as exc_info:
+    with pytest.raises(requests.exceptions.JSONDecodeError) as exc_info:
         client.request("GET", "/models")
 
 

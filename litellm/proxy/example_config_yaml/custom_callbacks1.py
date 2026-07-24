@@ -3,13 +3,12 @@ from typing import Literal, Optional
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.proxy_server import DualCache, UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
-class MyCustomHandler(
-    CustomLogger
-):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+class MyCustomHandler(CustomLogger):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     def __init__(self):
         pass
@@ -21,16 +20,7 @@ class MyCustomHandler(
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-        ],
+        call_type: CallTypesLiteral,
     ):
         return data
 
@@ -56,14 +46,7 @@ class MyCustomHandler(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-        ],
+        call_type: CallTypesLiteral,
     ):
         pass
 

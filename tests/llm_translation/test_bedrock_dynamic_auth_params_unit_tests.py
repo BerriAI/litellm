@@ -66,12 +66,9 @@ def test_bedrock_completion_with_region_name():
             mock_post.call_args.kwargs["url"]
             == "https://bedrock-runtime.us-west-12.amazonaws.com/model/cohere.command-r-v1:0/invoke"
         )
-        assert (
-            mock_post.call_args.kwargs["data"]
-            == json.dumps({"message": "Hello, world!", "chat_history": []}).encode(
-                "utf-8"
-            )
-        )
+        assert mock_post.call_args.kwargs["data"] == json.dumps(
+            {"message": "Hello, world!", "chat_history": []}
+        ).encode("utf-8")
 
         # Print the URL and body of the HTTP request.
         # assert request was signed with the correct region
@@ -207,6 +204,7 @@ class DummyCredentials:
         ("aws_role_name", "dummy_role_name"),
         ("aws_web_identity_token", "dummy_web_identity_token"),
         ("aws_sts_endpoint", "dummy_sts_endpoint"),
+        ("aws_external_id", "dummy_external_id"),
     ],
 )
 def test_dynamic_aws_params_propagation(model, param_name, param_value):

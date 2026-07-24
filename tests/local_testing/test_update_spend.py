@@ -94,6 +94,7 @@ def prisma_client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_batch_update_spend(prisma_client):
     await proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update(
         SpendUpdateQueueItem(

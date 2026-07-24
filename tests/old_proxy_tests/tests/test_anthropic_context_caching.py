@@ -7,7 +7,7 @@ client = openai.OpenAI(
 
 
 response = client.chat.completions.create(
-    model="anthropic/claude-3-5-sonnet-20240620",
+    model="anthropic/claude-sonnet-4-5-20250929",
     messages=[
         {  # type: ignore
             "role": "system",
@@ -30,7 +30,6 @@ response = client.chat.completions.create(
     ],
     extra_headers={
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
     },
 )
 

@@ -7,11 +7,20 @@ Thank you for your interest in contributing to LiteLLM! We welcome contributions
 Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
+- [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+
+#### Proxy (Backend) PRs
+
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
   - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
-- [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+
+#### UI PRs
+
+- [ ] **Ensure the UI builds successfully** - `npm run build`
+- [ ] **Ensure all UI unit tests pass** - `npm run test`
+- [ ] **Add tests for new components or logic** - If you are adding a new component or new logic, add corresponding tests
 
 ## **Contributor License Agreement (CLA)**
 
@@ -24,21 +33,29 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 ### 1. Setup Your Local Development Environment
 
 ```bash
-# Clone the repository
-git clone https://github.com/BerriAI/litellm.git
+# Fork the repository on GitHub (click the Fork button at https://github.com/BerriAI/litellm)
+# Then clone your fork locally
+git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
-# Create a new branch for your feature
-git checkout -b your-feature-branch
+# Create a new branch for your feature (see "Commit and Branch Conventions" below)
+git checkout -b feature/your-feature
 
 # Install development dependencies
 make install-dev
+
+# Install git hooks that enforce commit + branch conventions (one-time, opt-in)
+make install-hooks
 
 # Verify your setup works
 make help
 ```
 
 That's it! Your local development environment is ready.
+
+## Commit and Branch Conventions
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and branches follow [Conventional Branches](https://conventional-branch.github.io/). Run `make install-hooks` once per clone to enable the local git hooks that enforce these — see the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
 
 ### 2. Development Workflow
 
@@ -57,12 +74,12 @@ make lint
 # Run unit tests to ensure nothing is broken
 make test-unit
 
-# Commit your changes
+# Commit your changes (must follow Conventional Commits — see above)
 git add .
-git commit -m "Your descriptive commit message"
+git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR
-git push origin your-feature-branch
+# Push and create a PR (branch must follow Conventional Branches — see above)
+git push origin feature/your-feature
 ```
 
 ## Adding Testing
@@ -112,9 +129,17 @@ Run all unit tests (uses parallel execution for speed):
 make test-unit
 ```
 
+If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
+
+```bash
+make install-test-deps
+```
+
+This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
+
 Run specific test files:
 ```bash
-poetry run pytest tests/test_litellm/test_your_file.py -v
+uv run pytest tests/test_litellm/test_your_file.py -v
 ```
 
 ### Running Linting and Formatting Checks
@@ -129,7 +154,7 @@ Individual linting commands:
 ```bash
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
-make lint-mypy          # Run MyPy type checking
+make lint-basedpyright  # Run basedpyright type checking
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```
@@ -138,6 +163,19 @@ Apply formatting (auto-fixes issues):
 ```bash
 make format
 ```
+
+> **Black formatting is enforced in CI.** All PRs must pass the Black formatting check.
+>
+> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): `AGENTS.md` and `CLAUDE.md` instruct agents to run `poetry run black .` before committing.
+> - **VS Code users**: Install the [Black Formatter extension](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter) and enable format-on-save:
+>   ```json
+>   {
+>     "[python]": {
+>       "editor.defaultFormatter": "ms-python.black-formatter",
+>       "editor.formatOnSave": true
+>     }
+>   }
+>   ```
 
 ### CI Compatibility
 
@@ -162,7 +200,7 @@ Run `make help` to see all available commands:
 make help                       # Show all available commands
 make install-dev               # Install development dependencies
 make install-proxy-dev         # Install proxy development dependencies
-make install-test-deps         # Install test dependencies (for running tests)
+make install-test-deps         # Install the full local test environment
 make format                    # Apply Black code formatting
 make format-check              # Check Black formatting (matches CI)
 make lint                      # Run all linting checks
@@ -178,7 +216,7 @@ LiteLLM follows the [Google Python Style Guide](https://google.github.io/stylegu
 Our automated quality checks include:
 - **Black** for consistent code formatting
 - **Ruff** for linting and code quality
-- **MyPy** for static type checking
+- **basedpyright** for static type checking
 - **Circular import detection**
 - **Import safety validation**
 
@@ -192,7 +230,7 @@ If `make lint` fails:
 
 1. **Formatting issues**: Run `make format` to auto-fix
 2. **Ruff issues**: Check the output and fix manually
-3. **MyPy issues**: Add proper type hints
+3. **basedpyright issues**: Add proper type hints
 4. **Circular imports**: Refactor import dependencies
 5. **Import safety**: Fix any unprotected imports
 
@@ -207,7 +245,7 @@ If `make test-unit` fails:
 
 ### 3. Common Development Tips
 
-- **Use type hints**: MyPy requires proper type annotations
+- **Use type hints**: basedpyright requires proper type annotations
 - **Write descriptive commit messages**: Help reviewers understand your changes
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path
@@ -224,7 +262,7 @@ To run the proxy server locally:
 make install-proxy-dev
 
 # Start the proxy server
-poetry run litellm --config your_config.yaml
+uv run litellm --config your_config.yaml
 ```
 
 ### Docker Development
@@ -244,10 +282,47 @@ docker run \
     --config /app/config.yaml --detailed_debug
 ```
 
+## UI Development
+
+### 1. Setup Your Local UI Development Environment
+
+```bash
+# Clone the repo (if you haven't already)
+git clone https://github.com/YOUR_USERNAME/litellm.git
+cd litellm
+
+# Navigate to the UI dashboard directory
+cd ui/litellm-dashboard
+
+# Install dependencies
+npm install
+
+# Start the development server
+npm run dev
+```
+
+### 2. Adding UI Tests
+
+If you are adding a **new component** or **new logic**, you must add corresponding tests.
+
+### 3. Running UI Unit Tests
+
+```bash
+npm run test
+```
+
+### 4. Building the UI
+
+Ensure the UI builds successfully before submitting your PR:
+
+```bash
+npm run build
+```
+
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and create a pull request
+2. **Create a PR**: Go to GitHub and open a pull request against [`litellm_internal_staging`](https://github.com/BerriAI/litellm/tree/litellm_internal_staging), which is the default base branch. Do not target `main`.
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates
@@ -258,6 +333,7 @@ docker run \
 If you need help:
 
 - 💬 [Join our Discord](https://discord.gg/wuPM9dRgDw)
+- 💬 [Join our Slack](https://www.litellm.ai/support)
 - 📧 Email us: ishaan@berri.ai / krrish@berri.ai
 - 🐛 [Create an issue](https://github.com/BerriAI/litellm/issues/new)
 

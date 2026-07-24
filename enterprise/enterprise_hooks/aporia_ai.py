@@ -5,32 +5,33 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys
 import os
+import sys
+
+from litellm.types.utils import CallTypesLiteral
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from typing import Optional, Literal, Any
-import litellm
+import json
 import sys
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from typing import Any, List, Literal, Optional
+
 from fastapi import HTTPException
+
+import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
-from typing import List
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-import json
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
-
-litellm.set_verbose = True
 
 GUARDRAIL_NAME = "aporia"
 
@@ -167,14 +168,7 @@ class AporiaGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-        ],
+        call_type: CallTypesLiteral,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,

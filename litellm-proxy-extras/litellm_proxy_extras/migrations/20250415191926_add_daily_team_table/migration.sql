@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyTeamSpend" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyTeamSpend" (
     "id" TEXT NOT NULL,
     "team_id" TEXT NOT NULL,
     "date" TEXT NOT NULL,
@@ -20,17 +20,17 @@ CREATE TABLE "LiteLLM_DailyTeamSpend" (
 );
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTeamSpend_date_idx" ON "LiteLLM_DailyTeamSpend"("date");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTeamSpend_date_idx" ON "LiteLLM_DailyTeamSpend"("date");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTeamSpend_team_id_idx" ON "LiteLLM_DailyTeamSpend"("team_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTeamSpend_team_id_idx" ON "LiteLLM_DailyTeamSpend"("team_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTeamSpend_api_key_idx" ON "LiteLLM_DailyTeamSpend"("api_key");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTeamSpend_api_key_idx" ON "LiteLLM_DailyTeamSpend"("api_key");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTeamSpend_model_idx" ON "LiteLLM_DailyTeamSpend"("model");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTeamSpend_model_idx" ON "LiteLLM_DailyTeamSpend"("model");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_DailyTeamSpend_team_id_date_api_key_model_custom_ll_key" ON "LiteLLM_DailyTeamSpend"("team_id", "date", "api_key", "model", "custom_llm_provider");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_DailyTeamSpend_team_id_date_api_key_model_custom_ll_key" ON "LiteLLM_DailyTeamSpend"("team_id", "date", "api_key", "model", "custom_llm_provider");
 

@@ -2,7 +2,7 @@ import { getProxyUISettings } from "@/components/networking";
 
 export const fetchProxySettings = async (accessToken: string | null) => {
   if (!accessToken) return null;
-  
+
   try {
     const proxySettings = await getProxyUISettings(accessToken);
     return proxySettings;
@@ -10,4 +10,4 @@ export const fetchProxySettings = async (accessToken: string | null) => {
     console.error("Error fetching proxy settings:", error);
     return null;
   }
-}; 
+};

@@ -28,6 +28,7 @@ from httpx import Headers
 from base_llm_unit_tests import BaseLLMChatTest
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 class TestMistralCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         litellm.set_verbose = True

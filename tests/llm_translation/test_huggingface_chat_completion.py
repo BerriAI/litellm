@@ -2,19 +2,21 @@
 Test HuggingFace LLM
 """
 
-from base_llm_unit_tests import BaseLLMChatTest
 import json
 import os
 import sys
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from base_llm_unit_tests import BaseLLMChatTest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 import pytest
-from litellm.types.utils import ModelResponseStream, ModelResponse
+
+import litellm
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 MOCK_COMPLETION_RESPONSE = {
     "id": "9115d3daeab10608",
@@ -361,31 +363,27 @@ class TestHuggingFace(BaseLLMChatTest):
             )
 
     @pytest.mark.parametrize(
-        "model, provider, expected_url",
+        "model, expected_url",
         [
             (
                 "meta-llama/Llama-3-8B-Instruct",
-                None,
-                "https://router.huggingface.co/hf-inference/models/meta-llama/Llama-3-8B-Instruct/v1/chat/completions",
+                "https://router.huggingface.co/v1/chat/completions",
             ),
             (
                 "together/meta-llama/Llama-3-8B-Instruct",
-                None,
                 "https://router.huggingface.co/together/v1/chat/completions",
             ),
             (
                 "novita/meta-llama/Llama-3-8B-Instruct",
-                None,
                 "https://router.huggingface.co/novita/v3/openai/chat/completions",
             ),
             (
                 "http://custom-endpoint.com/v1/chat/completions",
-                None,
                 "http://custom-endpoint.com/v1/chat/completions",
             ),
         ],
     )
-    def test_get_complete_url(self, model, provider, expected_url):
+    def test_get_complete_url(self, model, expected_url):
         """Test that the complete URL is constructed correctly for different providers"""
         from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
 

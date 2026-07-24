@@ -1,10 +1,29 @@
 from enum import Enum
-from typing import Optional, TypedDict
+from typing import Optional
+
+from typing_extensions import TypedDict
+
+# Request.state key for programmatic pass-through callers (e.g. Bedrock proxy) that attach
+# JSON without a FastAPI `custom_body` parameter (which would consume the HTTP body).
+LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY = "litellm_pass_through_custom_body"
+
+# Request.state key for programmatic pass-through callers that must preserve an
+# exact byte/string body, such as AWS SigV4-signed requests.
+LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY = "litellm_pass_through_raw_body"
+
+# Attribute set on the FastAPI endpoint function of every user-defined pass-through
+# route. Auth reads it off the dispatched endpoint (``request.scope["endpoint"]``) to
+# decide whether a request body ``model`` names an upstream model rather than a
+# LiteLLM-managed one. Keying off the resolved endpoint (not the request path) means a
+# custom path that collides with a built-in route never suppresses model-access checks:
+# on a collision FastAPI dispatches the built-in handler, which does not carry this flag.
+LITELLM_PASS_THROUGH_ENDPOINT_MARKER = "__litellm_pass_through_endpoint__"
 
 
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
     ANTHROPIC = "anthropic"
+    OPENAI = "openai"
     GENERIC = "generic"
 
 
@@ -31,4 +50,11 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
     response_body: Optional[dict]  # only tracked for non-streaming responses
     """
     The body of the response
+    """
+
+    cost_per_request: Optional[float]
+    """
+    The cost per request to the target endpoint
+
+    Optional field, we use this for cost tracking only if it's set.
     """

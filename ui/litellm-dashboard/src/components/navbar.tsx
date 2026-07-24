@@ -1,129 +1,164 @@
-import Link from "next/link";
-import React, { useState, useEffect } from "react";
-import type { MenuProps } from "antd";
-import { Dropdown } from "antd";
-import { getProxyBaseUrl, Organization } from "@/components/networking";
-import { defaultOrg } from "@/components/common_components/default_org";
-import { 
-  UserOutlined,
-  LogoutOutlined
-} from '@ant-design/icons';
+import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
+import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
+import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
+import { useWorker } from "@/hooks/useWorker";
+import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
+import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
+import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
+import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
+import { Tag } from "antd";
+import Link from "next/link";
+import React from "react";
+import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
+import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
+import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
+import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
+import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import ViewSwitcher from "./Navbar/ViewSwitcher";
+import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
-  userID: string | null;
-  userEmail: string | null;
-  userRole: string | null;
-  premiumUser: boolean;
-  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
-  proxySettings: any;
   accessToken: string | null;
+  isPublicPage: boolean;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
-  userID,
-  userEmail,
-  userRole,
-  premiumUser,
-  proxySettings,
-  setProxySettings,
   accessToken,
+  isPublicPage = false,
+  sidebarCollapsed = false,
+  onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const imageUrl = baseUrl + "/get_image";
-  const [logoutUrl, setLogoutUrl] = useState("");
+  const proxySettings = useProxySettings(accessToken);
+  const { logoUrl } = useTheme();
+  const { data: healthData } = useHealthReadinessDetails(accessToken);
+  const version = healthData?.litellm_version;
+  const disableBouncingIcon = useDisableBouncingIcon();
+  const hideCommunityLinks = useDisableShowPrompts();
+  const { isControlPlane, selectedWorker } = useWorker();
+  const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
-  useEffect(() => {
-    const initializeProxySettings = async () => {
-      if (accessToken) {
-        const settings = await fetchProxySettings(accessToken);
-        console.log("response from fetchProxySettings", settings);
-        if (settings) {
-          setProxySettings(settings);
-        }
-      }
-    };
-
-    initializeProxySettings();
-  }, [accessToken]);
-
-  useEffect(() => {
-    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
-  }, [proxySettings]);
+  const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
   const handleLogout = () => {
     clearTokenCookies();
-    window.location.href = logoutUrl;
+    localStorage.removeItem("litellm_selected_worker_id");
+    localStorage.removeItem("litellm_worker_url");
+    window.location.href = proxySettings.PROXY_LOGOUT_URL || "";
   };
 
-  const userItems: MenuProps["items"] = [
-    {
-      key: "1",
-      label: (
-        <div className="py-1">
-          <p className="text-sm text-gray-600">Role: {userRole}</p>
-          <p className="text-sm text-gray-600">Email: {userEmail || "Unknown"}</p>
-          <p className="text-sm text-gray-600"><UserOutlined /> {userID}</p>
-          <p className="text-sm text-gray-600">Premium User: {String(premiumUser)}</p>
-        </div>
-      ),
-    },
-    {
-      key: "2",
-      label: <p className="text-sm hover:text-gray-900" onClick={handleLogout}><LogoutOutlined /> Logout</p>,
-    }
-  ];
-
+  const handleWorkerSwitch = (workerId: string) => {
+    clearTokenCookies();
+    clearStoredReturnUrl();
+    localStorage.removeItem("litellm_selected_worker_id");
+    localStorage.removeItem("litellm_worker_url");
+    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
+  };
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white">
       <div className="w-full">
-        <div className="flex items-center h-12 px-4">
-          {/* Left side with correct logo positioning */}
-          <div className="flex items-center flex-shrink-0">
-            <Link href="/" className="flex items-center">
-              <img
-                src={imageUrl}
-                alt="LiteLLM Brand"
-                className="h-8 w-auto"
-              />
-            </Link>
-          </div>
-
-          {/* Right side nav items */}
-          <div className="flex items-center space-x-5 ml-auto">
-            <a
-              href="https://docs.litellm.ai/docs/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[13px] text-gray-600 hover:text-gray-900 transition-colors"
-            >
-              Docs
-            </a>
-
-            <Dropdown 
-              menu={{ 
-                items: userItems,
-                style: {
-                  padding: '4px',
-                  marginTop: '4px'
-                }
-              }}
-            >
-              <button className="inline-flex items-center text-[13px] text-gray-600 hover:text-gray-900 transition-colors">
-                User
-                <svg
-                  className="ml-1 w-4 h-4 text-gray-500"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
-                </svg>
+        <div className="flex h-14 items-center px-4">
+          <div className="flex shrink-0 items-center">
+            {onToggleSidebar && (
+              <button
+                onClick={onToggleSidebar}
+                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
               </button>
-            </Dropdown>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+                <div className="relative">
+                  <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
+                    <img
+                      src={imageUrl}
+                      alt="LiteLLM Brand"
+                      className="h-auto max-h-full w-auto max-w-full object-contain"
+                    />
+                  </div>
+                </div>
+              </Link>
+              {version && (
+                <div className="relative">
+                  {!disableBouncingIcon && (
+                    <span
+                      className="absolute -left-2 -top-1 animate-bounce text-lg"
+                      style={{ animationDuration: "2s" }}
+                      title="Thanks for using LiteLLM!"
+                    >
+                      🌑
+                    </span>
+                  )}
+                  <Tag className="relative z-10 cursor-pointer text-xs font-medium">
+                    <a
+                      href="https://docs.litellm.ai/release_notes"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0"
+                    >
+                      v{version}
+                    </a>
+                  </Tag>
+                </div>
+              )}
+            </div>
           </div>
+
+          {!isPublicPage && (
+            <div className="ml-4 flex shrink-0 items-center border-l border-gray-200 pl-4">
+              <ViewSwitcher />
+            </div>
+          )}
+
+          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
+            {showWorkerSwitch && (
+              <div className="flex shrink-0 items-center">
+                <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+              </div>
+            )}
+
+            <nav
+              aria-label="Product documentation"
+              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-gray-200 pl-4" : ""}`}
+            >
+              <a
+                href="https://docs.litellm.ai/docs/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={NAV_PRODUCT_LINK_CLASS}
+              >
+                Docs
+                {/* Layout parity with Blog chevron — intentional single-level link */}
+                <DownOutlined className="pointer-events-none text-[10px] opacity-0" aria-hidden />
+              </a>
+              <BlogDropdown />
+            </nav>
+
+            {!hideCommunityLinks && (
+              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
+                <CommunityEngagementButtons />
+              </div>
+            )}
+
+            {!isPublicPage && (
+              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
+                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
+                  <NotificationsBell />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
+                  <UserDropdown onLogout={handleLogout} />
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Dark mode toggle: keep disabled until the dashboard supports dark styles end-to-end. */}
         </div>
       </div>
     </nav>

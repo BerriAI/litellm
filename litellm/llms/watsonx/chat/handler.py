@@ -21,7 +21,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         *,
         model: str,
         messages: list,
-        api_base: str,
+        api_base: Optional[str],
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
@@ -40,7 +40,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ):
-        api_params = _get_api_params(params=optional_params)
+        api_params = _get_api_params(params=optional_params, model=model)
 
         ## UPDATE HEADERS
         headers = watsonx_chat_transformation.validate_environment(
@@ -52,7 +52,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             litellm_params=litellm_params,
         )
 
-        ## UPDATE PAYLOAD (optional params)
+        ## UPDATE PAYLOAD (optional params and special cases for models deployed in spaces)
         watsonx_auth_payload = watsonx_chat_transformation._prepare_payload(
             model=model,
             api_params=api_params,
@@ -70,7 +70,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         )
 
         return super().completion(
-            model=model,
+            model=watsonx_auth_payload.get("model_id") or "",
             messages=messages,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,

@@ -174,7 +174,7 @@ def test_remove_callback_from_list_by_object():
             manager.add_litellm_async_failure_callback(self.callback)
 
         def callback(self):
-            pass    
+            pass
 
     obj = TestObject()
 
@@ -191,6 +191,28 @@ def test_remove_callback_from_list_by_object():
     assert len(litellm._async_success_callback) == 0
     assert len(litellm._async_failure_callback) == 0
 
+
+def test_remove_callback_from_all_lists():
+    manager = LoggingCallbackManager()
+    manager._reset_all_callbacks()
+
+    class TestLogger(CustomLogger):
+        pass
+
+    obj = TestLogger()
+    manager.add_litellm_callback(obj)
+    manager.add_litellm_success_callback(obj)
+    manager.add_litellm_failure_callback(obj)
+    manager.add_litellm_async_success_callback(obj)
+    manager.add_litellm_async_failure_callback(obj)
+
+    manager.remove_callback_from_all_lists(obj)
+
+    assert obj not in litellm.callbacks
+    assert obj not in litellm.success_callback
+    assert obj not in litellm.failure_callback
+    assert obj not in litellm._async_success_callback
+    assert obj not in litellm._async_failure_callback
 
 
 def test_reset_callbacks(callback_manager):
@@ -210,3 +232,197 @@ def test_reset_callbacks(callback_manager):
     assert len(litellm.failure_callback) == 0
     assert len(litellm._async_success_callback) == 0
     assert len(litellm._async_failure_callback) == 0
+
+
+@pytest.mark.asyncio
+async def test_slack_alerting_callback_registration(callback_manager):
+    """
+    Test that litellm callbacks are correctly registered for slack alerting
+    when outage_alerts or region_outage_alerts are enabled
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from unittest.mock import AsyncMock, patch
+
+    # Mock the async HTTP handler
+    with patch(
+        "litellm.integrations.SlackAlerting.slack_alerting.get_async_httpx_client"
+    ) as mock_http:
+        mock_http.return_value = AsyncMock()
+
+        # Create a fresh ProxyLogging instance
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        # Test 1: No callbacks should be added when alerting is None
+        proxy_logging.update_values(
+            alerting=None, alert_types=["outage_alerts", "region_outage_alerts"]
+        )
+        assert len(litellm.callbacks) == 0
+
+        # Test 2: Callbacks should be added when slack alerting is enabled with outage alerts
+        proxy_logging.update_values(alerting=["slack"], alert_types=["outage_alerts"])
+        assert len(litellm.callbacks) == 1
+        assert isinstance(litellm.callbacks[0], SlackAlerting)
+
+        # Test 3: Callbacks should be added when slack alerting is enabled with region outage alerts
+        callback_manager._reset_all_callbacks()  # Reset callbacks
+        proxy_logging.update_values(
+            alerting=["slack"], alert_types=["region_outage_alerts"]
+        )
+        assert len(litellm.callbacks) == 1
+        assert isinstance(litellm.callbacks[0], SlackAlerting)
+
+        # Test 4: No callbacks should be added for other alert types
+        callback_manager._reset_all_callbacks()  # Reset callbacks
+        proxy_logging.update_values(
+            alerting=["slack"], alert_types=["budget_alerts"]  # Some other alert type
+        )
+        assert len(litellm.callbacks) == 0
+
+        # Test 5: Both success and regular callbacks should be added
+        callback_manager._reset_all_callbacks()  # Reset callbacks
+        proxy_logging.update_values(alerting=["slack"], alert_types=["outage_alerts"])
+        assert len(litellm.callbacks) == 1  # Regular callback for outage alerts
+        assert isinstance(litellm.callbacks[0], SlackAlerting)
+        # response_taking_too_long_callback is async, so it should be in the async success callback list
+        response_taking_too_long_callback = (
+            proxy_logging.slack_alerting_instance.response_taking_too_long_callback
+        )
+        assert len(litellm._async_success_callback) == 1
+        assert litellm._async_success_callback[0] == response_taking_too_long_callback
+
+        # Cleanup
+        callback_manager._reset_all_callbacks()
+
+
+@pytest.mark.asyncio
+async def test_generic_api_compatible_callbacks_json():
+    """
+    Test that callbacks defined in generic_api_compatible_callbacks.json
+    are properly loaded and initialized by _add_custom_callback_generic_api_str
+    """
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+
+    # Mock environment variable for SumoLogic webhook URL
+    test_sumologic_url = "https://collectors.sumologic.com/receiver/v1/http/test123"
+
+    with patch.dict(os.environ, {"SUMOLOGIC_WEBHOOK_URL": test_sumologic_url}):
+        # Test that sumologic callback is recognized from JSON file
+        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+            "sumologic"
+        )
+
+        # Verify a GenericAPILogger instance is returned
+        assert isinstance(
+            result, GenericAPILogger
+        ), "Should return GenericAPILogger instance for sumologic callback"
+
+        # Verify the endpoint is correctly loaded from environment variable
+        assert (
+            result.endpoint == test_sumologic_url
+        ), f"Endpoint should be {test_sumologic_url}"
+
+        # Verify headers only contain Content-Type (no Authorization for SumoLogic)
+        assert "Content-Type" in result.headers, "Should have Content-Type header"
+        assert (
+            result.headers["Content-Type"] == "application/json"
+        ), "Content-Type should be application/json"
+        assert (
+            "Authorization" not in result.headers
+        ), "Should not have Authorization header for SumoLogic"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_compatible_callbacks_json_rubrik():
+    """
+    Test the rubrik callback from generic_api_compatible_callbacks.json
+    which requires both API key and webhook URL
+    """
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+
+    # Mock environment variables for Rubrik
+    test_rubrik_url = "https://webhook.site/test-rubrik"
+    test_rubrik_api_key = "sk-rubrik-test-key"
+
+    with patch.dict(
+        os.environ,
+        {"RUBRIK_WEBHOOK_URL": test_rubrik_url, "RUBRIK_API_KEY": test_rubrik_api_key},
+    ):
+        # Test that rubrik callback is recognized from JSON file
+        result = LoggingCallbackManager._add_custom_callback_generic_api_str("rubrik")
+
+        # Verify a GenericAPILogger instance is returned
+        assert isinstance(
+            result, GenericAPILogger
+        ), "Should return GenericAPILogger instance for rubrik callback"
+
+        # Verify the endpoint is correctly loaded
+        assert (
+            result.endpoint == test_rubrik_url
+        ), f"Endpoint should be {test_rubrik_url}"
+
+        # Verify headers include Authorization with Bearer token
+        assert "Content-Type" in result.headers, "Should have Content-Type header"
+        assert (
+            "Authorization" in result.headers
+        ), "Should have Authorization header for Rubrik"
+        assert (
+            result.headers["Authorization"] == f"Bearer {test_rubrik_api_key}"
+        ), "Authorization should have correct API key"
+
+        # Verify event_types filter (rubrik only logs success events)
+        assert result.event_types == [
+            "llm_api_success"
+        ], "Rubrik should only log success events"
+
+
+def test_generic_api_compatible_callbacks_json_unknown_callback():
+    """
+    Test that unknown callbacks (not in JSON or callback_settings) are returned unchanged
+    """
+    # Test with a callback that doesn't exist in the JSON file
+    result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+        "unknown_callback"
+    )
+
+    # Should return the string unchanged
+    assert result == "unknown_callback", "Unknown callback should be returned as-is"
+    assert isinstance(result, str), "Unknown callback should remain a string"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_settings_retry_config():
+    """
+    Test that generic_api callback_settings are passed to GenericAPILogger.
+    """
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        _generic_api_logger_cache,
+    )
+
+    callback_name = "test_generic_api_retry_config"
+    _generic_api_logger_cache.pop(callback_name, None)
+    litellm.callback_settings[callback_name] = {
+        "callback_type": "generic_api",
+        "endpoint": "https://example.com/api/logs",
+        "headers": {"Content-Type": "application/json"},
+        "max_retries": 2,
+        "retry_delay": 0.5,
+        "timeout": 3,
+    }
+
+    try:
+        result = LoggingCallbackManager._add_custom_callback_generic_api_str(
+            callback_name
+        )
+
+        assert isinstance(result, GenericAPILogger)
+        assert result.endpoint == "https://example.com/api/logs"
+        assert result.headers == {"Content-Type": "application/json"}
+        assert result.max_retries == 2
+        assert result.retry_delay == 0.5
+        assert result.timeout == 3
+    finally:
+        litellm.callback_settings.pop(callback_name, None)
+        _generic_api_logger_cache.pop(callback_name, None)

@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
 import httpx
 
-from litellm.types.rerank import OptionalRerankParams, RerankBilledUnits, RerankResponse
+from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import ModelInfo
 
 from ..chat.transformation import BaseLLMException
@@ -22,7 +22,8 @@ class BaseRerankConfig(ABC):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> dict:
         pass
 
@@ -30,8 +31,9 @@ class BaseRerankConfig(ABC):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: dict | None = None,
     ) -> dict:
         return {}
 
@@ -42,7 +44,7 @@ class BaseRerankConfig(ABC):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -50,7 +52,12 @@ class BaseRerankConfig(ABC):
         return model_response
 
     @abstractmethod
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        model: str,
+        optional_params: dict | None = None,
+    ) -> str:
         """
         OPTIONAL
 
@@ -72,13 +79,14 @@ class BaseRerankConfig(ABC):
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
+    ) -> Dict:
         pass
 
     def get_error_class(
@@ -93,9 +101,9 @@ class BaseRerankConfig(ABC):
     def calculate_rerank_cost(
         self,
         model: str,
-        custom_llm_provider: Optional[str] = None,
-        billed_units: Optional[RerankBilledUnits] = None,
-        model_info: Optional[ModelInfo] = None,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
     ) -> Tuple[float, float]:
         """
         Calculates the cost per query for a given rerank model.

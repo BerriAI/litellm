@@ -106,9 +106,7 @@ def batch_completion(
                     original_kwargs = {}
                     if "kwargs" in kwargs_modified:
                         original_kwargs = kwargs_modified.pop("kwargs")
-                    future = executor.submit(
-                        litellm.completion, **kwargs_modified, **original_kwargs
-                    )
+                    future = executor.submit(litellm.completion, **kwargs_modified, **original_kwargs)
                     completions.append(future)
 
         # Retrieve the results from the futures
@@ -153,13 +151,9 @@ def batch_completion_models(*args, **kwargs):
         futures = {}
         with ThreadPoolExecutor(max_workers=len(models)) as executor:
             for model in models:
-                futures[model] = executor.submit(
-                    litellm.completion, *args, model=model, **kwargs
-                )
+                futures[model] = executor.submit(litellm.completion, *args, model=model, **kwargs)
 
-            for model, future in sorted(
-                futures.items(), key=lambda x: models.index(x[0])
-            ):
+            for model, future in sorted(futures.items(), key=lambda x: models.index(x[0])):
                 if future.result() is not None:
                     return future.result()
     elif "deployments" in kwargs:
@@ -171,14 +165,10 @@ def batch_completion_models(*args, **kwargs):
         with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
             for deployment in deployments:
                 for key in kwargs.keys():
-                    if (
-                        key not in deployment
-                    ):  # don't override deployment values e.g. model name, api base, etc.
+                    if key not in deployment:  # don't override deployment values e.g. model name, api base, etc.
                         deployment[key] = kwargs[key]
                 kwargs = {**deployment, **nested_kwargs}
-                futures[deployment["model"]] = executor.submit(
-                    litellm.completion, **kwargs
-                )
+                futures[deployment["model"]] = executor.submit(litellm.completion, **kwargs)
 
             while futures:
                 # wait for the first returned future
@@ -191,9 +181,7 @@ def batch_completion_models(*args, **kwargs):
                         return result
                     except Exception:
                         # if model 1 fails, continue with response from model 2, model3
-                        print_verbose(
-                            "\n\ngot an exception, ignoring, removing from futures"
-                        )
+                        print_verbose("\n\ngot an exception, ignoring, removing from futures")
                         print_verbose(futures)
                         new_futures = {}
                         for key, value in futures.items():
@@ -237,17 +225,32 @@ def batch_completion_models_all_responses(*args, **kwargs):
     if "model" in kwargs:
         kwargs.pop("model")
     if "models" in kwargs:
-        models = kwargs["models"]
-        kwargs.pop("models")
+        models = kwargs.pop("models")
     else:
         raise Exception("'models' param not in kwargs")
+
+    if isinstance(models, str):
+        models = [models]
+    elif isinstance(models, (list, tuple)):
+        models = list(models)
+    else:
+        raise TypeError("'models' must be a string or list of strings")
+
+    if len(models) == 0:
+        return []
 
     responses = []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-        for idx, model in enumerate(models):
-            future = executor.submit(litellm.completion, *args, model=model, **kwargs)
-            if future.result() is not None:
-                responses.append(future.result())
+        futures = [executor.submit(litellm.completion, *args, model=model, **kwargs) for model in models]
+
+        for future in futures:
+            try:
+                result = future.result()
+                if result is not None:
+                    responses.append(result)
+            except Exception as e:
+                print_verbose(f"batch_completion_models_all_responses: model request failed: {str(e)}")
+                continue
 
     return responses

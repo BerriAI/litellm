@@ -27,9 +27,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         api_key: Optional[str],
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")  # type: ignore
-        dynamic_api_key = (
-            api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""
-        )  # vllm does not require an api key
+        dynamic_api_key = api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
 
     @staticmethod
@@ -61,6 +59,23 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         return message
 
     @staticmethod
+    def _sanitize_usage_obj(response_json: dict) -> dict:
+        """
+        Checks for a 'usage' object in the response and replaces any None token values with 0.
+        This enforces OpenAI compatibility for providers that might return null.
+
+        This method is future-proof and sanitizes any key ending in '_tokens'.
+        """
+        if "usage" in response_json and isinstance(response_json.get("usage"), dict):
+            usage = response_json["usage"]
+            # Iterate through all keys in the usage dictionary
+            for key, value in usage.items():
+                # Sanitize if the key ends with '_tokens' and its value is None
+                if key.endswith("_tokens") and value is None:
+                    usage[key] = 0
+        return response_json
+
+    @staticmethod
     def _transform_response(
         model: str,
         response: httpx.Response,
@@ -85,21 +100,20 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             additional_args={"complete_input_dict": data},
         )
 
+        # Sanitize the usage object at the source
+        response_json = OpenAILikeChatConfig._sanitize_usage_obj(response_json)
+
         if json_mode:
             for choice in response_json["choices"]:
-                message = (
-                    OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
-                        choice.get("message"), json_mode
-                    )
+                message = OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
+                    choice.get("message"), json_mode
                 )
                 choice["message"] = message
 
         returned_response = ModelResponse(**response_json)
 
         if custom_llm_provider is not None:
-            returned_response.model = (
-                custom_llm_provider + "/" + (returned_response.model or "")
-            )
+            returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
 
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
@@ -144,13 +158,8 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        mapped_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
-        if (
-            "max_completion_tokens" in non_default_params
-            and replace_max_completion_tokens_with_max_tokens
-        ):
+        mapped_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
             mapped_params["max_tokens"] = non_default_params[
                 "max_completion_tokens"
             ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'

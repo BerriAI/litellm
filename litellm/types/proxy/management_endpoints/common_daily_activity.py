@@ -1,8 +1,9 @@
 from datetime import date
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 
 class GroupByDimension(str, Enum):
@@ -21,6 +22,9 @@ class SpendMetrics(BaseModel):
     completion_tokens: int = Field(default=0)
     cache_read_input_tokens: int = Field(default=0)
     cache_creation_input_tokens: int = Field(default=0)
+    compression_saved_tokens: int = Field(default=0)
+    compression_savings_spend: float = Field(default=0.0)
+    prompt_caching_savings_spend: float = Field(default=0.0)
     total_tokens: int = Field(default=0)
     successful_requests: int = Field(default=0)
     failed_requests: int = Field(default=0)
@@ -29,10 +33,6 @@ class SpendMetrics(BaseModel):
 
 class MetricBase(BaseModel):
     metrics: SpendMetrics
-
-
-class MetricWithMetadata(MetricBase):
-    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class KeyMetadata(BaseModel):
@@ -48,21 +48,22 @@ class KeyMetricWithMetadata(MetricBase):
     metadata: KeyMetadata = Field(default_factory=KeyMetadata)
 
 
+class MetricWithMetadata(MetricBase):
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    # API key breakdown for this metric (e.g., which API keys are using this MCP server)
+    api_key_breakdown: Dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+
+
 class BreakdownMetrics(BaseModel):
     """Breakdown of spend by different dimensions"""
 
-    models: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # model -> {metrics, metadata}
-    providers: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # provider -> {metrics, metadata}
-    api_keys: Dict[str, KeyMetricWithMetadata] = Field(
-        default_factory=dict
-    )  # api_key -> {metrics, metadata}
-    entities: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # entity -> {metrics, metadata}
+    mcp_servers: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # mcp_server -> {metrics, metadata}
+    models: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # model -> {metrics, metadata}
+    model_groups: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # model_group -> {metrics, metadata}
+    providers: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # provider -> {metrics, metadata}
+    endpoints: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
+    api_keys: Dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+    entities: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
 
 
 class DailySpendData(BaseModel):
@@ -81,6 +82,9 @@ class DailySpendMetadata(BaseModel):
     total_failed_requests: int = Field(default=0)
     total_cache_read_input_tokens: int = Field(default=0)
     total_cache_creation_input_tokens: int = Field(default=0)
+    total_compression_saved_tokens: int = Field(default=0)
+    total_compression_savings_spend: float = Field(default=0.0)
+    total_prompt_caching_savings_spend: float = Field(default=0.0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
@@ -96,13 +100,17 @@ class LiteLLM_DailyUserSpend(BaseModel):
     user_id: str
     date: str
     api_key: str
-    model: str
+    mcp_server_id: Optional[str] = None
+    model: Optional[str] = None
     model_group: Optional[str] = None
     custom_llm_provider: Optional[str] = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    compression_saved_tokens: int = 0
+    compression_savings_spend: float = 0.0
+    prompt_caching_savings_spend: float = 0.0
     spend: float = 0.0
     api_requests: int = 0
     successful_requests: int = 0

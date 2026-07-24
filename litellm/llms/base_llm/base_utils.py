@@ -5,14 +5,39 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
-from litellm.types.utils import Message, ProviderSpecificModelInfo
+from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+
+
+class BaseTokenCounter(ABC):
+    @abstractmethod
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
+        request_model: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
+    ) -> Optional[TokenCountResponse]:
+        pass
+
+    @abstractmethod
+    def should_use_token_counting_api(
+        self,
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Returns True if we should the this API for token counting for the selected `custom_llm_provider`
+        """
+        return False
 
 
 class BaseLLMModelInfo(ABC):
@@ -26,9 +51,7 @@ class BaseLLMModelInfo(ABC):
         return None
 
     @abstractmethod
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         """
         Returns a list of models supported by this provider.
         """
@@ -41,7 +64,9 @@ class BaseLLMModelInfo(ABC):
 
     @staticmethod
     @abstractmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(
+        api_base: Optional[str] = None,
+    ) -> Optional[str]:
         pass
 
     @abstractmethod
@@ -67,6 +92,16 @@ class BaseLLMModelInfo(ABC):
             This function will return `anthropic.claude-3-opus-20240229-v1:0`
         """
         pass
+
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+        """
+        Factory method to create a token counter for this provider.
+
+        Returns:
+            Optional TokenCounterInterface implementation for this provider,
+            or None if token counting is not supported.
+        """
+        return None
 
 
 def _convert_tool_response_to_message(
@@ -95,9 +130,7 @@ def _convert_tool_response_to_message(
     return None
 
 
-def _dict_to_response_format_helper(
-    response_format: dict, ref_template: Optional[str] = None
-) -> dict:
+def _dict_to_response_format_helper(response_format: dict, ref_template: Optional[str] = None) -> dict:
     if ref_template is not None and response_format.get("type") == "json_schema":
         # Deep copy to avoid modifying original
         modified_format = copy.deepcopy(response_format)

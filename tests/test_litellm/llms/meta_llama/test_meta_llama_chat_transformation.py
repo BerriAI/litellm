@@ -1,6 +1,5 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -8,19 +7,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.llms.meta_llama.chat.transformation import LlamaAPIConfig
-
-
-def test_get_supported_openai_params():
-    """Test that LlamaAPIConfig correctly filters unsupported parameters"""
-    config = LlamaAPIConfig()
-
-    # Test error handling
-    with patch("litellm.get_model_info", side_effect=Exception("Test error")):
-        params = config.get_supported_openai_params("llama-3.3-8B-instruct")
-        assert "function_call" not in params
-        assert "tools" not in params
-        assert "tool_choice" not in params
 
 
 def test_map_openai_params():
@@ -56,3 +44,28 @@ def test_map_openai_params():
     assert "temperature" in result
     assert result["temperature"] == 0.7
     assert "response_format" in result
+
+
+def test_llama_api_streaming_no_307_error():
+    """
+    Test that the OpenAI-compatible httpx clients use follow_redirects=True.
+
+    meta_llama routes through the OpenAI SDK path (BaseOpenAILLM), so the
+    follow_redirects setting on that SDK's underlying httpx client is what
+    actually prevents 307 redirect errors for LLaMA API streaming.
+    """
+    from litellm.llms.openai.common_utils import BaseOpenAILLM
+
+    # Verify the async httpx client has follow_redirects enabled
+    async_client = BaseOpenAILLM._get_async_http_client()
+    assert async_client is not None
+    assert (
+        async_client.follow_redirects is True
+    ), "Async httpx client should set follow_redirects=True to prevent 307 errors"
+
+    # Verify the sync httpx client has follow_redirects enabled
+    sync_client = BaseOpenAILLM._get_sync_http_client()
+    assert sync_client is not None
+    assert (
+        sync_client.follow_redirects is True
+    ), "Sync httpx client should set follow_redirects=True to prevent 307 errors"

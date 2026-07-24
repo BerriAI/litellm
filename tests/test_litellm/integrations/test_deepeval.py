@@ -1,6 +1,6 @@
 import os
 import unittest
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 

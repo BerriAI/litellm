@@ -1,11 +1,11 @@
 import copy
 import json
 import time
-import urllib.parse
 from functools import partial
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     _get_httpx_client,
 )
+from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
@@ -37,6 +38,38 @@ else:
     LiteLLMLoggingObj = Any
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+_GUARDRAIL_CONFIG_VALIDATOR: "TypeAdapter[GuardrailConfigBlock]" = TypeAdapter(GuardrailConfigBlock)
+
+_GUARDRAIL_CONFIG_EXPECTED_FORMAT = (
+    "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
+)
+
+
+def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
+    try:
+        guardrail_config = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
+    except ValidationError as e:
+        raise BedrockError(
+            status_code=400,
+            message="Invalid guardrailConfig={}. Expected format: {}. Error: {}".format(
+                raw_guardrail_config, _GUARDRAIL_CONFIG_EXPECTED_FORMAT, e
+            ),
+        )
+    if "guardrailIdentifier" not in guardrail_config:
+        raise BedrockError(
+            status_code=400,
+            message="guardrailConfig={} is missing 'guardrailIdentifier'. Expected format: {}".format(
+                raw_guardrail_config, _GUARDRAIL_CONFIG_EXPECTED_FORMAT
+            ),
+        )
+    trace = guardrail_config.get("trace")
+    candidate_headers = {
+        "X-Amzn-Bedrock-GuardrailIdentifier": guardrail_config.get("guardrailIdentifier"),
+        "X-Amzn-Bedrock-GuardrailVersion": guardrail_config.get("guardrailVersion"),
+        "X-Amzn-Bedrock-Trace": trace.upper() if trace is not None else None,
+    }
+    return {name: value for name, value in candidate_headers.items() if value is not None}
 
 
 class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
@@ -96,16 +129,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=self._get_aws_region_name(
-                optional_params=optional_params, model=model
-            ),
+            aws_region_name=self._get_aws_region_name(optional_params=optional_params, model=model),
         )
 
         if (stream is not None and stream is True) and provider != "ai21":
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            proxy_endpoint_url = (
-                f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
-            )
+            proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
@@ -118,6 +147,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
@@ -128,10 +158,17 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             optional_params=optional_params,
             request_data=request_data,
             api_base=api_base,
+            api_key=api_key,
             model=model,
             stream=stream,
             fake_stream=fake_stream,
         )
+
+    def _apply_config_to_params(self, config: dict, inference_params: dict) -> None:
+        """Apply config values to inference_params if not already set."""
+        for k, v in config.items():
+            if k not in inference_params:
+                inference_params[k] = v
 
     def transform_request(
         self,
@@ -143,6 +180,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        optional_params.pop("stream_chunk_size", None)
         custom_prompt_dict: dict = litellm_params.pop("custom_prompt_dict", None) or {}
         hf_model_name = litellm_params.get("hf_model_name", None)
 
@@ -155,21 +193,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             custom_prompt_dict=custom_prompt_dict,
         )
         inference_params = copy.deepcopy(optional_params)
-        inference_params = {
-            k: v
-            for k, v in inference_params.items()
-            if k not in self.aws_authentication_params
-        }
+        inference_params = {k: v for k, v in inference_params.items() if k not in self.aws_authentication_params}
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
                 ## LOAD CONFIG
                 config = litellm.AmazonCohereChatConfig().get_config()
-                for k, v in config.items():
-                    if (
-                        k not in inference_params
-                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                        inference_params[k] = v
+                self._apply_config_to_params(config, inference_params)
                 _data = {"message": prompt, **inference_params}
                 if chat_history is not None:
                     _data["chat_history"] = chat_history
@@ -177,24 +207,20 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             else:
                 ## LOAD CONFIG
                 config = litellm.AmazonCohereConfig.get_config()
-                for k, v in config.items():
-                    if (
-                        k not in inference_params
-                    ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                        inference_params[k] = v
+                self._apply_config_to_params(config, inference_params)
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = True  # cohere requires stream = True in inference params
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            return litellm.AmazonAnthropicClaude3Config().transform_request(
+            transformed_request = litellm.AmazonAnthropicClaudeConfig().transform_request(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 headers=headers,
             )
+
+            return transformed_request
         elif provider == "nova":
             return litellm.AmazonInvokeNovaConfig().transform_request(
                 model=model,
@@ -206,32 +232,17 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         elif provider == "ai21":
             ## LOAD CONFIG
             config = litellm.AmazonAI21Config.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-
+            self._apply_config_to_params(config, inference_params)
             request_data = {"prompt": prompt, **inference_params}
         elif provider == "mistral":
             ## LOAD CONFIG
             config = litellm.AmazonMistralConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-
+            self._apply_config_to_params(config, inference_params)
             request_data = {"prompt": prompt, **inference_params}
         elif provider == "amazon":  # amazon titan
             ## LOAD CONFIG
             config = litellm.AmazonTitanConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
-
+            self._apply_config_to_params(config, inference_params)
             request_data = {
                 "inputText": prompt,
                 "textGenerationConfig": inference_params,
@@ -239,12 +250,25 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
             ## LOAD CONFIG
             config = litellm.AmazonLlamaConfig.get_config()
-            for k, v in config.items():
-                if (
-                    k not in inference_params
-                ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                    inference_params[k] = v
+            self._apply_config_to_params(config, inference_params)
             request_data = {"prompt": prompt, **inference_params}
+        elif provider == "twelvelabs":
+            return litellm.AmazonTwelveLabsPegasusConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        elif provider == "openai":
+            # OpenAI imported models use OpenAI Chat Completions format
+            return litellm.AmazonBedrockOpenAIConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         else:
             raise BedrockError(
                 status_code=404,
@@ -255,7 +279,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
 
         return request_data
 
-    def transform_response(  # noqa: PLR0915
+    def transform_response(
         self,
         model: str,
         raw_response: httpx.Response,
@@ -272,9 +296,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         try:
             completion_response = raw_response.json()
         except Exception:
-            raise BedrockError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise BedrockError(message=raw_response.text, status_code=raw_response.status_code)
         verbose_logger.debug(
             "bedrock invoke response % s",
             json.dumps(completion_response, indent=4, default=str),
@@ -291,7 +313,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                         completion_response["generations"][0]["finish_reason"]
                     )
             elif provider == "anthropic":
-                return litellm.AmazonAnthropicClaude3Config().transform_response(
+                return litellm.AmazonAnthropicClaudeConfig().transform_response(
                     model=model,
                     raw_response=raw_response,
                     model_response=model_response,
@@ -316,10 +338,22 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     litellm_params=litellm_params,
                     encoding=encoding,
                 )
-            elif provider == "ai21":
-                outputText = (
-                    completion_response.get("completions")[0].get("data").get("text")
+            elif provider == "twelvelabs":
+                return litellm.AmazonTwelveLabsPegasusConfig().transform_response(
+                    model=model,
+                    raw_response=raw_response,
+                    model_response=model_response,
+                    logging_obj=logging_obj,
+                    request_data=request_data,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    encoding=encoding,
+                    api_key=api_key,
+                    json_mode=json_mode,
                 )
+            elif provider == "ai21":
+                outputText = completion_response.get("completions")[0].get("data").get("text")
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
@@ -328,9 +362,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
             raise BedrockError(
-                message="Error processing={}, Received error={}".format(
-                    raw_response.text, str(e)
-                ),
+                message="Error processing={}, Received error={}".format(raw_response.text, str(e)),
                 status_code=422,
             )
 
@@ -353,23 +385,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 raise Exception()
         except Exception as e:
             raise BedrockError(
-                message="Error parsing received text={}.\nError-{}".format(
-                    outputText, str(e)
-                ),
+                message="Error parsing received text={}.\nError-{}".format(outputText, str(e)),
                 status_code=raw_response.status_code,
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        bedrock_input_tokens = raw_response.headers.get(
-            "x-amzn-bedrock-input-token-count", None
-        )
-        bedrock_output_tokens = raw_response.headers.get(
-            "x-amzn-bedrock-output-token-count", None
-        )
+        bedrock_input_tokens = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
+        bedrock_output_tokens = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
 
-        prompt_tokens = int(
-            bedrock_input_tokens or litellm.token_counter(messages=messages)
-        )
+        prompt_tokens = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 
         completion_tokens = int(
             bedrock_output_tokens
@@ -400,7 +424,16 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        return headers
+        raw_guardrail_config = optional_params.pop("guardrailConfig", None)
+        if raw_guardrail_config is None:
+            return headers
+        existing_header_names = frozenset(name.lower() for name in headers)
+        guardrail_headers = {
+            name: value
+            for name, value in _bedrock_invoke_guardrail_headers(raw_guardrail_config).items()
+            if name.lower() not in existing_header_names
+        }
+        return {**headers, **guardrail_headers}
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -507,6 +540,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if model.startswith("invoke/"):
             model = model.replace("invoke/", "", 1)
 
+        # Special case: Check for "nova" in model name first (before "amazon")
+        # This handles amazon.nova-* models which would otherwise match "amazon" (Titan)
+        if "nova" in model.lower():
+            if "nova" in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, "nova")
+
         _split_model = model.split(".")[0]
         if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
             return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
@@ -515,10 +554,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         provider = AmazonInvokeConfig._get_provider_from_model_path(model)
         if provider is not None:
             return provider
-
-        # check if provider == "nova"
-        if "nova" in model:
-            return "nova"
 
         for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
             if provider in model:
@@ -545,51 +580,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
         return None
 
-    def get_bedrock_model_id(
-        self,
-        optional_params: dict,
-        provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL],
-        model: str,
-    ) -> str:
-        modelId = optional_params.pop("model_id", None)
-        if modelId is not None:
-            modelId = self.encode_model_id(model_id=modelId)
-        else:
-            modelId = model
-
-        modelId = modelId.replace("invoke/", "", 1)
-        if provider == "llama" and "llama/" in modelId:
-            modelId = self._get_model_id_from_model_with_spec(modelId, spec="llama")
-        elif provider == "deepseek_r1" and "deepseek_r1/" in modelId:
-            modelId = self._get_model_id_from_model_with_spec(
-                modelId, spec="deepseek_r1"
-            )
-        return modelId
-
-    def _get_model_id_from_model_with_spec(
-        self,
-        model: str,
-        spec: str,
-    ) -> str:
-        """
-        Remove `llama` from modelID since `llama` is simply a spec to follow for custom bedrock models
-        """
-        model_id = model.replace(spec + "/", "")
-        return self.encode_model_id(model_id=model_id)
-
-    def encode_model_id(self, model_id: str) -> str:
-        """
-        Double encode the model ID to ensure it matches the expected double-encoded format.
-        Args:
-            model_id (str): The model ID to encode.
-        Returns:
-            str: The double-encoded model ID.
-        """
-        return urllib.parse.quote(model_id, safe="")
-
-    def convert_messages_to_prompt(
-        self, model, messages, provider, custom_prompt_dict
-    ) -> Tuple[str, Optional[list]]:
+    def convert_messages_to_prompt(self, model, messages, provider, custom_prompt_dict) -> Tuple[str, Optional[list]]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: Optional[list] = None
@@ -599,26 +590,18 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details.get(
-                    "initial_prompt_value", ""
-                ),
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
                 final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
                 messages=messages,
             )
             return prompt, None
         ## ELSE
         if provider == "anthropic" or provider == "amazon":
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="bedrock"
-            )
+            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
         elif provider == "mistral":
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="bedrock"
-            )
+            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
         elif provider == "meta" or provider == "llama":
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="bedrock"
-            )
+            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="bedrock")
         elif provider == "cohere":
             prompt, chat_history = cohere_message_pt(messages=messages)
         elif provider == "deepseek_r1":

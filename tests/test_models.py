@@ -83,10 +83,8 @@ async def add_models(
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": "os.environ/AZURE_API_KEY",
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "openai/gpt-4.1-nano",
+            "api_key": "os.environ/OPENAI_API_KEY",
         },
         "model_info": {"id": model_id},
     }
@@ -119,10 +117,8 @@ async def update_model(
     data = {
         "model_name": model_name,
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": "os.environ/AZURE_API_KEY",
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "openai/gpt-4.1-nano",
+            "api_key": "os.environ/OPENAI_API_KEY",
         },
         "model_info": {"id": model_id},
     }
@@ -272,6 +268,9 @@ async def delete_model(session, model_id="123", key="sk-1234"):
         return await response.json()
 
 
+@pytest.mark.skip(
+    reason="Requires live proxy + OPENAI_API_KEY. Deterministic mock version in tests/test_litellm/proxy/management_endpoints/test_model_management_endpoints.py::TestAddAndDeleteModelLifecycle"
+)
 @pytest.mark.asyncio
 async def test_add_and_delete_models():
     """
@@ -280,7 +279,7 @@ async def test_add_and_delete_models():
     - Delete model
     - Call model -> expect to fail
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -311,10 +310,8 @@ async def add_model_for_health_checking(session, model_id="123"):
     data = {
         "model_name": f"azure-model-health-check-{model_id}",
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-            "api_version": "2023-05-15",
+            "model": "gpt-4.1-nano",
+            "api_key": os.getenv("OPENAI_API_KEY"),
         },
         "model_info": {"id": model_id},
     }
@@ -404,7 +401,7 @@ async def test_add_model_run_health():
     Call /health
     -> Ensure the health check for the endpoint is working as expected
     """
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(session=session)
@@ -436,7 +433,7 @@ async def test_add_model_run_health():
 
         assert _health_info["healthy_count"] == 1
         assert (
-            _healthy_endpooint["model"] == "azure/chatgpt-v-3"
+            _healthy_endpooint["model"] == "gpt-4.1-nano"
         )  # this is the model that got added
 
         # assert httpx client is is unchanges
@@ -495,23 +492,20 @@ async def test_model_group_info_e2e():
         models = await get_models(session=session, key="sk-1234")
         print(models)
 
-        expected_models = [
-            "anthropic/claude-3-5-haiku-20241022",
-            "anthropic/claude-3-opus-20240229",
-        ]
-
         model_group_info = await get_model_group_info(session=session, key="sk-1234")
         print(model_group_info)
 
-        has_anthropic_claude_3_5_haiku = False
-        has_anthropic_claude_3_opus = False
+        # Check that the endpoint returns data and contains the wildcard
+        # anthropic model group from the proxy config
+        has_anthropic_wildcard = False
         for model in model_group_info["data"]:
-            if model["model_group"] == "anthropic/claude-3-5-haiku-20241022":
-                has_anthropic_claude_3_5_haiku = True
-            if model["model_group"] == "anthropic/claude-3-opus-20240229":
-                has_anthropic_claude_3_opus = True
+            if model["model_group"] == "anthropic/*":
+                has_anthropic_wildcard = True
 
-        assert has_anthropic_claude_3_5_haiku and has_anthropic_claude_3_opus
+        assert has_anthropic_wildcard, (
+            f"Expected 'anthropic/*' in model groups, got: "
+            f"{[m['model_group'] for m in model_group_info['data']]}"
+        )
 
 
 @pytest.mark.asyncio
@@ -528,7 +522,7 @@ async def test_team_model_e2e():
     """
     from tests.test_users import new_user
     from tests.test_team import new_team
-    import uuid
+    from litellm._uuid import uuid
 
     async with aiohttp.ClientSession() as session:
         # Creat a user

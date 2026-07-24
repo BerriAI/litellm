@@ -36,6 +36,8 @@ from litellm.proxy.proxy_server import chat_completion
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.router import Router
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 ### UNIT TESTS FOR OpenAI Moderation ###
 
 
@@ -246,7 +248,7 @@ router = Router(
             "model_name": "fake-model",
             "litellm_params": {
                 "model": "openai/fake",
-                "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                "api_base": FAKE_OPENAI_API_BASE,
                 "api_key": "sk-12345",
             },
         }

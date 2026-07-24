@@ -225,6 +225,39 @@ async def test_aggregate_queue_updates_accuracy(spend_queue):
     assert aggregated["team_list_transactions"]["team1"] == 5.0
 
 
+def test_get_aggregated_spend_update_queue_item_does_not_mutate_original_updates(
+    spend_queue,
+):
+    original_update: SpendUpdateQueueItem = {
+        "entity_type": Litellm_EntityType.USER,
+        "entity_id": "user1",
+        "response_cost": 10.0,
+    }
+    duplicate_key_update: SpendUpdateQueueItem = {
+        "entity_type": Litellm_EntityType.USER,
+        "entity_id": "user1",
+        "response_cost": 20.0,
+    }
+
+    aggregated_updates = spend_queue._get_aggregated_spend_update_queue_item(
+        [original_update, duplicate_key_update]
+    )
+    user1_aggregated_update = next(
+        (
+            update
+            for update in aggregated_updates
+            if update.get("entity_type") == Litellm_EntityType.USER
+            and update.get("entity_id") == "user1"
+        ),
+        None,
+    )
+
+    assert original_update["response_cost"] == 10.0
+    assert user1_aggregated_update is not None
+    assert user1_aggregated_update["response_cost"] == 30.0
+    assert user1_aggregated_update is not original_update
+
+
 @pytest.mark.asyncio
 async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
     """Test that queue size is actually reduced when dealing with many items"""

@@ -5,7 +5,7 @@ A Python client library for interacting with the LiteLLM proxy server. This clie
 ## Installation
 
 ```bash
-pip install litellm
+uv add litellm
 ```
 
 ## Quick Start
@@ -298,4 +298,101 @@ Contributions are welcome! Please check out our [contributing guidelines](../../
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](../../LICENSE) file for details. 
+This project is licensed under the MIT License - see the [LICENSE](../../LICENSE) file for details.
+
+## CLI Authentication Flow
+
+The LiteLLM CLI supports SSO authentication through a polling-based approach that works with any OAuth-compatible SSO provider.
+
+### How CLI Authentication Works
+
+```mermaid
+sequenceDiagram
+    participant CLI as CLI
+    participant Browser as Browser
+    participant Proxy as LiteLLM Proxy
+    participant SSO as SSO Provider
+    
+    CLI->>Proxy: POST /sso/cli/start
+    Proxy->>CLI: Return login_id, poll_secret, user_code
+    CLI->>Browser: Open /sso/key/generate?source=litellm-cli&key=login_id
+    
+    Browser->>Proxy: GET /sso/key/generate?source=litellm-cli&key=login_id
+    Proxy->>Proxy: Set cli_state = litellm-session-token:login_id
+    Proxy->>SSO: Redirect with state=litellm-session-token:login_id
+    
+    SSO->>Browser: Show login page
+    Browser->>SSO: User authenticates
+    SSO->>Proxy: Redirect to /sso/callback?state=litellm-session-token:login_id
+    
+    Proxy->>Proxy: Check if state starts with "litellm-session-token:"
+    Proxy->>Browser: Prompt for user_code
+    Browser->>Proxy: POST /sso/cli/complete/login_id
+    
+    CLI->>Proxy: Poll /sso/cli/poll/login_id with poll_secret header
+    Proxy->>CLI: Return {"status": "ready", "key": "jwt"}
+    CLI->>CLI: Save key to ~/.litellm/token.json
+```
+
+### Authentication Commands
+
+The CLI provides these authentication commands:
+
+- **`lite login`** - Start SSO authentication flow
+- **`lite logout`** - Clear stored authentication token
+- **`lite whoami`** - Show current authentication status
+- **`lite auth print-token`** - Print the cached token (used as Claude Code's `apiKeyHelper`); fails once the token has expired
+
+### Authentication Flow Steps
+
+1. **Start Session**: CLI creates a short-lived login session with `/sso/cli/start`
+2. **Open Browser**: CLI opens browser to `/sso/key/generate` with CLI source and login ID parameters
+3. **SSO Redirect**: Proxy sets the formatted state (`litellm-session-token:{login_id}`) as OAuth state parameter and redirects to SSO provider
+4. **User Authentication**: User completes SSO authentication in browser
+5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
+6. **User Code Verification**: Browser confirms the verification code shown in the CLI
+7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
+8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
+
+### Benefits of This Approach
+
+- **No Local Server**: No need to run a local callback server
+- **Standard OAuth**: Uses OAuth 2.0 state parameter correctly
+- **Remote Compatible**: Works with remote proxy servers
+- **Secure**: Keeps the polling secret out of the browser handoff
+- **Simple Setup**: No additional OAuth redirect URL configuration needed
+
+### Token Storage
+
+Authentication tokens are stored in `~/.litellm/token.json` with restricted file permissions (600). The stored token includes:
+
+```json
+{
+  "key": "sk-...",
+  "user_id": "cli-user",
+  "user_email": "user@example.com",
+  "user_role": "cli",
+  "auth_header_name": "Authorization",
+  "timestamp": 1234567890
+}
+```
+
+The stored credential is a short-lived, per-session agent token, not a managed virtual key. It is scoped to the user and team you logged in as and inherits their models and budgets; spend is tracked against the shared team and user budgets rather than a separate per-session cap, so multiple logins or several concurrent agents all draw down the same allowance. It is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); re-run `lite login` to refresh it and pick up your latest team and user settings. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while fresh and fails once it expires -- there is no silent renewal. It is accepted on a default deployment without `EXPERIMENTAL_UI_LOGIN`, does not appear in the Keys UI, and cannot be rotated or revoked mid-session. For a long-lived, rotatable, Keys-UI-visible credential, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY`.
+
+### Usage
+
+Once authenticated, the CLI will automatically use the stored token for all requests. You no longer need to specify `--api-key` for subsequent commands.
+
+```bash
+# Login
+lite login
+
+# Use CLI without specifying API key
+lite models list
+
+# Check authentication status
+lite whoami
+
+# Logout
+lite logout
+``` 

@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 from litellm_enterprise.types.proxy.proxy_server import CustomAuthSettings
@@ -20,3 +21,14 @@ class EnterpriseProxyConfig:
         global custom_auth_settings
         custom_auth_settings = await self.load_custom_auth_settings(general_settings)
         return None
+
+    @staticmethod
+    def get_custom_docs_description() -> Optional[str]:
+        from litellm.proxy.proxy_server import premium_user
+
+        docs_description: Optional[str] = None
+        if premium_user:
+            # check if premium_user has custom_docs_description
+            docs_description = os.getenv("DOCS_DESCRIPTION")
+
+        return docs_description

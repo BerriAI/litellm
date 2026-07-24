@@ -12,7 +12,7 @@ export interface PiiConfigurationProps {
   entities: string[];
   actions: string[];
   selectedEntities: string[];
-  selectedActions: {[key: string]: string};
+  selectedActions: { [key: string]: string };
   onEntitySelect: (entity: string) => void;
   onActionSelect: (entity: string, action: string) => void;
   entityCategories?: PiiEntityCategory[];
@@ -25,10 +25,16 @@ export interface Guardrail {
     guardrail: string;
     mode: string;
     default_on: boolean;
-    pii_entities_config?: {[key: string]: string};
+    pii_entities_config?: { [key: string]: string };
     [key: string]: any;
   };
   guardrail_info: Record<string, any> | null;
   created_at?: string;
   updated_at?: string;
-} 
+  guardrail_definition_location: GuardrailDefinitionLocation;
+}
+
+export enum GuardrailDefinitionLocation {
+  DB = "db",
+  CONFIG = "config",
+}

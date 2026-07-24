@@ -2,7 +2,7 @@
 CREATE TYPE "JobStatus" AS ENUM ('ACTIVE', 'INACTIVE');
 
 -- CreateTable
-CREATE TABLE "LiteLLM_CronJob" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_CronJob" (
     "cronjob_id" TEXT NOT NULL,
     "pod_id" TEXT NOT NULL,
     "status" "JobStatus" NOT NULL DEFAULT 'INACTIVE',

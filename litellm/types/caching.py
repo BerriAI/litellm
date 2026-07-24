@@ -1,16 +1,20 @@
 from enum import Enum
-from typing import Any, Dict, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 class LiteLLMCacheType(str, Enum):
     LOCAL = "local"
     REDIS = "redis"
     REDIS_SEMANTIC = "redis-semantic"
+    VALKEY_SEMANTIC = "valkey-semantic"
     S3 = "s3"
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
+    AZURE_BLOB = "azure-blob"
+    GCS = "gcs"
 
 
 CachingSupportedCallTypes = Literal[
@@ -24,6 +28,8 @@ CachingSupportedCallTypes = Literal[
     "text_completion",
     "arerank",
     "rerank",
+    "responses",
+    "aresponses",
 ]
 
 
@@ -45,6 +51,24 @@ class RedisPipelineSetOperation(TypedDict):
     key: str
     value: Any
     ttl: Optional[int]
+
+
+class RedisPipelineRpushOperation(TypedDict):
+    """
+    TypedDict for 1 Redis Pipeline RPUSH Operation
+    """
+
+    key: str
+    values: List[Any]
+
+
+class RedisPipelineLpopOperation(TypedDict):
+    """
+    TypedDict for 1 Redis Pipeline LPOP Operation
+    """
+
+    key: str
+    count: Optional[int]
 
 
 DynamicCacheControl = TypedDict(
@@ -86,3 +110,14 @@ class HealthCheckCacheParams(BaseModel):
     redis_kwargs: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
     redis_version: Optional[Union[str, int, float]] = None
+
+
+class CachedEmbedding(TypedDict):
+    """Type definition for cached embedding objects"""
+
+    embedding: Optional[List[float]]
+    index: Optional[int]
+    object: Optional[str]
+    model: Optional[str]
+    prompt_tokens: Optional[int]
+    prompt_tokens_details: Optional[dict]

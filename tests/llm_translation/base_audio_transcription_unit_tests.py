@@ -5,7 +5,7 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
-import uuid
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -62,7 +62,9 @@ class BaseLLMAudioTranscriptionTest(ABC):
         litellm._turn_on_debug()
         AUDIO_FILE = open(file_path, "rb")
         transcription_call_args = self.get_base_audio_transcription_call_args()
-        transcript = await litellm.atranscription(**transcription_call_args, file=AUDIO_FILE)
+        transcript = await litellm.atranscription(
+            **transcription_call_args, file=AUDIO_FILE
+        )
         print(f"transcript: {transcript.model_dump()}")
         print(f"transcript hidden params: {transcript._hidden_params}")
 

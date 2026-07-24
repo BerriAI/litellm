@@ -1,6 +1,7 @@
-from typing import Optional, TypedDict, Union
+from typing import Optional, Union
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -138,7 +139,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         ########## End of logging ############
         ####### Send the request ###################
         if _is_async is True:
-            return self.async_audio_speech(  # type:ignore
+            return self.async_audio_speech(  # type: ignore
                 logging_obj=logging_obj, url=url, headers=headers, request=request
             )
         sync_handler = _get_httpx_client()
@@ -149,9 +150,7 @@ class VertexTextToSpeechAPI(VertexLLM):
             json=request,  # type: ignore
         )
         if response.status_code != 200:
-            raise Exception(
-                f"Request failed with status code {response.status_code}, {response.text}"
-            )
+            raise Exception(f"Request failed with status code {response.status_code}, {response.text}")
         ############ Process the response ############
         _json_response = response.json()
 
@@ -179,9 +178,7 @@ class VertexTextToSpeechAPI(VertexLLM):
     ) -> HttpxBinaryResponseContent:
         import base64
 
-        async_handler = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.VERTEX_AI
-        )
+        async_handler = get_async_httpx_client(llm_provider=litellm.LlmProviders.VERTEX_AI)
 
         response = await async_handler.post(
             url=url,
@@ -190,9 +187,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         )
 
         if response.status_code != 200:
-            raise Exception(
-                f"Request did not return a 200 status code: {response.status_code}, {response.text}"
-            )
+            raise Exception(f"Request did not return a 200 status code: {response.status_code}, {response.text}")
 
         _json_response = response.json()
 
@@ -212,9 +207,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         return http_binary_response
 
 
-def validate_vertex_input(
-    input_data: VertexInput, kwargs: dict, optional_params: dict
-) -> None:
+def validate_vertex_input(input_data: VertexInput, kwargs: dict, optional_params: dict) -> None:
     # Remove None values
     if input_data.get("text") is None:
         input_data.pop("text", None)

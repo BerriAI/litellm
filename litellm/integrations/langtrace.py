@@ -86,12 +86,8 @@ class LangtraceAttributes:
         usage = response_obj.get("usage")
         if usage:
             usage_attributes = {
-                SpanAttributes.LLM_USAGE_PROMPT_TOKENS.value: usage.get(
-                    "prompt_tokens"
-                ),
-                SpanAttributes.LLM_USAGE_COMPLETION_TOKENS.value: usage.get(
-                    "completion_tokens"
-                ),
+                SpanAttributes.LLM_USAGE_PROMPT_TOKENS.value: usage.get("prompt_tokens"),
+                SpanAttributes.LLM_USAGE_COMPLETION_TOKENS.value: usage.get("completion_tokens"),
                 SpanAttributes.LLM_USAGE_TOTAL_TOKENS.value: usage.get("total_tokens"),
             }
             self.set_span_attributes(span, usage_attributes)

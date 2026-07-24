@@ -1,0 +1,195 @@
+"""
+Test that batch cost calculation uses custom deployment-level pricing
+when model_info is provided.
+
+Reproduces the bug where `input_cost_per_token_batches` /
+`output_cost_per_token_batches` set on a proxy deployment's model_info
+are ignored by the batch cost pipeline because they are never threaded
+through to `batch_cost_calculator`.
+"""
+
+import litellm
+import pytest
+
+from litellm.batches.batch_utils import (
+    _batch_cost_calculator,
+    _get_batch_job_cost_from_file_content,
+    calculate_batch_cost_and_usage,
+)
+from litellm.cost_calculator import batch_cost_calculator
+from litellm.types.utils import Usage
+
+
+# --- helpers ---
+
+
+def _make_batch_output_line(prompt_tokens: int = 10, completion_tokens: int = 5):
+    """Return a single successful batch output line (OpenAI JSONL format)."""
+    return {
+        "id": "batch_req_1",
+        "custom_id": "req-1",
+        "response": {
+            "status_code": 200,
+            "body": {
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "model": "fake-batch-model",
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        },
+        "error": None,
+    }
+
+
+CUSTOM_MODEL_INFO = {
+    "input_cost_per_token_batches": 0.00125,
+    "output_cost_per_token_batches": 0.005,
+}
+
+
+# --- tests ---
+
+
+def test_batch_cost_calculator_explicit_zero_pricing_not_overridden_by_global(
+    monkeypatch,
+):
+    """
+    Explicit ``0`` / ``0.0`` pricing must count as present so we do not fall back
+    to the global pricing table (truthiness would treat zero as missing).
+    """
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    def fake_get_model_info(*args, **kwargs):
+        return {
+            "input_cost_per_token_batches": 1e-3,
+            "output_cost_per_token_batches": 2e-3,
+        }
+
+    monkeypatch.setattr(litellm, "get_model_info", fake_get_model_info)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage,
+        model="any-model",
+        custom_llm_provider="openai",
+        model_info={
+            "input_cost_per_token_batches": 0.0,
+            "output_cost_per_token_batches": 0.0,
+        },
+    )
+
+    assert prompt_cost == 0.0
+    assert completion_cost == 0.0
+
+
+def test_batch_cost_calculator_uses_custom_model_info():
+    """batch_cost_calculator should use model_info override when provided."""
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage,
+        model="fake-batch-model",
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    expected_prompt = 10 * 0.00125
+    expected_completion = 5 * 0.005
+    assert prompt_cost == pytest.approx(
+        expected_prompt
+    ), f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
+    assert completion_cost == pytest.approx(
+        expected_completion
+    ), f"Expected completion cost {expected_completion}, got {completion_cost}"
+
+
+def test_get_batch_job_cost_from_file_content_uses_custom_model_info():
+    """_get_batch_job_cost_from_file_content should thread model_info to completion_cost."""
+    file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
+
+    cost = _get_batch_job_cost_from_file_content(
+        file_content_dictionary=file_content,
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    expected = (10 * 0.00125) + (5 * 0.005)
+    assert cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {cost}"
+
+
+def test_batch_cost_calculator_func_uses_custom_model_info():
+    """_batch_cost_calculator should thread model_info."""
+    file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
+
+    cost = _batch_cost_calculator(
+        file_content_dictionary=file_content,
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    expected = (10 * 0.00125) + (5 * 0.005)
+    assert cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {cost}"
+
+
+@pytest.mark.parametrize("data_residency", ["eu", "us"])
+def test_batch_cost_calculator_applies_data_residency_uplift(
+    data_residency, monkeypatch
+):
+    """batch_cost_calculator should apply the regional uplift multiplier when
+    data_residency is set and the model carries a configured multiplier."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    prev_model_cost = litellm.model_cost
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+        base_prompt, base_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+        )
+        regional_prompt, regional_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            data_residency=data_residency,
+        )
+
+        assert base_prompt > 0 and base_completion > 0
+        assert regional_prompt == pytest.approx(base_prompt * 1.10, rel=1e-9)
+        assert regional_completion == pytest.approx(base_completion * 1.10, rel=1e-9)
+    finally:
+        litellm.model_cost = prev_model_cost
+
+
+@pytest.mark.asyncio
+async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
+    """calculate_batch_cost_and_usage should thread model_info."""
+    file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
+
+    batch_cost, batch_usage, batch_models = await calculate_batch_cost_and_usage(
+        file_content_dictionary=file_content,
+        custom_llm_provider="openai",
+        model_info=CUSTOM_MODEL_INFO,
+    )
+
+    expected = (10 * 0.00125) + (5 * 0.005)
+    assert batch_cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {batch_cost}"
+    assert batch_usage.prompt_tokens == 10
+    assert batch_usage.completion_tokens == 5

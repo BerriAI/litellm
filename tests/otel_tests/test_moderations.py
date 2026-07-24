@@ -3,7 +3,7 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
-import uuid
+from litellm._uuid import uuid
 
 
 async def make_moderations_curl_request(
@@ -58,7 +58,7 @@ async def test_basic_moderations_on_proxy_with_model():
         test_text = "I want to harm someone"  # Test text that should trigger moderation
         request_data = {
             "input": test_text,
-            "model": "text-moderation-stable",
+            "model": "omni-moderation-latest",
         }
         try:
             response = await make_moderations_curl_request(

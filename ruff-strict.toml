@@ -1,0 +1,33 @@
+extend = "ruff.toml"
+
+[lint]
+preview = true
+select = ["ANN", "ASYNC230", "B004", "B006", "B008", "B009", "B010", "B018", "B019", "B021", "B026", "B033", "BLE", "C401", "C404", "C405", "C408", "C414", "C419", "C901", "D419", "DTZ001", "DTZ003", "DTZ005", "DTZ006", "DTZ007", "DTZ011", "EXE001", "EXE002", "F401", "FURB136", "FURB168", "FURB188", "I001", "LOG015", "N999", "PERF102", "PERF401", "PERF402", "PERF403", "PIE790", "PIE800", "PIE804", "PIE810", "PLC0206", "PLC0208", "PLC0414", "PLR0124", "PLR0206", "PLR0402", "PLR1704", "PLR1711", "PLR1714", "PLR1730", "PLR2044", "PLW0127", "PLW0133", "PLW0602", "PLW0603", "PLW1508", "PLW1510", "PYI030", "PYI036", "PYI041", "PYI064", "RET501", "RET504", "RUF010", "RUF012", "RUF015", "RUF019", "RUF022", "RUF023", "RUF046", "RUF051", "RUF059", "RUF100", "S110", "S112", "SIM101", "SIM102", "SIM103", "SIM113", "SIM114", "SIM115", "SIM117", "SIM118", "SIM201", "SIM210", "SIM211", "SIM222", "SIM401", "TC004", "TC005", "TID251", "TRY002", "TRY004", "TRY201", "TRY203", "TRY300", "UP006", "UP007", "UP008", "UP012", "UP018", "UP024", "UP028", "UP031", "UP032", "UP034", "UP035", "UP036", "UP037", "UP045"]
+extend-select = []
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.pylint]
+max-args = 5
+
+[lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Use a concrete type. Frozen slots=True dataclass (preferred) / NamedTuple / ReadOnly TypedDict for payloads."
+"typing_extensions.Any".msg = "Same as typing.Any."
+"typing.List".msg = "tuple[X, ...] for state, Sequence[X] for params."
+"typing.Dict".msg = "Frozen dataclass / NamedTuple / ReadOnly TypedDict; create a Mapping alias with concrete value types if truly dynamic."
+"typing.Set".msg = "frozenset[X] or AbstractSet[X]."
+"typing.MutableSequence".msg = "Sequence[X]."
+"typing.MutableMapping".msg = "See typing.Dict."
+# Unchecked casts: cast() lies to the type checker with no runtime guarantee.
+# Validate into a concrete frozen type at the boundary (pydantic) instead.
+# Per-call-site coverage lives in check_type_discipline.py (LIT006); this freezes
+# new cast imports. Suppress (with a reason) via `# noqa: TID251  # <reason>`.
+"typing.cast".msg = "No unchecked casts: validate into a frozen dataclass/NamedTuple/ReadOnly TypedDict at the boundary (pydantic)."
+"typing_extensions.cast".msg = "Same as typing.cast."
+# Unverified narrowing predicates: the checker never validates the guard body, so a
+# wrong guard silently corrupts types. Banned outright (there are none today).
+"typing.TypeGuard".msg = "Unverified narrowing. Parse into a concrete type, or use isinstance for a runtime-checked narrowing."
+"typing_extensions.TypeGuard".msg = "Same as typing.TypeGuard."
+"typing.TypeIs".msg = "Unverified narrowing (the body is trusted). Parse into a concrete type instead."
+"typing_extensions.TypeIs".msg = "Same as typing.TypeIs."

@@ -1,19 +1,28 @@
 # stdlib imports
-import sys
 from typing import Optional
 
 # third party imports
 import click
 
-# local imports
-from .commands.models import models
-from .commands.credentials import credentials
-from .commands.chat import chat
-from .commands.http import http
-from .commands.keys import keys
-from .commands.users import users
 from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
+
+from .commands.agents import agent_commands
+from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
+from .commands.autoroute.commands import autoroute_group
+from .commands.chat import chat
+from .commands.credentials import credentials
+from .commands.encryption import encryption
+from .commands.http import http
+from .commands.keys import keys
+from .commands.model_groups import model_groups
+
+# local imports
+from .commands.models import models
+from .commands.teams import teams
+from .commands.up import down, up
+from .commands.users import users
+from .interface import interactive_shell
 
 
 def print_version(base_url: str, api_key: Optional[str]):
@@ -32,17 +41,25 @@ def print_version(base_url: str, api_key: Optional[str]):
         click.echo(f"Could not retrieve server version: {e}")
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.option(
-    "--version", "-v", is_flag=True, is_eager=True, expose_value=False,
+    "--version",
+    "-v",
+    is_flag=True,
+    is_eager=True,
+    expose_value=False,
     help="Show the LiteLLM Proxy CLI and server version and exit.",
     callback=lambda ctx, param, value: (
-        print_version(
-            ctx.params.get("base_url") or "http://localhost:4000",
-            ctx.params.get("api_key")
+        (
+            print_version(
+                ctx.params.get("base_url") or "http://localhost:4000",
+                ctx.params.get("api_key"),
+            )
+            or ctx.exit()
         )
-        or ctx.exit()
-    ) if value and not ctx.resilient_parsing else None,
+        if value and not ctx.resilient_parsing
+        else None
+    ),
 )
 @click.option(
     "--base-url",
@@ -61,10 +78,28 @@ def print_version(base_url: str, api_key: Optional[str]):
 def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
-    if sys.stderr.isatty():
-        click.secho(f"Accessing LiteLLM server: {base_url} ...\n", fg="yellow", err=True)
+
+    # Normalize once here so every downstream command (login, agents, http, ...) can safely
+    # do f"{base_url}/some/path" without producing a double slash.
+    base_url = base_url.rstrip("/")
+
+    # If no API key provided via flag or environment variable, try to load from saved token.
+    # Pass base_url so we only use the stored key when it was issued for this server.
+    if api_key is None:
+        api_key = get_stored_api_key(expected_base_url=base_url)
+
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = api_key
+    # `--base-url` defaults to localhost:4000 for local dev convenience, but
+    # apiKeyHelper is invoked bare (no flags) -- commands that must work
+    # unattended (print-token) need to tell "user didn't say" apart from
+    # "user said localhost:4000 on purpose" so they can fall back to
+    # whatever server the stored token was actually issued for.
+    ctx.obj["base_url_explicit"] = ctx.get_parameter_source("base_url") != click.core.ParameterSource.DEFAULT
+
+    # If no subcommand was invoked, start interactive mode
+    if ctx.invoked_subcommand is None:
+        interactive_shell(ctx)
 
 
 @cli.command()
@@ -74,18 +109,38 @@ def version(ctx: click.Context):
     print_version(ctx.obj.get("base_url"), ctx.obj.get("api_key"))
 
 
+# Add authentication commands as top-level commands
+cli.add_command(login)
+cli.add_command(logout)
+cli.add_command(whoami)
+# Add the auth command group (e.g. `lite auth print-token`, used as Claude Code's apiKeyHelper)
+cli.add_command(auth_group, name="auth")
 # Add the models command group
 cli.add_command(models)
 # Add the credentials command group
 cli.add_command(credentials)
+# Add the encryption migration command group
+cli.add_command(encryption)
 # Add the chat command group
 cli.add_command(chat)
 # Add the http command group
 cli.add_command(http)
 # Add the keys command group
 cli.add_command(keys)
+# Add the teams command group
+cli.add_command(teams)
 # Add the users command group
 cli.add_command(users)
+# Add a top-level command per coding agent (claude, codex, opencode, ...)
+for agent_command in agent_commands():
+    cli.add_command(agent_command)
+# Add the up/down commands (route Claude Code through the local LiteLLM proxy)
+cli.add_command(up)
+cli.add_command(down)
+# Add the model-groups command group (discover models your key can access)
+cli.add_command(model_groups)
+# Add the autoroute command group (QA auto-routing against your real proxy)
+cli.add_command(autoroute_group, name="autoroute")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,16 @@
-from typing import Dict, List, Optional
+from typing import List, Optional, cast
 
 import litellm
+
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
 )
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import ContentType, PartType, SpeechConfig, VoiceConfig, PrebuiltVoiceConfig
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    convert_url_to_base64,
+)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
+from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
@@ -85,72 +89,29 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "stop",
             "logprobs",
             "frequency_penalty",
+            "presence_penalty",
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
+            "include_server_side_tool_invocations",
+            "service_tier",
         ]
-        if supports_reasoning(model):
+        if supports_reasoning(model, custom_llm_provider="gemini"):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
         if self.is_model_gemini_audio_model(model):
             supported_params.append("audio")
         return supported_params
 
-    def map_openai_params(
-        self,
-        non_default_params: Dict,
-        optional_params: Dict,
-        model: str,
-        drop_params: bool,
-    ) -> Dict:
-        # Handle audio parameter for TTS models
-        if self.is_model_gemini_audio_model(model):
-            for param, value in non_default_params.items():
-                if param == "audio" and isinstance(value, dict):
-                    # Validate audio format - Gemini TTS only supports pcm16
-                    audio_format = value.get("format")
-                    if audio_format is not None and audio_format != "pcm16":
-                        raise ValueError(
-                            f"Unsupported audio format for Gemini TTS models: {audio_format}. "
-                            f"Gemini TTS models only support 'pcm16' format as they return audio data in L16 PCM format. "
-                            f"Please set audio format to 'pcm16'."
-                        )
-
-                    # Map OpenAI audio parameter to Gemini speech config
-                    speech_config: SpeechConfig = {}
-
-                    if "voice" in value:
-                        prebuilt_voice_config: PrebuiltVoiceConfig = {
-                            "voiceName": value["voice"]
-                        }
-                        voice_config: VoiceConfig = {
-                            "prebuiltVoiceConfig": prebuilt_voice_config
-                        }
-                        speech_config["voiceConfig"] = voice_config
-
-                    if speech_config:
-                        optional_params["speechConfig"] = speech_config
-
-                    # Ensure audio modality is set
-                    if "responseModalities" not in optional_params:
-                        optional_params["responseModalities"] = ["AUDIO"]
-                    elif "AUDIO" not in optional_params["responseModalities"]:
-                        optional_params["responseModalities"].append("AUDIO")
-
-        if litellm.vertex_ai_safety_settings is not None:
-            optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
-        return super().map_openai_params(
-            model=model,
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            drop_params=drop_params,
-        )
-
     def _transform_messages(
-        self, messages: List[AllMessageValues]
+        self,
+        messages: List[AllMessageValues],
+        model: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
     ) -> List[ContentType]:
         """
-        Google AI Studio Gemini does not support image urls in messages.
+        Google AI Studio Gemini does not support HTTP/HTTPS URLs for files.
+        Convert them to base64 data instead.
         """
         for message in messages:
             _message_content = message.get("content")
@@ -161,18 +122,45 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                         img_element = element
                         _image_url: Optional[str] = None
                         format: Optional[str] = None
+                        detail: Optional[str] = None
                         if isinstance(img_element.get("image_url"), dict):
                             _image_url = img_element["image_url"].get("url")  # type: ignore
                             format = img_element["image_url"].get("format")  # type: ignore
+                            detail = img_element["image_url"].get("detail")  # type: ignore
                         else:
                             _image_url = img_element.get("image_url")  # type: ignore
                         if _image_url and "https://" in _image_url:
-                            image_obj = convert_to_anthropic_image_obj(
-                                _image_url, format=format
+                            image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
+                            converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)
+                            if detail is not None:
+                                img_element["image_url"] = {  # type: ignore
+                                    "url": converted_image_url,
+                                    "detail": detail,
+                                }
+                            else:
+                                img_element["image_url"] = converted_image_url  # type: ignore
+                    elif element.get("type") == "file":
+                        file_element = cast(ChatCompletionFileObject, element)
+                        _file_field = file_element.get("file")
+                        if _file_field is None:
+                            raise litellm.BadRequestError(
+                                message="Content block has type='file' but is missing the required 'file' field",
+                                model=model,
+                                llm_provider="gemini",
                             )
-                            img_element["image_url"] = (  # type: ignore
-                                convert_generic_image_chunk_to_openai_image_obj(
-                                    image_obj
-                                )
-                            )
-        return _gemini_convert_messages_with_history(messages=messages)
+                        file_id = _file_field.get("file_id")
+                        if file_id and ("http://" in file_id or "https://" in file_id):
+                            # Convert HTTP/HTTPS file URL to base64 data
+                            try:
+                                base64_data = convert_url_to_base64(file_id)
+                                _file_field["file_data"] = base64_data  # type: ignore
+                                _file_field.pop("file_id", None)  # type: ignore
+                            except Exception:
+                                # If conversion fails, leave as is and let the API handle it
+                                pass
+        return _gemini_convert_messages_with_history(
+            messages=messages,
+            model=model,
+            litellm_params=litellm_params,
+            custom_llm_provider="gemini",
+        )

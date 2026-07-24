@@ -1,11 +1,51 @@
 import os
 
+from litellm.proxy.utils import get_custom_url
+
 url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 if server_root_path != "":
     url_to_redirect_to += server_root_path
 url_to_redirect_to += "/login"
-html_form = f"""
+new_ui_login_url = get_custom_url("", "ui/login")
+
+
+def build_ui_login_form(
+    show_deprecation_banner: bool = False,
+    hide_default_credentials_hint: bool = False,
+) -> str:
+    banner_html = (
+        f"""
+        <div class="deprecation-banner">
+            <strong>Deprecated:</strong> Logging in with username and password on this page is deprecated.
+            Please use the <a href="{new_ui_login_url}">new login page</a> instead.
+            This page will be dedicated to signing in via SSO in the future.
+        </div>
+        """
+        if show_deprecation_banner
+        else ""
+    )
+
+    info_box_html = (
+        ""
+        if hide_default_credentials_hint
+        else """
+        <div class="info-box">
+            <div class="info-header">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                </svg>
+                Default Credentials
+            </div>
+            <p>By default, Username is <code>admin</code> and Password is your set LiteLLM Proxy <code>MASTER_KEY</code>.</p>
+            <p>Need to set UI credentials or SSO? <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank">Check the documentation</a>.</p>
+        </div>
+        """
+    )
+
+    return f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -129,8 +169,18 @@ html_form = f"""
             margin-bottom: 20px;
         }}
         
-        .toggle-password input {{
-            margin-right: 6px;
+        .toggle-password input[type="checkbox"] {{
+            margin-right: 8px;
+            vertical-align: middle;
+            width: 16px;
+            height: 16px;
+        }}
+        
+        .toggle-password label {{
+            margin-bottom: 0;
+            font-size: 14px;
+            cursor: pointer;
+            line-height: 1;
         }}
 
         input[type="submit"] {{
@@ -175,10 +225,28 @@ html_form = f"""
             margin-top: -12px;
             margin-bottom: 20px;
         }}
+
+        .deprecation-banner {{
+            background-color: #fee2e2;
+            border: 1px solid #ef4444;
+            color: #991b1b;
+            padding: 14px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            line-height: 1.5;
+        }}
+
+        .deprecation-banner a {{
+            color: #991b1b;
+            font-weight: 600;
+            text-decoration: underline;
+        }}
     </style>
 </head>
 <body>
     <form action="{url_to_redirect_to}" method="post">
+        {banner_html}
         <div class="logo-container">
             <div class="logo">
                 🚅 LiteLLM
@@ -186,18 +254,7 @@ html_form = f"""
         </div>
         <h2>Login</h2>
         <p class="subtitle">Access your LiteLLM Admin UI.</p>
-        <div class="info-box">
-            <div class="info-header">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="16" x2="12" y2="12"></line>
-                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                </svg>
-                Default Credentials
-            </div>
-            <p>By default, Username is <code>admin</code> and Password is your set LiteLLM Proxy <code>MASTER_KEY</code>.</p>
-            <p>Need to set UI credentials or SSO? <a href="https://docs.litellm.ai/docs/proxy/ui" target="_blank">Check the documentation</a>.</p>
-        </div>
+        {info_box_html}
         <label for="username">Username<span class="required">*</span></label>
         <input type="text" id="username" name="username" required placeholder="Enter your username" autocomplete="username">
         

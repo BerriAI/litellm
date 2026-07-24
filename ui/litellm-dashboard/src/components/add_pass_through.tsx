@@ -2,146 +2,394 @@
  * Modal to add fallbacks to the proxy router config
  */
 
-
-
-import React, { useState, useEffect, useRef } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Select, SelectItem, MultiSelect, MultiSelectItem, Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody, } from "@tremor/react";
-import { CopyToClipboard } from 'react-copy-to-clipboard';
+import React, { useState } from "react";
+import { Button, TextInput, Switch } from "@tremor/react";
+import { Card, Title, Subtitle } from "@tremor/react";
 import { createPassThroughEndpoint } from "./networking";
-import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  InputNumber,
-  Select as Select2,
-  message,
-} from "antd";
-import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
-import { list } from "postcss";
+import { Modal, Form, Select as Select2, Tooltip, Alert } from "antd";
+import NumericalInput from "./shared/numerical_input";
+import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import KeyValueInput from "./key_value_input";
-import { passThroughItem } from "./pass_through_settings";
+import QueryParamInput from "./query_param_input";
+import { passThroughItem } from "./PassThroughSettings/PassThroughSettings";
+import RoutePreview from "./route_preview";
+import NotificationsManager from "./molecules/notifications_manager";
+import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
+import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 const { Option } = Select2;
 
+const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+
 interface AddFallbacksProps {
-//   models: string[] | undefined; 
+  //   models: string[] | undefined;
   accessToken: string;
   passThroughItems: passThroughItem[];
   setPassThroughItems: React.Dispatch<React.SetStateAction<passThroughItem[]>>;
+  premiumUser?: boolean;
 }
 
 const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
-    accessToken, setPassThroughItems, passThroughItems
+  accessToken,
+  setPassThroughItems,
+  passThroughItems,
+  premiumUser = false,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
-  const handleOk = () => {
-    setIsModalVisible(false);
-    form.resetFields();
-  };
-
+  const [pathValue, setPathValue] = useState("");
+  const [targetValue, setTargetValue] = useState("");
+  const [includeSubpath, setIncludeSubpath] = useState(true);
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>([]);
+  const [guardrails, setGuardrails] = useState<
+    Record<string, { request_fields?: string[]; response_fields?: string[] } | null>
+  >({});
   const handleCancel = () => {
+    form.resetFields();
+    setPathValue("");
+    setTargetValue("");
+    setIncludeSubpath(true);
+    setSelectedMethods([]);
+    setGuardrails({});
     setIsModalVisible(false);
-    form.resetFields();
   };
 
-  const addPassThrough = (formValues: Record<string, any>) => {
-    // Print the received value
-    console.log(formValues);
-
-    // // Extract model_name and models from formValues
-    // const { model_name, models } = formValues;
-
-    // // Create new fallback
-    // const newFallback = { [model_name]: models };
-
-    // // Get current fallbacks, or an empty array if it's null
-    // const currentFallbacks = routerSettings.fallbacks || [];
-
-    // // Add new fallback to the current fallbacks
-    // const updatedFallbacks = [...currentFallbacks, newFallback];
-
-    // // Create a new routerSettings object with updated fallbacks
-    // const updatedRouterSettings = { ...routerSettings, fallbacks: updatedFallbacks };
-
-    const newPassThroughItem: passThroughItem = {
-        "headers": formValues["headers"],
-        "path": formValues["path"],
-        "target": formValues["target"]
+  const handlePathChange = (value: string) => {
+    // Auto-add leading slash if missing
+    let formattedPath = value;
+    if (value && !value.startsWith("/")) {
+      formattedPath = "/" + value;
     }
-    const updatedPassThroughSettings = [...passThroughItems, newPassThroughItem]
+    setPathValue(formattedPath);
+    form.setFieldsValue({ path: formattedPath });
+  };
 
-
+  const addPassThrough = async (formValues: Record<string, any>) => {
+    setIsLoading(true);
     try {
-        createPassThroughEndpoint(accessToken, formValues);
-        setPassThroughItems(updatedPassThroughSettings)
+      // Remove auth field if not premium user
+      if (!premiumUser && "auth" in formValues) {
+        delete formValues.auth;
+      }
+
+      // Add guardrails to formValues (only if not empty)
+      if (guardrails && Object.keys(guardrails).length > 0) {
+        formValues.guardrails = guardrails;
+      }
+
+      // Add methods to formValues (only if specific methods are selected)
+      if (selectedMethods && selectedMethods.length > 0) {
+        formValues.methods = selectedMethods;
+      }
+
+      const response = await createPassThroughEndpoint(accessToken, formValues);
+
+      // Use the created endpoint from the API response (includes the generated ID)
+      const createdEndpoint = response.endpoints[0];
+
+      const updatedPassThroughSettings = [...passThroughItems, createdEndpoint];
+      setPassThroughItems(updatedPassThroughSettings);
+
+      NotificationsManager.success("Pass-through endpoint created successfully");
+      form.resetFields();
+      setPathValue("");
+      setTargetValue("");
+      setIncludeSubpath(true);
+      setSelectedMethods([]);
+      setGuardrails({});
+      setIsModalVisible(false);
     } catch (error) {
-        message.error("Failed to update router settings: " + error, 20);
+      NotificationsManager.fromBackend("Error creating pass-through endpoint: " + error);
+    } finally {
+      setIsLoading(false);
     }
-
-    message.success("Pass through endpoint successfully added");
-
-    setIsModalVisible(false)
-    form.resetFields();
   };
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    NotificationsManager.success("Copied to clipboard!");
+  };
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+      <Button className="mx-auto mb-4 mt-4" onClick={() => setIsModalVisible(true)}>
         + Add Pass-Through Endpoint
       </Button>
       <Modal
-        title="Add Pass-Through Endpoint"
-        visible={isModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
-      >
-        <Form
-          form={form}
-          onFinish={addPassThrough}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-            <>
-              <Form.Item 
-                label="Path" 
-                name="path"
-                rules={[{ required: true, message: 'The route to be added to the LiteLLM Proxy Server.' }]}
-                help="required"
-              >
-                <TextInput/>
-              </Form.Item>
-
-              <Form.Item 
-                label="Target" 
-                name="target"
-                rules={[{ required: true, message: 'The URL to which requests for this path should be forwarded.' }]}
-                help="required"
-              >
-                <TextInput/>
-              </Form.Item>
-              <Form.Item 
-                label="Headers" 
-                name="headers"
-                rules={[{ required: true, message: 'Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint' }]}
-                help="required"
-              >
-                <KeyValueInput/>
-              </Form.Item>
-            </>
-          
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Add Pass-Through Endpoint</Button2>
+        title={
+          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+            <ApiOutlined className="text-xl text-blue-500" />
+            <h2 className="text-xl font-semibold text-gray-900">Add Pass-Through Endpoint</h2>
           </div>
-        </Form>
-      </Modal>
+        }
+        open={isModalVisible}
+        width={1000}
+        onCancel={handleCancel}
+        footer={null}
+        className="top-8"
+        styles={{
+          body: { padding: "24px" },
+          header: { padding: "24px 24px 0 24px", border: "none" },
+        }}
+      >
+        <div className="mt-6">
+          <Alert
+            message="What is a Pass-Through Endpoint?"
+            description="Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through LiteLLM."
+            type="info"
+            showIcon
+            className="mb-6"
+          />
 
+          <Form
+            form={form}
+            onFinish={addPassThrough}
+            layout="vertical"
+            className="space-y-6"
+            initialValues={{
+              include_subpath: true,
+              path: pathValue,
+              target: targetValue,
+            }}
+          >
+            {/* Route Configuration Section */}
+            <Card className="p-5">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Route Configuration</Title>
+              <Subtitle className="text-gray-600 mb-5">
+                Configure how requests to your domain will be forwarded to the target API
+              </Subtitle>
+
+              <div className="space-y-5">
+                <Form.Item
+                  label={<span className="text-sm font-medium text-gray-700">Path Prefix</span>}
+                  name="path"
+                  rules={[{ required: true, message: "Path is required", pattern: /^\// }]}
+                  extra={
+                    <div className="text-xs text-gray-500 mt-1">Example: /bria, /adobe-photoshop, /elasticsearch</div>
+                  }
+                  className="mb-4"
+                >
+                  <div className="flex items-center">
+                    <TextInput
+                      placeholder="bria"
+                      value={pathValue}
+                      onChange={(e) => handlePathChange(e.target.value)}
+                      className="flex-1"
+                    />
+                  </div>
+                </Form.Item>
+
+                <Form.Item
+                  label={<span className="text-sm font-medium text-gray-700">Target URL</span>}
+                  name="target"
+                  rules={[
+                    { required: true, message: "Target URL is required" },
+                    { type: "url", message: "Please enter a valid URL" },
+                  ]}
+                  extra={<div className="text-xs text-gray-500 mt-1">Example:https://engine.prod.bria-api.com</div>}
+                  className="mb-4"
+                >
+                  <TextInput
+                    placeholder="https://engine.prod.bria-api.com"
+                    value={targetValue}
+                    onChange={(e) => {
+                      setTargetValue(e.target.value);
+                      form.setFieldsValue({ target: e.target.value });
+                    }}
+                  />
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      HTTP Methods (Optional)
+                      <Tooltip title="Select specific HTTP methods. Leave empty to support all methods (GET, POST, PUT, DELETE, PATCH). Useful when the same path needs different targets for different methods.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="methods"
+                  extra={
+                    <div className="text-xs text-gray-500 mt-1">
+                      {selectedMethods.length === 0
+                        ? "All HTTP methods supported (default)"
+                        : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`}
+                    </div>
+                  }
+                  className="mb-4"
+                >
+                  <Select2
+                    mode="multiple"
+                    placeholder="Select methods (leave empty for all)"
+                    value={selectedMethods}
+                    onChange={setSelectedMethods}
+                    allowClear
+                    style={{ width: "100%" }}
+                  >
+                    {HTTP_METHODS.map((method) => (
+                      <Option key={method} value={method}>
+                        {method}
+                      </Option>
+                    ))}
+                  </Select2>
+                </Form.Item>
+
+                <div className="flex items-center justify-between py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-700">Include Subpaths</div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      Forward all subpaths to the target API (recommended for REST APIs)
+                    </div>
+                  </div>
+                  <Form.Item name="include_subpath" valuePropName="checked" className="mb-0">
+                    <Switch checked={includeSubpath} onChange={setIncludeSubpath} />
+                  </Form.Item>
+                </div>
+              </div>
+            </Card>
+
+            {/* Route Preview Section */}
+            <RoutePreview pathValue={pathValue} targetValue={targetValue} includeSubpath={includeSubpath} />
+
+            {/* Headers Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Headers</Title>
+              <Subtitle className="text-gray-600 mb-6">
+                Add headers that will be sent with every request to the target API
+              </Subtitle>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Authentication Headers
+                    <Tooltip title="Authentication and other headers to forward with requests">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="headers"
+                rules={[{ required: true, message: "Please configure the headers" }]}
+                extra={
+                  <div className="text-xs text-gray-500 mt-2">
+                    <div className="font-medium mb-1">Add authentication tokens and other required headers</div>
+                    <div>Common examples: auth_token, Authorization, x-api-key</div>
+                  </div>
+                }
+              >
+                <KeyValueInput />
+              </Form.Item>
+            </Card>
+
+            {/* Default Query Parameters Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Default Query Parameters</Title>
+              <Subtitle className="text-gray-600 mb-6">
+                Add query parameters that will be automatically sent with every request to the target API
+              </Subtitle>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Default Query Parameters (Optional)
+                    <Tooltip title="Query parameters that will be added to all requests. Clients can override these by providing their own values.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="default_query_params"
+                extra={
+                  <div className="text-xs text-gray-500 mt-2">
+                    <div className="font-medium mb-1">Parameters are sent with all GET, POST, PUT, PATCH requests</div>
+                    <div>Client parameters override defaults. Examples: version=v1, format=json, key=default</div>
+                  </div>
+                }
+              >
+                <QueryParamInput />
+              </Form.Item>
+            </Card>
+
+            {/* Security Section */}
+            <PassThroughSecuritySection
+              premiumUser={premiumUser}
+              authEnabled={authEnabled}
+              onAuthChange={(checked) => {
+                setAuthEnabled(checked);
+                form.setFieldsValue({ auth: checked });
+              }}
+            />
+
+            {/* Guardrails Section */}
+            <PassThroughGuardrailsSection accessToken={accessToken} value={guardrails} onChange={setGuardrails} />
+
+            {/* Performance Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Performance</Title>
+              <Subtitle className="text-gray-600 mb-6">Configure upstream request timeout for this endpoint</Subtitle>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Request Timeout (seconds)
+                    <Tooltip title="Max time to wait for the upstream API to respond. Leave empty to use general_settings.pass_through_request_timeout (default 600s).">
+                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                    </Tooltip>
+                  </span>
+                }
+                name="timeout"
+                extra={
+                  <div className="text-xs text-gray-500 mt-2">
+                    Use a higher value for slow upstream APIs (e.g. 1200 for long-running LLM calls)
+                  </div>
+                }
+              >
+                <NumericalInput min={1} step={1} precision={0} placeholder="600" size="large" />
+              </Form.Item>
+            </Card>
+
+            {/* Billing Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Billing</Title>
+              <Subtitle className="text-gray-600 mb-6">Optional cost tracking for this endpoint</Subtitle>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Cost Per Request (USD)
+                    <Tooltip title="Optional: Track costs for requests to this endpoint">
+                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                    </Tooltip>
+                  </span>
+                }
+                name="cost_per_request"
+                extra={
+                  <div className="text-xs text-gray-500 mt-2">
+                    The cost charged for each request through this endpoint
+                  </div>
+                }
+              >
+                <NumericalInput min={0} step={0.001} precision={4} placeholder="2.0000" size="large" />
+              </Form.Item>
+            </Card>
+
+            <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+              <Button variant="secondary" onClick={handleCancel}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                loading={isLoading}
+                onClick={() => {
+                  form.submit();
+                }}
+              >
+                {isLoading ? "Creating..." : "Add Pass-Through Endpoint"}
+              </Button>
+            </div>
+          </Form>
+        </div>
+      </Modal>
     </div>
   );
 };

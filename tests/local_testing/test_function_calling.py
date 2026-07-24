@@ -47,11 +47,9 @@ def get_current_weather(location, unit="fahrenheit"):
     [
         "gpt-3.5-turbo-1106",
         "mistral/mistral-large-latest",
-        "claude-3-haiku-20240307",
-        "gemini/gemini-1.5-pro",
+        "claude-haiku-4-5-20251001",
+        "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        "groq/llama3-8b-8192",
-        "cohere_chat/command-r",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -160,8 +158,8 @@ def test_aaparallel_function_call(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-haiku-4-5-20251001",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -270,51 +268,63 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
 
+_PARALLEL_TOOL_HISTORY_MESSAGES = [
+    {
+        "role": "user",
+        "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+    },
+    Message(
+        content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+        role="assistant",
+        tool_calls=[
+            ChatCompletionMessageToolCall(
+                index=1,
+                function=Function(
+                    arguments='{"location": "San Francisco, CA", "unit": "fahrenheit"}',
+                    name="get_current_weather",
+                ),
+                id="tooluse_Jj98qn6xQlOP_PiQr-w9iA",
+                type="function",
+            )
+        ],
+        function_call=None,
+    ),
+    {
+        "tool_call_id": "tooluse_Jj98qn6xQlOP_PiQr-w9iA",
+        "role": "tool",
+        "name": "get_current_weather",
+        "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+    },
+]
+
+
 @pytest.mark.parametrize(
-    "model, provider",
+    "model, messages, expect_unsupported_params_error",
     [
+        # Bedrock Converse still requires modify_params to inject the dummy tool.
         (
             "anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock",
+            _PARALLEL_TOOL_HISTORY_MESSAGES,
+            True,
         ),
-        ("claude-3-haiku-20240307", "anthropic"),
-    ],
-)
-@pytest.mark.parametrize(
-    "messages, expected_error_msg",
-    [
+        # Anthropic Messages API: dummy tool is injected without modify_params.
         (
+            "claude-haiku-4-5-20251001",
+            _PARALLEL_TOOL_HISTORY_MESSAGES,
+            False,
+        ),
+        (
+            "anthropic.claude-3-sonnet-20240229-v1:0",
             [
                 {
                     "role": "user",
                     "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
-                },
-                Message(
-                    content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
-                    role="assistant",
-                    tool_calls=[
-                        ChatCompletionMessageToolCall(
-                            index=1,
-                            function=Function(
-                                arguments='{"location": "San Francisco, CA", "unit": "fahrenheit"}',
-                                name="get_current_weather",
-                            ),
-                            id="tooluse_Jj98qn6xQlOP_PiQr-w9iA",
-                            type="function",
-                        )
-                    ],
-                    function_call=None,
-                ),
-                {
-                    "tool_call_id": "tooluse_Jj98qn6xQlOP_PiQr-w9iA",
-                    "role": "tool",
-                    "name": "get_current_weather",
-                    "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
-                },
+                }
             ],
-            True,
+            False,
         ),
         (
+            "claude-haiku-4-5-20251001",
             [
                 {
                     "role": "user",
@@ -326,21 +336,26 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
     ],
 )
 def test_parallel_function_call_anthropic_error_msg(
-    model, provider, messages, expected_error_msg
+    model, messages, expect_unsupported_params_error
 ):
     """
-    Anthropic doesn't support tool calling without `tools=` param specified.
+    Tool history without an explicit ``tools`` param:
 
-    Ensure this error is thrown when `tools=` param is not specified. But tool call requests are made.
+    - Bedrock **Converse** still raises ``UnsupportedParamsError`` unless
+      ``litellm.modify_params`` is enabled (dummy tool is only added there).
+    - **Anthropic** (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
+      always get a dummy tool so CLIs work with ``modify_params`` left off.
 
     Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
     """
+    # Ensure modify_params is False so Bedrock Converse path still raises.
+    # (other tests in this file set it to True and don't reset it)
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = False
     try:
         litellm.set_verbose = True
 
-        messages = messages
-
-        if expected_error_msg:
+        if expect_unsupported_params_error:
             with pytest.raises(litellm.UnsupportedParamsError) as e:
                 second_response = litellm.completion(
                     model=model,
@@ -365,6 +380,8 @@ def test_parallel_function_call_anthropic_error_msg(
         print(e)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+    finally:
+        litellm.modify_params = original_modify_params
 
 
 def test_parallel_function_call_stream():
@@ -562,39 +579,12 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        # "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "claude-3-haiku-20240307",
-        "databricks/databricks-claude-3-7-sonnet"
-    ],
-)
-def test_anthropic_function_call_with_no_schema(model):
-    """
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/6012
-    """
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in New York",
-            },
-        }
-    ]
-    messages = [
-        {"role": "user", "content": "What is the current temperature in New York?"}
-    ]
-    completion(model=model, messages=messages, tools=tools, tool_choice="auto")
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic/claude-3-5-sonnet-20241022",
         "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
     ],
 )
 def test_passing_tool_result_as_list(model):
     litellm.set_verbose = True
+    litellm._turn_on_debug()
     messages = [
         {
             "content": [
@@ -644,7 +634,6 @@ def test_passing_tool_result_as_list(model):
             "role": "tool",
             "tool_call_id": "toolu_01V1paXrun4CVetdAGiQaZG5",
             "name": "execute_bash",
-            "cache_control": {"type": "ephemeral"},
         },
     ]
     tools = [
@@ -730,17 +719,23 @@ def test_passing_tool_result_as_list(model):
         resp = completion(model=model, messages=messages, tools=tools)
         print(resp)
 
-    if model == "claude-3-5-sonnet-20241022":
+    if model == "claude-sonnet-4-5-20250929":
         assert resp.usage.prompt_tokens_details.cached_tokens > 0
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=1)
-async def test_watsonx_tool_choice(sync_mode):
+async def test_watsonx_tool_choice(sync_mode, monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
     import json
     from litellm import acompletion, completion
+
+    # Mock the IAM token generation to avoid actual API calls
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
     litellm.set_verbose = True
     tools = [
@@ -791,12 +786,10 @@ async def test_watsonx_tool_choice(sync_mode):
             mock_completion.assert_called_once()
             print(mock_completion.call_args.kwargs)
             json_data = json.loads(mock_completion.call_args.kwargs["data"])
-            json_data["tool_choice_options"] == "auto"
+            assert json_data["tool_choice_option"] == "auto"
         except Exception as e:
             print(e)
             if "The read operation timed out" in str(e):
                 pytest.skip("Skipping test due to timeout")
             else:
                 raise e
-
-

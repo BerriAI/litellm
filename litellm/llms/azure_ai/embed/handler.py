@@ -26,10 +26,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         input: List,
     ):
         combined_responses = []
-        if (
-            image_embedding_responses is not None
-            and text_embedding_responses is not None
-        ):
+        if image_embedding_responses is not None and text_embedding_responses is not None:
             # Combine and order the results
             text_idx = 0
             image_idx = 0
@@ -58,7 +55,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         data: ImageEmbeddingRequest,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str],
         api_base: Optional[str],
@@ -138,7 +135,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         input: List,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
@@ -148,9 +145,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_request,
             v1_embeddings_request,
             image_embeddings_idx,
-        ) = AzureAICohereConfig()._transform_request(
-            input=input, optional_params=optional_params, model=model
-        )
+        ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
 
         image_embedding_responses: Optional[List] = None
         text_embedding_responses: Optional[List] = None
@@ -210,6 +205,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         client=None,
         aembedding=None,
         max_retries: Optional[int] = None,
+        shared_session=None,
     ) -> EmbeddingResponse:
         """
         - Separate image url from text
@@ -235,9 +231,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
             image_embeddings_request,
             v1_embeddings_request,
             image_embeddings_idx,
-        ) = AzureAICohereConfig()._transform_request(
-            input=input, optional_params=optional_params, model=model
-        )
+        ) = AzureAICohereConfig()._transform_request(input=input, optional_params=optional_params, model=model)
 
         image_embedding_responses: Optional[List] = None
         text_embedding_responses: Optional[List] = None
@@ -269,12 +263,9 @@ class AzureAIEmbedding(OpenAIChatCompletion):
                 optional_params,
                 api_key,
                 api_base,
-                client=(
-                    client
-                    if client is not None and isinstance(client, OpenAI)
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, OpenAI) else None),
                 aembedding=aembedding,
+                shared_session=shared_session,
             )
 
             text_embedding_responses = response.data

@@ -39,13 +39,10 @@ from create_mock_standard_logging_payload import create_standard_logging_payload
 
 def test_tpm_rpm_updated():
     test_cache = DualCache()
-    model_list = []
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
-    deployment = "azure/chatgpt-v-3"
+    deployment = "azure/gpt-4.1-mini"
     total_tokens = 50
     standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
@@ -100,23 +97,21 @@ def test_get_available_deployments():
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-3"},
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
             "model_info": {"id": "1234"},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "azure/chatgpt-v-3"},
+            "litellm_params": {"model": "azure/gpt-4.1-mini"},
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     total_tokens = 50
     deployment_id = "1234"
-    deployment = "azure/chatgpt-v-3"
+    deployment = "azure/gpt-4.1-mini"
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["model_group"] = model_group
     standard_logging_payload["model_id"] = deployment_id
@@ -552,25 +547,43 @@ async def test_router_caching_ttl():
 
     assert router.cache.redis_cache is not None
 
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     increment_cache_kwargs = {}
     with patch.object(
-        router.cache.redis_cache,
-        "async_increment",
+        router.cache,
+        "async_increment_cache_pipeline",
         new=AsyncMock(),
     ) as mock_client:
         await router.acompletion(model=model, messages=messages)
+
+        # Async success callbacks are dispatched to GLOBAL_LOGGING_WORKER's
+        # background queue; drain it before asserting the mock was invoked.
+        await GLOBAL_LOGGING_WORKER.flush()
 
         # mock_client.assert_called_once()
         print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
         print(f"mock_client.call_args.args: {mock_client.call_args.args}")
 
-        increment_cache_kwargs = {
-            "key": mock_client.call_args.args[0],
-            "value": mock_client.call_args.args[1],
-            "ttl": mock_client.call_args.kwargs["ttl"],
-        }
+        # Get the increment_list from the first positional argument or the keyword argument
+        increment_list = mock_client.call_args.kwargs.get(
+            "increment_list",
+            mock_client.call_args.args[0] if mock_client.call_args.args else None,
+        )
+        assert increment_list is not None
+        assert len(increment_list) > 0
 
-        assert mock_client.call_args.kwargs["ttl"] == 60
+        # Check that TTL is set to 60 for all operations
+        for operation in increment_list:
+            assert operation["ttl"] == 60
+
+        # Get the first operation for testing the redis increment
+        first_operation = increment_list[0]
+        increment_cache_kwargs = {
+            "key": first_operation["key"],
+            "value": first_operation["increment_value"],
+            "ttl": first_operation["ttl"],
+        }
 
     ## call redis async increment and check if ttl correctly set
     await router.cache.redis_cache.async_increment(**increment_cache_kwargs)
@@ -656,13 +669,9 @@ def test_return_potential_deployments():
     """
     Assert deployment at limit is filtered out
     """
-    from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 
     test_cache = DualCache()
-    model_list = []
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache, model_list=model_list
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
 
     args: Dict = {
         "healthy_deployments": [
@@ -721,9 +730,9 @@ async def test_tpm_rpm_routing_model_name_checks():
     deployment = {
         "model_name": "gpt-3.5-turbo",
         "litellm_params": {
-            "model": "azure/chatgpt-v-3",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": os.getenv("AZURE_API_BASE"),
+            "model": "azure/gpt-4.1-mini",
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
             "mock_response": "Hey, how's it going?",
         },
     }
@@ -732,13 +741,16 @@ async def test_tpm_rpm_routing_model_name_checks():
     async def side_effect_pre_call_check(*args, **kwargs):
         return args[0]
 
-    with patch.object(
-        router.lowesttpm_logger_v2,
-        "async_pre_call_check",
-        side_effect=side_effect_pre_call_check,
-    ) as mock_object, patch.object(
-        router.lowesttpm_logger_v2, "async_log_success_event"
-    ) as mock_logging_event:
+    with (
+        patch.object(
+            router.lowesttpm_logger_v2,
+            "async_pre_call_check",
+            side_effect=side_effect_pre_call_check,
+        ) as mock_object,
+        patch.object(
+            router.lowesttpm_logger_v2, "async_log_success_event"
+        ) as mock_logging_event,
+    ):
         response = await router.acompletion(
             model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}]
         )
@@ -763,5 +775,5 @@ async def test_tpm_rpm_routing_model_name_checks():
 
         assert (
             standard_logging_payload["hidden_params"]["litellm_model_name"]
-            == "azure/chatgpt-v-3"
+            == "azure/gpt-4.1-mini"
         )

@@ -1,0 +1,46 @@
+{{- if .Values.migrationJob.enabled -}}
+# Pre-install / pre-upgrade hook that runs `prisma migrate deploy` against
+# the writer database before the gateway and backend Deployments are rolled
+# out. Required because the gateway and backend both spin up Prisma at
+# startup and assume the LiteLLM schema (LiteLLM_Config,
+# LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...) already exists.
+#
+# Running this pre-upgrade closes the window where new application pods would
+# otherwise serve traffic against the previous release's unmigrated schema.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "litellm.fullname" . }}-migrations
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-weight: "0"
+spec:
+  backoffLimit: {{ .Values.migrationJob.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.migrationJob.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "litellm.commonLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "litellm.backend.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: prisma-migrations
+          image: "{{ .Values.migrationJob.image.repository }}:{{ .Values.migrationJob.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.migrationJob.image.pullPolicy }}
+          env:
+            {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.migrationJob) | nindent 12 }}
+          {{- with .Values.migrationJob.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

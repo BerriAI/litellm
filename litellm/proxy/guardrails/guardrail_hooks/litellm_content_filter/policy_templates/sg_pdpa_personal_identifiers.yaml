@@ -1,0 +1,94 @@
+# Singapore PDPA Section 13 — Consent Obligation (Personal Identifiers)
+# Blocks requests to collect, harvest, or extract Singapore-specific
+# personal identifiers (NRIC/FIN, passport, SingPass) without consent context.
+# Reference: https://www.pdpc.gov.sg/overview-of-pdpa/the-legislation/personal-data-protection-act
+category_name: "sg_pdpa_personal_identifiers"
+description: "PDPA s.13 — Blocks unauthorized collection, harvesting, or extraction of Singapore personal identifiers (NRIC/FIN, SingPass, passports)"
+default_action: "BLOCK"
+
+identifier_words:
+  # Singapore national identifiers
+  - "NRIC"
+  - "FIN"
+  - "IC number"
+  - "identity card number"
+  - "foreign identification number"
+
+  # Government digital identity
+  - "SingPass"
+  - "Singpass"
+  - "MyInfo"
+  - "CorpPass"
+
+  # Travel & immigration documents
+  - "Singapore passport"
+  - "passport number"
+
+  # Employment passes
+  - "work permit number"
+  - "employment pass"
+  - "S-pass"
+  - "S pass"
+  - "EP number"
+  - "WP number"
+
+additional_block_words:
+  # Data collection actions
+  - "collect"
+  - "harvest"
+  - "scrape"
+  - "extract"
+  - "crawl"
+  - "mine"
+
+  # Storage & aggregation
+  - "store"
+  - "aggregate"
+  - "compile database"
+  - "compile list"
+  - "bulk"
+  - "mass collect"
+
+  # Unauthorized access
+  - "without consent"
+  - "bypass"
+  - "circumvent"
+  - "verify without"
+  - "lookup"
+  - "enumerate"
+  - "brute force"
+
+always_block_keywords:
+  - keyword: "scrape NRIC"
+    severity: "high"
+  - keyword: "harvest FIN numbers"
+    severity: "high"
+  - keyword: "collect NRIC without consent"
+    severity: "high"
+  - keyword: "database of IC numbers"
+    severity: "high"
+  - keyword: "bulk NRIC lookup"
+    severity: "high"
+  - keyword: "SingPass credential"
+    severity: "high"
+  - keyword: "steal SingPass"
+    severity: "high"
+  - keyword: "fake NRIC generator"
+    severity: "high"
+  - keyword: "NRIC brute force"
+    severity: "high"
+
+exceptions:
+  - "compliance"
+  - "PDPA audit"
+  - "consent form"
+  - "data protection officer"
+  - "legitimate purpose"
+  - "research"
+  - "government portal"
+  - "official verification"
+  - "explain"
+  - "what is"
+  - "how to protect"
+  - "format of"
+  - "validate checksum"

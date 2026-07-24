@@ -15,17 +15,30 @@ import os
 import dotenv
 from dotenv import load_dotenv
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIConnectionError
 from openai.types.chat import ChatCompletion
 
 load_dotenv()
 
 # used for testing
 LANGFUSE_BASE_URL = "https://exampleopenaiendpoint-production-c715.up.railway.app"
+PROXY_BASE_URL = "http://127.0.0.1:4000"
+
+
+async def wait_for_proxy_ready(session, timeout: int = 60):
+    for _ in range(timeout):
+        try:
+            async with session.get(f"{PROXY_BASE_URL}/health/liveliness") as response:
+                if response.status == 200:
+                    return
+        except aiohttp.ClientError:
+            pass
+        await asyncio.sleep(1)
+    raise RuntimeError(f"Proxy at {PROXY_BASE_URL} not ready after {timeout}s")
 
 
 async def config_update(session, routing_strategy=None):
-    url = "http://0.0.0.0:4000/config/update"
+    url = f"{PROXY_BASE_URL}/config/update"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     print("routing_strategy: ", routing_strategy)
     data = {
@@ -62,32 +75,41 @@ async def check_langfuse_request(response_id: str):
 
 
 async def make_chat_completions_request() -> ChatCompletion:
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
-    response = await client.chat.completions.create(
-        model="fake-openai-endpoint",
-        messages=[{"role": "user", "content": "Hello, world!"}],
+    client = AsyncOpenAI(api_key="sk-1234", base_url=PROXY_BASE_URL)
+    last_error = None
+    for _ in range(10):
+        try:
+            response = await client.chat.completions.create(
+                model="fake-openai-endpoint",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+            )
+            print(response)
+            return response
+        except APIConnectionError as e:
+            last_error = e
+            await asyncio.sleep(2)
+    raise AssertionError(
+        f"Proxy at {PROXY_BASE_URL} unreachable after retries: {last_error!r}"
     )
-    print(response)
-    return response
 
 
 @pytest.mark.asyncio
 async def test_e2e_langfuse_callbacks_in_db():
 
-    session = aiohttp.ClientSession()
+    async with aiohttp.ClientSession() as session:
+        # add langfuse callback to DB
+        await config_update(session)
 
-    # add langfuse callback to DB
-    await config_update(session)
+        # wait 20 seconds for the callback to be loaded into the instance
+        await asyncio.sleep(20)
+        await wait_for_proxy_ready(session)
 
-    # wait 20 seconds for the callback to be loaded into the instance
+        # make a /chat/completions request to the proxy
+        response = await make_chat_completions_request()
+        print(response)
+        response_id = response.id
+        print("response_id: ", response_id)
+
     await asyncio.sleep(20)
-
-    # make a /chat/completions request to the proxy
-    response = await make_chat_completions_request()
-    print(response)
-    response_id = response.id
-    print("response_id: ", response_id)
-
-    await asyncio.sleep(11)
     # check if the request is logged in Langfuse
     await check_langfuse_request(response_id)
