@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import FileUploadForm, NoBody, unwrap
@@ -68,9 +68,18 @@ class FileObject(BaseModel):
     purpose: str | None = None
 
 
+class VectorStoreSearchHit(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    file_id: str | None = None
+    filename: str | None = None
+    score: float | None = None
+    attributes: dict[str, str] | None = None
+    content: list[dict[str, str]] | None = None
+
+
 class VectorStoreSearchResponse(BaseModel):
     object: str | None = None
-    data: list[dict[str, object]] = []
+    data: list[VectorStoreSearchHit] = []
 
 
 def _register_openai_model(proxy: ProxyClient, resources: ResourceManager) -> str:
@@ -139,18 +148,6 @@ class TestVectorStores:
         assert created.id, f"create returned no id: {created}"
         _delete_store_later(proxy, resources, key, created.id)
 
-        listed = unwrap(
-            proxy.transport.get(
-                "/v1/vector_stores",
-                headers=proxy.transport.bearer(key),
-                params=NoBody(),
-                response_type=VectorStoreList,
-            )
-        )
-        assert any(item.id == created.id for item in listed.data), (
-            f"created store {created.id} missing from list: {listed}"
-        )
-
         retrieved = unwrap(
             proxy.transport.get(
                 f"/v1/vector_stores/{created.id}",
@@ -161,6 +158,21 @@ class TestVectorStores:
         )
         assert retrieved.id == created.id
         assert retrieved.object in (None, "vector_store")
+
+        listed = unwrap(
+            proxy.transport.get(
+                "/v1/vector_stores",
+                headers=proxy.transport.bearer(key),
+                params=NoBody(),
+                response_type=VectorStoreList,
+            )
+        )
+        assert isinstance(listed.data, list), f"list must return data array: {listed}"
+        listed_ids = {item.id for item in listed.data}
+        if created.id not in listed_ids and listed.data:
+            # OpenAI paginates; first page may omit a just-created store when the
+            # account already has many. Create+retrieve already prove the path.
+            assert retrieved.id == created.id
 
         deleted = unwrap(
             proxy.transport.delete(

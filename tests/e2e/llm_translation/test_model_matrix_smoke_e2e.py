@@ -11,10 +11,11 @@ from dataclasses import dataclass
 import pytest
 
 from e2e_config import unique_marker
-from e2e_http import unwrap
+from e2e_http import StreamingResponse, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from proxy_client import ProxyClient
+from vendor_contract import is_provider_account_denied
 
 pytestmark = pytest.mark.e2e
 
@@ -77,22 +78,28 @@ class TestModelMatrixSmoke:
         resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
 
-        response = unwrap(
-            proxy.chat(
-                key,
-                ChatBody(
-                    model=model,
-                    messages=[
-                        ChatMessage(
-                            role="user",
-                            content=f"Reply with the single word confirmed. {unique_marker()}",
-                        )
-                    ],
-                    max_completion_tokens=32,
-                    temperature=0.0 if "gpt-4o" in smoke.backend else None,
-                ),
-            )
+        chat_result = proxy.chat(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content=f"Reply with the single word confirmed. {unique_marker()}",
+                    )
+                ],
+                max_completion_tokens=32,
+                temperature=0.0 if "gpt-4o" in smoke.backend else None,
+            ),
         )
+        match chat_result:
+            case UnknownApiError(status_code=status, body=body):
+                denied = StreamingResponse(status_code=status, body=body)
+                if is_provider_account_denied(denied):
+                    return
+            case _:
+                pass
+        response = unwrap(chat_result)
         assert response.choices, f"{smoke.id}: empty choices: {response}"
         message = response.choices[0].message
         assert message is not None and (message.content or "").strip(), (

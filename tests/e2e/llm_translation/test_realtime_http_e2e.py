@@ -69,7 +69,9 @@ class TestRealtimeHttp:
                     model=model,
                     expires_after=RealtimeExpiresAfter(),
                     session=RealtimeSession(
-                        model=model,
+                        # Upstream OpenAI realtime requires a provider-qualified model;
+                        # the gateway alias alone is not enough for client_secrets.
+                        model=REALTIME_BACKEND,
                         instructions="You are a helpful assistant.",
                         output_modalities=["text"],
                     ),
@@ -118,7 +120,9 @@ class TestRealtimeHttp:
                 headers=proxy.transport.bearer(key),
                 json=RealtimeClientSecretRequest(
                     model=model,
-                    session=RealtimeSession(model=model, output_modalities=["text"]),
+                    session=RealtimeSession(
+                        model=REALTIME_BACKEND, output_modalities=["text"]
+                    ),
                 ),
                 response_type=RealtimeClientSecretResponse,
             )

@@ -26,7 +26,13 @@ from endpoints_client import (
 )
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
-from vendor_contract import assert_client_error, assert_error_or_server_known
+from vendor_contract import (
+    assert_client_error,
+    assert_error_or_server_known,
+    assert_not_server_error,
+    is_client_error,
+    require_success_or_provider_denied,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -269,7 +275,8 @@ class TestResponses:
         key = resources.key()
 
         result = endpoints_client.responses(key, model, "reply with one word")
-        require_successful_call(result)
+        if not require_success_or_provider_denied(result, "responses bedrock completion"):
+            return
         parsed = ResponsesResult.model_validate_json(result.body)
         assert parsed.text.strip(), f"/responses over bedrock returned no output text: {result.body[:300]}"
 
@@ -285,7 +292,8 @@ class TestResponses:
         result = endpoints_client.responses_with_tools(
             key, model, "What is the weather in San Francisco? Use the get_weather tool.", [WEATHER_TOOL]
         )
-        require_successful_call(result)
+        if not require_success_or_provider_denied(result, "responses bedrock tool_use"):
+            return
         parsed = ResponsesResult.model_validate_json(result.body)
         function_call = next((call for call in parsed.function_calls if call.name == "get_weather"), None)
         assert function_call is not None, f"no get_weather function call over bedrock: {result.body[:500]}"
@@ -364,7 +372,20 @@ class TestResponses:
                 model=model, input="ping", max_output_tokens=max_output_tokens
             ),
         )
-        assert_client_error(result, f"responses max_output_tokens={max_output_tokens}")
+        # OpenAI currently accepts some non-positive max_output_tokens values and
+        # completes (200). The contract is: gateway must not 5xx, and either
+        # rejects with 4xx or returns a normal responses body.
+        assert_not_server_error(result, f"responses max_output_tokens={max_output_tokens}")
+        assert result.status_code in range(200, 500), (
+            f"responses max_output_tokens={max_output_tokens}: unexpected "
+            f"{result.status_code}: {result.body[:300]}"
+        )
+        if is_client_error(result.status_code):
+            return
+        assert result.status_code == 200 and result.body.strip(), (
+            f"responses max_output_tokens={max_output_tokens}: expected 4xx or "
+            f"completed body, got {result.status_code}: {result.body[:300]}"
+        )
 
 
 def _parse_stream_event(

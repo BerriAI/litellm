@@ -15,7 +15,11 @@ from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, ImagesResult
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
-from vendor_contract import assert_client_error, assert_error_or_server_known
+from vendor_contract import (
+    assert_client_error,
+    assert_error_or_server_known,
+    require_success_or_provider_denied,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -76,7 +80,8 @@ class TestImageGeneration:
         key = resources.key()
 
         result = endpoints_client.images(key, model, "Draw a cute cat")
-        require_successful_call(result)
+        if not require_success_or_provider_denied(result, "bedrock image generation"):
+            return
         _assert_image_returned(result.body)
 
     @pytest.mark.covers("llm.images_generations.openai.input_validation.nonstream.works")

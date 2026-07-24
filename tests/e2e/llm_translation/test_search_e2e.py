@@ -57,13 +57,16 @@ class SearchResponse(BaseModel):
     results: list[SearchResultItem] = []
 
 
+def _search_credentials() -> tuple[str, str]:
+    if os.environ.get("PERPLEXITY_API_KEY"):
+        return "perplexity", os.environ["PERPLEXITY_API_KEY"]
+    if os.environ.get("TAVILY_API_KEY"):
+        return "tavily", os.environ["TAVILY_API_KEY"]
+    pytest.fail("set PERPLEXITY_API_KEY or TAVILY_API_KEY for /v1/search e2e coverage")
+
+
 def _register_search_tool(proxy: ProxyClient, resources: ResourceManager) -> str:
-    api_key = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("TAVILY_API_KEY")
-    provider = "perplexity" if os.environ.get("PERPLEXITY_API_KEY") else "tavily"
-    if not api_key:
-        pytest.fail(
-            "set PERPLEXITY_API_KEY or TAVILY_API_KEY for /v1/search e2e coverage"
-        )
+    provider, api_key = _search_credentials()
     name = f"e2e-search-{unique_marker()}"
     created = unwrap(
         proxy.transport.post(

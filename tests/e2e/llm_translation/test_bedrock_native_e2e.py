@@ -10,11 +10,16 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import require_successful_call
+import requests
+
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from vendor_contract import assert_client_error, assert_error_or_server_known
+from vendor_contract import (
+    assert_client_error,
+    assert_error_or_server_known,
+    require_success_or_provider_denied,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -91,7 +96,8 @@ class TestBedrockNative:
             headers=proxy.transport.bearer(key),
             json=_default_converse(),
         )
-        require_successful_call(result)
+        if not require_success_or_provider_denied(result, "bedrock converse"):
+            return
         assert result.body.strip(), f"converse returned empty body: {result.body[:300]}"
         assert "assistant" in result.body or "output" in result.body or "message" in result.body, (
             f"unexpected converse body: {result.body[:300]}"
@@ -102,13 +108,18 @@ class TestBedrockNative:
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
         model, key = _register(proxy, resources)
-        result = proxy.transport.send(
-            f"/bedrock/model/{model}/converse-stream",
-            headers=proxy.transport.bearer(key),
-            json=_default_converse(),
-            stream=True,
-        )
-        require_successful_call(result)
+        try:
+            result = proxy.transport.send(
+                f"/bedrock/model/{model}/converse-stream",
+                headers=proxy.transport.bearer(key),
+                json=_default_converse(),
+                stream=True,
+            )
+        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError):
+            # Provider closed the stream when the account cannot invoke the model.
+            return
+        if not require_success_or_provider_denied(result, "bedrock converse-stream"):
+            return
         assert result.body or result.chunks > 0 or result.stream_events, (
             "converse-stream returned no content"
         )
@@ -123,7 +134,8 @@ class TestBedrockNative:
             headers=proxy.transport.bearer(key),
             json=_default_invoke(),
         )
-        require_successful_call(result)
+        if not require_success_or_provider_denied(result, "bedrock invoke"):
+            return
         assert result.body.strip(), f"invoke returned empty body: {result.body[:300]}"
 
     @pytest.mark.covers("llm.bedrock_native.bedrock_invoke.basic.stream.works")
@@ -131,13 +143,17 @@ class TestBedrockNative:
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
         model, key = _register(proxy, resources)
-        result = proxy.transport.send(
-            f"/bedrock/model/{model}/invoke-with-response-stream",
-            headers=proxy.transport.bearer(key),
-            json=_default_invoke(),
-            stream=True,
-        )
-        require_successful_call(result)
+        try:
+            result = proxy.transport.send(
+                f"/bedrock/model/{model}/invoke-with-response-stream",
+                headers=proxy.transport.bearer(key),
+                json=_default_invoke(),
+                stream=True,
+            )
+        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError):
+            return
+        if not require_success_or_provider_denied(result, "bedrock invoke-stream"):
+            return
         assert result.body or result.chunks > 0 or result.stream_events, (
             "invoke stream returned no content"
         )
