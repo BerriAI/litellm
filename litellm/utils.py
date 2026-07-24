@@ -6806,7 +6806,13 @@ def trim_messages(
         for message in messages:
             if message["role"] == "system":
                 system_message += "\n" if system_message else ""
-                system_message += message["content"]
+                content = message.get("content", "")
+                if isinstance(content, str):
+                    system_message += content
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            system_message += part.get("text", "")
 
         ## Handle Tool Call ## - check if last message is a tool response, return as is - https://github.com/BerriAI/litellm/issues/4931
         tool_messages = []
