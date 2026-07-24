@@ -3680,6 +3680,22 @@ async def test_pre_call_hook_skips_chat_traffic_when_configured_for_pre_mcp_call
     mock_post.assert_not_called()
 
 
+def test_process_response_with_none_metadata_does_not_crash():
+    guardrail = _make_guardrail()
+    response = {"id": "batch_123", "status": "validating"}
+    request_data = {"model": "gemini-2.5-flash", "metadata": None}
+
+    result = guardrail._process_response(
+        response=response,
+        request_data=request_data,
+        event_type=GuardrailEventHooks.post_call,
+    )
+
+    assert result is response
+    assert isinstance(request_data["metadata"], dict)
+    assert "standard_logging_guardrail_information" in request_data["metadata"]
+
+
 @pytest.mark.asyncio
 async def test_moderation_hook_scans_mcp_tool_call_when_configured_for_during_mcp_call():
     """A guardrail configured with mode `during_mcp_call` must scan MCP tool calls.
