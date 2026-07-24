@@ -2982,6 +2982,7 @@ def get_optional_params_image_gen(
         "n": None,
         "quality": None,
         "response_format": None,
+        "output_format": None,
         "size": None,
         "style": None,
         "user": None,

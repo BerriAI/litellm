@@ -224,6 +224,7 @@ def test_get_optional_params_image_gen():
     optional_params = get_optional_params_image_gen(
         model="gpt-image-1",
         response_format="b64_json",
+        output_format="webp",
         n=3,
         custom_llm_provider="azure",
         drop_params=True,
@@ -232,6 +233,7 @@ def test_get_optional_params_image_gen():
     assert optional_params is not None
     assert "response_format" not in optional_params
     assert optional_params["n"] == 3
+    assert optional_params["output_format"] == "webp"
 
 
 def test_get_optional_params_image_gen_vertex_ai_size():
