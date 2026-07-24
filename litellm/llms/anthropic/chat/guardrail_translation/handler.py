@@ -600,9 +600,15 @@ class AnthropicMessagesHandler(BaseTranslation):
                     guardrail_inputs["tool_calls"] = tool_calls_list
 
                 try:
+                    prepared_request_data = self._prepare_request_data(
+                        request_data,
+                        model_response,
+                        user_api_key_dict,
+                        key="response",
+                    )
                     _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                         inputs=guardrail_inputs,
-                        request_data=request_data if request_data is not None else {},
+                        request_data=prepared_request_data,
                         input_type="response",
                         logging_obj=litellm_logging_obj,
                     )

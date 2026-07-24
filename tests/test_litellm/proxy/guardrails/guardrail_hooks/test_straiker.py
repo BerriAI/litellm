@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -8,6 +9,7 @@ from litellm.exceptions import GuardrailRaisedException, ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.straiker import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.straiker.straiker import (
     StraikerGuardrail,
+    _response_finish_reason,
 )
 from litellm.proxy.guardrails.guardrail_registry import (
     guardrail_class_registry,
@@ -17,7 +19,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     StraikerGuardrailConfigModel,
     StraikerGuardrailConfigModelOptionalParams,
 )
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Function,
+    Message,
+    ModelResponse,
+    Usage,
+)
 
 
 def _mock_response(action: str, turn_id: str = "turn-1", schema_version: str = "1", **extra) -> MagicMock:
@@ -208,7 +217,9 @@ async def test_request_envelope_transport_and_shape():
         "metadata": {"user_api_key_alias": "team-key", "agent_id": "chatbot-app", "app_name": "Chatbot"},
     }
 
-    out = await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request", logging_obj=_logging_obj())
+    out = await g.apply_guardrail(
+        inputs=inputs, request_data=request_data, input_type="request", logging_obj=_logging_obj()
+    )
 
     assert out is inputs
     url = g.async_handler.post.call_args.args[0]
@@ -230,6 +241,35 @@ async def test_request_envelope_transport_and_shape():
     assert "user_role" not in payload["application"]
     assert "response" not in payload
     assert "metadata" not in payload
+
+
+@pytest.mark.asyncio
+async def test_request_envelope_ignores_unsupported_opaque_items():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+
+    await g.apply_guardrail(
+        inputs={
+            "texts": ["hello"],
+            "tools": [
+                object(),
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {"type": "object"}},
+                },
+            ],
+        },
+        request_data={"model": "m", "messages": [{"role": "user", "content": "hello"}]},
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+
+    assert _posted_payload(g)["request"]["tools"] == [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object"}},
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -332,6 +372,64 @@ async def test_context_session_id_from_request_metadata():
 
 
 @pytest.mark.asyncio
+async def test_context_mode_from_string_event_hook():
+    g = _make_guardrail(event_hook="pre_call")
+    g.async_handler.post.return_value = _mock_response("NONE")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data={"model": "m"},
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    assert _posted_payload(g)["context"]["mode"] == ["pre_call"]
+
+
+@pytest.mark.asyncio
+async def test_context_mode_from_list_event_hook():
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    g = _make_guardrail(event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call])
+    g.async_handler.post.return_value = _mock_response("NONE")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data={"model": "m"},
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    assert _posted_payload(g)["context"]["mode"] == ["pre_call", "post_call"]
+
+
+@pytest.mark.asyncio
+async def test_context_mode_from_tagged_mode_is_flattened_and_deduped():
+    from litellm.types.guardrails import Mode
+
+    g = _make_guardrail(
+        event_hook=Mode(tags={"team-a": "pre_call", "team-b": ["post_call", "pre_call"]}, default="post_call")
+    )
+    g.async_handler.post.return_value = _mock_response("NONE")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data={"model": "m"},
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    assert _posted_payload(g)["context"]["mode"] == ["post_call", "pre_call"]
+
+
+@pytest.mark.asyncio
+async def test_context_mode_omitted_when_event_hook_absent():
+    g = _make_guardrail(event_hook=None)
+    g.async_handler.post.return_value = _mock_response("NONE")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data={"model": "m"},
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    assert "mode" not in _posted_payload(g)["context"]
+
+
+@pytest.mark.asyncio
 async def test_identity_key_and_team_coalesce_alias_over_id():
     g = _make_guardrail()
     g.async_handler.post.return_value = _mock_response("NONE")
@@ -425,6 +523,7 @@ async def test_application_source_from_agent_id():
         logging_obj=_logging_obj(),
     )
     assert _posted_payload(g)["application"] == {"source": "analytics-app", "name": "Analytics"}
+
 
 @pytest.mark.asyncio
 async def test_request_block_raises_guardrail_exception_with_reason():
@@ -558,6 +657,33 @@ async def test_response_envelope_and_block_replaces_response():
     assert payload["response"]["texts"] == ["secret"]
     assert payload["response"]["finish_reason"] == "stop"
     assert payload["request"]["structured_messages"] == [{"role": "user", "content": "original prompt"}]
+
+
+@pytest.mark.asyncio
+async def test_post_call_resolves_request_from_responses_input_when_messages_absent():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    response = ModelResponse(
+        choices=[Choices(finish_reason="stop", index=0, message=Message(content="answer", role="assistant"))],
+        model="gpt-4o-mini",
+    )
+    request_data = {
+        "model": "gpt-4o-mini",
+        "input": "responses-surface prompt",
+        "response": response,
+    }
+
+    await g.apply_guardrail(
+        inputs={"texts": ["answer"], "model": "gpt-4o-mini"},
+        request_data=request_data,
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+
+    payload = _posted_payload(g)
+    assert payload["event"]["type"] == "post_call"
+    messages = payload["request"]["structured_messages"]
+    assert any(m.get("content") == "responses-surface prompt" for m in messages)
 
 
 @pytest.mark.asyncio
@@ -731,3 +857,135 @@ async def test_unreachable_http_status_fail_closed_blocks():
         await g.apply_guardrail(
             inputs={"texts": ["x"]}, request_data={"model": "m"}, input_type="request", logging_obj=_logging_obj()
         )
+
+
+@pytest.mark.asyncio
+async def test_post_call_preserves_anthropic_tool_blocks_in_request_messages():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    anthropic_messages = [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {"city": "Paris"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "18C, cloudy",
+                }
+            ],
+        },
+    ]
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Mild and cloudy."}],
+        "stop_reason": "end_turn",
+        "model": "claude-sonnet-5",
+    }
+    await g.apply_guardrail(
+        inputs={"texts": ["Mild and cloudy."], "model": "claude-sonnet-5"},
+        request_data={
+            "model": "claude-sonnet-5",
+            "messages": anthropic_messages,
+            "response": response,
+        },
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+    payload = _posted_payload(g)
+    assert payload["request"]["structured_messages"] == anthropic_messages
+    assert payload["response"]["finish_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_preserves_anthropic_tool_blocks_in_structured_messages():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    anthropic_messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {"city": "Paris"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "18C",
+                }
+            ],
+        },
+    ]
+    await g.apply_guardrail(
+        inputs={"structured_messages": anthropic_messages, "model": "claude-sonnet-5"},
+        request_data={"model": "claude-sonnet-5", "messages": anthropic_messages},
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    assert _posted_payload(g)["request"]["structured_messages"] == anthropic_messages
+
+
+@pytest.mark.asyncio
+async def test_response_finish_reason_from_openai_choices_still_works():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    response = ModelResponse(
+        choices=[Choices(finish_reason="tool_calls", index=0, message=Message(content=None, role="assistant"))],
+        model="gpt-4o-mini",
+    )
+    await g.apply_guardrail(
+        inputs={
+            "texts": [],
+            "tool_calls": [
+                ChatCompletionMessageToolCall(
+                    id="c1",
+                    type="function",
+                    function=Function(name="f", arguments="{}"),
+                )
+            ],
+        },
+        request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "response": response},
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+    payload = _posted_payload(g)
+    assert payload["response"]["finish_reason"] == "tool_calls"
+    assert payload["response"]["tool_calls"] == [
+        {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (None, None),
+        ({"choices": "invalid"}, None),
+        ({"choices": [{"finish_reason": "length"}]}, "length"),
+        ({"choices": [{"stop_reason": "end_turn"}]}, "end_turn"),
+        ({"choices": [{}]}, None),
+        (SimpleNamespace(stop_reason="end_turn"), "end_turn"),
+    ],
+)
+def test_response_finish_reason_handles_supported_shapes(response, expected):
+    assert _response_finish_reason(response) == expected
