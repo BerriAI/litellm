@@ -122,6 +122,15 @@ async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
         OSError("network is unreachable"),
         HTTPClientClosedError(),
         PrismaError("can't reach database server"),
+        DataError(
+            data={
+                "user_facing_error": {
+                    "error_code": "P2037",
+                    "message": "Too many database connections opened: FATAL: sorry, too many clients already",
+                    "meta": {"database_error": "FATAL: sorry, too many clients already"},
+                }
+            }
+        ),
         RawQueryError(
             data={
                 "user_facing_error": {
