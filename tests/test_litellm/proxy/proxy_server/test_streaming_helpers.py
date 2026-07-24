@@ -1019,6 +1019,28 @@ def test_resolve_keepalive_seconds_absent_returns_zero(monkeypatch):
     assert result == 0.0
 
 
+def test_resolve_keepalive_seconds_deployment_disable_cannot_be_overridden_by_request(monkeypatch):
+    """A deployment that explicitly sets keepalive_seconds: 0 is a hard operator
+    disable: an authenticated client must not be able to re-enable heartbeats for
+    that deployment by passing a positive value in the request body, since that
+    would let a client evade the deployment's idle-timeout behavior at will."""
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = 0
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-disabled"}
+
+    result = _resolve_keepalive_seconds({"model": "my-model", "keepalive_seconds": 250}, response=response)
+    assert result == 0.0
+
+
 def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
     from unittest.mock import MagicMock
 

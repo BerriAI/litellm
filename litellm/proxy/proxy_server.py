@@ -7594,10 +7594,27 @@ def _keepalive_from_deployment_config(request_data: dict[str, Any], response: An
     return None
 
 
+def _is_explicit_keepalive_disable(raw: Any) -> bool:
+    if raw is None:
+        return False
+    try:
+        return float(raw) <= 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_keepalive_seconds(request_data: dict[str, Any], response: Any = None) -> float:
+    deployment_raw = _keepalive_from_deployment_config(request_data, response)
+    # An operator setting keepalive_seconds: 0 on a deployment is an explicit hard
+    # disable: an authenticated client must not be able to re-enable heartbeats
+    # (and the idle-timeout evasion that comes with them) for a deployment the
+    # operator opted out of, regardless of what the request body asks for.
+    if _is_explicit_keepalive_disable(deployment_raw):
+        return 0.0
+
     raw = request_data.get("keepalive_seconds")
     if raw is None:
-        raw = _keepalive_from_deployment_config(request_data, response)
+        raw = deployment_raw
     try:
         value = float(raw) if raw is not None else 0.0
     except (TypeError, ValueError):
