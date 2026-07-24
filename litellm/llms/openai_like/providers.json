@@ -1,4 +1,11 @@
 {
+  "gondola": {
+    "base_url": "https://api.gondola-ai.com/v1",
+    "api_key_env": "GONDOLA_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
