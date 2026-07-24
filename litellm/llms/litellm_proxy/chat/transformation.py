@@ -15,6 +15,32 @@ if TYPE_CHECKING:
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
+    @staticmethod
+    def _get_litellm_proxy_request_body(
+        model: str,
+        messages: list["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> dict:
+        request_body = {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
+        metadata = litellm_params.get("metadata")
+        requester_metadata = metadata.get("requester_metadata") if isinstance(metadata, dict) else None
+        if isinstance(requester_metadata, dict) and isinstance(requester_metadata.get("tags"), list):
+            request_body["metadata"] = {"tags": requester_metadata["tags"]}
+
+        session_id = litellm_params.get("litellm_session_id")
+        if session_id is not None:
+            extra_body = request_body.get("extra_body")
+            request_body["extra_body"] = {
+                **(extra_body if isinstance(extra_body, dict) else {}),
+                "litellm_session_id": session_id,
+            }
+        return request_body
+
     def get_supported_openai_params(self, model: str) -> List:
         params_list = super().get_supported_openai_params(model)
         params_list.extend(OPENAI_CHAT_COMPLETION_PARAMS)
@@ -119,12 +145,12 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        # don't transform the request
-        return {
-            "model": model,
-            "messages": messages,
-            **optional_params,
-        }
+        return self._get_litellm_proxy_request_body(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
 
     async def async_transform_request(
         self,
@@ -134,9 +160,9 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        # don't transform the request
-        return {
-            "model": model,
-            "messages": messages,
-            **optional_params,
-        }
+        return self._get_litellm_proxy_request_body(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
