@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
 import httpx
 from httpx._types import RequestFiles
 
+import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -91,6 +92,19 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     3. Extract video data (base64) from response
     """
 
+    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: dict[str, str] = {
+        "1280x720": "16:9",
+        "1920x1080": "16:9",
+        "720x1280": "9:16",
+        "1080x1920": "9:16",
+    }
+    _OPENAI_VIDEO_SIZE_TO_RESOLUTION: dict[str, str] = {
+        "1280x720": "720p",
+        "1920x1080": "1080p",
+        "720x1280": "720p",
+        "1080x1920": "1080p",
+    }
+
     def __init__(self):
         BaseVideoConfig.__init__(self)
         VertexBase.__init__(self)
@@ -133,6 +147,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - prompt → prompt (in instances)
         - input_reference → image (in instances)
         - size → aspectRatio (e.g., "1280x720" → "16:9")
+        - size → resolution for models with resolution-tier pricing when inferable
+          ("1280x720"/"720x1280" → "720p", "1920x1080"/"1080x1920" → "1080p");
+          skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
         mapped_params: Dict[str, Any] = {}
@@ -147,6 +164,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if "parameters" in video_create_optional_params:
             mapped_params["parameters"] = video_create_optional_params["parameters"]
 
+        if "resolution" in video_create_optional_params:
+            mapped_params["resolution"] = video_create_optional_params["resolution"]
+
         # Map size to aspectRatio
         if "size" in video_create_optional_params:
             size = video_create_optional_params["size"]
@@ -154,6 +174,15 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 aspect_ratio = self._convert_size_to_aspect_ratio(size)
                 if aspect_ratio:
                     mapped_params["aspectRatio"] = aspect_ratio
+                nested_params = video_create_optional_params.get("parameters")
+                has_resolution = "resolution" in mapped_params or (
+                    isinstance(nested_params, dict) and nested_params.get("resolution") is not None
+                )
+                supports_resolution = self._supports_resolution_inference(model)
+                if supports_resolution and not has_resolution:
+                    inferred_resolution = self._convert_size_to_resolution(size)
+                    if inferred_resolution is not None:
+                        mapped_params["resolution"] = inferred_resolution
 
         # Map seconds to durationSeconds, default to 4 seconds (matching OpenAI)
         if "seconds" in video_create_optional_params:
@@ -177,14 +206,16 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if not size:
             return None
 
-        aspect_ratio_map = {
-            "1280x720": "16:9",
-            "1920x1080": "16:9",
-            "720x1280": "9:16",
-            "1080x1920": "9:16",
-        }
+        return self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO.get(size, "16:9")
 
-        return aspect_ratio_map.get(size, "16:9")
+    def _convert_size_to_resolution(self, size: str) -> Optional[str]:
+        return self._OPENAI_VIDEO_SIZE_TO_RESOLUTION.get(size)
+
+    @staticmethod
+    def _supports_resolution_inference(model: str) -> bool:
+        model_key = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+        model_info = litellm.model_cost.get(model_key, {})
+        return model_info.get("output_cost_per_second_1080p") is not None
 
     def validate_environment(
         self,
