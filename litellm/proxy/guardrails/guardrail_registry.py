@@ -724,6 +724,7 @@ class InMemoryGuardrailHandler:
         guardrail: Guardrail,
         config_file_path: Optional[str] = None,
         source: Literal["db", "config"] = "config",
+        llm_router: Optional["Router"] = None,
     ) -> Optional[Guardrail]:
         """
         Force re-initialization of a guardrail even if it exists in memory.
@@ -739,10 +740,18 @@ class InMemoryGuardrailHandler:
             self.delete_in_memory_guardrail(guardrail_id)
 
         # Initialize fresh (will add new callback to litellm.callbacks)
-        return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+        return self.initialize_guardrail(
+            guardrail=guardrail,
+            config_file_path=config_file_path,
+            llm_router=llm_router,
+            source=source,
+        )
 
     def sync_guardrail_from_db(
-        self, guardrail: Guardrail, config_file_path: Optional[str] = None
+        self,
+        guardrail: Guardrail,
+        config_file_path: Optional[str] = None,
+        llm_router: Optional["Router"] = None,
     ) -> Optional[Guardrail]:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
@@ -762,6 +771,7 @@ class InMemoryGuardrailHandler:
                 guardrail=guardrail,
                 config_file_path=config_file_path,
                 source="db",
+                llm_router=llm_router,
             )
 
         # Params unchanged but the entry is still DB-backed; make sure the

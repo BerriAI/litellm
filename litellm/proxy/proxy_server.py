@@ -6621,6 +6621,7 @@ class ProxyConfig:
                     db_guardrail_ids.add(guardrail_id)
                 IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                     guardrail=cast(Guardrail, guardrail),
+                    llm_router=llm_router,
                 )
 
             # Drop in-memory DB-backed entries whose row was deleted on another

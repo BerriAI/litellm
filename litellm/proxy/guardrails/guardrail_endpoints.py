@@ -353,7 +353,11 @@ async def create_guardrail(
         guardrail_id = result.get("guardrail_id", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, result), source="db")
+            from litellm.proxy.proxy_server import llm_router
+
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, result), source="db", llm_router=llm_router
+            )
             verbose_proxy_logger.info(
                 f"Immediate sync: Successfully initialized guardrail '{guardrail_name}' (ID: {guardrail_id})"
             )
@@ -974,7 +978,11 @@ async def approve_guardrail_submission(
             "team_id": row.team_id,
         }
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, guardrail_dict), source="db")
+            from litellm.proxy.proxy_server import llm_router
+
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, guardrail_dict), source="db", llm_router=llm_router
+            )
             verbose_proxy_logger.info(
                 "Approved guardrail %s (ID: %s) and initialized in memory",
                 row.guardrail_name,
@@ -1161,8 +1169,11 @@ async def patch_guardrail(
         guardrail_name = result.get("guardrail_name", "Unknown")
 
         try:
+            from litellm.proxy.proxy_server import llm_router
+
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
+                llm_router=llm_router,
             )
             verbose_proxy_logger.info(
                 f"Immediate sync: Successfully updated guardrail '{guardrail_name}' (ID: {guardrail_id})"

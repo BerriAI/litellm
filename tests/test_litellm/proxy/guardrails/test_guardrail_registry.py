@@ -367,3 +367,55 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+def _judge_guardrail(guardrail_id: str) -> Guardrail:
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name="quality-judge",
+        litellm_params={
+            "guardrail": "llm_as_a_judge",
+            "mode": "post_call",
+            "judge_model": "my-judge-alias",
+            "overall_threshold": 80,
+            "on_failure": "log",
+            "criteria": [{"name": "helpfulness", "weight": 100, "description": "helpful?"}],
+        },
+    )
+
+
+def _make_router(model_names):
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_model_names.return_value = list(model_names)
+    return router
+
+
+def test_initialize_guardrail_passes_router_to_judge_from_db():
+    """A judge guardrail created/synced through a DB path must receive the active
+    Router so its proxy-only judge model resolves credentials (issue: UI-created
+    guardrails failed open because the Router was never wired in)."""
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeGuardrail
+
+    handler = InMemoryGuardrailHandler()
+    router = _make_router({"my-judge-alias"})
+
+    handler.sync_guardrail_from_db(_judge_guardrail("judge-db"), llm_router=router)
+
+    instance = handler.guardrail_id_to_custom_guardrail["judge-db"]
+    assert isinstance(instance, LLMAsAJudgeGuardrail)
+    assert instance.llm_router is router
+
+
+def test_reinitialize_guardrail_forwards_router_to_judge():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeGuardrail
+
+    handler = InMemoryGuardrailHandler()
+    router = _make_router({"my-judge-alias"})
+
+    handler.reinitialize_guardrail(_judge_guardrail("judge-reinit"), source="db", llm_router=router)
+
+    instance = handler.guardrail_id_to_custom_guardrail["judge-reinit"]
+    assert isinstance(instance, LLMAsAJudgeGuardrail)
+    assert instance.llm_router is router
