@@ -858,9 +858,6 @@ export function KeyEditView({
           neverExpire={neverExpire}
           onNeverExpireChange={setNeverExpire}
         />
-        <Form.Item name="duration" hidden initialValue="">
-          <Input />
-        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}
