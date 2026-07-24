@@ -8268,7 +8268,8 @@ async def model_list(
                 "(requires background_health_checks); returning unfiltered model list"
             )
 
-    hidden_names = blocked_names | unhealthy_names
+    experimental_names = _fully_experimental_model_names(llm_router)
+    hidden_names = blocked_names | unhealthy_names | experimental_names
 
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
@@ -8300,7 +8301,7 @@ async def model_list(
             only_model_access_groups=only_model_access_groups or False,
         )
 
-        # Hide paused/unhealthy models from the public listing
+        # Hide paused, unhealthy, and fully experimental models from the public listing
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
@@ -8340,7 +8341,7 @@ async def model_list(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Hide paused/unhealthy models from the public listing
+    # Hide paused, unhealthy, and fully experimental models from the public listing
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
 
@@ -12339,6 +12340,43 @@ def _translate_model_name_for_response(model: dict) -> dict:
     return {**model, "model_name": team_public}
 
 
+def _is_experimental_deployment(model: dict) -> bool:
+    """True if the deployment carries an "experimental" / "experimental:<id>" tag.
+
+    Used to hide deployments that are temporarily scaled down (e.g. in GPUStack)
+    from the default /model/info listing.
+    """
+    tags = (model.get("litellm_params") or {}).get("tags") or []
+    return any(
+        isinstance(tag, str)
+        and (tag == "experimental" or tag.startswith("experimental:"))
+        for tag in tags
+    )
+
+
+def _fully_experimental_model_names(llm_router: Optional[Router]) -> Set[str]:
+    """Model names whose *every* deployment is tagged experimental.
+
+    Such a name has no live deployment, so it is hidden from the
+    OpenAI-compatible /v1/models and /models listings. A name that still has at
+    least one non-experimental deployment is kept — it is still served (e.g. one
+    replica scaled down in GPUStack while others stay up).
+    """
+    if llm_router is None:
+        return set()
+    all_names: Set[str] = set()
+    live_names: Set[str] = set()
+    for deployment in getattr(llm_router, "model_list", None) or []:
+        dep = deployment if isinstance(deployment, dict) else dict(deployment)
+        name = dep.get("model_name")
+        if not name:
+            continue
+        all_names.add(name)
+        if not _is_experimental_deployment(dep):
+            live_names.add(name)
+    return all_names - live_names
+
+
 def _get_proxy_model_info(model: dict) -> dict:
     # provided model_info in config.yaml
     model_info = model.get("model_info", {})
@@ -12391,6 +12429,7 @@ def _get_proxy_model_info(model: dict) -> dict:
 async def model_info_v1(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_model_id: Optional[str] = None,
+    include_experimental: bool = False,
     include_team_models: Optional[bool] = fastapi.Query(
         False,
         description="When true, filter to deployments the caller can use via direct access or team membership.",
@@ -12413,6 +12452,11 @@ async def model_info_v1(
 
     Each model in the list response includes `model_info.access_via_team_ids` and
     `model_info.direct_access` when the proxy database is connected.
+
+        include_experimental: bool = False - deployments tagged `"experimental"` (or
+        `"experimental:<id>"`) in `litellm_params.tags` — e.g. temporarily scaled down in
+        GPUStack — are hidden from the listing by default for every caller. Only a
+        PROXY_ADMIN that explicitly passes `include_experimental=true` gets them back.
 
     Returns:
         Returns a dictionary containing information about each model.
@@ -12535,6 +12579,12 @@ async def model_info_v1(
         all_models=all_models,
         allowed_model_names=allowed_model_names,
     )
+
+    # Deployments tagged "experimental" (or "experimental:<id>") are hidden by
+    # default. Only a proxy admin can explicitly include them.
+    show_experimental = include_experimental and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    if not show_experimental:
+        all_models = [model for model in all_models if not _is_experimental_deployment(model)]
 
     # Team BYOK deployments carry an internal routing key and other teams'
     # public name/team_id/api_base; drop the ones the caller cannot access so
