@@ -1395,6 +1395,10 @@ SPECIAL_CHAR_OBJECT_KEYS = [
     "R&D + Ops/2025-09-14/test-key.json",
     "tёam#1/2025-09-14/test-key.json",
     "a@b/2025-09-14/test-key.json",
+    "./2025-09-14/test-key.json",
+    "../2025-09-14/test-key.json",
+    "a/./b/2025-09-14/test-key.json",
+    "a/../b/2025-09-14/test-key.json",
 ]
 
 
@@ -1407,6 +1411,7 @@ def _assert_signature_valid_for_wire_url(
     region="us-east-1",
     method="PUT",
 ):
+    import httpx
     from botocore.auth import S3SigV4Auth
     from botocore.awsrequest import AWSRequest
     from botocore.credentials import Credentials
@@ -1414,11 +1419,13 @@ def _assert_signature_valid_for_wire_url(
     assert "Authorization" in signed_headers, "request was not signed"
     assert " " not in request_url, "raw space leaked onto the wire URL"
 
+    wire_url = str(httpx.Request(method, request_url).url)
+
     verify_headers = {
         k: v for k, v in signed_headers.items() if k.lower() != "authorization"
     }
     verify_req = AWSRequest(
-        method=method, url=request_url, data=data, headers=verify_headers
+        method=method, url=wire_url, data=data, headers=verify_headers
     )
     verify_req.context["timestamp"] = signed_headers["X-Amz-Date"]
     S3SigV4Auth(Credentials(access_key, secret_key), "s3", region).add_auth(verify_req)
@@ -1426,9 +1433,10 @@ def _assert_signature_valid_for_wire_url(
     assert verify_req.headers["Authorization"] == signed_headers["Authorization"], (
         "SigV4 signature does not match the URL actually sent on the wire; "
         "S3 would reject this with 403 SignatureDoesNotMatch.\n"
-        f"  wire url  : {request_url}\n"
-        f"  sent sig  : {signed_headers['Authorization']}\n"
-        f"  valid sig : {verify_req.headers['Authorization']}"
+        f"  passed url : {request_url}\n"
+        f"  wire url   : {wire_url}\n"
+        f"  sent sig   : {signed_headers['Authorization']}\n"
+        f"  valid sig  : {verify_req.headers['Authorization']}"
     )
 
 

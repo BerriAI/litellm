@@ -9,7 +9,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 import asyncio
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, List, Optional, cast
 from urllib.parse import quote
 
 if TYPE_CHECKING:
@@ -280,15 +280,24 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             self.handle_callback_failure(callback_name="S3Logger")
 
+    @staticmethod
+    def _encode_s3_object_key(s3_object_key: str) -> str:
+        encoded_segments = []
+        for segment in quote(s3_object_key, safe="/").split("/"):
+            if segment in (".", ".."):
+                segment = segment.replace(".", "%2E")
+            encoded_segments.append(segment)
+        return "/".join(encoded_segments)
+
     def _sign_s3_request(
         self,
         credentials: "Credentials",
         method: str,
         url: str,
-        headers: Dict[str, str],
+        headers: "dict[str, str]",
         region: str,
-        data: Optional[str] = None,
-    ) -> Dict[str, str]:
+        data: "str | None" = None,
+    ) -> "dict[str, str]":
         try:
             from botocore.auth import S3SigV4Auth
             from botocore.awsrequest import AWSRequest
@@ -324,7 +333,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.debug(f"s3_v2 logger - uploading data to s3 - {batch_logging_element.s3_object_key}")
             verbose_logger.debug(f"s3_v2 logger - s3_verify setting: {self.s3_verify}")
 
-            object_key_encoded = quote(batch_logging_element.s3_object_key, safe="/")
+            object_key_encoded = self._encode_s3_object_key(batch_logging_element.s3_object_key)
 
             # Prepare the URL
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{object_key_encoded}"
@@ -491,7 +500,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 aws_region_name=self.s3_region_name,
             )
 
-            object_key_encoded = quote(batch_logging_element.s3_object_key, safe="/")
+            object_key_encoded = self._encode_s3_object_key(batch_logging_element.s3_object_key)
 
             # Prepare the URL
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{object_key_encoded}"
@@ -597,7 +606,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             verbose_logger.debug(f"s3_v2 logger - downloading data from s3 - {s3_object_key}")
 
-            object_key_encoded = quote(s3_object_key, safe="/")
+            object_key_encoded = self._encode_s3_object_key(s3_object_key)
 
             # Prepare the URL
             url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{object_key_encoded}"
