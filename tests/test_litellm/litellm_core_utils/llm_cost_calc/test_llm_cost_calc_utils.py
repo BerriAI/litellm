@@ -900,6 +900,73 @@ def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
     assert round(prompt_cost, 3) == 0.029
 
 
+def test_generic_cost_per_token_openai_cache_write_tokens():
+    """Regression for #33772: OpenAI-style providers report cache writes under
+    prompt_tokens_details.cache_write_tokens. Those tokens must be priced at the
+    cache-creation rate, not the plain input rate."""
+    model = "gpt-5.6"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    cache_write_tokens = 1000
+    usage = Usage(
+        prompt_tokens=cache_write_tokens,
+        completion_tokens=0,
+        total_tokens=cache_write_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0, cache_write_tokens=cache_write_tokens
+        ),
+    )
+    prompt_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    expected = model_cost_map["cache_creation_input_token_cost"] * cache_write_tokens
+    assert round(prompt_cost, 10) == round(expected, 10)
+    # guard against the pre-fix behavior where cache-write fell through to the input rate
+    assert round(prompt_cost, 10) != round(
+        model_cost_map["input_cost_per_token"] * cache_write_tokens, 10
+    )
+
+
+def test_generic_cost_per_token_cache_write_tokens_priority_tier():
+    """Regression for #33772: the priority-tier cache-creation rate must be applied
+    to cache-write tokens. This exercises both the cache_write_tokens fix and the
+    cache_creation_input_token_cost_priority key now surfaced by get_model_info."""
+    model = "gpt-5.6"
+    custom_llm_provider = "openai"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    cache_write_tokens = 1000
+    usage = Usage(
+        prompt_tokens=cache_write_tokens,
+        completion_tokens=0,
+        total_tokens=cache_write_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0, cache_write_tokens=cache_write_tokens
+        ),
+    )
+    prompt_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="priority",
+    )
+    expected = (
+        model_cost_map["cache_creation_input_token_cost_priority"] * cache_write_tokens
+    )
+    assert round(prompt_cost, 10) == round(expected, 10)
+    # the priority rate differs from the standard rate, so a regression here would show up
+    assert round(prompt_cost, 10) != round(
+        model_cost_map["cache_creation_input_token_cost"] * cache_write_tokens, 10
+    )
+
+
 def test_string_cost_values():
     """Test that cost values defined as strings are properly converted to floats."""
     from unittest.mock import patch
