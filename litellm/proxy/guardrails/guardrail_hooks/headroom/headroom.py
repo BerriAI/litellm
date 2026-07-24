@@ -31,7 +31,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -459,18 +459,38 @@ class HeadroomGuardrail(CustomGuardrail):
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         if input_type != "request":
+            self._record_guardrail_result(
+                request_data=request_data,
+                guardrail_status="not_run",
+                guardrail_json_response={"skipped": True, "reason": "unsupported_input_type"},
+            )
             return inputs
 
         if self._should_bypass(request_data):
             verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
+            self._record_guardrail_result(
+                request_data=request_data,
+                guardrail_status="not_run",
+                guardrail_json_response={"skipped": True, "reason": "bypass_header"},
+            )
             return inputs
 
         structured_messages = inputs.get("structured_messages")
         if not _is_object_list(structured_messages) or not structured_messages:
+            self._record_guardrail_result(
+                request_data=request_data,
+                guardrail_status="not_run",
+                guardrail_json_response={"skipped": True, "reason": "no_structured_messages"},
+            )
             return inputs
 
         messages = [m for m in structured_messages if _is_str_object_dict(m)]
         if not messages:
+            self._record_guardrail_result(
+                request_data=request_data,
+                guardrail_status="not_run",
+                guardrail_json_response={"skipped": True, "reason": "no_valid_messages"},
+            )
             return inputs
 
         model = self.headroom_model or request_data.get("model")
@@ -482,6 +502,13 @@ class HeadroomGuardrail(CustomGuardrail):
         end_time = time.time()
 
         if not compression_succeeded:
+            self._record_guardrail_result(
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_json_response={"skipped": False, "reason": "compression_failed"},
+                start_time=start_time,
+                end_time=end_time,
+            )
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
         self.add_standard_logging_guardrail_information_to_request_data(
@@ -515,6 +542,26 @@ class HeadroomGuardrail(CustomGuardrail):
             merged_tools = list(existing_tools) if isinstance(existing_tools, list) else [retrieve_tool]
 
         return {**inputs, "structured_messages": compressed, "tools": merged_tools}  # pyright: ignore[reportReturnType]
+
+    def _record_guardrail_result(
+        self,
+        request_data: dict,
+        guardrail_status: GuardrailStatus,
+        guardrail_json_response: dict[str, object],
+        start_time: float | None = None,
+        end_time: float | None = None,
+    ) -> None:
+        resolved_start_time = start_time if start_time is not None else time.time()
+        resolved_end_time = end_time if end_time is not None else resolved_start_time
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=guardrail_json_response,
+            request_data=request_data,
+            guardrail_status=guardrail_status,
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+            start_time=resolved_start_time,
+            end_time=resolved_end_time,
+            duration=resolved_end_time - resolved_start_time,
+        )
 
     async def async_should_run_agentic_loop(
         self,

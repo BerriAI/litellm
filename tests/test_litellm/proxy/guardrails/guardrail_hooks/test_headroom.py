@@ -140,6 +140,91 @@ async def test_apply_guardrail_compresses_and_returns_structured_messages(
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_skips_passthrough_without_auto_success_entry(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(texts=["A" * 5000])
+    request_data: dict = {"model": "gpt-4o"}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert len(entries) == 1
+    assert entries[0]["guardrail_status"] == "not_run"
+    assert entries[0]["guardrail_response"] == {
+        "skipped": True,
+        "reason": "no_structured_messages",
+    }
+    assert result == inputs
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_success_for_compression(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    request_data: dict = {"model": "gpt-4o"}
+    mock_response = _make_compress_response(COMPRESSED_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert len(entries) == 1
+    assert entries[0]["guardrail_status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_failure_and_preserves_input():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    request_data: dict = {"model": "gpt-4o"}
+    mock_response = _make_compress_response(COMPRESSED_MESSAGES, status=500)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert len(entries) == 1
+    assert entries[0]["guardrail_status"] == "guardrail_failed_to_respond"
+    assert result == inputs
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_injects_retrieve_tool_when_hashes_present(
     guardrail: HeadroomGuardrail,
 ):
