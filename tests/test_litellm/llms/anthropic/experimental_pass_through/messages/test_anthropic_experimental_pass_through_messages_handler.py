@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm
 from litellm.anthropic_interface import messages
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
@@ -821,3 +822,96 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+def _responses_vs_completions_stubs(monkeypatch):
+    """Patch the two Anthropic->OpenAI translation handlers with distinct
+    return values so the caller can assert which endpoint a request routed to.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToResponsesAPIHandler,
+        "anthropic_messages_handler",
+        staticmethod(lambda **kwargs: "responses"),
+    )
+    monkeypatch.setattr(
+        handler.LiteLLMMessagesToCompletionTransformationHandler,
+        "anthropic_messages_handler",
+        staticmethod(lambda **kwargs: "chat-completions"),
+    )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://open.bigmodel.cn/api/paas/v4",
+        "https://api.groq.com/openai/v1",
+        "http://0.0.0.0:4000/v1",
+    ],
+)
+def test_openai_compatible_custom_api_base_routes_to_chat_completions(monkeypatch, api_base):
+    """Regression for #33824: an OpenAI-compatible deployment (provider=openai)
+    with a non-openai api_base must route /v1/messages through chat/completions,
+    not the Responses API which those endpoints do not implement (404 /responses).
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    _responses_vs_completions_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/glm-4.6",
+        api_key="sk-test",
+        api_base=api_base,
+    )
+
+    assert result == "chat-completions"
+
+
+@pytest.mark.parametrize("api_base", [None, "https://api.openai.com/v1"])
+def test_genuine_openai_routes_to_responses_api(monkeypatch, api_base):
+    """Genuine OpenAI endpoints (no override, or an api.openai.com host) still
+    route to the Responses API."""
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    _responses_vs_completions_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/gpt-5.1",
+        api_key="sk-test",
+        api_base=api_base,
+    )
+
+    assert result == "responses"
+
+
+def test_should_route_to_responses_api_honors_api_base():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _should_route_to_responses_api,
+    )
+
+    assert _should_route_to_responses_api("openai", None) is True
+    assert _should_route_to_responses_api("openai", "https://api.openai.com/v1") is True
+    assert _should_route_to_responses_api("openai", "https://us.api.openai.com/v1") is True
+    assert _should_route_to_responses_api("openai", "https://open.bigmodel.cn/api/paas/v4") is False
+    assert _should_route_to_responses_api("anthropic", None) is False
+
+
+def test_should_route_to_responses_api_respects_global_optout(monkeypatch):
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _should_route_to_responses_api,
+    )
+
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    assert _should_route_to_responses_api("openai", None) is False
