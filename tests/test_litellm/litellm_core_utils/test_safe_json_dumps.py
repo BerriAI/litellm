@@ -230,3 +230,20 @@ def test_pydantic_base_model():
     assert len(result["healthy_endpoints"]) == 2
     assert result["healthy_endpoints"][0]["name"] == "test"
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
+
+
+def test_dict_mutated_during_serialization_does_not_raise():
+    data = {}
+
+    class _InsertsKeyOnStr:
+        def __str__(self):
+            data[f"late-{len(data)}"] = "added-mid-iteration"
+            return "value"
+
+    for i in range(5):
+        data[f"item-{i}"] = _InsertsKeyOnStr()
+
+    result = json.loads(safe_dumps(data))
+
+    for i in range(5):
+        assert result[f"item-{i}"] == "value"
