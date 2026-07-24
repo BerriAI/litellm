@@ -60,6 +60,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -1853,6 +1854,7 @@ class Router:
         silent_kwargs.pop("litellm_logging_obj", None)
         silent_kwargs.pop("standard_logging_object", None)
         # DON'T pop proxy_server_request — it's needed for spend log metadata
+        silent_kwargs["metadata"].pop("tags", None)
 
         return silent_kwargs
 
@@ -2705,6 +2707,29 @@ class Router:
                         )
 
         return SyncFallbackStreamWrapper(stream_with_fallbacks())
+
+    async def _silent_experiment_ageneric(self, silent_model: str, original_function: Callable, **kwargs: Any) -> None:
+        try:
+            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
+                return
+
+            from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+                LiteLLM_Proxy_MCP_Handler,
+            )
+
+            if LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+                mcp_tools_with_litellm_proxy=kwargs.get("tools") or []
+            ):
+                return
+
+            verbose_router_logger.info(f"Starting silent experiment for model {silent_model}")
+            silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
+            silent_kwargs["metadata"]["model_group"] = silent_model
+            await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function, model=silent_model, **silent_kwargs
+            )
+        except Exception as e:  # noqa: BLE001  # a background mirror failure must never break the primary request
+            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {str(e)}")
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: List[Any], **kwargs):
         """
@@ -4474,6 +4499,18 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data = deployment["litellm_params"].copy()
+            silent_model = data.pop("silent_model", None)
+            if (
+                silent_model is not None
+                and getattr(original_generic_function, "__name__", None) in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES
+            ):
+                asyncio.create_task(
+                    self._silent_experiment_ageneric(
+                        silent_model=silent_model,
+                        original_function=original_generic_function,
+                        **kwargs,
+                    )
+                )
             model_name = data["model"]
             self.total_calls[model_name] += 1
 
@@ -4502,6 +4539,7 @@ class Router:
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
 
+            response_kwargs.pop("silent_model", None)
             response = original_generic_function(**response_kwargs)
 
             rpm_semaphore = self._get_client(
