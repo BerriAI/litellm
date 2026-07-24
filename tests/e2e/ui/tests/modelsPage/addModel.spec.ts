@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ALIAS, E2E_TEAM_CRUD_ID } from "../../constants";
+import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ID } from "../../constants";
 import { Role, users } from "../../fixtures/users";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
@@ -56,17 +56,17 @@ test.describe("Add Model", () => {
       },
     });
     expect(createResponse.ok()).toBe(true);
+    const createdModelId = (await createResponse.json()).model_info?.id;
+    expect(createdModelId, "model id from /model/new").toBeTruthy();
 
     // Navigate to Models + Endpoints
     await page.goto("/ui");
     await page.getByText("Models + Endpoints").click();
 
-    // Click the new model row to open its detail view. The table renders
-    // a clickable outer row plus a nested detail row for the same model,
-    // so we target the first match (outer row) explicitly.
-    const modelRow = page.locator("tr", { hasText: modelName }).first();
-    await expect(modelRow).toBeVisible({ timeout: 10_000 });
-    await modelRow.click();
+    // The Model ID cell is the drill-in control; the row itself is not clickable.
+    const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
+    await expect(modelIdCell).toBeVisible({ timeout: 10_000 });
+    await modelIdCell.click();
 
     await expect(page.getByText("Back to Models").first()).toBeVisible({ timeout: 10_000 });
 
@@ -137,11 +137,11 @@ test.describe("Add Model", () => {
     await page.waitForTimeout(2000);
 
     // Search for the model we just added
-    await page.locator('input[placeholder="Search model names..."]').fill("claude-haiku-4-5");
+    await page.getByPlaceholder("Search model names").fill("claude-haiku-4-5");
     await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
-    await expect(page.getByTestId("models-results-count")).toHaveText(/Showing \d+ - \d+ of \d+ results/, {
+    await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
       timeout: 15_000,
     });
 
@@ -228,24 +228,24 @@ test.describe("Add Model", () => {
       // searching.
       await page.waitForTimeout(2000);
 
-      await page.locator('input[placeholder="Search model names..."]').fill("cohere");
+      await page.getByPlaceholder("Search model names").fill("cohere");
       await page.waitForTimeout(1000);
 
       // Confirm the search returned at least one result — gives a clear
       // failure message when the table is empty instead of timing out on a
       // row assertion.
-      await expect(page.getByTestId("models-results-count")).toHaveText(/Showing \d+ - \d+ of \d+ results/, {
+      await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
         timeout: 15_000,
       });
 
-      // Stronger than "alias appears somewhere in tbody" — pin the assertion
+      // Stronger than "the team appears somewhere in tbody" — pin the assertion
       // to a single row that has BOTH the cohere model_name AND the seeded
-      // team alias, so a stale cohere row from "Add wildcard route" (no team)
-      // can't satisfy the check.
+      // team, so a stale cohere row from "Add wildcard route" (no team) can't
+      // satisfy the check. The Team ID column renders the id, not the alias.
       const teamCohereRow = page
         .locator("table tbody tr")
         .filter({ hasText: "cohere/" })
-        .filter({ hasText: E2E_TEAM_CRUD_ALIAS });
+        .filter({ hasText: E2E_TEAM_CRUD_ID });
       await expect(teamCohereRow).toHaveCount(1, { timeout: 15_000 });
     } finally {
       await deleteTeamScopedCohereModels();
@@ -281,11 +281,11 @@ test.describe("Add Model", () => {
     await page.waitForTimeout(2000);
 
     // Search for the wildcard model
-    await page.locator('input[placeholder="Search model names..."]').fill("cohere");
+    await page.getByPlaceholder("Search model names").fill("cohere");
     await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
-    await expect(page.getByTestId("models-results-count")).toHaveText(/Showing \d+ - \d+ of \d+ results/, {
+    await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
       timeout: 15_000,
     });
 
