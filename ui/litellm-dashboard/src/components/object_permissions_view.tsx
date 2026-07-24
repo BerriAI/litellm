@@ -9,7 +9,7 @@ interface ObjectPermission {
   mcp_servers: string[];
   mcp_access_groups?: string[];
   mcp_tool_permissions?: Record<string, string[]>;
-  mcp_toolsets?: string[];
+  mcp_toolsets?: string[] | null;
   vector_stores: string[];
   agents?: string[];
   agent_access_groups?: string[];
