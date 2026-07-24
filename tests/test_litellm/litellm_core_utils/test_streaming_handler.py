@@ -3569,6 +3569,38 @@ async def test_sync_to_async_queue_iterator_aclose_while_producer_blocked_in_nex
 
 
 @pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_aclose_does_not_deadlock_on_full_queue():
+    """
+    Regression: a producer blocked in queue.put() (bounded queue full because the
+    consumer stopped reading) must not deadlock against aclose() waiting for the
+    producer to finish before draining the queue. aclose() must drain concurrently.
+    """
+    import litellm.constants as litellm_constants
+
+    monkeypatch_maxsize = litellm_constants.LITELLM_ASYNCIO_QUEUE_MAXSIZE
+    litellm_constants.LITELLM_ASYNCIO_QUEUE_MAXSIZE = 2
+    try:
+        produced = []
+
+        class FastSyncIter:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                produced.append(1)
+                if len(produced) > 10:
+                    raise StopIteration
+                return "chunk"
+
+        wrapper = _SyncToAsyncQueueIterator(FastSyncIter())
+        await asyncio.sleep(0.05)  # let the producer fill the bounded queue and block on put()
+
+        await asyncio.wait_for(wrapper.aclose(), timeout=2)
+    finally:
+        litellm_constants.LITELLM_ASYNCIO_QUEUE_MAXSIZE = monkeypatch_maxsize
+
+
+@pytest.mark.asyncio
 async def test_sync_to_async_queue_iterator_aclose_swallows_close_exception():
     class ExplodingCloseIter:
         def __iter__(self):
@@ -3585,8 +3617,8 @@ async def test_sync_to_async_queue_iterator_aclose_swallows_close_exception():
 
 
 @pytest.mark.asyncio
-async def test_sync_to_async_queue_iterator_aclose_drains_queue_race():
-    """Cover the QueueEmpty branch of aclose()'s drain loop, which guards
+async def test_sync_to_async_queue_iterator_drain_queue_nowait_handles_race():
+    """Cover the QueueEmpty branch of _drain_queue_nowait(), which guards
     against get_nowait() racing ahead of empty() reporting a non-empty queue."""
 
     class NeverYieldsIter:
@@ -3600,16 +3632,13 @@ async def test_sync_to_async_queue_iterator_aclose_drains_queue_race():
     wrapper._queue.empty = lambda: False
     wrapper._queue.get_nowait = Mock(side_effect=asyncio.QueueEmpty())
 
-    await wrapper.aclose()
+    wrapper._drain_queue_nowait()
 
 
 def test_sync_to_async_queue_iterator_producer_survives_cancelled_put():
     import concurrent.futures
 
-    from litellm.litellm_core_utils.streaming_handler import (
-        _SYNC_ITER_EXHAUSTED,
-        _SyncToAsyncQueueIterator,
-    )
+    from litellm.litellm_core_utils.streaming_handler import _SyncToAsyncQueueIterator
 
     class DummyLoop:
         pass

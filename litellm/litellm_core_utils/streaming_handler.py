@@ -119,15 +119,31 @@ class _SyncToAsyncQueueIterator:
             raise item
         return item
 
-    async def aclose(self) -> None:
-        self._exhausted = True
-        self._closed.set()
-        await asyncio.to_thread(self._done.wait)
+    def _drain_queue_nowait(self) -> None:
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    async def aclose(self) -> None:
+        self._exhausted = True
+        self._closed.set()
+
+        async def _drain_until_done() -> None:
+            while True:
+                await self._queue.get()
+
+        drain_task = asyncio.ensure_future(_drain_until_done())
+        try:
+            await asyncio.to_thread(self._done.wait)
+        finally:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except asyncio.CancelledError:
+                pass
+        self._drain_queue_nowait()
 
 
 def is_async_iterable(obj: Any) -> bool:
