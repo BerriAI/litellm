@@ -203,7 +203,10 @@ class TestToolManagementEndpoints:
             assert tuple(call.args[1:]) == expected_binds
         assert resp.json()["end_date"] == "2026-07-02"
 
-    def test_tool_spend_window_clamped_to_most_recent_30_days(self):
+    def test_tool_spend_start_clamped_to_30_days_before_end(self):
+        # Clamped floor is end_date minus 30 days, serving up to 31 calendar dates
+        # inclusive: deliberately the same width as the endpoint's default window,
+        # so the dashboard's default range never triggers the clamp.
         prisma = MagicMock()
         prisma.db.query_raw = AsyncMock(return_value=[])
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):

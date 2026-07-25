@@ -148,7 +148,7 @@ describe("UsageTab", () => {
     };
     const { findByText } = renderWith([day("2026-07-12", {})], toolSpend);
 
-    expect(await findByText(/most recent 30 days of the selected range/)).toBeInTheDocument();
+    expect(await findByText(/capped at 30 days before the end of the selected range/)).toBeInTheDocument();
   });
 
   it("shows no cap note when the served window matches the request", async () => {
@@ -162,6 +162,6 @@ describe("UsageTab", () => {
     const { findAllByTestId, queryByText } = renderWith([day("2026-07-12", {})], toolSpend);
 
     await findAllByTestId("bar-chart");
-    expect(queryByText(/most recent 30 days of the selected range/)).not.toBeInTheDocument();
+    expect(queryByText(/capped at 30 days before the end of the selected range/)).not.toBeInTheDocument();
   });
 });
