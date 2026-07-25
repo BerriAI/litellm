@@ -710,9 +710,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
         summary = thinking.get("summary") if isinstance(thinking, dict) else None
         if summary:
-            return cast(Any, {"effort": reasoning_effort, "summary": summary})
+            return {"effort": reasoning_effort, "summary": summary}
         if is_reasoning_auto_summary_enabled():
-            return cast(Any, {"effort": reasoning_effort, "summary": "detailed"})
+            return {"effort": reasoning_effort, "summary": "detailed"}
         return reasoning_effort
 
     def translate_anthropic_tool_choice_to_openai(
