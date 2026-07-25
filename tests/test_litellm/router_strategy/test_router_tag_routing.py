@@ -1019,3 +1019,99 @@ async def test_negation_removes_tag_regex_deployment_falls_to_ban_only():
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "openai-deployment"
+
+
+@pytest.mark.asyncio()
+async def test_request_level_enable_tag_filtering_applies_when_global_off():
+    """
+    A request carrying enable_tag_filtering=True (set by the proxy from key/team
+    router_settings) must activate tag filtering even when the router-level flag
+    is off. Without this, a team's "Enable Tag Filtering" toggle saved in the UI
+    is silently ignored at request time.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["teamA"],
+                },
+                "model_info": {"id": "team-a-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["teamB"],
+                },
+                "model_info": {"id": "team-b-deployment"},
+            },
+        ],
+        enable_tag_filtering=False,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["teamA"]},
+            enable_tag_filtering=True,
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "team-a-deployment"
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["teamB"]},
+            enable_tag_filtering=True,
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "team-b-deployment"
+
+
+@pytest.mark.asyncio()
+async def test_request_level_enable_tag_filtering_false_cannot_disable_global():
+    """
+    A request-level enable_tag_filtering=False must not bypass a router-level
+    True: tag filtering can be an operator-level restriction on which
+    deployments a caller may reach, so per-request settings may only scope
+    down, never escape the global policy.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["teamA"],
+                },
+                "model_info": {"id": "team-a-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["teamB"],
+                },
+                "model_info": {"id": "team-b-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["teamA"]},
+            enable_tag_filtering=False,
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "team-a-deployment"

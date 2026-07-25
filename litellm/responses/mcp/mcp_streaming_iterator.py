@@ -5,6 +5,8 @@ from litellm._uuid import uuid
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    ErrorEvent,
+    ErrorEventError,
     MCPCallArgumentsDeltaEvent,
     MCPCallArgumentsDoneEvent,
     MCPCallCompletedEvent,
@@ -316,6 +318,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # Cache the response ID to ensure consistency across all events
         self._cached_response_id: Optional[str] = None
 
+        self._initial_creation_error: Exception | None = None
+        self._stream_error: Exception | None = None
+        self._error_event_emitted = False
+        self._last_sequence_number = 0
+
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
         from typing import Dict, Optional
@@ -380,10 +387,31 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
 
+    def _make_stream_error_event(self) -> ResponsesAPIStreamingResponse:
+        err = self._stream_error
+        status_code = getattr(err, "status_code", None)
+        return ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=self._last_sequence_number + 1,
+            error=ErrorEventError(
+                type="mcp_gateway_error",
+                code=str(status_code) if status_code is not None else "internal_error",
+                message=str(err) if err is not None else "MCP gateway stream failed",
+                param=None,
+            ),
+        )
+
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        chunk = await self._anext_impl()
+        sequence_number = getattr(chunk, "sequence_number", None)
+        if isinstance(sequence_number, int) and sequence_number > self._last_sequence_number:
+            self._last_sequence_number = sequence_number
+        return chunk
+
+    async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
         """
         Phase-based streaming:
         1. initial_response - Stream the first LLM response (includes response.created, response.in_progress, response.output_item.added)
@@ -438,10 +466,16 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.phase = "continue_initial_response"
                 return await self.__anext__()
             self.phase = "finished"
+            if self._stream_error is not None and not self._error_event_emitted:
+                self._error_event_emitted = True
+                return self._make_stream_error_event()
             raise StopAsyncIteration
 
         # Phase 6: Finished
         if self.phase == "finished":
+            if self._stream_error is not None and not self._error_event_emitted:
+                self._error_event_emitted = True
+                return self._make_stream_error_event()
             raise StopAsyncIteration
 
         # Should not reach here
@@ -530,6 +564,12 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         chunk = await cast(Any, self.base_iterator).__anext__()  # type: ignore[attr-defined]
 
+        if self._cached_response_id is None and hasattr(chunk, "response"):
+            new_response = getattr(chunk, "response", None)
+            new_response_id = getattr(new_response, "id", None) if new_response is not None else None
+            if new_response_id:
+                self._cached_response_id = new_response_id
+
         # Ensure response ID consistency - update chunk if needed
         if self._cached_response_id and hasattr(chunk, "response"):
             response_obj = getattr(chunk, "response", None)
@@ -589,6 +629,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.base_iterator = None
+            self._initial_creation_error = e
+            self._stream_error = e
             # Don't set phase to "finished" here — let __anext__ emit any
             # pre-generated MCP discovery events before ending the iteration.
 
@@ -761,6 +803,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             if hasattr(follow_up_response, "__aiter__"):
                 self.base_iterator = follow_up_response
                 self.collected_response = None
+                self._cached_response_id = None
 
         except Exception as e:
             verbose_logger.error(f"Error creating follow-up iterator: {e}")
@@ -768,6 +811,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             traceback.print_exc()
             self.base_iterator = None
+            self._stream_error = e
 
     def __iter__(self):
         return self

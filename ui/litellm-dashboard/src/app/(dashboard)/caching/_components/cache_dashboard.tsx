@@ -1,30 +1,30 @@
-import {
-  BarChart,
-  Card,
-  Col,
-  DateRangePickerValue,
-  Grid,
-  Icon,
-  MultiSelect,
-  MultiSelectItem,
-  Subtitle,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-} from "@tremor/react";
+import { DateRangePickerValue } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import UsageDatePicker from "@/components/shared/usage_date_picker";
+import { BarChart } from "@/components/shared/charts";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+} from "@/components/ui/combobox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { RefreshIcon } from "@heroicons/react/outline";
+import { RefreshCw } from "lucide-react";
 import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/networking";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
 import CacheSettings from "./cache_settings";
+import CoordinationRedisSettings from "./coordination_redis_settings";
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -61,13 +61,13 @@ interface cacheDataItem {
   // Add other properties as needed
 }
 
-interface uiData {
+type uiData = {
   name: string;
   "LLM API requests": number;
   "Cache hit": number;
   "Cached Completion Tokens": number;
   "Generated Completion Tokens": number;
-}
+};
 
 interface CacheHealthResponse {
   status?: string;
@@ -257,134 +257,202 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     }
   };
 
+  const statCards = [
+    { label: "Cache Hit Ratio", value: `${cacheHitRatio}%` },
+    { label: "Cache Hits", value: cachedResponses },
+    { label: "Cached Completion Tokens", value: cachedTokens },
+  ];
+
   return (
-    <TabGroup className="gap-2 p-8 h-full w-full mt-2 mb-8">
-      <TabList className="flex justify-between mt-2 w-full items-center">
-        <div className="flex">
-          <Tab>Cache Analytics</Tab>
-          <Tab>Cache Health</Tab>
-          <Tab>Cache Settings</Tab>
-        </div>
+    <Tabs defaultValue="analytics" className="mt-2 mb-8 w-full gap-2 p-8">
+      <div className="mt-2 flex w-full items-center justify-between">
+        <TabsList>
+          <TabsTrigger value="analytics" className="flex-none">
+            Cache Analytics
+          </TabsTrigger>
+          <TabsTrigger value="health" className="flex-none">
+            Cache Health
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="flex-none">
+            Cache Settings
+          </TabsTrigger>
+          <TabsTrigger value="coordination" className="flex-none">
+            Coordination Redis
+          </TabsTrigger>
+        </TabsList>
 
         <div className="flex items-center space-x-2">
-          {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-          <Icon
-            icon={RefreshIcon} // Modify as necessary for correct icon name
-            variant="shadow"
-            size="xs"
-            className="self-center"
-            onClick={handleRefreshClick}
-          />
+          {lastRefreshed && <p className="text-sm text-muted-foreground">Last Refreshed: {lastRefreshed}</p>}
+          <Button variant="outline" size="icon-sm" onClick={handleRefreshClick} aria-label="Refresh">
+            <RefreshCw />
+          </Button>
         </div>
-      </TabList>
-      <TabPanels>
-        <TabPanel>
-          <Card>
-            <Grid numItems={3} className="gap-4 mt-4">
-              <Col>
-                <MultiSelect
-                  placeholder="Select Virtual Keys"
-                  value={selectedApiKeys}
-                  onValueChange={setSelectedApiKeys}
-                >
-                  {uniqueApiKeys.map((key) => (
-                    <MultiSelectItem key={key} value={key}>
-                      {key}
-                    </MultiSelectItem>
-                  ))}
-                </MultiSelect>
-              </Col>
-              <Col>
-                <MultiSelect placeholder="Select Models" value={selectedModels} onValueChange={setSelectedModels}>
-                  {uniqueModels.map((model) => (
-                    <MultiSelectItem key={model} value={model}>
-                      {model}
-                    </MultiSelectItem>
-                  ))}
-                </MultiSelect>
-              </Col>
-              <Col>
-                <UsageDatePicker
-                  value={dateValue}
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateCachingData(value.from, value.to);
-                  }}
-                />
-              </Col>
-            </Grid>
+      </div>
 
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cache Hit Ratio
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cacheHitRatio}%
-                  </p>
-                </div>
-              </Card>
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cache Hits
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cachedResponses}
-                  </p>
-                </div>
-              </Card>
+      <TabsContent value="analytics">
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Analytics for LiteLLM&apos;s{" "}
+              <a
+                href="https://docs.litellm.ai/docs/proxy/caching"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                response cache
+              </a>{" "}
+              (e.g. Redis / in-memory): requests answered from cache without calling the LLM provider. Provider-side{" "}
+              <a
+                href="https://docs.litellm.ai/docs/completion/prompt_caching"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                prompt caching
+              </a>{" "}
+              (cached input tokens from Anthropic, OpenAI, etc.) is not shown here; see &quot;Prompt Caching
+              Metrics&quot; on the Usage page or individual requests in the Logs page.
+            </p>
 
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cached Tokens
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cachedTokens}
-                  </p>
-                </div>
-              </Card>
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+              <Combobox
+                multiple
+                items={uniqueApiKeys}
+                value={selectedApiKeys}
+                onValueChange={(keys: string[]) => setSelectedApiKeys(keys)}
+              >
+                <ComboboxChips>
+                  <ComboboxValue>
+                    {(keys: string[]) =>
+                      keys.map((key) => (
+                        <ComboboxChip key={key} aria-label={key}>
+                          {key}
+                        </ComboboxChip>
+                      ))
+                    }
+                  </ComboboxValue>
+                  <ComboboxChipsInput placeholder="Select Virtual Keys" className="border-0 bg-transparent" />
+                </ComboboxChips>
+                <ComboboxContent>
+                  <ComboboxEmpty>No virtual keys found</ComboboxEmpty>
+                  <ComboboxList>
+                    {(key: string) => (
+                      <ComboboxItem key={key} value={key}>
+                        {key}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+
+              <Combobox
+                multiple
+                items={uniqueModels}
+                value={selectedModels}
+                onValueChange={(models: string[]) => setSelectedModels(models)}
+              >
+                <ComboboxChips>
+                  <ComboboxValue>
+                    {(models: string[]) =>
+                      models.map((model) => (
+                        <ComboboxChip key={model} aria-label={model}>
+                          {model}
+                        </ComboboxChip>
+                      ))
+                    }
+                  </ComboboxValue>
+                  <ComboboxChipsInput placeholder="Select Models" className="border-0 bg-transparent" />
+                </ComboboxChips>
+                <ComboboxContent>
+                  <ComboboxEmpty>No models found</ComboboxEmpty>
+                  <ComboboxList>
+                    {(model: string) => (
+                      <ComboboxItem key={model} value={model}>
+                        {model}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+
+              <UsageDatePicker
+                value={dateValue}
+                onValueChange={(value) => {
+                  setDateValue(value);
+                  updateCachingData(value.from, value.to);
+                }}
+              />
             </div>
 
-            <Subtitle className="mt-4">Cache Hits vs API Requests</Subtitle>
-            <BarChart
-              title="Cache Hits vs API Requests"
-              data={filteredData}
-              stack={true}
-              index="name"
-              valueFormatter={valueFormatterNumbers}
-              categories={["LLM API requests", "Cache hit"]}
-              colors={["sky", "teal"]}
-              yAxisWidth={48}
-            />
+            <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {statCards.map((stat) => (
+                <Card key={stat.label}>
+                  <CardContent>
+                    <p className="text-sm font-medium text-muted-foreground">{stat.label}</p>
+                    <div className="mt-2 flex items-baseline space-x-2.5">
+                      <p className="text-3xl font-semibold">{stat.value}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
 
-            <Subtitle className="mt-4">Cached Completion Tokens vs Generated Completion Tokens</Subtitle>
-            <BarChart
-              className="mt-6"
-              data={filteredData}
-              stack={true}
-              index="name"
-              valueFormatter={valueFormatterNumbers}
-              categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
-              colors={["sky", "teal"]}
-              yAxisWidth={48}
-            />
-          </Card>
-        </TabPanel>
-        <TabPanel>
-          <CacheHealthTab
-            accessToken={accessToken}
-            healthCheckResponse={healthCheckResponse}
-            runCachingHealthCheck={runCachingHealthCheck}
-          />
-        </TabPanel>
-        <TabPanel>
-          <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-        </TabPanel>
-      </TabPanels>
-    </TabGroup>
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle className="text-base font-semibold">Cache Hits vs API Requests</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <BarChart
+                  data={filteredData}
+                  stack={true}
+                  index="name"
+                  valueFormatter={valueFormatterNumbers}
+                  categories={["LLM API requests", "Cache hit"]}
+                  colors={["sky", "teal"]}
+                  yAxisWidth={48}
+                />
+              </CardContent>
+            </Card>
+
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle className="text-base font-semibold">
+                  Cached Completion Tokens vs Generated Completion Tokens
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <BarChart
+                  data={filteredData}
+                  stack={true}
+                  index="name"
+                  valueFormatter={valueFormatterNumbers}
+                  categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
+                  colors={["sky", "teal"]}
+                  yAxisWidth={48}
+                />
+              </CardContent>
+            </Card>
+          </CardContent>
+        </Card>
+      </TabsContent>
+
+      <TabsContent value="health">
+        <CacheHealthTab
+          accessToken={accessToken}
+          healthCheckResponse={healthCheckResponse}
+          runCachingHealthCheck={runCachingHealthCheck}
+        />
+      </TabsContent>
+
+      <TabsContent value="settings">
+        <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
+      </TabsContent>
+
+      <TabsContent value="coordination">
+        <CoordinationRedisSettings />
+      </TabsContent>
+    </Tabs>
   );
 };
 

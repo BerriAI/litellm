@@ -14,7 +14,8 @@ grouped `module > feature > test`, with LLM cells split into `Core LLMs` and
 `fail_before_fix` flag.
 
 The rows live in per-prefix YAML files (`llm_*.yaml`, `mgmt.yaml`, `mcp.yaml`,
-`reliability.yaml`, `logging.yaml`, `guardrail.yaml`, `other.yaml`) and validate against
+`reliability.yaml`, `quota_management.yaml`, `logging.yaml`, `guardrail.yaml`,
+`other.yaml`) and validate against
 the discriminated union in `schema.py`, so an LLM row cannot carry a guardrail field and
 vice versa. `llm` rows with `subject_endpoint` of `chat_completions`, `messages`, or
 `responses` roll up to `Core LLMs`; all other LLM endpoints roll up to `Non-Core LLMs`.

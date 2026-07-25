@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -26,6 +27,14 @@ class PromptSecurityGuardrailMissingSecrets(Exception):
 
 
 class PromptSecurityGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -35,6 +44,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         check_tool_results: Optional[bool] = None,
         **kwargs,
     ):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PROMPT_SECURITY_API_KEY")
         self.api_base = api_base or os.environ.get("PROMPT_SECURITY_API_BASE")

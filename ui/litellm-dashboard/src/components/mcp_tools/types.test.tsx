@@ -7,9 +7,14 @@ import {
   handleTransport,
   handleAuth,
   getMcpOAuthMode,
+  gatewayMintsClientFor,
   getOAuthAuthorizationIdentity,
   isHeldOAuthTokenStale,
   oauth2FlowToFormValue,
+  preservedDeclaredAppCredentials,
+  withoutMintedTokenCredentials,
+  credentialAuthClass,
+  isUnsupportedOnGatewayConnect,
 } from "./types";
 
 describe("getOAuthAuthorizationIdentity", () => {
@@ -98,6 +103,41 @@ describe("constants", () => {
   });
 });
 
+describe("gatewayMintsClientFor", () => {
+  // The authoritative client-acquisition matrix: for each (auth_type, dcr_bridge) cell, does the
+  // gateway mint the OAuth client at /authorize (browser skips its own register) or not (browser
+  // registers)? This MUST equal the backend resolve_ephemeral_dcr_client mint set exactly, which
+  // test_discoverable_endpoints.py::test_resolve_ephemeral_dcr_client_mint_set_is_exact pins against
+  // the same predicate. A divergence in either direction dead-ends a mode (skip a register the
+  // gateway never performs) or double-registers, so both sides are enumerated against this table.
+  const MATRIX: Array<{ auth_type: string; dcr_bridge: boolean | null | undefined; mints: boolean }> = [
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: true, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: undefined, mints: true },
+    // The one interactive-sign-in cell the gateway must NOT mint (browser front-door register).
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.API_KEY, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BEARER_TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BASIC, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.NONE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.AWS_SIGV4, dcr_bridge: false, mints: false },
+  ];
+
+  it.each(MATRIX)(
+    "mints=$mints for auth_type=$auth_type dcr_bridge=$dcr_bridge",
+    ({ auth_type, dcr_bridge, mints }) => {
+      expect(gatewayMintsClientFor({ auth_type, dcr_bridge })).toBe(mints);
+    },
+  );
+});
+
 describe("getMcpOAuthMode", () => {
   it("returns null for non-OAuth2 servers", () => {
     expect(getMcpOAuthMode({ auth_type: AUTH_TYPE.API_KEY })).toBeNull();
@@ -178,5 +218,73 @@ describe("oauth2FlowToFormValue", () => {
   it("returns undefined for a null/unset flow so the select shows its placeholder", () => {
     expect(oauth2FlowToFormValue(null)).toBeUndefined();
     expect(oauth2FlowToFormValue(undefined)).toBeUndefined();
+  });
+});
+
+describe("preservedDeclaredAppCredentials", () => {
+  it("keeps only non-empty string declared-app keys and never token-shaped keys", () => {
+    expect(preservedDeclaredAppCredentials(undefined)).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({})).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: 123 })).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: "" })).toBeUndefined();
+    expect(preservedDeclaredAppCredentials({ client_id: "a", access_token: "t", scopes: ["s"] })).toEqual({
+      client_id: "a",
+    });
+    expect(preservedDeclaredAppCredentials({ client_secret: "s" })).toEqual({ client_secret: "s" });
+    expect(preservedDeclaredAppCredentials({ client_id: "a", client_secret: "b", refresh_token: "r" })).toEqual({
+      client_id: "a",
+      client_secret: "b",
+    });
+  });
+});
+
+describe("withoutMintedTokenCredentials", () => {
+  it("drops token keys and keeps the declared app and other config", () => {
+    expect(withoutMintedTokenCredentials(undefined)).toBeUndefined();
+    const mixed = {
+      client_id: "a",
+      client_secret: "b",
+      access_token: "t",
+      refresh_token: "r",
+      expires_in: 3600,
+      scope: "read",
+      scopes: ["read"],
+    };
+    expect(withoutMintedTokenCredentials(mixed)).toEqual({ client_id: "a", client_secret: "b", scopes: ["read"] });
+  });
+
+  it("returns undefined (not {}) when only minted keys are present, so a restore never blanks the fields", () => {
+    expect(withoutMintedTokenCredentials({ access_token: "t", refresh_token: "r", expires_in: 3600 })).toBeUndefined();
+    // A declared client is always kept, so a stored client_id can never be overwritten with empty.
+    expect(withoutMintedTokenCredentials({ client_id: "x", access_token: "t" })).toEqual({ client_id: "x" });
+  });
+});
+
+describe("credentialAuthClass", () => {
+  it("collapses the client-forwarded modes to one class and leaves others distinct", () => {
+    expect(credentialAuthClass(AUTH_TYPE.TRUE_PASSTHROUGH)).toBe("client_forwarded");
+    expect(credentialAuthClass(AUTH_TYPE.OAUTH_DELEGATE)).toBe("client_forwarded");
+    expect(credentialAuthClass(AUTH_TYPE.OAUTH2)).toBe(AUTH_TYPE.OAUTH2);
+    expect(credentialAuthClass(null)).toBeNull();
+  });
+});
+
+describe("isUnsupportedOnGatewayConnect", () => {
+  it("flags the modes that need a caller-supplied upstream token or subject", () => {
+    // client-forwarded: caller presents the upstream Authorization per call
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.TRUE_PASSTHROUGH)).toBe(true);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH_DELEGATE)).toBe(true);
+    // OBO: caller's own IdP token is the exchange subject, which the session bearer is not
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE)).toBe(true);
+  });
+
+  it("does not flag modes the gateway can serve from server-side state or interactive vaulting", () => {
+    // interactive authorization_code is the one mode the connect grid vaults per user
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2)).toBe(false);
+    // server-configured credentials need no per-user connect
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.API_KEY)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.NONE)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(null)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(undefined)).toBe(false);
   });
 });

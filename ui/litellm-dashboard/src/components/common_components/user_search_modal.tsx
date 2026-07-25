@@ -1,8 +1,9 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Modal, Form, Button, Select, Tooltip } from "antd";
 import { UserAddOutlined } from "@ant-design/icons";
-import debounce from "lodash/debounce";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { userFilterUICall } from "@/components/networking";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 interface User {
   user_id: string;
   user_email: string;
@@ -93,9 +94,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     }
   };
 
-  const debouncedSearch = useCallback(
-    debounce((text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName), 300),
-    [],
+  const debouncedSearch = useDebouncedCallback(
+    (text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName),
+    { wait: DEBOUNCE_WAIT_MS },
   );
 
   const handleSearch = (value: string, fieldName: "user_email" | "user_id"): void => {

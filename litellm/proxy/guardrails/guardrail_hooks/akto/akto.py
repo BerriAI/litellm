@@ -11,7 +11,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type
 
 from fastapi import HTTPException
 
@@ -52,6 +52,13 @@ class AktoGuardrail(CustomGuardrail):
 
         return AktoConfigModel
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         akto_base_url: Optional[str] = None,
@@ -90,10 +97,7 @@ class AktoGuardrail(CustomGuardrail):
         self.akto_account_id = akto_account_id or os.environ.get("AKTO_ACCOUNT_ID", "1000000")
         self.akto_vxlan_id = akto_vxlan_id or os.environ.get("AKTO_VXLAN_ID", "0")
 
-        kwargs["supported_event_hooks"] = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
+        kwargs["supported_event_hooks"] = list(self.get_supported_event_hooks())
         super().__init__(**kwargs)
 
         verbose_proxy_logger.debug(

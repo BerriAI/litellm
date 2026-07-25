@@ -760,7 +760,11 @@ def _select_model_name_for_cost_calc(
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
             entry = litellm.model_cost[router_model_id]
-            if entry.get("input_cost_per_token") is not None or entry.get("input_cost_per_second") is not None:
+            if (
+                entry.get("input_cost_per_token") is not None
+                or entry.get("input_cost_per_second") is not None
+                or entry.get("tiered_pricing") is not None
+            ):
                 return_model = router_model_id
             else:
                 return_model = model
@@ -2187,6 +2191,13 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
+def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> List[str]:
+    field_names = list(type(prompt_tokens_details).model_fields)
+    if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
+        return field_names
+    return [attr for attr in field_names if attr != "cache_creation_tokens"]
+
+
 class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: List[Usage]) -> Usage:
@@ -2221,7 +2232,7 @@ class BaseTokenUsageProcessor:
 
                 # Check what keys exist in the model's prompt_tokens_details
                 # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-                for attr in type(usage.prompt_tokens_details).model_fields:
+                for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
                     if (
                         hasattr(usage.prompt_tokens_details, attr)
                         and not attr.startswith("_")

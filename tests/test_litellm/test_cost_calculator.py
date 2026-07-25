@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.cost_calculator import (
+    BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
@@ -998,6 +999,110 @@ def test_per_request_custom_pricing_with_router():
     assert selected is not None
     assert router_model_id not in selected
     assert "gpt-3.5-turbo" in selected
+
+
+def test_tiered_pricing_only_deployment_selects_router_model_id():
+    """A deployment priced solely via ``tiered_pricing`` (no flat
+    input/output cost) must resolve cost against its ``router_model_id``
+    entry, which holds the tiered table, instead of the shared backend alias
+    that has custom pricing fields stripped. Regression for tier-only models
+    (e.g. dashscope/qwen3.7-plus) being billed as free.
+    """
+    from litellm import Router
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-3.7-plus",
+                "litellm_params": {
+                    "model": "dashscope/qwen3.7-plus",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 4e-07,
+                            "output_cost_per_token": 1.6e-06,
+                            "range": [0, 256000],
+                        },
+                    ],
+                },
+            },
+        ]
+    )
+    router_model_id = router.model_list[0]["model_info"]["id"]
+
+    entry = litellm.model_cost[router_model_id]
+    assert entry.get("input_cost_per_token") is None
+    assert entry.get("tiered_pricing") is not None
+    # The stripped shared alias must not carry tiered pricing.
+    assert litellm.model_cost["dashscope/qwen3.7-plus"].get("tiered_pricing") is None
+
+    selected = _select_model_name_for_cost_calc(
+        model="dashscope/qwen3.7-plus",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="dashscope",
+        router_model_id=router_model_id,
+    )
+    assert selected is not None
+    assert router_model_id in selected
+
+
+def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
+    """End-to-end: a tier-only deployment must produce the tiered cost, not
+    $0. Mirrors the reported dashscope/qwen3.7-plus trace (12 prompt + 377
+    completion tokens).
+    """
+    from litellm import Router
+    from litellm.types.utils import Choices, Message
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-3.7-plus",
+                "litellm_params": {
+                    "model": "dashscope/qwen3.7-plus",
+                    "api_key": "sk-fake",
+                },
+                "model_info": {
+                    "tiered_pricing": [
+                        {
+                            "input_cost_per_token": 4e-07,
+                            "output_cost_per_token": 1.6e-06,
+                            "range": [0, 256000],
+                        },
+                        {
+                            "input_cost_per_token": 1.2e-06,
+                            "output_cost_per_token": 4.8e-06,
+                            "range": [256000, 1000000],
+                        },
+                    ],
+                },
+            },
+        ]
+    )
+    router_model_id = router.model_list[0]["model_info"]["id"]
+
+    response = ModelResponse(
+        model="dashscope/qwen3.7-plus",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
+        usage=Usage(prompt_tokens=12, completion_tokens=377, total_tokens=389),
+    )
+    response._hidden_params = {"custom_llm_provider": "dashscope", "model_id": router_model_id}
+
+    cost = completion_cost(
+        completion_response=response,
+        model="dashscope/qwen3.7-plus",
+        custom_llm_provider="dashscope",
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    expected = 12 * 4e-07 + 377 * 1.6e-06
+    assert cost == pytest.approx(expected)
+    assert cost > 0
 
 
 def test_azure_realtime_cost_calculator():
@@ -3375,3 +3480,32 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
+    """
+    cache_write_tokens and cache_creation_tokens mirror each other on
+    PromptTokensDetailsWrapper, so field-iterating aggregation must sum the pair
+    once: a single 50-token usage stays 50 and two combine to 100, not double.
+    """
+    single = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cache_write_tokens=50),
+    )
+    combined = BaseTokenUsageProcessor.combine_usage_objects([single])
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.cache_write_tokens == 50
+    assert combined.prompt_tokens_details.cache_creation_tokens == 50
+
+    anthropic_style = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        cache_creation_input_tokens=50,
+    )
+    combined_pair = BaseTokenUsageProcessor.combine_usage_objects([anthropic_style, anthropic_style])
+    assert combined_pair.prompt_tokens_details is not None
+    assert combined_pair.prompt_tokens_details.cache_write_tokens == 100
+    assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100

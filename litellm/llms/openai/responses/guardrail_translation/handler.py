@@ -247,6 +247,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Merge remapped guardrailed tools with original tools that were not sent
         to the guardrail (e.g. web_search, web_search_preview), preserving order.
+        Tools a guardrail appended (``remapped`` longer than ``original_tools``)
+        have no original slot and are kept so an injected tool is not dropped.
         """
         if not original_tools:
             return remapped
@@ -262,6 +264,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if j < len(remapped):
                     result.append(remapped[j])
                     j += 1
+        # Keep guardrail-appended tools that matched no original slot above.
+        result.extend(remapped[j:])
         return result
 
     def _apply_guardrailed_tools_to_data(

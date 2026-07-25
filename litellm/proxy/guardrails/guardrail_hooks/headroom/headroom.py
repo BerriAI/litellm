@@ -4,13 +4,14 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, List, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
 
 import litellm
 from httpx import Response as HttpxResponse
+from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from typing_extensions import TypeGuard
 
 from litellm._logging import verbose_proxy_logger
@@ -208,6 +209,15 @@ def _build_responses_followup_items(
 
 
 class HeadroomGuardrail(CustomGuardrail):
+    records_own_guardrail_information: ClassVar[bool] = True
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_base: str | None = None,
@@ -237,6 +247,7 @@ class HeadroomGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
         )
 
     def _should_bypass(self, request_data: dict) -> bool:
@@ -401,6 +412,19 @@ class HeadroomGuardrail(CustomGuardrail):
             )
             if key in body
         }
+        tokens_before = stats.get("tokens_before")
+        tokens_after = stats.get("tokens_after")
+        if (
+            "tokens_saved" not in stats
+            and isinstance(tokens_before, (int, float))
+            and not isinstance(tokens_before, bool)
+            and isinstance(tokens_after, (int, float))
+            and not isinstance(tokens_after, bool)
+        ):
+            # Spend tracking (extract_compression_saved_tokens) reads only
+            # tokens_saved, which the live compression service omits; derive it
+            # so savings are counted, but let a service-sent value win.
+            stats["tokens_saved"] = tokens_before - tokens_after
         return filtered, True, stats
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
@@ -472,18 +496,33 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         end_time = time.time()
 
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
         if not compression_succeeded:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={"error": "headroom compression unavailable; request forwarded uncompressed"},
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+            )
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=stats,
             request_data=request_data,
             guardrail_status="success",
-            guardrail_provider="headroom",
+            guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
             start_time=start_time,
             end_time=end_time,
             duration=end_time - start_time,
         )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
         hashes = extract_hashes_from_messages(compressed)
         if not hashes:

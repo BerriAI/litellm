@@ -19,9 +19,9 @@ pub enum CoreError {
     InvalidRequest(String),
     #[error("{0}")]
     Auth(String),
-    #[error("OCR request failed with status {status}: {body}")]
+    #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
-    #[error("OCR network error: {0}")]
+    #[error("upstream network error: {0}")]
     Network(String),
     #[error("routing error: {0}")]
     Routing(String),

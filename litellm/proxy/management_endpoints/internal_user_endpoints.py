@@ -61,6 +61,8 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_METADATA_KEY,
+    SCIM_ENTITLEMENTS_METADATA_KEY,
+    SCIM_ROLES_METADATA_KEY,
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
@@ -312,11 +314,13 @@ async def add_new_user_to_default_team(
     tasks = []
     for team in teams:
         user_role: Literal["user", "admin"] = "user"
+        max_budget_in_team: float | None = None
         if isinstance(team, str):
             team_id = team
         elif isinstance(team, NewUserRequestTeam):
             team_id = team.team_id
             user_role = team.user_role
+            max_budget_in_team = team.max_budget_in_team
         else:
             raise ValueError(f"Invalid team type: {type(team)}")
 
@@ -326,6 +330,7 @@ async def add_new_user_to_default_team(
                 team_id=team_id,
                 user_email=user_email,
                 user_api_key_dict=user_api_key_dict,
+                max_budget_in_team=max_budget_in_team,
                 user_role=user_role,
             )
         )
@@ -690,15 +695,21 @@ async def _get_user_info_teams(
     return team_list, teams_1
 
 
+_SCIM_DIRECTORY_METADATA_KEYS = frozenset(
+    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
+)
+
+
 def _redact_scim_enterprise_metadata(
     metadata: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """SCIM enterprise attributes are persisted in user metadata so reporting can
-    group on them, but they are directory-only fields that generic user-info
-    endpoints must not surface; SCIM clients read them through the SCIM endpoints."""
-    if not isinstance(metadata, dict) or SCIM_ENTERPRISE_METADATA_KEY not in metadata:
+    """SCIM enterprise attributes, entitlements, and roles are persisted in user
+    metadata so reporting can group on them, but they are directory-only fields
+    that generic user-info endpoints must not surface; SCIM clients read them
+    through the SCIM endpoints."""
+    if not isinstance(metadata, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(metadata):
         return metadata
-    return {k: v for k, v in metadata.items() if k != SCIM_ENTERPRISE_METADATA_KEY}
+    return {k: v for k, v in metadata.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
 
 
 def _build_user_info_response(

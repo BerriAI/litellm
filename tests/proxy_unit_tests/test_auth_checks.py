@@ -236,6 +236,8 @@ async def test_can_team_call_model(model, expect_to_work):
         (["bedrock/*"], "bedrock/anthropic.claude-3-5-sonnet-20240620", True),
         (["bedrock/*"], "bedrockz/anthropic.claude-3-5-sonnet-20240620", False),
         (["bedrock/us.*"], "bedrock/us.amazon.nova-micro-v1:0", True),
+        (["openai/*"], "ft:gpt-4-0613", True),
+        (["openai/*"], "bedrockz/ft:gpt-4-0613", False),
     ],
 )
 @pytest.mark.asyncio
