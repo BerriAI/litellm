@@ -5,7 +5,7 @@ import ModelGroupAliasSettings from "@/components/model_group_alias_settings";
 import { getCallbacksCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-export default function ModelGroupAliasPage() {
+export default function ModelGroupAliasPanel() {
   const { accessToken, userId: userID, userRole } = useAuthorized();
   const [modelGroupAlias, setModelGroupAlias] = useState<{ [key: string]: string }>({});
 
