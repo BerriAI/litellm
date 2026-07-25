@@ -2996,6 +2996,25 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert "content-type" not in proxy_exc.headers
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
+    async def test_strips_framing_headers_on_existing_proxy_exception(self):
+        from litellm.proxy._types import ProxyException
+
+        exc = ProxyException(
+            message="Resource exhausted",
+            type="rate_limit_error",
+            param=None,
+            code=429,
+            headers={
+                "content-length": "42",
+                "transfer-encoding": "chunked",
+                "x-request-id": "abc-123",
+            },
+        )
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
 
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""

@@ -2712,10 +2712,11 @@ class ProxyBaseLLMRequestProcessing:
         self._apply_router_cooldown_retry_after(headers, e)
 
         if isinstance(e, ProxyException):
-            e.headers = {
+            merged_headers = {
                 **e.headers,
                 **{k: v if isinstance(v, str) else str(v) for k, v in headers.items()},
             }
+            e.headers = {k: v for k, v in merged_headers.items() if k.lower() not in _HTTP_FRAMING_HEADERS}
             raise e
 
         if isinstance(e, HTTPException):
