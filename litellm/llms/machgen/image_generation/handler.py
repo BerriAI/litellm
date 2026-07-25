@@ -114,7 +114,11 @@ class MachGenImageGeneration:
 
         deadline = time.time() + self.max_polling_time
         while True:
-            task_response = sync_client.get(url=task_url, headers=request.headers)
+            task_response = sync_client.get(
+                url=task_url,
+                headers=request.headers,
+                timeout=self._remaining_timeout(timeout, deadline),
+            )
             if self._is_terminal(task_response):
                 break
             if time.time() >= deadline:
@@ -132,7 +136,11 @@ class MachGenImageGeneration:
         )
 
         if self._wants_b64(optional_params):
-            asset = sync_client.get(url=self.config.get_asset_url(task_response), headers=request.headers)
+            asset = sync_client.get(
+                url=self.config.get_asset_url(task_response),
+                headers=request.headers,
+                timeout=timeout,
+            )
             return self._inline_asset(response, asset)
         return response
 
@@ -172,7 +180,11 @@ class MachGenImageGeneration:
 
         deadline = time.time() + self.max_polling_time
         while True:
-            task_response = await async_client.get(url=task_url, headers=request.headers)
+            task_response = await async_client.get(
+                url=task_url,
+                headers=request.headers,
+                timeout=self._remaining_timeout(timeout, deadline),
+            )
             if self._is_terminal(task_response):
                 break
             if time.time() >= deadline:
@@ -190,7 +202,11 @@ class MachGenImageGeneration:
         )
 
         if self._wants_b64(optional_params):
-            asset = await async_client.get(url=self.config.get_asset_url(task_response), headers=request.headers)
+            asset = await async_client.get(
+                url=self.config.get_asset_url(task_response),
+                headers=request.headers,
+                timeout=timeout,
+            )
             return self._inline_asset(response, asset)
         return response
 
@@ -260,6 +276,15 @@ class MachGenImageGeneration:
 
         verbose_logger.debug("MachGen polling task %s", task_id)
         return f"{request.api_base}{TASKS_PATH}/{quote(str(task_id), safe='')}"
+
+    @staticmethod
+    def _remaining_timeout(timeout: float | httpx.Timeout | None, deadline: float) -> float | httpx.Timeout:
+        remaining = max(deadline - time.time(), 0.0)
+        if isinstance(timeout, httpx.Timeout):
+            return timeout
+        if timeout is None:
+            return remaining
+        return min(timeout, remaining)
 
     def _timeout_error(self) -> MachGenError:
         return MachGenError(

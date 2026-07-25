@@ -48,7 +48,7 @@ class MachGenImageGenerationConfig(BaseImageGenerationConfig):
     """Translate OpenAI image generation requests to/from the MachGen task API."""
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return ["size", "response_format", "seed", "aspect_ratio"]
+        return ["size", "response_format"]
 
     def map_openai_params(
         self,

@@ -118,26 +118,12 @@ class TestMachGenTransformation:
                 drop_params=False,
             )
 
-    def test_machgen_specific_params_pass_through(self):
-        params = self.config.map_openai_params(
-            non_default_params={"infer_steps": 30, "guidance_scale": [5.0], "enhance_prompt": True},
-            optional_params={},
-            model=MODEL,
-            drop_params=False,
-        )
+    def test_machgen_specific_params_are_not_declared_as_openai_params(self):
+        """They must stay out of get_supported_openai_params or the shared pipeline drops them."""
+        supported = self.config.get_supported_openai_params(MODEL)
 
-        assert params == {"infer_steps": 30, "guidance_scale": [5.0], "enhance_prompt": True}
-
-        body = self.config.transform_image_generation_request(
-            model=MODEL,
-            prompt=PROMPT,
-            optional_params=params,
-            litellm_params={},
-            headers={},
-        )
-        assert body["image_config"]["infer_steps"] == 30
-        assert body["image_config"]["guidance_scale"] == [5.0]
-        assert body["enhance_prompt"] is True
+        assert "aspect_ratio" not in supported
+        assert "seed" not in supported
 
     def test_unsupported_param_raises_unless_dropped(self):
         with pytest.raises(ValueError, match="style"):
@@ -264,6 +250,50 @@ class TestMachGenHandler:
         assert [image.url for image in response.data] == [ASSET_URL]
         assert client.post.call_args.kwargs["json"]["model"] == MODEL
         assert client.post.call_args.kwargs["json"]["image_config"] == {"width": 1024, "height": 1024}
+
+    def test_machgen_params_survive_the_shared_parameter_pipeline(self):
+        import litellm
+
+        client = _sync_client([_completed_response()])
+
+        litellm.image_generation(
+            model=f"machgen/{MODEL}",
+            prompt=PROMPT,
+            api_key="MGA_key:secret",
+            client=client,
+            aspect_ratio="16:9",
+            infer_steps=30,
+            guidance_scale=[5.0],
+            seed=7,
+            enhance_prompt=True,
+        )
+
+        body = client.post.call_args.kwargs["json"]
+        assert body["image_config"] == {
+            "height": 1024,
+            "aspect_ratio": "16:9",
+            "infer_steps": 30,
+            "guidance_scale": [5.0],
+        }
+        assert body["seed"] == 7
+        assert body["enhance_prompt"] is True
+
+    def test_polling_requests_are_bounded_by_the_polling_deadline(self):
+        client = _sync_client([_task_response("RUNNING"), _completed_response()])
+
+        MachGenImageGeneration(polling_interval=0, max_polling_time=30).image_generation(
+            model=MODEL,
+            prompt=PROMPT,
+            model_response=ImageResponse(),
+            optional_params={},
+            litellm_params={},
+            logging_obj=MagicMock(),
+            timeout=600,
+            api_key="MGA_key:secret",
+            client=client,
+        )
+
+        assert all(0 < call.kwargs["timeout"] <= 30 for call in client.get.call_args_list)
 
     @pytest.mark.asyncio
     async def test_async_generation_polls_and_returns_the_asset(self):
