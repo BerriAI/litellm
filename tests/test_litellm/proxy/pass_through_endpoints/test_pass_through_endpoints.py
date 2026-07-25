@@ -4860,3 +4860,20 @@ async def test_configured_cost_per_request_still_applies_without_usage_headers()
 
     assert len(payloads) == 1
     assert payloads[0]["response_cost"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
+    """
+    A target that speaks this contract owns the cost for the request. When the
+    value it sends is unusable the contract records 0, rather than falling back
+    to a flat cost_per_request the upstream just contradicted.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {"x-litellm-response-cost": "not-a-number", "x-litellm-total-tokens": "1874"},
+        cost_per_request=0.05,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.0
+    assert payloads[0]["total_tokens"] == 1874

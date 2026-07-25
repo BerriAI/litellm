@@ -30,7 +30,7 @@ from .llm_provider_handlers.gemini_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
-from .upstream_usage_headers import upstream_reported_cost
+from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler = CoherePassthroughLoggingHandler()
 
@@ -450,15 +450,17 @@ class PassThroughEndpointLogging:
         Only set the cost per request if it's set in the passthrough logging payload.
         If it's not set, don't set it in the logging object.
 
-        An upstream that priced the request itself always wins: ``cost_per_request``
+        An upstream that prices its own requests always wins: ``cost_per_request``
         is a flat per-request estimate for targets LiteLLM cannot price, and it
         defaults to 0.0 on every config-defined endpoint, so honoring it here
-        would zero out the real cost the upstream reported.
+        would zero out the real cost the upstream reported. That holds even when
+        the reported value was unusable, where the contract records 0 rather
+        than billing an estimate the upstream just contradicted.
         """
         #########################################################
         # Check if cost per request is set
         #########################################################
-        if upstream_reported_cost(logging_obj) is not None:
+        if has_upstream_reported_usage(logging_obj):
             return kwargs
 
         if passthrough_logging_payload.get("cost_per_request") is not None:
