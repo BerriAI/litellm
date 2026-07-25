@@ -18,6 +18,7 @@ vi.mock("@/components/shared/charts", () => ({
   AreaChart: () => <div />,
   DonutChart: () => <div />,
   BarChart: () => <div />,
+  CustomLegend: () => <div />,
   DEFAULT_COLOR_CYCLE: ["emerald"],
 }));
 
