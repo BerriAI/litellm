@@ -3147,3 +3147,43 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_tools_to_openai_does_not_mutate_input_schema():
+    """Regression for #34510: translation must not alias and mutate the caller's
+    ``input_schema``. Extra top-level tool keys (e.g. ``display_width_px`` on a
+    computer tool) are merged into the OpenAI function ``parameters``; if that
+    dict is the caller's ``input_schema`` by reference, those non-schema keys
+    leak back into the source. Callers reuse the same tool list across passes
+    (guardrail pre-call translation, then the real request), so on the second
+    pass a polluted schema gets forwarded."""
+    import copy
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tool = {
+        "name": "computer",
+        "type": "computer_20241022",
+        "input_schema": {"type": "object", "properties": {"action": {"type": "string"}}},
+        "display_width_px": 1024,
+        "display_height_px": 768,
+    }
+    original = copy.deepcopy(tool)
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=[tool])
+
+    # The source tool and its schema are untouched.
+    assert tool == original
+    assert "display_width_px" not in tool["input_schema"]
+    assert "display_height_px" not in tool["input_schema"]
+
+    # The translated parameters still carry the schema plus the vendor kwargs.
+    params = new_tools[0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["properties"] == {"action": {"type": "string"}}
+    assert params["display_width_px"] == 1024
+    assert params["display_height_px"] == 768
+
+    # Re-translating the reused tool keeps the source clean (the pass-through
+    # double-translation scenario from the issue).
+    adapter.translate_anthropic_tools_to_openai(tools=[tool])
+    assert tool == original
