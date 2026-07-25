@@ -6,9 +6,7 @@ import pytest
 
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 
 @pytest.mark.asyncio
@@ -44,14 +42,9 @@ async def test_async_realtime_uses_max_size_parameter():
 
     shared_context = get_shared_realtime_ssl_context()
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -188,10 +181,7 @@ async def test_construct_url_forwards_transcription_intent_ga_without_model_quer
         query_params={"intent": "transcription"},
     )
 
-    assert url == (
-        "wss://my-endpoint.openai.azure.com/openai/v1/realtime"
-        "?intent=transcription"
-    )
+    assert url == ("wss://my-endpoint.openai.azure.com/openai/v1/realtime?intent=transcription")
 
 
 @pytest.mark.asyncio
@@ -313,14 +303,9 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -344,10 +329,7 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
         assert "model=gpt-4o-realtime-preview" in called_url
         assert "api-version" not in called_url
         assert "deployment" not in called_url
-        assert (
-            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
-            is False
-        )
+        assert mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"] is False
 
 
 @pytest.mark.asyncio
@@ -378,14 +360,9 @@ async def test_async_realtime_ga_without_api_version():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -533,14 +510,9 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -559,7 +531,161 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
         called_url = mock_ws_connect.call_args[0][0]
         assert "/openai/realtime?" in called_url
         assert "/openai/v1/realtime" not in called_url
-        assert (
-            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
-            is True
+        assert mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"] is True
+
+
+class _DummyAsyncContextManager:
+    def __init__(self, value):
+        self.value = value
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_uses_api_key_header_when_present():
+    """
+    When an api-key is available it must be sent as the `api-key` header and no
+    Azure AD bearer token should be attached, even if a token is also supplied.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    mock_backend_ws = AsyncMock()
+
+    with (
+        patch(
+            "websockets.connect",
+            return_value=_DummyAsyncContextManager(mock_backend_ws),
+        ) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_streaming,
+    ):
+        mock_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-realtime-whisper",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key="test-key",
+            api_version="2024-10-01-preview",
+            azure_ad_token="unused-token",
         )
+
+    headers = mock_ws_connect.call_args.kwargs["additional_headers"]
+    assert headers == {"api-key": "test-key"}
+    assert "Authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_uses_bearer_token_when_no_api_key():
+    """
+    Entra ID / managed-identity deployments have no api-key. The handler must
+    fall back to sending the Azure AD token as an `Authorization: Bearer` header
+    and must not send an `api-key` header.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    mock_backend_ws = AsyncMock()
+
+    with (
+        patch(
+            "websockets.connect",
+            return_value=_DummyAsyncContextManager(mock_backend_ws),
+        ) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_streaming,
+    ):
+        mock_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-realtime-whisper",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key=None,
+            api_version="2024-10-01-preview",
+            azure_ad_token="test-token",
+        )
+
+    headers = mock_ws_connect.call_args.kwargs["additional_headers"]
+    assert headers == {"Authorization": "Bearer test-token"}
+    assert "api-key" not in headers
+
+
+@pytest.mark.asyncio
+async def test_arealtime_resolves_and_forwards_azure_ad_token(monkeypatch):
+    """
+    _arealtime must resolve an Azure AD token via get_azure_ad_token and forward
+    it to the Azure handler. Guards against regressing to a hard-coded None.
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(
+        realtime_main,
+        "azure_realtime",
+        MagicMock(async_realtime=mock_async_realtime),
+    )
+
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return (
+            "gpt-realtime-whisper",
+            "azure",
+            None,
+            "https://my-endpoint.openai.azure.com",
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+    monkeypatch.setattr(
+        "litellm.llms.azure.common_utils.get_azure_ad_token",
+        lambda litellm_params: "resolved-token",
+    )
+
+    await realtime_main._arealtime(
+        model="azure/gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_key=None,
+        api_version="2025-04-01-preview",
+        query_params={"intent": "transcription"},
+        litellm_logging_obj=MagicMock(),
+    )
+
+    called_kwargs = mock_async_realtime.call_args.kwargs
+    assert called_kwargs["azure_ad_token"] == "resolved-token"
+
+
+@pytest.mark.asyncio
+async def test_realtime_health_check_uses_bearer_token_for_azure(monkeypatch):
+    """
+    An Entra ID-only Azure deployment (no api-key) must pass the health check by
+    authenticating the websocket handshake with an Authorization bearer header.
+    """
+    from litellm.realtime_api.main import _realtime_health_check
+
+    monkeypatch.setattr(
+        "litellm.llms.azure.common_utils.get_azure_ad_token",
+        lambda litellm_params: "health-token",
+    )
+
+    mock_backend_ws = AsyncMock()
+    with patch(
+        "websockets.connect",
+        return_value=_DummyAsyncContextManager(mock_backend_ws),
+    ) as mock_ws_connect:
+        result = await _realtime_health_check(
+            model="gpt-realtime-whisper",
+            custom_llm_provider="azure",
+            api_key=None,
+            api_base="https://my-endpoint.openai.azure.com",
+            api_version="2025-04-01-preview",
+            realtime_protocol="GA",
+        )
+
+    assert result is True
+    headers = mock_ws_connect.call_args.kwargs["additional_headers"]
+    assert headers == {"Authorization": "Bearer health-token"}
+    assert "api-key" not in headers

@@ -370,13 +370,18 @@ async def _arealtime(
         if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
             realtime_protocol = "GA"
         realtime_protocol = realtime_protocol or "beta"
+
+        from litellm.llms.azure.common_utils import get_azure_ad_token
+
+        if azure_ad_token is None:
+            azure_ad_token = get_azure_ad_token(litellm_params)
         await azure_realtime.async_realtime(
             model=model,
             websocket=websocket,
             api_base=api_base,
             api_key=api_key,
             api_version=api_version,
-            azure_ad_token=None,
+            azure_ad_token=azure_ad_token,
             client=None,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
@@ -536,6 +541,7 @@ async def _realtime_health_check(
     import websockets
 
     url: Optional[str] = None
+    auth_headers: Dict[str, Any] = {"api-key": api_key}
     if custom_llm_provider == "azure":
         url = azure_realtime._construct_url(
             api_base=api_base or "",
@@ -543,6 +549,14 @@ async def _realtime_health_check(
             api_version=api_version or "2024-10-01-preview",
             realtime_protocol=realtime_protocol,
         )
+        # Auth precedence mirrors the Azure realtime handler: prefer api-key,
+        # fall back to an Azure AD (Entra ID) bearer token, never both.
+        if not api_key:
+            from litellm.llms.azure.common_utils import get_azure_ad_token
+
+            azure_ad_token = get_azure_ad_token(GenericLiteLLMParams(**(model_params or {})))
+            if azure_ad_token:
+                auth_headers = {"Authorization": f"Bearer {azure_ad_token}"}
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
             api_base=api_base or "https://api.openai.com/",
@@ -584,9 +598,7 @@ async def _realtime_health_check(
     ssl_context = get_shared_realtime_ssl_context()
     async with websockets.connect(  # type: ignore
         url,
-        additional_headers={
-            "api-key": api_key,  # type: ignore
-        },
+        additional_headers=auth_headers,
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=ssl_context,
     ):
