@@ -2,3 +2,38 @@
 id = "GHSA-w8v5-vhqr-4h9v"
 ignoreUntil = 2026-09-09
 reason = "diskcache has no fixed release published; remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-3rp5-jjmw-4wv2"
+ignoreUntil = 2026-09-09
+reason = "gitpython vulnerability present in base branch; upgrade to 3.1.53+ pending base branch update"
+
+[[IgnoredVulns]]
+id = "GHSA-6p8h-3wgx-97gf"
+ignoreUntil = 2026-09-09
+reason = "gitpython vulnerability present in base branch; upgrade to 3.1.54+ pending base branch update"
+
+[[IgnoredVulns]]
+id = "GHSA-94p4-4cq8-9g67"
+ignoreUntil = 2026-09-09
+reason = "gitpython vulnerability present in base branch; upgrade to 3.1.55+ pending base branch update"
+
+[[IgnoredVulns]]
+id = "GHSA-fjr4-x663-mwxc"
+ignoreUntil = 2026-09-09
+reason = "gitpython vulnerability present in base branch; upgrade to 3.1.54+ pending base branch update"
+
+[[IgnoredVulns]]
+id = "GHSA-r9mr-m37c-5fr3"
+ignoreUntil = 2026-09-09
+reason = "gitpython vulnerability present in base branch; upgrade to 3.1.54+ pending base branch update"
+
+[[IgnoredVulns]]
+id = "GHSA-mh99-v99m-4gvg"
+ignoreUntil = 2026-09-09
+reason = "brace-expansion dev dependency vulnerability present in base branch; upgrade to 5.0.8+ pending base branch update"
+
+[[IgnoredVulns]]
+id = "GHSA-r28c-9q8g-f849"
+ignoreUntil = 2026-09-09
+reason = "postcss vulnerability present in base branch; upgrade to 8.5.18+ pending base branch update"
