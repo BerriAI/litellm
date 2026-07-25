@@ -228,6 +228,42 @@ def test_parse_judge_verdict_reraises_when_no_json():
         _parse_judge_verdict("no json here")
 
 
+def test_parse_judge_verdict_rejects_json_non_object():
+    """Valid JSON that is not an object (e.g. a bare list) raises ValueError."""
+    with pytest.raises(ValueError):
+        _parse_judge_verdict("[1, 2, 3]")
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_enforces_fenced_verdict(mock_completion):
+    """A failing verdict wrapped in a code fence blocks with a 422."""
+    fenced = "```json\n" + json.dumps(_make_verdict_response(50.0)) + "\n```"
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=fenced))])
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
+    inputs = {"texts": ["bad response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_non_object_verdict_fails_open_with_status(mock_completion):
+    """A non-object verdict fails open and logs guardrail_failed_to_respond."""
+    mock_completion.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content='[{"overall_score": 50}]'))]
+    )
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+    logged = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert logged[0]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
 async def test_apply_guardrail_parses_fenced_json_verdict(mock_completion):

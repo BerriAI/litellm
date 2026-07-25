@@ -3,7 +3,7 @@
 import json
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union, cast
 
 import litellm
 from fastapi import HTTPException
@@ -50,14 +50,18 @@ def _parse_judge_verdict(raw: str) -> Dict[str, Any]:
     fenced = _JSON_FENCE_RE.search(text)
     if fenced is not None:
         text = fenced.group(1).strip()
+    parsed: object
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end <= start:
             raise
-        return json.loads(text[start : end + 1])
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("judge response is not a JSON object")
+    return cast(Dict[str, Any], parsed)  # cast-ok: narrowed to dict by the isinstance guard above
 
 
 def _extract_text_from_content(content: Any) -> str:
