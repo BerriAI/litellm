@@ -55,6 +55,7 @@ from litellm.proxy.auth.auth_checks import (
     is_valid_fallback_model,
     resolve_and_validate_end_user_id,
 )
+from litellm.proxy.auth.access_schedule import AccessDenied, evaluate_access_schedule
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
@@ -1841,6 +1842,18 @@ async def _user_api_key_auth_builder(
                         code=status.HTTP_401_UNAUTHORIZED,
                         param=abbreviate_api_key(api_key=api_key),
                     )
+
+            access_decision = evaluate_access_schedule(
+                permissions=valid_token.permissions,
+                now=datetime.now(timezone.utc),
+            )
+            if isinstance(access_decision, AccessDenied):
+                raise ProxyException(
+                    message=f"Authentication Error - {access_decision.reason}",
+                    type=ProxyErrorTypes.key_access_schedule_denied,
+                    code=status.HTTP_403_FORBIDDEN,
+                    param=abbreviate_api_key(api_key=api_key),
+                )
 
             if not skip_budget_checks:
                 with tracer.trace("litellm.proxy.auth.budget_checks"):

@@ -54,6 +54,7 @@ from litellm.proxy.auth.auth_checks import (
     get_project_object,
     get_team_object,
 )
+from litellm.proxy.auth.access_schedule import ScheduleInvalid, parse_access_schedule
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import (
@@ -597,6 +598,17 @@ def _check_permissions_caller_permission(
         status_code=403,
         detail={"error": "Only proxy admins can set `permissions`."},
     )
+
+
+def _validate_access_schedule(data: GenerateRequestBase) -> None:
+    if "permissions" not in data.model_fields_set and not data.permissions:
+        return
+    parsed = parse_access_schedule(data.permissions)
+    if isinstance(parsed, ScheduleInvalid):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Invalid permissions.access_schedule: {parsed.error}"},
+        )
 
 
 def _check_budget_limits_delegation_ceiling(
@@ -1506,7 +1518,7 @@ async def generate_key_fn(
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
+    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false} It may also carry an `access_schedule` object ({"timezone": "Europe/Berlin", "windows": [{"days": ["mon","tue"], "start": "09:00", "end": "18:00"}]}) restricting the key to recurring time windows; requests outside every window are rejected with 403
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
@@ -1604,6 +1616,7 @@ async def generate_key_fn(
             data=data,
             user_api_key_dict=user_api_key_dict,
         )
+        _validate_access_schedule(data)
 
         # For non-admin internal users: auto-assign caller's user_id if not provided
         # This prevents creating unbound keys with no user association (LIT-1884)
@@ -1714,7 +1727,7 @@ async def generate_service_account_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
-    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
+    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false} It may also carry an `access_schedule` object ({"timezone": "Europe/Berlin", "windows": [{"days": ["mon","tue"], "start": "09:00", "end": "18:00"}]}) restricting the key to recurring time windows; requests outside every window are rejected with 403
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
@@ -2281,6 +2294,7 @@ async def _validate_update_key_data(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
+    _validate_access_schedule(data)
 
     _validate_caller_can_change_key_ownership(
         data=data,

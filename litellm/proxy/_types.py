@@ -3539,6 +3539,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Key has expired
     """
 
+    key_access_schedule_denied = "key_access_schedule_denied"
+    """
+    Request was made outside the key's allowed recurring access schedule
+    """
+
     auth_error = "auth_error"
     """
     General authentication error

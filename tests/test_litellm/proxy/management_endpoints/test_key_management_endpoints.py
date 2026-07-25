@@ -15067,3 +15067,48 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         prisma_client=mock_prisma_client,
         new_master_key="sk-new-master-key",
     )
+
+
+def test_validate_access_schedule_accepts_valid_schedule():
+    from litellm.proxy._types import GenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_access_schedule,
+    )
+
+    data = GenerateKeyRequest(
+        permissions={
+            "access_schedule": {
+                "timezone": "Europe/Berlin",
+                "windows": [
+                    {"days": ["mon", "tue", "wed", "thu", "fri"], "start": "09:00", "end": "18:00"}
+                ],
+            }
+        }
+    )
+    _validate_access_schedule(data)
+
+
+def test_validate_access_schedule_rejects_invalid_schedule():
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_access_schedule,
+    )
+
+    data = UpdateKeyRequest(
+        key="sk-1",
+        permissions={"access_schedule": {"timezone": "Not/AZone", "windows": []}},
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_access_schedule(data)
+    assert exc_info.value.status_code == 400
+    assert "access_schedule" in str(exc_info.value.detail)
+
+
+def test_validate_access_schedule_ignores_other_permissions():
+    from litellm.proxy._types import GenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_access_schedule,
+    )
+
+    _validate_access_schedule(GenerateKeyRequest(permissions={"pii": False}))
+    _validate_access_schedule(GenerateKeyRequest())
