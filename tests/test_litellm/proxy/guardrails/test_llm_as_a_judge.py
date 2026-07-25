@@ -328,8 +328,13 @@ def _real_router(model_list, **router_kwargs):
             {"model_group_alias": {"my-judge-alias": "backing-group"}},
             "my-judge-alias",
         ),
+        (
+            [{"model_name": "backing-group", "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"}}],
+            {"model_group_alias": {"my-judge-alias": {"model": "backing-group", "hidden": True}}},
+            "my-judge-alias",
+        ),
     ],
-    ids=["plain-deployment", "wildcard-route", "model-group-alias"],
+    ids=["plain-deployment", "wildcard-route", "model-group-alias", "hidden-model-group-alias"],
 )
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
