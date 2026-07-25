@@ -1,13 +1,3 @@
-"""
-Response caching for Anthropic Messages (`/v1/messages`) requests.
-
-Non-streaming responses are plain dicts and are stored by the generic caching
-handler. Streaming responses are returned to the caller before
-``LLMCachingHandler.async_set_cache`` runs, so they are teed here instead: the
-SSE events are buffered while they are forwarded and persisted verbatim once the
-stream completes, and a hit replays exactly what the provider sent.
-"""
-
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
@@ -38,14 +28,6 @@ def _decode(chunk: bytes | str) -> str:
 
 
 class AnthropicMessagesStreamCacheWriter:
-    """
-    Forwards a `/v1/messages` SSE stream unchanged while buffering it, then
-    writes the collected events to the response cache on normal completion.
-
-    Only a stream that ran to a ``message_stop`` without a provider ``error``
-    event is written, so partial or failed responses cannot be replayed.
-    """
-
     def __init__(
         self,
         stream: AsyncIterator[bytes | str],
@@ -105,11 +87,6 @@ class AnthropicMessagesStreamCacheWriter:
 
 
 class CachedAnthropicMessagesStreamIterator(BaseAnthropicMessagesStreamingIterator):
-    """
-    Replays cached `/v1/messages` SSE events and logs the request as a cache hit
-    once the replay finishes, mirroring what the live stream logs at end of stream.
-    """
-
     def __init__(
         self,
         events: list[str],
@@ -146,11 +123,6 @@ def convert_cached_anthropic_messages_result(
     logging_obj: LiteLLMLoggingObj,
     kwargs: dict[str, Any],
 ) -> AnthropicMessagesResponse | CachedAnthropicMessagesStreamIterator:
-    """
-    Turn a cached `/v1/messages` entry back into what the caller expects: an
-    SSE replay iterator for a streamed entry, otherwise the response itself
-    (``AnthropicMessagesResponse`` is a TypedDict, i.e. a dict at runtime).
-    """
     events = get_cached_stream_events(cached_result)
     if events is not None:
         return CachedAnthropicMessagesStreamIterator(
