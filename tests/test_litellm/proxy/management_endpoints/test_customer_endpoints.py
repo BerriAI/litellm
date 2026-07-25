@@ -831,6 +831,17 @@ def test_customer_aliases_caps_the_rows_it_scans(mock_prisma_client, mock_user_a
     assert 'ORDER BY "startTime" DESC' in inner
 
 
+def test_customer_aliases_breaks_start_time_ties_deterministically(mock_prisma_client, mock_user_api_key_auth):
+    """Without a unique tiebreaker the capped scan can cut differently per request,
+    so OFFSET page 2 would page through a different set than page 1 did."""
+    query_raw = _mock_alias_rows(mock_prisma_client, [])
+
+    client.get(f"/customer/aliases?{WINDOW}", headers={"Authorization": "Bearer k"})
+
+    sql = query_raw.call_args.args[0]
+    assert 'ORDER BY "startTime" DESC, request_id DESC' in sql
+
+
 def test_customer_aliases_requires_a_time_window(mock_prisma_client, mock_user_api_key_auth):
     """No window means no index bound, which is the unbounded scan we must not allow."""
     _mock_alias_rows(mock_prisma_client, [])
