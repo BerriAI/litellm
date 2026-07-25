@@ -3194,10 +3194,13 @@ def _url_image_block():
 
 def _run_chat_completions_pipeline(anthropic_messages):
     """Anthropic /v1/messages input -> chat adapter -> the OpenAI-compatible
-    message transformation every OpenAIGPTConfig-based provider runs."""
+    request transformation every OpenAIGPTConfig-based provider runs."""
     adapter = LiteLLMAnthropicMessagesAdapter()
     translated = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
-    return OpenAIGPTConfig()._transform_messages(messages=translated, model="gpt-4o-mini")
+    request = OpenAIGPTConfig().transform_request(
+        model="gpt-5.4-mini", messages=translated, optional_params={}, litellm_params={}, headers={}
+    )
+    return request["messages"]
 
 
 def _images_in_tool_messages(messages):
@@ -3293,21 +3296,6 @@ def test_tool_result_parallel_tool_calls_keep_tool_message_adjacency():
     assert roles == ["assistant", "tool", "tool", "user"]
     assert _images_in_tool_messages(result) == []
     assert len(_image_urls_in_user_messages(result)) == 2
-
-
-def test_top_level_user_image_unchanged_by_openai_transform():
-    result = _run_chat_completions_pipeline(
-        [
-            AnthropicMessagesUserMessageParam(
-                role="user",
-                content=[{"type": "text", "text": "what is this"}, _base64_image_block()],
-            )
-        ]
-    )
-
-    assert len(result) == 1
-    assert result[0]["role"] == "user"
-    assert len(_image_urls_in_user_messages(result)) == 1
 
 
 def test_tool_result_plain_text_unchanged_by_openai_transform():

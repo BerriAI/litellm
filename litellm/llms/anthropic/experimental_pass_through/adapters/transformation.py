@@ -443,24 +443,11 @@ class LiteLLMAnthropicMessagesAdapter:
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                         elif c.get("type") == "image":
-                                            source = c.get("source", {})
-                                            openai_image_url = (
-                                                self._translate_anthropic_image_to_openai(cast(dict, source)) or ""
-                                            )
-                                            single_image_content = (
-                                                [
-                                                    ChatCompletionImageObject(
-                                                        type="image_url",
-                                                        image_url=ChatCompletionImageUrlObject(url=openai_image_url),
-                                                    )
-                                                ]
-                                                if openai_image_url
-                                                else ""
-                                            )
+                                            image_part = self._tool_result_image_part(cast(dict, c.get("source", {})))
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
                                                 tool_call_id=content.get("tool_use_id", ""),
-                                                content=single_image_content,
+                                                content=[image_part] if image_part else "",
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
@@ -485,19 +472,11 @@ class LiteLLMAnthropicMessagesAdapter:
                                                     )
                                                 )
                                             elif c.get("type") == "image":
-                                                source = c.get("source", {})
-                                                openai_image_url = (
-                                                    self._translate_anthropic_image_to_openai(cast(dict, source)) or ""
+                                                image_part = self._tool_result_image_part(
+                                                    cast(dict, c.get("source", {}))
                                                 )
-                                                if openai_image_url:
-                                                    combined_content_parts.append(
-                                                        ChatCompletionImageObject(
-                                                            type="image_url",
-                                                            image_url=ChatCompletionImageUrlObject(
-                                                                url=openai_image_url
-                                                            ),
-                                                        )
-                                                    )
+                                                if image_part:
+                                                    combined_content_parts.append(image_part)
                                     # Create a single tool message with combined content
                                     if combined_content_parts:
                                         tool_result = ChatCompletionToolMessage(
@@ -1147,6 +1126,12 @@ class LiteLLMAnthropicMessagesAdapter:
             return image_source.get("url", "")
 
         return None
+
+    def _tool_result_image_part(self, image_source: dict) -> ChatCompletionImageObject | None:
+        openai_image_url = self._translate_anthropic_image_to_openai(image_source)
+        if not openai_image_url:
+            return None
+        return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
 
     def _translate_openai_content_to_anthropic(
         self,

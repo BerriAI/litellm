@@ -743,7 +743,7 @@ def _assistant_tool_call_msg(*tool_call_ids):
     }
 
 
-def test_hoist_images_from_tool_messages_bare_data_uri_string():
+def test_hoist_images_from_tool_messages_bare_data_uri_string_passes_through():
     messages = [
         {"role": "user", "content": "read the image"},
         _assistant_tool_call_msg("call_1"),
@@ -752,14 +752,7 @@ def test_hoist_images_from_tool_messages_bare_data_uri_string():
 
     result = hoist_images_from_tool_messages(messages)
 
-    assert len(result) == 4
-    assert result[2]["role"] == "tool"
-    assert result[2]["tool_call_id"] == "call_1"
-    assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[3] == {
-        "role": "user",
-        "content": [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}],
-    }
+    assert result is messages
 
 
 def test_hoist_images_from_tool_messages_structured_image_part():
@@ -813,28 +806,6 @@ def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
     ]
 
 
-def test_hoist_images_from_tool_messages_does_not_hoist_bare_url_text():
-    messages = [
-        _assistant_tool_call_msg("call_1"),
-        _tool_msg("https://example.com/report.pdf"),
-    ]
-
-    result = hoist_images_from_tool_messages(messages)
-
-    assert result == messages
-
-
-def test_hoist_images_from_tool_messages_does_not_hoist_non_image_data_uri():
-    messages = [
-        _assistant_tool_call_msg("call_1"),
-        _tool_msg("data:application/pdf;base64,JVBERi0xLjQ="),
-    ]
-
-    result = hoist_images_from_tool_messages(messages)
-
-    assert result == messages
-
-
 def test_hoist_images_from_tool_messages_no_tool_messages_returns_input_unchanged():
     messages = [
         {"role": "user", "content": [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]},
@@ -855,14 +826,31 @@ def test_hoist_images_from_tool_messages_text_only_tool_message_unchanged():
 
     result = hoist_images_from_tool_messages(messages)
 
-    assert result == messages
+    assert result is messages
 
 
 def test_hoist_images_from_tool_messages_does_not_mutate_input():
-    tool_message = _tool_msg(DATA_URI_PNG)
+    tool_message = _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}])
     messages = [_assistant_tool_call_msg("call_1"), tool_message]
 
     hoist_images_from_tool_messages(messages)
 
-    assert tool_message["content"] == DATA_URI_PNG
+    assert tool_message["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
     assert len(messages) == 2
+
+
+def test_hoist_images_from_tool_messages_none_content_tool_message_passes_through():
+    none_content_tool_msg = _tool_msg(None, tool_call_id="call_2")
+    messages = [
+        _assistant_tool_call_msg("call_1", "call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+        none_content_tool_msg,
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    roles = [m["role"] for m in result]
+    assert roles == ["assistant", "tool", "tool", "user"]
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2] is none_content_tool_msg
+    assert result[3]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]

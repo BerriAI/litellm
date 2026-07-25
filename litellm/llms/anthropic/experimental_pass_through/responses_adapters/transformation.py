@@ -106,7 +106,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
-                            image_urls: List[str] = []
                             if inner is None:
                                 output_text = ""
                             elif isinstance(inner, str):
@@ -124,15 +123,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     if isinstance(c, dict) and c.get("type") == "image"
                                 ]
                                 image_urls = [url for url in image_candidates if url]
+                                if image_urls:
+                                    output_text = (
+                                        f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
+                                        if output_text
+                                        else TOOL_RESULT_IMAGE_PLACEHOLDER
+                                    )
+                                    user_parts.extend({"type": "input_image", "image_url": url} for url in image_urls)
                             else:
                                 output_text = str(inner)
-                            if image_urls:
-                                output_text = (
-                                    f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
-                                    if output_text
-                                    else TOOL_RESULT_IMAGE_PLACEHOLDER
-                                )
-                                user_parts.extend({"type": "input_image", "image_url": url} for url in image_urls)
                             # tool_result is a top-level item, not inside the message
                             input_items.append(
                                 {

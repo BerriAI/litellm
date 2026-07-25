@@ -30,7 +30,6 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantMessage,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
-    ChatCompletionImageUrlObject,
     ChatCompletionResponseMessage,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
@@ -1578,44 +1577,34 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
 
 TOOL_RESULT_IMAGE_PLACEHOLDER = "[Tool returned an image - see the following user message]"
 
-_TOOL_MESSAGE_IMAGE_DATA_URI_RE = re.compile(r"^data:image/[a-zA-Z0-9.+-]+;base64,", re.IGNORECASE)
-
 
 def _is_image_url_part(part: object) -> bool:
     return isinstance(part, dict) and part.get("type") == "image_url"
 
 
-def _tool_message_may_carry_image(message: AllMessageValues) -> bool:
+def _tool_message_carries_image(message: AllMessageValues) -> bool:
     if message.get("role") != "tool":
         return False
     content = message.get("content")
-    if isinstance(content, list):
-        return True
-    return isinstance(content, str) and content.startswith("data:image/")
+    return isinstance(content, list) and any(_is_image_url_part(part) for part in content)
 
 
 def _split_images_from_tool_message(
     message: AllMessageValues,
 ) -> tuple[AllMessageValues, list[ChatCompletionImageObject]]:
     content = message.get("content")
-    if isinstance(content, str):
-        if _TOOL_MESSAGE_IMAGE_DATA_URI_RE.match(content) is None:
-            return message, []
-        image_part = ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=content))
-        rewritten = {**message, "content": TOOL_RESULT_IMAGE_PLACEHOLDER}
-        return cast(AllMessageValues, rewritten), [image_part]  # cast-ok: dict spread keeps keys like cache_control
-    if isinstance(content, list):
-        image_parts = [
-            cast(ChatCompletionImageObject, part)  # cast-ok: shape checked by _is_image_url_part
-            for part in content
-            if _is_image_url_part(part)
-        ]
-        if not image_parts:
-            return message, []
-        remaining_parts = [part for part in content if not _is_image_url_part(part)]
-        rewritten = {**message, "content": remaining_parts if remaining_parts else TOOL_RESULT_IMAGE_PLACEHOLDER}
-        return cast(AllMessageValues, rewritten), image_parts  # cast-ok: dict spread keeps keys like cache_control
-    return message, []
+    if not isinstance(content, list):
+        return message, []
+    image_parts = [
+        cast(ChatCompletionImageObject, part)  # cast-ok: shape checked by _is_image_url_part
+        for part in content
+        if _is_image_url_part(part)
+    ]
+    if not image_parts:
+        return message, []
+    remaining_parts = [part for part in content if not _is_image_url_part(part)]
+    rewritten = {**message, "content": remaining_parts if remaining_parts else TOOL_RESULT_IMAGE_PLACEHOLDER}
+    return cast(AllMessageValues, rewritten), image_parts  # cast-ok: dict spread keeps keys like cache_control
 
 
 def _hoist_images_in_tool_message_run(run: list[AllMessageValues]) -> list[AllMessageValues]:
@@ -1641,7 +1630,7 @@ def hoist_images_from_tool_messages(messages: list[AllMessageValues]) -> list[Al
     consecutive tool message so the assistant tool_calls -> tool messages
     adjacency that strict providers validate is preserved.
     """
-    if not any(_tool_message_may_carry_image(message) for message in messages):
+    if not any(_tool_message_carries_image(message) for message in messages):
         return messages
     return [
         rewritten_message

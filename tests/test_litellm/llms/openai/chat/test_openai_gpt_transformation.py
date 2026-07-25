@@ -812,7 +812,7 @@ class TestCacheControlPreservationForCustomEndpoint:
 
 
 class TestToolMessageImageHoisting:
-    """_transform_messages moves tool-message images into a following user message
+    """transform_request moves tool-message images into a following user message
     (OpenAI-compatible APIs only accept text in role:"tool" messages)."""
 
     DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
@@ -837,11 +837,16 @@ class TestToolMessageImageHoisting:
             },
         ]
 
-    def test_sync_transform_hoists_image_part_from_tool_message(self):
-        result = self.config._transform_messages(
-            messages=self._messages_with_image_part_in_tool(), model="gpt-4o-mini"
+    def test_transform_request_hoists_image_part_from_tool_message(self):
+        request = self.config.transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
         )
 
+        result = request["messages"]
         assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
         tool_message = result[2]
         assert isinstance(tool_message["content"], str)
@@ -850,34 +855,18 @@ class TestToolMessageImageHoisting:
             {"type": "image_url", "image_url": {"url": self.DATA_URI}}
         ]
 
-    def test_sync_transform_hoists_bare_data_uri_tool_content(self):
-        messages = self._messages_with_image_part_in_tool()
-        messages[2] = {"role": "tool", "tool_call_id": "call_1", "content": self.DATA_URI}
-
-        result = self.config._transform_messages(messages=messages, model="gpt-4o-mini")
-
-        assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
-        assert result[2]["content"] != self.DATA_URI
-        assert result[3]["content"] == [
-            {"type": "image_url", "image_url": {"url": self.DATA_URI}}
-        ]
-
     @pytest.mark.asyncio
-    async def test_async_transform_hoists_image_part_from_tool_message(self):
-        result = await self.config._transform_messages(
-            messages=self._messages_with_image_part_in_tool(), model="gpt-4o-mini", is_async=True
+    async def test_async_transform_request_hoists_image_part_from_tool_message(self):
+        request = await self.config.async_transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
         )
 
+        result = request["messages"]
         assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
         assert result[3]["content"] == [
             {"type": "image_url", "image_url": {"url": self.DATA_URI}}
         ]
-
-    def test_sync_transform_leaves_text_tool_message_alone(self):
-        messages = self._messages_with_image_part_in_tool()
-        messages[2] = {"role": "tool", "tool_call_id": "call_1", "content": "no image here"}
-
-        result = self.config._transform_messages(messages=messages, model="gpt-4o-mini")
-
-        assert [m.get("role") for m in result] == ["user", "assistant", "tool"]
-        assert result[2]["content"] == "no image here"
