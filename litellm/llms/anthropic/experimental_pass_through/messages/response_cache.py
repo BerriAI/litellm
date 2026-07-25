@@ -96,6 +96,7 @@ class CachedAnthropicMessagesStreamIterator(BaseAnthropicMessagesStreamingIterat
         super().__init__(litellm_logging_obj=litellm_logging_obj, request_body=request_body)
         self.chunks: list[bytes] = [event.encode("utf-8") for event in events]
         self.current_index = 0
+        self.logged = False
         self._hidden_params: dict[str, Any] = {"cache_hit": True}
         litellm_logging_obj.model_call_details["cache_hit"] = True
 
@@ -104,7 +105,9 @@ class CachedAnthropicMessagesStreamIterator(BaseAnthropicMessagesStreamingIterat
 
     async def __anext__(self) -> bytes:
         if self.current_index >= len(self.chunks):
-            await self._handle_streaming_logging(self.chunks)
+            if not self.logged:
+                self.logged = True
+                await self._handle_streaming_logging(self.chunks)
             raise StopAsyncIteration
         chunk = self.chunks[self.current_index]
         self.current_index += 1
