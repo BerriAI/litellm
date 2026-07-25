@@ -13,7 +13,24 @@ import asyncio
 import math
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
+from datetime import datetime
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Type,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -117,6 +134,393 @@ last_db_access_time = LimitedSizeOrderedDict(max_size=100)
 db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
+
+
+class _BudgetRowFields(TypedDict):
+    budget_id: str | None
+    soft_budget: float | None
+    max_budget: float | None
+    max_parallel_requests: int | None
+    tpm_limit: int | None
+    rpm_limit: int | None
+    model_max_budget: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_BudgetTable, which declares this field as a dict
+    budget_duration: str | None
+    allowed_models: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_BudgetTable, which declares this field as a list
+
+
+class _EndUserRowFields(TypedDict):
+    user_id: str
+    blocked: bool
+    alias: str | None
+    spend: float
+    allowed_model_region: Literal["eu", "us"] | None
+    default_model: str | None
+    budget_id: str | None
+
+
+class _TagRowFields(TypedDict):
+    tag_name: str
+    description: str | None
+    models: list[str]  # mutable-ok: splatted into LiteLLM_TagTable, which declares this field as a list
+    model_info: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_TagTable, which declares this field as a dict
+    spend: float
+    budget_id: str | None
+    created_at: datetime | None
+    created_by: str | None
+    updated_at: datetime | None
+
+
+class _TeamMembershipRowFields(TypedDict):
+    user_id: str
+    team_id: str
+    budget_id: str | None
+    spend: float | None
+
+
+class _OrgMembershipRowFields(TypedDict):
+    user_id: str
+    organization_id: str
+    user_role: str | None
+    spend: float
+    budget_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    user_email: str | None
+
+
+class _UserRowFields(TypedDict):
+    user_id: str
+    user_alias: str | None
+    team_id: str | None
+    sso_user_id: str | None
+    organization_id: str | None
+    object_permission_id: str | None
+    teams: list[str]  # mutable-ok: splatted into LiteLLM_UserTable, which declares this field as a list
+    user_role: str | None
+    max_budget: float | None
+    spend: float
+    user_email: str | None
+    models: list[str]  # mutable-ok: splatted into LiteLLM_UserTable, which declares this field as a list
+    metadata: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_UserTable, which declares this field as a dict
+    max_parallel_requests: int | None
+    tpm_limit: int | None
+    rpm_limit: int | None
+    budget_duration: str | None
+    budget_reset_at: datetime | None
+    allowed_cache_controls: list[
+        str
+    ]  # mutable-ok: splatted into LiteLLM_UserTable, which declares this field as a list
+    policies: list[str]  # mutable-ok: splatted into LiteLLM_UserTable, which declares this field as a list
+    model_spend: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_UserTable, which declares this field as a dict
+    model_max_budget: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_UserTable, which declares this field as a dict
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class _TeamRowFields(TypedDict):
+    team_alias: str | None
+    team_id: str
+    organization_id: str | None
+    admins: list[str]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a list
+    members: list[str]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a list
+    team_member_permissions: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a list
+    metadata: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a dict
+    tpm_limit: int | None
+    rpm_limit: int | None
+    max_budget: float | None
+    soft_budget: float | None
+    budget_duration: str | None
+    models: list[str]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a list
+    blocked: bool
+    router_settings: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a dict
+    access_group_ids: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a list
+    default_team_member_models: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a list
+    spend: float | None
+    max_parallel_requests: int | None
+    budget_reset_at: datetime | None
+    model_id: int | None
+    model_spend: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a dict
+    model_max_budget: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a dict
+    policies: list[str] | None  # mutable-ok: splatted into LiteLLM_TeamTable, which declares this field as a list
+    allow_team_guardrail_config: bool | None
+    object_permission_id: str | None
+    updated_at: datetime | None
+    created_at: datetime | None
+
+
+class _AccessGroupRowFields(TypedDict):
+    access_group_id: str
+    access_group_name: str
+    description: str | None
+    access_model_names: list[
+        str
+    ]  # mutable-ok: splatted into LiteLLM_AccessGroupTable, which declares this field as a list
+    access_mcp_server_ids: list[
+        str
+    ]  # mutable-ok: splatted into LiteLLM_AccessGroupTable, which declares this field as a list
+    access_agent_ids: list[
+        str
+    ]  # mutable-ok: splatted into LiteLLM_AccessGroupTable, which declares this field as a list
+    assigned_team_ids: list[
+        str
+    ]  # mutable-ok: splatted into LiteLLM_AccessGroupTable, which declares this field as a list
+    assigned_key_ids: list[
+        str
+    ]  # mutable-ok: splatted into LiteLLM_AccessGroupTable, which declares this field as a list
+    created_at: datetime | None
+    created_by: str | None
+    updated_at: datetime | None
+    updated_by: str | None
+
+
+class _OrgRowFields(TypedDict):
+    organization_id: str | None
+    organization_alias: str | None
+    budget_id: str
+    spend: float
+    metadata: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_OrganizationTable, which declares this field as a dict
+    models: list[str]  # mutable-ok: splatted into LiteLLM_OrganizationTable, which declares this field as a list
+    model_spend: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_OrganizationTable, which declares this field as a dict
+    created_by: str
+    updated_by: str
+    object_permission_id: str | None
+
+
+class _ObjectPermissionRowFields(TypedDict):
+    object_permission_id: str
+    mcp_servers: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    mcp_access_groups: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    mcp_tool_permissions: Optional[
+        dict[str, list[str]]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a dict
+    vector_stores: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    agents: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    agent_access_groups: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    models: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    mcp_toolsets: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    blocked_tools: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    search_tools: Optional[
+        list[str]
+    ]  # mutable-ok: splatted into LiteLLM_ObjectPermissionTable, which declares this field as a list
+    mcp_tool_search_enabled: bool | None
+
+
+class _VectorStoreRowFields(TypedDict):
+    vector_store_id: str
+    custom_llm_provider: str
+    vector_store_name: str | None
+    vector_store_description: str | None
+    vector_store_metadata: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_ManagedVectorStoresTable, which declares this field as a dict
+    created_at: datetime | None
+    updated_at: datetime | None
+    litellm_credential_name: str | None
+    litellm_params: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_ManagedVectorStoresTable, which declares this field as a dict
+    team_id: str | None
+    user_id: str | None
+
+
+class _ProjectRowFields(TypedDict):
+    project_id: str
+    project_alias: str | None
+    description: str | None
+    team_id: str | None
+    budget_id: str | None
+    metadata: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_ProjectTableCachedObj, which declares this field as a dict
+    models: list[str]  # mutable-ok: splatted into LiteLLM_ProjectTableCachedObj, which declares this field as a list
+    spend: float
+    model_spend: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_ProjectTableCachedObj, which declares this field as a dict
+    model_rpm_limit: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_ProjectTableCachedObj, which declares this field as a dict
+    model_tpm_limit: Optional[
+        dict[str, object]
+    ]  # mutable-ok: splatted into LiteLLM_ProjectTableCachedObj, which declares this field as a dict
+    blocked: bool
+    object_permission_id: str | None
+    created_by: str | None
+    updated_by: str | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class _UserAPIKeyAuthFields(TypedDict, total=False):
+    token: str | None
+    key_name: str | None
+    key_alias: str | None
+    spend: float
+    max_budget: float | None
+    user_id: str | None
+    team_id: str | None
+    models: list[str]  # mutable-ok: splatted into UserAPIKeyAuth, which declares this field as a list
+    budget_duration: str | None
+    metadata: dict[str, object]  # mutable-ok: splatted into UserAPIKeyAuth, which declares this field as a dict
+
+
+class _OrgQueryKwargs(TypedDict, total=False):
+    where: Mapping[str, object]
+    include: Mapping[str, object]
+
+
+class _BudgetRow(Protocol):
+    def dict(self) -> _BudgetRowFields: ...
+
+
+class _EndUserRow(Protocol):
+    def dict(self) -> _EndUserRowFields: ...
+
+
+class _TagRow(Protocol):
+    tag_name: str
+
+    def dict(self) -> _TagRowFields: ...
+
+
+class _TeamMembershipRow(Protocol):
+    def dict(self) -> _TeamMembershipRowFields: ...
+
+
+class _OrgMembershipRow(Protocol):
+    def model_dump(self) -> _OrgMembershipRowFields: ...
+
+
+class _UserRow(Protocol):
+    user_id: str
+
+    @property
+    def organization_memberships(self) -> Sequence[_OrgMembershipRow | None] | None: ...
+
+    @organization_memberships.setter
+    def organization_memberships(self, value: Sequence[LiteLLM_OrganizationMembershipTable] | None) -> None: ...
+
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str) -> object: ...
+
+
+class _TeamRow(Protocol):
+    def dict(self) -> _TeamRowFields: ...
+
+    def model_dump(self) -> _TeamRowFields: ...
+
+
+class _AccessGroupRow(Protocol):
+    def dict(self) -> _AccessGroupRowFields: ...
+
+
+class _JWTKeyMappingRow(Protocol):
+    token: str
+
+
+class _OrgRow(Protocol):
+    def model_dump(self) -> _OrgRowFields: ...
+
+
+class _ObjectPermissionRow(Protocol):
+    def dict(self) -> _ObjectPermissionRowFields: ...
+
+
+class _VectorStoreRow(Protocol):
+    def model_dump(self) -> _VectorStoreRowFields: ...
+
+    def dict(self) -> _VectorStoreRowFields: ...
+
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str) -> object: ...
+
+
+class _ProjectRow(Protocol):
+    def model_dump(self) -> _ProjectRowFields: ...
+
+
+_PrismaRowT_co = TypeVar("_PrismaRowT_co", covariant=True)
+
+
+class _PrismaTable(Protocol[_PrismaRowT_co]):
+    async def find_unique(
+        self,
+        where: Mapping[str, object] | None = None,
+        include: Mapping[str, object] | None = None,
+    ) -> _PrismaRowT_co | None: ...
+
+    async def find_first(
+        self,
+        where: Mapping[str, object] | None = None,
+        include: Mapping[str, object] | None = None,
+    ) -> _PrismaRowT_co | None: ...
+
+    async def find_many(
+        self,
+        where: Mapping[str, object] | None = None,
+        include: Mapping[str, object] | None = None,
+        take: int | None = None,
+    ) -> Sequence[_PrismaRowT_co]: ...
+
+    async def create(
+        self,
+        data: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> _PrismaRowT_co: ...
+
+    async def update(
+        self,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> _PrismaRowT_co | None: ...
 
 
 def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
@@ -377,7 +781,7 @@ _GUARDRAIL_MODIFICATION_KEYS: tuple = (
 )
 
 
-def _guardrail_modification_check(request_body: dict, team_object: Optional[LiteLLM_TeamTable]) -> None:
+def _guardrail_modification_check(request_body: Mapping[str, object], team_object: LiteLLM_TeamTable | None) -> None:
     """
     Reject user-supplied metadata flags that would modify guardrail behavior
     unless the team has explicit permission. Checked keys include the plural
@@ -392,7 +796,7 @@ def _guardrail_modification_check(request_body: dict, team_object: Optional[Lite
     """
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
 
-    def _coerce_to_dict(container: Any) -> Optional[dict]:
+    def _coerce_to_dict(container: object) -> dict | None:
         """Accept dict or JSON-string (from multipart/form-data or extra_body).
 
         Without this, an attacker can smuggle guardrail keys past the check by
@@ -404,11 +808,11 @@ def _guardrail_modification_check(request_body: dict, team_object: Optional[Lite
         if isinstance(container, dict):
             return container
         if isinstance(container, str):
-            parsed = safe_json_loads(container)
+            parsed = cast("object", safe_json_loads(container))  # cast-ok: safe_json_loads is untyped
             return parsed if isinstance(parsed, dict) else None
         return None
 
-    def _user_requested_modification(container: Any) -> bool:
+    def _user_requested_modification(container: object) -> bool:
         coerced = _coerce_to_dict(container)
         if coerced is None:
             return False
@@ -716,7 +1120,10 @@ async def common_checks(
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
-    _guardrail_modification_check(request_body, team_object)
+    _guardrail_modification_check(
+        cast("dict[str, object]", request_body),  # cast-ok: request body dicts are string-keyed JSON payloads
+        team_object,
+    )
 
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(user_object=user_object, route=route, request_body=request_body)
@@ -943,9 +1350,9 @@ async def get_default_end_user_budget(
 
     # Fetch from database
     try:
-        budget_record = await BudgetRepository(prisma_client).table.find_unique(
-            where={"budget_id": litellm.max_end_user_budget_id}
-        )
+        budget_record = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_BudgetRow]", BudgetRepository(prisma_client).table
+        ).find_unique(where={"budget_id": litellm.max_end_user_budget_id})
 
         if budget_record is None:
             verbose_proxy_logger.warning(
@@ -995,14 +1402,19 @@ async def get_team_member_default_budget(
 
     cache_key = f"team_member_default_budget:{budget_id}"
 
-    cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
+    cached_budget = cast(  # cast-ok: untyped cache returns the budget model or its serialized dict
+        "LiteLLM_BudgetTable | _BudgetRowFields | None",
+        await user_api_key_cache.async_get_cache(key=cache_key),
+    )
     if isinstance(cached_budget, LiteLLM_BudgetTable):
         return cached_budget
     if isinstance(cached_budget, dict):
         return LiteLLM_BudgetTable(**cached_budget)
 
     try:
-        budget_record = await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_id})
+        budget_record = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_BudgetRow]", BudgetRepository(prisma_client).table
+        ).find_unique(where={"budget_id": budget_id})
 
         if budget_record is None:
             verbose_proxy_logger.warning(f"Team-default member budget not found in database: {budget_id}")
@@ -1159,7 +1571,9 @@ async def get_end_user_object(
 
     # Fetch from database
     try:
-        response = await EndUserRepository(prisma_client).table.find_unique(
+        response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_EndUserRow]", EndUserRepository(prisma_client).table
+        ).find_unique(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True, "object_permission": True},
         )
@@ -1231,7 +1645,9 @@ async def resolve_and_validate_end_user_id(
         return raw_end_user_id
 
     cache_key = f"end_user_validation:{raw_end_user_id}"
-    cached = await user_api_key_cache.async_get_cache(key=cache_key)
+    cached = cast(  # cast-ok: untyped cache returns the validation marker string
+        "object", await user_api_key_cache.async_get_cache(key=cache_key)
+    )
     if cached == "valid":
         return raw_end_user_id
     if cached == "invalid":
@@ -1333,8 +1749,10 @@ async def get_tag_objects_batch(
     if not tag_names:
         return {}
 
-    tag_objects = {}
-    uncached_tags = []
+    tag_objects: dict[
+        str, LiteLLM_TagTable
+    ] = {}  # mutable-ok: filled per tag_name below and returned as the batch result
+    uncached_tags: list[str] = []  # mutable-ok: appended to in the cache-miss loop below
 
     # Try to get all tags from cache first
     for tag_name in tag_names:
@@ -1351,7 +1769,9 @@ async def get_tag_objects_batch(
     # Batch fetch uncached tags from DB in one query
     if uncached_tags:
         try:
-            db_tags = await TagRepository(prisma_client).table.find_many(
+            db_tags = await cast(  # cast-ok: repository .table returns an untyped prisma client
+                "_PrismaTable[_TagRow]", TagRepository(prisma_client).table
+            ).find_many(
                 where={"tag_name": {"in": uncached_tags}},
                 include={"litellm_budget_table": True},
             )
@@ -1445,7 +1865,9 @@ async def get_team_membership(
 
     # else, check db
     try:
-        response = await TeamMembershipRepository(prisma_client).table.find_unique(
+        response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_TeamMembershipRow]", TeamMembershipRepository(prisma_client).table
+        ).find_unique(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
             include={"litellm_budget_table": True},
         )
@@ -1514,7 +1936,7 @@ def _should_check_db(key: str, last_db_access_time: LimitedSizeOrderedDict, db_c
     return False
 
 
-def _update_last_db_access_time(key: str, value: Optional[Any], last_db_access_time: LimitedSizeOrderedDict):
+def _update_last_db_access_time(key: str, value: object | None, last_db_access_time: LimitedSizeOrderedDict):
     last_db_access_time[key] = (value, time.time())
 
 
@@ -1535,7 +1957,9 @@ def _get_role_based_permissions(
 
     for role_based_permission in role_based_permissions:
         if role_based_permission.role == rbac_role:
-            return getattr(role_based_permission, key)
+            return cast(  # cast-ok: key is "models" or "routes", both Optional[List[str]] attributes
+                "list[str] | None", getattr(role_based_permission, key)
+            )
 
     return None
 
@@ -1576,7 +2000,7 @@ async def _get_fuzzy_user_object(
     prisma_client: PrismaClient,
     sso_user_id: Optional[str] = None,
     user_email: Optional[str] = None,
-) -> Optional[LiteLLM_UserTable]:
+) -> Optional["_UserRow"]:
     """
     Checks if sso user is in db.
 
@@ -1590,7 +2014,9 @@ async def _get_fuzzy_user_object(
 
     response = None
     if sso_user_id is not None:
-        response = await UserRepository(prisma_client).table.find_unique(
+        response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_UserRow]", UserRepository(prisma_client).table
+        ).find_unique(
             where={"sso_user_id": sso_user_id},
             include={"organization_memberships": True},
         )
@@ -1598,14 +2024,18 @@ async def _get_fuzzy_user_object(
     if response is None and user_email is not None:
         # Use case-insensitive query to handle emails with different casing
         # This matches the pattern used in _check_duplicate_user_email
-        response = await UserRepository(prisma_client).table.find_first(
+        response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_UserRow]", UserRepository(prisma_client).table
+        ).find_first(
             where={"user_email": {"equals": user_email, "mode": "insensitive"}},
             include={"organization_memberships": True},
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
             asyncio.create_task(  # background task to update user with sso id
-                UserRepository(prisma_client).table.update(
+                cast(  # cast-ok: repository .table returns an untyped prisma client
+                    "_PrismaTable[_UserRow]", UserRepository(prisma_client).table
+                ).update(
                     where={"user_id": response.user_id},
                     data={"sso_user_id": sso_user_id},
                 )
@@ -1655,9 +2085,9 @@ async def get_user_object(
         )
 
         if should_check_db:
-            response = await UserRepository(prisma_client).table.find_unique(
-                where={"user_id": user_id}, include={"organization_memberships": True}
-            )
+            response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+                "_PrismaTable[_UserRow]", UserRepository(prisma_client).table
+            ).find_unique(where={"user_id": user_id}, include={"organization_memberships": True})
 
             if response is None:
                 response = await _get_fuzzy_user_object(
@@ -1671,7 +2101,7 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
-                new_user_params: Dict[str, Any] = {
+                new_user_params: dict[str, object] = {
                     "user_id": user_id,
                 }
                 if user_email is not None:
@@ -1683,10 +2113,14 @@ async def get_user_object(
                     and new_user_params.get("budget_reset_at") is None
                 ):
                     new_user_params["budget_reset_at"] = get_budget_reset_time(
-                        budget_duration=new_user_params["budget_duration"]
+                        budget_duration=cast(  # cast-ok: guarded non-None above; budget durations are strings
+                            "str", new_user_params["budget_duration"]
+                        )
                     )
 
-                response = await UserRepository(prisma_client).table.create(
+                response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+                    "_PrismaTable[_UserRow]", UserRepository(prisma_client).table
+                ).create(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
@@ -1708,7 +2142,7 @@ async def get_user_object(
             ]
             response.organization_memberships = _dumped_memberships
 
-        _response = LiteLLM_UserTable(**dict(response))
+        _response = LiteLLM_UserTable(**cast("_UserRowFields", dict(response)))  # cast-ok: prisma row field mapping
         response_dict = _response.model_dump()
 
         # save the user object to cache
@@ -1736,7 +2170,7 @@ async def get_user_object(
 
 async def _cache_management_object(
     key: str,
-    value: Union[BaseModel, Dict[str, Any]],
+    value: BaseModel | dict[str, object],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
     *,
@@ -1830,7 +2264,9 @@ async def _delete_cache_key_object(
 
 @log_db_metrics
 async def _get_team_db_check(team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None):
-    response = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+    response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+        "_PrismaTable[_TeamRow]", TeamRepository(prisma_client).table
+    ).find_unique(where={"team_id": team_id})
 
     if response is None and team_id_upsert:
         from litellm.proxy.management_endpoints.team_endpoints import new_team
@@ -1845,12 +2281,17 @@ async def _get_team_db_check(team_id: str, prisma_client: PrismaClient, team_id_
             http_request=mock_request,
             user_api_key_dict=system_admin_user,
         )
-        response = LiteLLM_TeamTable(**created_team_dict)
+        response = cast(  # cast-ok: the validated team model exposes the same row surface
+            "_TeamRow",
+            LiteLLM_TeamTable(**cast("_TeamRowFields", created_team_dict)),  # cast-ok: new_team returns an untyped dict
+        )
     return response
 
 
 async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
-    return await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+    return await cast(  # cast-ok: repository .table returns an untyped prisma client
+        "_PrismaTable[_TeamRow]", TeamRepository(prisma_client).table
+    ).find_unique(where={"team_id": team_id})
 
 
 async def _get_team_object_from_user_api_key_cache(
@@ -2058,9 +2499,9 @@ async def get_access_object(
 
     # Not in cache - fetch from DB
     try:
-        response = await AccessGroupRepository(prisma_client).table.find_unique(
-            where={"access_group_id": access_group_id}
-        )
+        response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_AccessGroupRow]", AccessGroupRepository(prisma_client).table
+        ).find_unique(where={"access_group_id": access_group_id})
 
         if response is None:
             raise HTTPException(
@@ -2134,7 +2575,9 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams = await TeamRepository(prisma_client).table.find_many(where={"team_alias": team_alias})
+        teams = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_TeamRow]", TeamRepository(prisma_client).table
+        ).find_many(where={"team_alias": team_alias})
 
         if not teams:
             raise HTTPException(
@@ -2236,7 +2679,9 @@ async def get_org_object_by_alias(
 
     # Query database by organization_alias
     try:
-        orgs = await OrganizationRepository(prisma_client).table.find_many(where={"organization_alias": org_alias})
+        orgs = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_OrgRow]", OrganizationRepository(prisma_client).table
+        ).find_many(where={"organization_alias": org_alias})
 
         if not orgs:
             raise HTTPException(
@@ -2396,7 +2841,9 @@ class ExperimentalUIJWTToken:
         if decrypted_token is None:
             return None
         try:
-            return UserAPIKeyAuth(**json.loads(decrypted_token))
+            return UserAPIKeyAuth(
+                **cast("_UserAPIKeyAuthFields", json.loads(decrypted_token))  # cast-ok: decrypted UI session payload
+            )
         except Exception as e:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
@@ -2453,7 +2900,9 @@ async def get_jwt_key_mapping_object(
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
     """
-    mapping = await JWTKeyMappingRepository(prisma_client).table.find_first(
+    mapping = await cast(  # cast-ok: repository .table returns an untyped prisma client
+        "_PrismaTable[_JWTKeyMappingRow]", JWTKeyMappingRepository(prisma_client).table
+    ).find_first(
         where={
             "jwt_claim_name": jwt_claim_name,
             "jwt_claim_value": jwt_claim_value,
@@ -2515,7 +2964,9 @@ async def get_key_object(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    _response = UserAPIKeyAuth(**_valid_token.model_dump(exclude_none=True))
+    _response = UserAPIKeyAuth(
+        **cast("_UserAPIKeyAuthFields", _valid_token.model_dump(exclude_none=True))  # cast-ok: combined view dump
+    )
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
@@ -2581,9 +3032,9 @@ async def get_object_permission(
 
     # else, check db
     try:
-        response = await ObjectPermissionRepository(prisma_client).table.find_unique(
-            where={"object_permission_id": object_permission_id}
-        )
+        response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_ObjectPermissionRow]", ObjectPermissionRepository(prisma_client).table
+        ).find_unique(where={"object_permission_id": object_permission_id})
 
         if response is None:
             return None
@@ -2637,7 +3088,9 @@ async def get_managed_vector_store_rows_by_uuids(
     if not cache_misses:
         return result
 
-    rows = await ManagedVectorStoresRepository(prisma_client).table.find_many(
+    rows = await cast(  # cast-ok: repository .table returns an untyped prisma client
+        "_PrismaTable[_VectorStoreRow]", ManagedVectorStoresRepository(prisma_client).table
+    ).find_many(
         where={"vector_store_id": {"in": cache_misses}},
         take=len(cache_misses),
     )
@@ -2648,7 +3101,9 @@ async def get_managed_vector_store_rows_by_uuids(
             row_dict = dict(row) if hasattr(row, "__dict__") else {}
         if not row_dict:
             continue
-        cached_obj = LiteLLM_ManagedVectorStoresTable(**row_dict)
+        cached_obj = LiteLLM_ManagedVectorStoresTable(
+            **cast("_VectorStoreRowFields", row_dict)  # cast-ok: prisma row field mapping
+        )
         key = "managed_vector_store_id:{}".format(cached_obj.vector_store_id)
         await user_api_key_cache.async_set_cache(
             key=key,
@@ -2711,11 +3166,13 @@ async def get_org_object(
         return deserialized_org
     # else, check db
     try:
-        query_kwargs: Dict[str, Any] = {"where": {"organization_id": org_id}}
+        query_kwargs: _OrgQueryKwargs = {"where": {"organization_id": org_id}}
         if include_budget_table:
             query_kwargs["include"] = {"litellm_budget_table": True}
 
-        response = await OrganizationRepository(prisma_client).table.find_unique(**query_kwargs)
+        response = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[_OrgRow]", OrganizationRepository(prisma_client).table
+        ).find_unique(**query_kwargs)
     except Exception:
         # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
         # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
@@ -3670,17 +4127,18 @@ async def _virtual_key_soft_budget_check(
         )
 
 
-def _parse_email_list(raw: Any) -> List[str]:
+def _parse_email_list(raw: object) -> list[str]:
     """Parse emails from a list or comma-separated string."""
     if isinstance(raw, list):
-        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
+        entries = cast("list[object]", raw)  # cast-ok: narrowed to list; elements validated below
+        return [e.strip() for e in entries if isinstance(e, str) and e.strip()]
     elif isinstance(raw, str):
         return [e.strip() for e in raw.split(",") if e.strip()]
     return []
 
 
 def _normalize_alert_emails(
-    cfg: Optional[Dict[str, Any]],
+    cfg: Mapping[str, object] | None,
 ) -> Dict[str, List[str]]:
     """Coerce user-supplied threshold→recipients mapping to Dict[str, List[str]].
 
@@ -3693,8 +4151,8 @@ def _normalize_alert_emails(
 
 
 def _merge_budget_alert_email_configs(
-    global_cfg: Optional[Dict[str, Any]],
-    per_key_cfg: Optional[Dict[str, Any]],
+    global_cfg: Mapping[str, object] | None,
+    per_key_cfg: Mapping[str, object] | None,
 ) -> Optional[Dict[str, List[str]]]:
     """
     Per-threshold additive merge: each threshold's recipient list is the union
@@ -4197,7 +4655,9 @@ async def get_project_object(
         return deserialized_project
 
     # Fetch from DB
-    project_row = await ProjectRepository(prisma_client).table.find_unique(
+    project_row = await cast(  # cast-ok: repository .table returns an untyped prisma client
+        "_PrismaTable[_ProjectRow]", ProjectRepository(prisma_client).table
+    ).find_unique(
         where={"project_id": project_id},
         include={"litellm_budget_table": True},
     )
@@ -4498,7 +4958,9 @@ async def vector_store_access_check(
     #########################################################
     # Check if the key can access the vector store
     if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        key_object_permission = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[LiteLLM_ObjectPermissionTable]", ObjectPermissionRepository(prisma_client).table
+        ).find_unique(
             where={"object_permission_id": valid_token.object_permission_id},
         )
         if key_object_permission is not None:
@@ -4510,7 +4972,9 @@ async def vector_store_access_check(
 
     # Check if the team can access the vector store
     if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        team_object_permission = await cast(  # cast-ok: repository .table returns an untyped prisma client
+            "_PrismaTable[LiteLLM_ObjectPermissionTable]", ObjectPermissionRepository(prisma_client).table
+        ).find_unique(
             where={"object_permission_id": team_object.object_permission_id},
         )
         if team_object_permission is not None:

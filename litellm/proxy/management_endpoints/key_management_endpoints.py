@@ -18,11 +18,12 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
+from typing_extensions import Never
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
@@ -127,6 +128,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
+    CredentialItem,
     PersonalUIKeyGenerationConfig,
     TeamUIKeyGenerationConfig,
 )
@@ -490,7 +492,7 @@ _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS = frozenset({"llm_api_routes", "info_rout
 
 def _validate_caller_can_change_key_ownership(
     data: Optional[BaseModel],
-    existing_key_row: Any,
+    existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
@@ -889,7 +891,7 @@ async def _common_key_generation_helper(
         )
         new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
-        _budget = await BudgetRepository(prisma_client).table.create(
+        _budget: LiteLLM_BudgetTable = await BudgetRepository(prisma_client).table.create(
             data={
                 **new_budget,  # type: ignore
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -1095,7 +1097,7 @@ async def _common_key_generation_helper(
 
 
 def _check_key_model_specific_limits(
-    keys: List[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     entity_rpm_limit: Optional[int],
     entity_tpm_limit: Optional[int],
@@ -1166,7 +1168,7 @@ def _check_key_model_specific_limits(
 
 
 def _check_key_rpm_tpm_limits(
-    keys: List[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     entity_rpm_limit: Optional[int],
     entity_tpm_limit: Optional[int],
@@ -1204,7 +1206,7 @@ def _check_key_rpm_tpm_limits(
 
 
 def check_team_key_model_specific_limits(
-    keys: List[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
 ) -> None:
@@ -1229,7 +1231,7 @@ def check_team_key_model_specific_limits(
 
 
 def check_team_key_rpm_tpm_limits(
-    keys: List[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
 ) -> None:
@@ -1261,7 +1263,7 @@ async def _check_team_key_limits(
     # calculate allocated tpm/rpm limit
     # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
 
-    keys = await VerificationTokenRepository(prisma_client).table.find_many(
+    keys: Sequence[LiteLLM_VerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"team_id": team_table.team_id},
     )
     # Exclude the key being updated to avoid double-counting its limits.
@@ -1331,7 +1333,7 @@ async def _check_project_key_limits(
 
 
 def check_org_key_model_specific_limits(
-    keys: List[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
 ) -> None:
@@ -1364,7 +1366,7 @@ def check_org_key_model_specific_limits(
 
 
 def check_org_key_rpm_tpm_limits(
-    keys: List[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
 ) -> None:
@@ -1405,7 +1407,7 @@ async def _validate_caller_can_assign_key_org(
             detail="Cannot assign a key to an organization without a user_id on the caller's token",
         )
 
-    user_row = await UserRepository(prisma_client).table.find_unique(
+    user_row: LiteLLM_UserTable | None = await UserRepository(prisma_client).table.find_unique(
         where={"user_id": user_api_key_dict.user_id},
         include={"organization_memberships": True},
     )
@@ -1443,7 +1445,7 @@ async def _check_org_key_limits(
     # get all organization keys
     # calculate allocated tpm/rpm limit
     # check if specified tpm/rpm limit is greater than allocated tpm/rpm limit
-    keys = await VerificationTokenRepository(prisma_client).table.find_many(
+    keys: Sequence[LiteLLM_VerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"organization_id": org_table.organization_id},
     )
     # Exclude the key being updated to avoid double-counting its limits.
@@ -1587,7 +1589,7 @@ async def generate_key_fn(
 
         if user_custom_key_generate is not None:
             if inspect.iscoroutinefunction(user_custom_key_generate):
-                result = await user_custom_key_generate(data)  # type: ignore
+                result: Mapping[str, object] = await user_custom_key_generate(data)
             else:
                 raise ValueError("user_custom_key_generate must be a coroutine")
             decision = result.get("decision", True)
@@ -1786,7 +1788,7 @@ async def generate_service_account_key_fn(
 
     if user_custom_key_generate is not None:
         if inspect.iscoroutinefunction(user_custom_key_generate):
-            result = await user_custom_key_generate(data)  # type: ignore
+            result: Mapping[str, object] = await user_custom_key_generate(data)
         else:
             raise ValueError("user_custom_key_generate must be a coroutine")
         decision = result.get("decision", True)
@@ -1855,7 +1857,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             )
         casted_metadata[reserved_field] = existing_value
 
-    data_json = data.model_dump(exclude_unset=True, exclude_none=True)
+    data_json: dict[str, object] = data.model_dump(exclude_unset=True, exclude_none=True)
 
     try:
         for k, v in data_json.items():
@@ -2046,7 +2048,9 @@ async def _get_and_validate_existing_key(
 
     hashed_token = _hash_token_if_needed(token=token)
 
-    existing_key_row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+    existing_key_row: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+        prisma_client
+    ).table.find_unique(where={"token": hashed_token})
 
     if existing_key_row is None:
         raise ProxyException(
@@ -2065,11 +2069,11 @@ async def _process_single_key_update(
     litellm_changed_by: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: Any,
+    proxy_logging_obj: ProxyLogging,
     llm_router: Optional[Router],
     user_custom_key_update: Optional[Callable] = None,
     existing_key_row: Optional[LiteLLM_VerificationToken] = None,
-) -> Dict[str, Any]:
+) -> dict[str, object]:
     """
     Process a single key update with all validations and checks.
 
@@ -2218,9 +2222,9 @@ async def _process_single_key_update(
 async def _validate_mcp_servers_for_key_update(
     data: "UpdateKeyRequest",
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
-    existing_key_row: Any,
-    prisma_client: Any,
-    user_api_key_cache: Any,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
     is_proxy_admin: bool,
 ) -> Optional[ObjectPermissionDict]:
     """Validate MCP servers in object_permission against the effective team."""
@@ -2255,12 +2259,12 @@ async def _validate_mcp_servers_for_key_update(
 
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
-    existing_key_row: Any,
+    existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Any,
+    llm_router: Router | None,
     premium_user: bool,
     prisma_client: Any,
-    user_api_key_cache: Any,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """Validate permissions and constraints for key update."""
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
@@ -2614,7 +2618,7 @@ async def update_key_fn(
         # Custom key update hook
         if user_custom_key_update is not None:
             if inspect.iscoroutinefunction(user_custom_key_update):
-                result = await user_custom_key_update(data)
+                result: Mapping[str, object] = await user_custom_key_update(data)
             else:
                 raise ValueError("user_custom_key_update must be a coroutine")
             decision = result.get("decision", True)
@@ -2892,7 +2896,7 @@ def _build_failed_team_key_update(
     else:
         error_message = str(exception)
 
-    key_info: Optional[Dict[str, Any]] = None
+    key_info: dict[str, object] | None = None
     if existing_key_row is not None:
         if hasattr(existing_key_row, "model_dump"):
             key_info = existing_key_row.model_dump()
@@ -2962,7 +2966,9 @@ async def bulk_update_team_keys(
         # `blocked` is Boolean? with no default; `/key/generate` writes NULL. Prisma's `NOT`
         # excludes NULLs, so explicitly OR `false` with `null` to include them.
         now = datetime.now(timezone.utc)
-        existing_keys = await VerificationTokenRepository(prisma_client).table.find_many(
+        existing_keys: Sequence[LiteLLM_VerificationToken] = await VerificationTokenRepository(
+            prisma_client
+        ).table.find_many(
             where={
                 "team_id": data.team_id,
                 "AND": [
@@ -2980,7 +2986,7 @@ async def bulk_update_team_keys(
                     "error": f"Team {data.team_id} has more than {MAX_BATCH_SIZE} keys. Use `key_ids` to update in batches of {MAX_BATCH_SIZE}."
                 },
             )
-        requested_tokens = [row.token for row in existing_keys]
+        requested_tokens = [cast(str, row.token) for row in existing_keys]  # cast-ok: DB rows always carry a token
     else:
         if data.key_ids is None or len(data.key_ids) == 0:
             raise HTTPException(
@@ -3050,7 +3056,7 @@ async def bulk_update_team_keys(
             update_key_request = UpdateKeyRequest(
                 key=token,
                 team_id=data.team_id,
-                **update_field_dict,
+                **cast(dict[str, Never], update_field_dict),  # cast-ok: pydantic validates the dumped fields
             )
             updated_key_info = await _process_single_key_update(
                 update_key_request=update_key_request,
@@ -3367,7 +3373,9 @@ async def info_key_fn_v2(
         # Resolve key_aliases to tokens so we never pass token=None (unbounded query)
         tokens_to_query = list(data.keys) if data.keys else []
         if data.key_aliases:
-            alias_rows = await VerificationTokenRepository(prisma_client).table.find_many(
+            alias_rows: Sequence[LiteLLM_VerificationToken] = await VerificationTokenRepository(
+                prisma_client
+            ).table.find_many(
                 where={"key_alias": {"in": data.key_aliases}},
                 include={"litellm_budget_table": True},
             )
@@ -4039,7 +4047,7 @@ def _transform_verification_tokens_to_deleted_records(
     keys: List[LiteLLM_VerificationToken],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, object]]:
     """Transform verification tokens into deleted token records ready for persistence."""
     if not keys:
         return []
@@ -4049,13 +4057,15 @@ def _transform_verification_tokens_to_deleted_records(
     for key in keys:
         key_payload = key.model_dump()
         deleted_record = LiteLLM_DeletedVerificationToken(
-            **key_payload,
+            **cast(dict[str, Never], key_payload),  # cast-ok: pydantic revalidates the dumped fields
             deleted_at=deleted_at,
             deleted_by=user_api_key_dict.user_id,
             deleted_by_api_key=user_api_key_dict.api_key,
             litellm_changed_by=litellm_changed_by,
         )
-        record = deleted_record.model_dump()
+        record: dict[str, object] = (
+            deleted_record.model_dump()
+        )  # mutable-ok: org_id/relation keys are popped and JSON fields rewritten in place below
 
         # Map org_id to organization_id (model uses org_id, but schema expects organization_id)
         org_id_value = record.pop("org_id", None)
@@ -4090,7 +4100,7 @@ def _transform_verification_tokens_to_deleted_records(
 
 
 async def _save_deleted_verification_token_records(
-    records: List[Dict[str, Any]],
+    records: list[dict[str, object]],
     prisma_client: PrismaClient,
 ) -> None:
     """Save deleted verification token records to the database."""
@@ -4124,9 +4134,9 @@ async def delete_key_aliases(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
-    _keys_being_deleted = await VerificationTokenRepository(prisma_client).table.find_many(
-        where={"key_alias": {"in": key_aliases}}
-    )
+    _keys_being_deleted: Sequence[LiteLLM_VerificationToken] = await VerificationTokenRepository(
+        prisma_client
+    ).table.find_many(where={"key_alias": {"in": key_aliases}})
 
     tokens = [key.token for key in _keys_being_deleted]
     return await delete_verification_tokens(
@@ -4161,7 +4171,7 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[List] = await ModelRepository(prisma_client).table.find_many()
+        models: list[LiteLLM_ProxyModelTable] | None = await ModelRepository(prisma_client).table.find_many()
     except Exception:
         models = None
     # 2. process model table
@@ -4171,14 +4181,16 @@ async def _rotate_master_key(
         new_models = []
         for model in decrypted_models:
             new_model = await _add_model_to_db(
-                model_params=Deployment(**model),
+                model_params=Deployment(**cast(dict[str, Never], model)),  # cast-ok: pydantic revalidates
                 user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,
                 new_encryption_key=new_master_key,
                 should_create_model_in_db=False,
             )
             if new_model:
-                _dumped = new_model.model_dump(exclude_none=True)
+                _dumped: dict[str, object] = new_model.model_dump(
+                    exclude_none=True
+                )  # mutable-ok: litellm_params/model_info are rewritten in place as prisma.Json
                 _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])  # type: ignore[attr-defined]
                 _dumped["model_info"] = prisma.Json(_dumped["model_info"])  # type: ignore[attr-defined]
                 new_models.append(_dumped)
@@ -4191,7 +4203,7 @@ async def _rotate_master_key(
             )
     # 3. process config table
     try:
-        config = await ConfigRepository(prisma_client).table.find_many()
+        config: Sequence[LiteLLM_Config] | None = await ConfigRepository(prisma_client).table.find_many()
     except Exception:
         config = None
 
@@ -4256,7 +4268,7 @@ async def _rotate_master_key(
 
     # 5. process credentials table
     try:
-        credentials = await CredentialsRepository(prisma_client).table.find_many()
+        credentials: Sequence[CredentialItem] | None = await CredentialsRepository(prisma_client).table.find_many()
     except Exception:
         credentials = None
     if credentials:
@@ -4270,7 +4282,9 @@ async def _rotate_master_key(
                     updated_patch=decrypted_cred,
                     new_encryption_key=new_master_key,
                 )
-                _cred_data = encrypted_cred.model_dump(exclude_none=True)
+                _cred_data: dict[str, object] = encrypted_cred.model_dump(
+                    exclude_none=True
+                )  # mutable-ok: credential_values/credential_info are rewritten in place as prisma.Json
                 if "credential_values" in _cred_data:
                     _cred_data["credential_values"] = prisma.Json(  # type: ignore[attr-defined]
                         _cred_data["credential_values"]
@@ -4520,7 +4534,7 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
-    updated_token = await VerificationTokenRepository(prisma_client).table.update(
+    updated_token: LiteLLM_VerificationToken | None = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_api_key},
         data=update_data,  # type: ignore
     )
@@ -4535,7 +4549,7 @@ async def _execute_virtual_key_regeneration(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    response = GenerateKeyResponse(**updated_token_dict)
+    response = GenerateKeyResponse(**cast(dict[str, Never], updated_token_dict))  # cast-ok: pydantic revalidates
     asyncio.create_task(
         KeyManagementEventHooks.async_key_rotated_hook(
             data=data,
@@ -4721,7 +4735,9 @@ async def regenerate_key_fn(
         else:
             hashed_api_key = hash_token(key)
 
-        _key_in_db = await VerificationTokenRepository(prisma_client).table.find_unique(
+        _key_in_db: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+            prisma_client
+        ).table.find_unique(
             where={"token": hashed_api_key},
         )
         if _key_in_db is None:
@@ -4853,7 +4869,7 @@ async def _check_proxy_or_team_admin_for_key(
     )
 
 
-def _validate_reset_spend_value(reset_to: Any, key_in_db: LiteLLM_VerificationToken) -> float:
+def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_VerificationToken) -> float:
     if not isinstance(reset_to, (int, float)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -4925,7 +4941,9 @@ async def reset_key_spend_fn(
         else:
             hashed_api_key = hash_token(key)
 
-        _key_in_db = await VerificationTokenRepository(prisma_client).table.find_unique(
+        _key_in_db: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+            prisma_client
+        ).table.find_unique(
             where={"token": hashed_api_key},
             include={"litellm_budget_table": True},
         )
@@ -4945,7 +4963,7 @@ async def reset_key_spend_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
-        updated_key = await VerificationTokenRepository(prisma_client).table.update(
+        updated_key: LiteLLM_VerificationToken | None = await VerificationTokenRepository(prisma_client).table.update(
             where={"token": hashed_api_key},
             data={"spend": reset_to},
         )
@@ -5029,7 +5047,9 @@ async def validate_key_list_check(
             code=status.HTTP_403_FORBIDDEN,
         )
 
-    complete_user_info = LiteLLM_UserTable(**complete_user_info_db_obj.model_dump())
+    complete_user_info = LiteLLM_UserTable(
+        **cast(dict[str, Never], complete_user_info_db_obj.model_dump())  # cast-ok: pydantic revalidates
+    )
 
     # internal user can only see their own keys
     if user_id:
@@ -5063,7 +5083,7 @@ async def validate_key_list_check(
 
     if key_hash:
         try:
-            key_info = await VerificationTokenRepository(prisma_client).table.find_unique(
+            key_info: LiteLLM_VerificationToken = await VerificationTokenRepository(prisma_client).table.find_unique(
                 where={"token": key_hash},
             )
         except Exception:
@@ -5102,7 +5122,10 @@ async def _fetch_user_team_objects(
     if teams is None:
         return []
 
-    return [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+    return [
+        LiteLLM_TeamTable(**cast(dict[str, Never], team.model_dump()))  # cast-ok: pydantic revalidates
+        for team in teams
+    ]
 
 
 def _get_admin_team_ids_from_objects(
@@ -5370,8 +5393,8 @@ async def list_keys(
 
 async def _apply_non_admin_alias_scope(
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Any,
-    query_params: List[Any],
+    prisma_client: PrismaClient,
+    query_params: list[object],
     where_parts: List[str],
 ) -> None:
     """Append SQL scope conditions so non-admin users only see aliases for
@@ -5384,7 +5407,9 @@ async def _apply_non_admin_alias_scope(
     # Look up the user's teams from the user table
     user_teams: List[str] = []
     if user_api_key_dict.user_id:
-        user_row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_api_key_dict.user_id})
+        user_row: LiteLLM_UserTable | None = await UserRepository(prisma_client).table.find_unique(
+            where={"user_id": user_api_key_dict.user_id}
+        )
         if user_row is not None:
             user_teams = getattr(user_row, "teams", []) or []
 
@@ -5442,7 +5467,7 @@ async def key_aliases(
         # support column-level SELECT projection on find_many.
         #
         # $1 is always UI_SESSION_TOKEN_TEAM_ID (filters out UI session tokens).
-        query_params: List[Any] = [UI_SESSION_TOKEN_TEAM_ID]
+        query_params: list[object] = [UI_SESSION_TOKEN_TEAM_ID]
         where_parts = [
             "key_alias IS NOT NULL",
             "key_alias != ''",
@@ -5469,7 +5494,7 @@ async def key_aliases(
         where_sql = " AND ".join(where_parts)
 
         count_sql = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
+        count_rows: Sequence[Mapping[str, int]] = await prisma_client.db.query_raw(count_sql, *query_params)
         total_count = int(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params = query_params + [size, (page - 1) * size]
@@ -5482,7 +5507,7 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        alias_rows: Sequence[Mapping[str, str]] = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
         aliases: List[str] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages = -(-total_count // size) if total_count > 0 else 0
@@ -5550,7 +5575,7 @@ def _validate_sort_params(sort_by: Optional[str], sort_order: str) -> Optional[D
     return order_by
 
 
-def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, Any]:
+def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str, object]:
     if expires_filter == "expired":
         return {"AND": [{"expires": {"not": None}}, {"expires": {"lt": now}}]}
     return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
@@ -5764,7 +5789,9 @@ async def _list_key_helper(
 
     # Fetch keys with pagination
     if use_deleted_table:
-        keys = await DeletedVerificationTokenRepository(prisma_client).table.find_many(
+        keys: Sequence[LiteLLM_VerificationToken] = await DeletedVerificationTokenRepository(
+            prisma_client
+        ).table.find_many(
             where=where,  # type: ignore
             skip=skip,  # type: ignore
             take=size,  # type: ignore
@@ -5797,7 +5824,7 @@ async def _list_key_helper(
 
     # Get total count of keys
     if use_deleted_table:
-        total_count = await DeletedVerificationTokenRepository(prisma_client).table.count(
+        total_count: int = await DeletedVerificationTokenRepository(prisma_client).table.count(
             where=where  # type: ignore
         )
     else:
@@ -5811,13 +5838,15 @@ async def _list_key_helper(
     total_pages = -(-total_count // size)  # Ceiling division
 
     # Fetch user information if expand includes "user"
-    user_map = {}
+    user_map: Mapping[str, LiteLLM_UserTable] = {}
     if expand and "user" in expand:
         user_ids = [key.user_id for key in keys if key.user_id]
         created_by_ids = [key.created_by for key in keys if key.created_by]
         all_ids = list(set(user_ids + created_by_ids))  # Remove duplicates
         if all_ids:
-            users = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": all_ids}})
+            users: Sequence[LiteLLM_UserTable] = await UserRepository(prisma_client).table.find_many(
+                where={"user_id": {"in": all_ids}}
+            )
             user_map = {user.user_id: user for user in users}
 
     # Prepare response
@@ -5851,9 +5880,12 @@ async def _list_key_helper(
         if return_full_object is True or (expand and "user" in expand):
             if use_deleted_table:
                 # Use deleted key type to preserve deleted_at, deleted_by, etc.
-                key_list.append(LiteLLM_DeletedVerificationToken(**key_dict))
+                key_list.append(
+                    LiteLLM_DeletedVerificationToken(**cast(dict[str, Never], key_dict))  # cast-ok: revalidated
+                )
             else:
-                key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
+                # Return full key object
+                key_list.append(UserAPIKeyAuth(**cast(dict[str, Never], key_dict)))  # cast-ok: revalidated
         else:
             _token = key_dict.get("token")
             key_list.append(cast(str, _token))  # Return only the token
@@ -5880,8 +5912,8 @@ def _get_condition_to_filter_out_ui_session_tokens() -> Dict[str, Any]:
 
 async def _check_key_admin_access(
     user_api_key_dict: UserAPIKeyAuth,
-    hashed_token: str,
-    prisma_client: Any,
+    hashed_token: str | None,
+    prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     route: str,
 ) -> None:
@@ -5900,7 +5932,9 @@ async def _check_key_admin_access(
         return
 
     # Look up the target key to find its team
-    target_key_row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+    target_key_row: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+        prisma_client
+    ).table.find_unique(where={"token": hashed_token})
     if target_key_row is None:
         raise HTTPException(
             status_code=404,
@@ -5996,7 +6030,9 @@ async def block_key(
     )
 
     # Check if the key exists before trying to block it
-    existing_record = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+    existing_record: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+        prisma_client
+    ).table.find_unique(where={"token": hashed_token})
     if existing_record is None:
         raise ProxyException(
             message="Key not found.",
@@ -6026,7 +6062,7 @@ async def block_key(
             )
         )
 
-    record = await VerificationTokenRepository(prisma_client).table.update(
+    record: LiteLLM_VerificationToken | None = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_token},
         data={"blocked": True},  # type: ignore
     )
@@ -6107,7 +6143,9 @@ async def unblock_key(
     )
 
     # Check if the key exists before trying to unblock it
-    existing_record = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": hashed_token})
+    existing_record: LiteLLM_VerificationToken | None = await VerificationTokenRepository(
+        prisma_client
+    ).table.find_unique(where={"token": hashed_token})
     if existing_record is None:
         raise ProxyException(
             message="Key not found.",
@@ -6137,7 +6175,7 @@ async def unblock_key(
             )
         )
 
-    record = await VerificationTokenRepository(prisma_client).table.update(
+    record: LiteLLM_VerificationToken | None = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_token},
         data={"blocked": False},  # type: ignore
     )
@@ -6392,7 +6430,7 @@ def _validate_key_alias_format(key_alias: Optional[str]) -> None:
 
 async def _enforce_unique_key_alias(
     key_alias: Optional[str],
-    prisma_client: Any,
+    prisma_client: PrismaClient | None,
     existing_key_token: Optional[str] = None,
 ) -> None:
     """
@@ -6408,7 +6446,7 @@ async def _enforce_unique_key_alias(
         ProxyException: If key alias already exists on a different key
     """
     if key_alias is not None and prisma_client is not None:
-        where_clause: dict[str, Any] = {"key_alias": key_alias}
+        where_clause: dict[str, object] = {"key_alias": key_alias}
         if existing_key_token:
             # Exclude the current key from the uniqueness check
             where_clause["NOT"] = {"token": existing_key_token}
