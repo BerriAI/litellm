@@ -2671,6 +2671,35 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return total_tokens
 
+    @staticmethod
+    def _aggregate_only_total_tokens(usage: Union[Usage, dict, None]) -> int:
+        """Total for usage that carries no input/output split, else 0.
+
+        A source that can only report one number for the whole request (a
+        pass-through target pricing its own multi-model call) charges that
+        number under every ``token_rate_limit_type``. Splitting it is
+        impossible, and reading 0 out of it would leave the window
+        uncharged, which is how pass-through traffic slips past a TPM limit
+        it is supposed to share.
+        """
+        if isinstance(usage, Usage):
+            prompt_tokens, completion_tokens, total_tokens = (
+                usage.prompt_tokens or 0,
+                usage.completion_tokens or 0,
+                usage.total_tokens or 0,
+            )
+        elif isinstance(usage, dict):
+            prompt_tokens, completion_tokens, total_tokens = (
+                usage.get("prompt_tokens") or 0,
+                usage.get("completion_tokens") or 0,
+                usage.get("total_tokens") or 0,
+            )
+        else:
+            return 0
+        if prompt_tokens or completion_tokens:
+            return 0
+        return total_tokens
+
     async def _execute_token_increment_script(
         self,
         pipeline_operations: List["RedisPipelineIncrementOperation"],
@@ -3086,8 +3115,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         model_group = get_model_group_from_litellm_kwargs(kwargs)
 
-        # Get total tokens from response
-        total_tokens = 0
+        # Get total tokens from response. Responses LiteLLM does not model
+        # (e.g. pass-through, whose usage is reported by the upstream rather
+        # than parsed out of the body) carry their usage in
+        # ``combined_usage_object`` instead, and would otherwise never charge
+        # the TPM window.
+        _usage: Union[Usage, dict, None] = None
         if isinstance(
             response_obj,
             (
@@ -3098,7 +3131,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ),
         ):
             _usage = getattr(response_obj, "usage", None)
-            total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
+        else:
+            _combined_usage = kwargs.get("combined_usage_object")
+            if isinstance(_combined_usage, Usage):
+                _usage = _combined_usage
+        total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
+        if total_tokens == 0:
+            total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
         reserved_tokens = self._get_reserved_tokens_from_kwargs(
             kwargs=kwargs,
