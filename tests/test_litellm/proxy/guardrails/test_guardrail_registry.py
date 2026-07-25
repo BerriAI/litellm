@@ -397,11 +397,17 @@ def test_db_synced_judge_guardrail_uses_lazy_router_provider():
 
     handler = InMemoryGuardrailHandler()
 
-    handler.sync_guardrail_from_db(_judge_guardrail("judge-db"))
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.sync_guardrail_from_db(_judge_guardrail("judge-db"))
 
-    instance = handler.guardrail_id_to_custom_guardrail["judge-db"]
-    assert isinstance(instance, LLMAsAJudgeGuardrail)
-    assert instance._router_provider is _default_router_provider
+        instance = handler.guardrail_id_to_custom_guardrail["judge-db"]
+        assert isinstance(instance, LLMAsAJudgeGuardrail)
+        assert instance._router_provider is _default_router_provider
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
 
 
 def test_reinitialized_judge_guardrail_uses_lazy_router_provider():
@@ -412,8 +418,14 @@ def test_reinitialized_judge_guardrail_uses_lazy_router_provider():
 
     handler = InMemoryGuardrailHandler()
 
-    handler.reinitialize_guardrail(_judge_guardrail("judge-reinit"), source="db")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.reinitialize_guardrail(_judge_guardrail("judge-reinit"), source="db")
 
-    instance = handler.guardrail_id_to_custom_guardrail["judge-reinit"]
-    assert isinstance(instance, LLMAsAJudgeGuardrail)
-    assert instance._router_provider is _default_router_provider
+        instance = handler.guardrail_id_to_custom_guardrail["judge-reinit"]
+        assert isinstance(instance, LLMAsAJudgeGuardrail)
+        assert instance._router_provider is _default_router_provider
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot

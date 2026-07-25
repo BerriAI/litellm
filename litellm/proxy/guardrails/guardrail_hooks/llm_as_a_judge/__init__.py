@@ -1,6 +1,7 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score responses against weighted criteria."""
 
 import json
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
@@ -32,9 +33,31 @@ _VALID_ON_FAILURE = frozenset({"block", "log"})
 
 
 def _default_router_provider() -> "Router | None":
-    from litellm.proxy.proxy_server import llm_router
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except ImportError:
+        return None
 
     return llm_router
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _parse_judge_verdict(raw: str) -> Dict[str, Any]:
+    """Parse the judge's JSON verdict, tolerating markdown fences and surrounding prose."""
+    text = raw.strip()
+    fenced = _JSON_FENCE_RE.search(text)
+    if fenced is not None:
+        text = fenced.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        return json.loads(text[start : end + 1])
 
 
 def _extract_text_from_content(content: Any) -> str:
@@ -158,7 +181,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 temperature=0,
             )
         raw = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
-        return json.loads(raw)
+        return _parse_judge_verdict(raw)
 
     async def apply_guardrail(
         self,

@@ -10,6 +10,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     LLMAsAJudgeGuardrail,
     _build_judge_prompt,
     _extract_text_from_content,
+    _parse_judge_verdict,
     initialize_guardrail,
 )
 
@@ -198,6 +199,50 @@ async def test_apply_guardrail_log_mode_does_not_block(mock_completion):
     assert request_data["metadata"]["eval_information"]["passed"] is False
 
 
+# ---------------------------------------------------------------------------
+# _parse_judge_verdict — tolerate fenced/prose-wrapped JSON
+# ---------------------------------------------------------------------------
+
+
+def test_parse_judge_verdict_plain_json():
+    assert _parse_judge_verdict('{"overall_score": 90}')["overall_score"] == 90
+
+
+def test_parse_judge_verdict_strips_json_fence_and_prose():
+    raw = 'Here is my verdict:\n```json\n{"overall_score": 42}\n```\nHope that helps'
+    assert _parse_judge_verdict(raw)["overall_score"] == 42
+
+
+def test_parse_judge_verdict_strips_bare_fence():
+    raw = '```\n{"overall_score": 7}\n```'
+    assert _parse_judge_verdict(raw)["overall_score"] == 7
+
+
+def test_parse_judge_verdict_extracts_json_from_surrounding_prose():
+    raw = 'Sure, here it is: {"overall_score": 55} let me know'
+    assert _parse_judge_verdict(raw)["overall_score"] == 55
+
+
+def test_parse_judge_verdict_reraises_when_no_json():
+    with pytest.raises(json.JSONDecodeError):
+        _parse_judge_verdict("no json here")
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_parses_fenced_json_verdict(mock_completion):
+    """Fencing-prone judge models wrap the verdict in a ```json fence; the guardrail
+    must parse it and evaluate rather than failing open on json.loads."""
+    fenced = "```json\n" + json.dumps(_make_verdict_response(90.0)) + "\n```"
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=fenced))])
+    guardrail = _make_guardrail(overall_threshold=80.0)
+    inputs = {"texts": ["good response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+    assert request_data["metadata"]["eval_information"]["passed"] is True
+
+
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
 async def test_apply_guardrail_judge_error_fails_open(mock_completion):
@@ -331,6 +376,18 @@ async def test_judge_resolves_router_lazily_per_call(mock_sdk_completion):
     await guardrail.apply_guardrail({"texts": ["r"]}, {"messages": [], "metadata": {}}, "response")
     holder["router"].acompletion.assert_awaited_once()
     mock_sdk_completion.assert_awaited_once()
+
+
+def test_default_router_provider_returns_none_when_proxy_not_importable():
+    """If the proxy dependency set is not importable, the provider must return None
+    so the judge falls back to the SDK rather than the ImportError being swallowed
+    by the fail-open handler and the guardrail silently no-opping."""
+    import sys
+
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _default_router_provider
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": None}):
+        assert _default_router_provider() is None
 
 
 def test_default_router_provider_reads_global_router():
