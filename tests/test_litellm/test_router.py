@@ -2132,6 +2132,79 @@ def test_completion_streaming_iterator_reraises_mid_chunk_error():
         list(result)
 
 
+def test_completion_streaming_iterator_reraises_mid_chunk_error_with_no_text_content():
+    """Sync: a reasoning-only chunk sets is_pre_first_chunk=False without populating
+    generated_content (which only tracks text deltas). The re-raise guard must still
+    detect this via the raw chunks on the wrapper, or the router silently retries and
+    the client receives duplicated/inconsistent output."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import Delta, StreamingChoices
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    mid_chunk_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=False,
+    )
+
+    reasoning_chunk = litellm.ModelResponseStream(
+        id="chatcmpl-partial-1",
+        model="gpt-4",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(reasoning_content="Thinking about the answer", role="assistant"),
+            )
+        ],
+    )
+
+    class SyncIteratorNoTextChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = [reasoning_chunk]
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise mid_chunk_error
+
+    mock_response = SyncIteratorNoTextChunkError()
+
+    with patch.object(router, "function_with_fallbacks") as mock_fallback:
+        result = router._completion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        with pytest.raises(MidStreamFallbackError):
+            list(result)
+
+        assert not mock_fallback.called, (
+            "fallback must not be attempted once any content, text or non-text, has already streamed"
+        )
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
     """When MidStreamFallbackError has is_pre_first_chunk=True, use original messages."""
@@ -2198,6 +2271,81 @@ async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation
         fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
         # Pre-first-chunk: should use original messages, no continuation prompt
         assert fallback_kwargs["messages"] == messages
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_reraises_mid_chunk_error_with_no_text_content():
+    """Async: a reasoning-only chunk sets is_pre_first_chunk=False without populating
+    generated_content (which only tracks text deltas). The re-raise guard must still
+    detect this via the raw chunks on the wrapper, or the router silently retries and
+    the client receives duplicated/inconsistent output."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import Delta, StreamingChoices
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    mid_chunk_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=False,
+    )
+
+    reasoning_chunk = litellm.ModelResponseStream(
+        id="chatcmpl-partial-1",
+        model="gpt-4",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(reasoning_content="Thinking about the answer", role="assistant"),
+            )
+        ],
+    )
+
+    class AsyncIteratorNoTextChunkError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = [reasoning_chunk]
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise mid_chunk_error
+
+    mock_response = AsyncIteratorNoTextChunkError()
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils") as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in iterator:
+                pass
+
+        assert not mock_fallback_utils.called, (
+            "fallback must not be attempted once any content, text or non-text, has already streamed"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -5984,13 +6132,13 @@ async def test_acompletion_deferred_stream_error_propagates_through_acompletion(
 
 
 @pytest.mark.asyncio
-async def test_acompletion_deferred_stream_strips_framing_headers_on_error():
-    """Content-Length / Transfer-Encoding / Content-Encoding / Content-Type from a
-    provider error response are stripped before the exception propagates, preventing
-    HTTP framing mismatches when LiteLLM builds its own error body.
-
-    Non-framing headers (e.g. x-request-id) must be preserved.
-    """
+async def test_acompletion_deferred_stream_preserves_original_headers_on_error():
+    """Router is used both by the proxy and directly as an SDK. HTTP-framing headers
+    (Content-Length, Transfer-Encoding, ...) must NOT be stripped at this layer, or
+    direct SDK callers lose legitimate provider metadata (e.g. content-type,
+    proxy-authenticate) that only the proxy's own response construction needs to
+    worry about. Stripping happens in the proxy layer instead
+    (_handle_llm_api_exception)."""
     import litellm as _litellm
 
     err = _litellm.RateLimitError(
@@ -6027,11 +6175,11 @@ async def test_acompletion_deferred_stream_strips_framing_headers_on_error():
 
     raised = exc_info.value
     headers = getattr(raised, "headers", {})
-    assert "content-length" not in headers, "content-length must be stripped"
-    assert "transfer-encoding" not in headers, "transfer-encoding must be stripped"
-    assert "content-encoding" not in headers, "content-encoding must be stripped"
-    assert "content-type" not in headers, "content-type must be stripped"
-    assert headers.get("x-request-id") == "abc-123", "x-request-id must be preserved"
+    assert headers.get("content-length") == "42"
+    assert headers.get("transfer-encoding") == "chunked"
+    assert headers.get("content-encoding") == "gzip"
+    assert headers.get("content-type") == "application/json"
+    assert headers.get("x-request-id") == "abc-123"
 
 
 @pytest.mark.asyncio

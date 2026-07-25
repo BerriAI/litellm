@@ -327,6 +327,21 @@ def _strip_http_framing_headers(exc: BaseException) -> None:
         setattr(exc, "headers", {k: v for k, v in headers.items() if k.lower() not in _HTTP_FRAMING_HEADERS})
 
 
+def _stream_chunks_have_generated_content(chunks: List[ModelResponseStream]) -> bool:
+    for chunk in chunks:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if (
+            delta.get("content")
+            or delta.get("tool_calls")
+            or delta.get("function_call")
+            or delta.get("reasoning_content")
+        ):
+            return True
+    return False
+
+
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
 
@@ -2114,7 +2129,9 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and e.generated_content:
+                if not e.is_pre_first_chunk and (
+                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                ):
                     raise
 
                 from litellm.main import stream_chunk_builder
@@ -2655,7 +2672,9 @@ class Router:
                 for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and e.generated_content:
+                if not e.is_pre_first_chunk and (
+                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                ):
                     raise
 
                 from litellm.main import stream_chunk_builder
@@ -2888,10 +2907,9 @@ class Router:
                 if response.completion_stream is None and response.make_call is not None:
                     try:
                         await response.fetch_stream()
-                    except Exception as fetch_err:
+                    except Exception:
                         if model_name is not None:
                             self.success_calls[model_name] -= 1
-                        _strip_http_framing_headers(fetch_err)
                         raise
                 return await self._acompletion_streaming_iterator(
                     model_response=response,

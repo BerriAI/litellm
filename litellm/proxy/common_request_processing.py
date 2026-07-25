@@ -52,7 +52,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
-from litellm.router import Router
+from litellm.router import _HTTP_FRAMING_HEADERS, Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
@@ -2693,6 +2693,7 @@ class ProxyBaseLLMRequestProcessing:
                 _response_headers = getattr(_response, "headers", None)
                 if _response_headers:
                     headers = get_response_headers(dict(_response_headers))
+        headers = {k: v for k, v in headers.items() if k.lower() not in _HTTP_FRAMING_HEADERS}
         headers.update(custom_headers)
 
         # Call response headers hook for failure

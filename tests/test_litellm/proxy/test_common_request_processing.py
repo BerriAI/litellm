@@ -2952,6 +2952,51 @@ class TestHandleLLMApiExceptionRetryAfter:
         assert proxy_exc.headers["x-custom"] == "1"
 
 
+class TestHandleLLMApiExceptionFramingHeaders:
+    """HTTP-framing headers on the provider exception must be stripped before the
+    proxy builds its own response, or they conflict with the framing the proxy
+    itself sets. Non-framing headers must survive unchanged."""
+
+    async def _invoke(self, exc: Exception):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_strips_framing_headers_preserves_others(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "content-length": "42",
+            "transfer-encoding": "chunked",
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "content-length" not in proxy_exc.headers
+        assert "transfer-encoding" not in proxy_exc.headers
+        assert "content-encoding" not in proxy_exc.headers
+        assert "content-type" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
+
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
 
