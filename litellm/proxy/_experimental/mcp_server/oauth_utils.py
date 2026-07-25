@@ -4,7 +4,7 @@
 import os
 from ipaddress import ip_address
 from typing import Any, Dict, List, NoReturn, Optional
-from urllib.parse import ParseResult, urlparse, urlunparse
+from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
 
@@ -68,6 +68,29 @@ def _oauth_invalid_request(
 def _origin_label(scheme: str, netloc: str) -> str:
     """Human-readable origin for error messages (scheme + host[:port])."""
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
+
+
+def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
+    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
+
+    Everything else is dropped: userinfo (``user:pass@``), the query string, the
+    fragment, and the path, because hosted MCP servers routinely embed the
+    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
+    in spend-log metadata that a caller who can invoke the tool can read back.
+    Returns None when the URL has no host to identify (nothing safe to log).
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts = urlsplit(url)
+        hostname = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if not hostname:
+        return None
+    netloc = f"{hostname}:{port}" if port else hostname
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
 def _resolve_proxy_base_url_env() -> Optional[str]:
@@ -343,8 +366,36 @@ def _parse_redirect_uri_for_validation(redirect_uri: str) -> ParseResult:
         )
 
 
-def _validate_trusted_http_redirect_shape(parsed: ParseResult) -> bool:
-    """Return True when ``parsed`` is an allowlisted native callback (caller may return)."""
+def is_loopback_redirect_host(parsed: ParseResult) -> bool:
+    """True when the redirect host is loopback (RFC 8252 section 7.3).
+
+    Shared by every redirect-URI policy in the MCP OAuth surface so that none of them
+    hand-rolls its own host list: a literal ``("localhost", "127.0.0.1", "::1")`` tuple
+    silently misses the rest of 127.0.0.0/8 and IPv6-mapped forms.
+    """
+    host = (parsed.hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_redirect_uri_shape(parsed: ParseResult) -> bool:
+    """Validate redirect-URI *hygiene* and resolve allowlisted native callbacks.
+
+    Returns True when ``parsed`` is an allowlisted native callback (the caller may accept
+    it outright); returns False for http/https, leaving the trust decision to the caller;
+    raises for a URI that no policy should ever accept (bad scheme, fragment, missing
+    host, userinfo, backslash in the host).
+
+    This is deliberately separate from :func:`validate_trusted_redirect_uri`, which adds
+    the *first-party* trust policy (same-origin, loopback, ops allowlist) appropriate to
+    the proxy's own OAuth endpoints. Public dynamic-client registration accepts any https
+    client and relies on PKCE plus the consent screen instead, so it shares this hygiene
+    rule but not that trust policy.
+    """
     if parsed.scheme not in ("http", "https"):
         if _matches_trusted_native_redirect_uri(parsed):
             return True
@@ -396,14 +447,8 @@ def _trusted_redirect_uri_is_allowed(
         ):
             return True
 
-    host = (parsed.hostname or "").lower()
-    if host == "localhost":
+    if is_loopback_redirect_host(parsed):
         return True
-    try:
-        if ip_address(host).is_loopback:
-            return True
-    except ValueError:
-        pass
 
     if parsed.scheme == "https":
         for entry in _parse_trusted_redirect_origins():
@@ -522,7 +567,7 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     :func:`validate_loopback_redirect_uri`.
     """
     parsed = _parse_redirect_uri_for_validation(redirect_uri)
-    if _validate_trusted_http_redirect_shape(parsed):
+    if validate_redirect_uri_shape(parsed):
         return
     redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
     proxy_base = _resolve_proxy_base_for_redirect(request)

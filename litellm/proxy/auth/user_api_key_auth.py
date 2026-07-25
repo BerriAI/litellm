@@ -1497,6 +1497,13 @@ async def _user_api_key_auth_builder(
                             check_cache_only=True,
                         ).resolve(hashed_token=hash_token(api_key))
                     )
+                # Key-cache entries are written only after the proxy validated a
+                # virtual key or the master key, but via_virtual_key is exclude=True
+                # so serialization drops it; restore it at this trusted boundary.
+                # The UI-login JWT fallback below constructs its token from a
+                # decrypted blob, not this cache, and stays unmarked.
+                if isinstance(valid_token, UserAPIKeyAuth):
+                    valid_token.via_virtual_key = True
             except Exception:
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
@@ -1614,6 +1621,7 @@ async def _user_api_key_auth_builder(
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
+            _user_api_key_obj.via_virtual_key = True
 
             return _user_api_key_obj
 
@@ -2021,7 +2029,7 @@ async def _user_api_key_auth_builder(
             # No token was found when looking up in the DB
             raise Exception("Invalid proxy server token passed")
         if valid_token_dict is not None:
-            return await _return_user_api_key_auth_obj(
+            virtual_key_auth_obj = await _return_user_api_key_auth_obj(
                 user_obj=user_obj,
                 api_key=api_key,
                 parent_otel_span=parent_otel_span,
@@ -2029,6 +2037,8 @@ async def _user_api_key_auth_builder(
                 route=route,
                 start_time=start_time,
             )
+            virtual_key_auth_obj.via_virtual_key = True
+            return virtual_key_auth_obj
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
             e=e,
@@ -2310,6 +2320,9 @@ async def _run_centralized_common_checks(
         None if isinstance(global_spend_result, BaseException) else global_spend_result
     )
 
+    if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
+        user_api_key_auth_obj.org_id = team_object.organization_id
+
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and
     # master_key tokens get admin from the token; the DB row for the
@@ -2442,6 +2455,7 @@ async def _reserve_budget_after_common_checks(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
         skip_user_budget_on_team_key=general_settings.get("skip_user_budget_on_team_key") is True,
+        fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
     )
 
 

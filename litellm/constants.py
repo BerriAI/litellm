@@ -1145,6 +1145,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
+    "anthropic.claude-opus-5",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",
@@ -1454,6 +1455,7 @@ SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEA
 SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
     os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
 )
+TOOL_SPEND_MAX_WINDOW_DAYS = 30
 SPEND_LOG_PARTITION_INTERVAL = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))

@@ -13472,7 +13472,7 @@ async def fallback_login(request: Request):
 @router.post("/login", include_in_schema=False)  # hidden since this is a helper for UI sso login
 async def login(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
     from litellm.proxy.utils import get_custom_url
 
     form = await request.form()
@@ -13495,13 +13495,7 @@ async def login(request: Request):
     )
 
     # Generate JWT token
-    import jwt
-
-    jwt_token = jwt.encode(
-        cast(dict, returned_ui_token_object),
-        cast(str, master_key),
-        algorithm="HS256",
-    )
+    jwt_token = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
     # Build redirect URL
     litellm_dashboard_ui = get_custom_url(str(request.base_url))
@@ -13511,16 +13505,51 @@ async def login(request: Request):
         litellm_dashboard_ui += "/ui/"
     litellm_dashboard_ui += "?login=success"
 
+    # Honor a same-origin return_to preserved by the sign-in page (e.g. the aggregate DCR connect flow's
+    # authorize round-trip), mirroring the SSO callback; otherwise land on the dashboard. Gated by
+    # _is_same_origin_return_path (strictly relative path) so it can never be an open redirect, and the
+    # one-shot cookie is cleared after use.
+    from litellm.proxy.management_endpoints.ui_sso import _sso_return_to_redirect
+
+    # Resume through the SAME resumer the SSO callback uses, rather than a second, narrower arm.
+    # _persist_return_to_cookie stores both shapes it accepts (a relative same-origin path AND a
+    # control_plane_url-matching absolute URL); honoring only the relative one here silently dropped
+    # the control-plane case, landing the user on the dashboard. One function decides how a stored
+    # return_to is honored for EVERY sign-in branch, so the write and read sets cannot diverge: it
+    # sets the token cookie on the same-origin arm and hands off via a one-time login code on the
+    # cross-origin arm, and clears the one-shot cookie in both.
+    cp_return_to = request.cookies.get("litellm_cp_return_to")
+    if cp_return_to:
+        try:
+            resumed = await _sso_return_to_redirect(
+                return_to=cp_return_to,
+                jwt_token=jwt_token,
+                redis_usage_cache=redis_usage_cache,
+                user_api_key_cache=user_api_key_cache,
+            )
+        except Exception:  # noqa: BLE001  # resuming must NEVER block a completed sign-in
+            # The symmetric half of _persist_return_to_cookie's "never raises" contract. The resumer
+            # rejects a return_to that no longer matches control_plane_url (a config change between
+            # the cookie's write and this read), and the user has ALREADY authenticated here —
+            # failing their login over a stale one-shot cookie is the worst possible outcome. Land
+            # on the dashboard instead; the cookie is cleared below either way.
+            verbose_proxy_logger.info("Ignoring stale litellm_cp_return_to cookie; landing on dashboard")
+            resumed = None
+        if resumed is not None:
+            return resumed
+
     # Create redirect response with cookie
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
     redirect_response.set_cookie(key="token", value=jwt_token)
+    if cp_return_to:
+        redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
 
 
 @router.post("/v2/login", include_in_schema=False)  # hidden helper for UI logins via API
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -13541,13 +13570,7 @@ async def login_v2(request: Request):
             premium_user=premium_user,
         )
 
-        import jwt
-
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            cast(str, master_key),
-            algorithm="HS256",
-        )
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
         if litellm_dashboard_ui.endswith("/"):
@@ -13591,7 +13614,7 @@ async def login_v2(request: Request):
 )  # control-plane login — always returns token in body for cross-origin use
 async def login_v3(request: Request):
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -13620,13 +13643,7 @@ async def login_v3(request: Request):
             premium_user=premium_user,
         )
 
-        import jwt
-
-        jwt_token = jwt.encode(
-            cast(dict, returned_ui_token_object),
-            cast(str, master_key),
-            algorithm="HS256",
-        )
+        jwt_token = encode_ui_session_jwt(returned_ui_token_object, cast(str, master_key))
 
         litellm_dashboard_ui = get_custom_url(str(request.base_url))
         if litellm_dashboard_ui.endswith("/"):

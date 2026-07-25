@@ -3,9 +3,22 @@ import { useCloudZeroExport } from "@/app/(dashboard)/hooks/cloudzero/useCloudZe
 import { useCloudZeroDeleteSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { Alert, Button, Card, Descriptions, Divider, Popconfirm, Tag } from "antd";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Separator } from "@/components/ui/separator";
 import MessageManager from "@/components/molecules/message_manager";
-import { CheckCircle, Edit, Play, Trash2, Upload } from "lucide-react";
+import { CheckCircle, Pencil, Play, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import CloudZeroUpdateModal from "./CloudZeroUpdateModal";
 import { CloudZeroSettings } from "./types";
@@ -15,10 +28,25 @@ interface CloudZeroIntegrationSettingsProps {
   onSettingsUpdated: () => void;
 }
 
+interface DetailRowProps {
+  label: string;
+  children: React.ReactNode;
+}
+
+const DetailRow = ({ label, children }: DetailRowProps) => (
+  <div className="grid grid-cols-1 border-b border-border last:border-b-0 sm:grid-cols-[220px_minmax(0,1fr)]">
+    <dt className="bg-muted/50 px-4 py-3 text-sm font-medium">{label}</dt>
+    <dd className="px-4 py-3 text-sm">{children}</dd>
+  </div>
+);
+
+const NotConfigured = () => <span className="text-muted-foreground italic">Not configured</span>;
+
 export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: CloudZeroIntegrationSettingsProps) {
   const { accessToken } = useAuthorized();
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isExportConfirmOpen, setIsExportConfirmOpen] = useState(false);
 
   const dryRunMutation = useCloudZeroDryRun(accessToken || "");
   const exportMutation = useCloudZeroExport(accessToken || "");
@@ -50,6 +78,7 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
       {
         onSuccess: () => {
           MessageManager.success("Data successfully exported to CloudZero");
+          setIsExportConfirmOpen(false);
         },
         onError: (error) => {
           MessageManager.error(error?.message || "Failed to export data");
@@ -96,111 +125,89 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
 
   return (
     <>
-      <div className="space-y-6 w-full max-w-4xl mx-auto">
-        <Card
-          title={
-            <div className="flex items-center gap-2">
-              <span className="text-lg font-semibold">CloudZero Configuration</span>
-              <Tag color="success" className="ml-2 capitalize">
+      <div className="mx-auto w-full max-w-4xl space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              CloudZero Configuration
+              <Badge variant="secondary" className="capitalize">
                 {settings.status || "Active"}
-              </Tag>
-            </div>
-          }
-          extra={
-            <div className="flex gap-2">
-              <Button icon={<Edit size={16} />} onClick={handleEdit} className="flex items-center gap-2">
+              </Badge>
+            </CardTitle>
+            <CardAction className="flex gap-2">
+              <Button variant="outline" onClick={handleEdit}>
+                <Pencil />
                 Edit
               </Button>
-              <Button
-                danger
-                icon={<Trash2 size={16} />}
-                onClick={handleDeleteClick}
-                className="flex items-center gap-2"
-              >
+              <Button variant="destructive" onClick={handleDeleteClick}>
+                <Trash2 />
                 Delete
               </Button>
+            </CardAction>
+          </CardHeader>
+
+          <CardContent>
+            <dl className="rounded-md border border-border">
+              <DetailRow label="API Key (Redacted)">
+                <span className="font-mono">{settings.api_key_masked || <NotConfigured />}</span>
+              </DetailRow>
+              <DetailRow label="Connection ID">
+                <span className="font-mono">{settings.connection_id || <NotConfigured />}</span>
+              </DetailRow>
+              <DetailRow label="Timezone">
+                {settings.timezone || <span className="text-muted-foreground italic">Default (UTC)</span>}
+              </DetailRow>
+            </dl>
+
+            <div className="mt-6 flex items-center gap-3">
+              <span className="text-sm text-muted-foreground">Actions</span>
+              <Separator className="flex-1" />
             </div>
-          }
-          className="shadow-xs"
-        >
-          <Descriptions
-            bordered
-            column={{
-              xxl: 1,
-              xl: 1,
-              lg: 1,
-              md: 1,
-              sm: 1,
-              xs: 1,
-            }}
-          >
-            <Descriptions.Item label="API Key (Redacted)">
-              <span className="font-mono text-gray-600">
-                {settings.api_key_masked || <span className="text-gray-400 italic">Not configured</span>}
-              </span>
-            </Descriptions.Item>
-            <Descriptions.Item label="Connection ID">
-              <span className="font-mono text-gray-600">
-                {settings.connection_id || <span className="text-gray-400 italic">Not configured</span>}
-              </span>
-            </Descriptions.Item>
-            <Descriptions.Item label="Timezone">
-              {settings.timezone || <span className="text-gray-400 italic">Default (UTC)</span>}
-            </Descriptions.Item>
-          </Descriptions>
 
-          <Divider orientation="left" className="text-gray-500">
-            Actions
-          </Divider>
+            <div className="mt-4 mb-6 flex flex-wrap gap-4">
+              <Button variant="outline" onClick={handleDryRun} disabled={dryRunMutation.isPending}>
+                <Play />
+                Run Dry Run Simulation
+              </Button>
 
-          <div className="flex flex-wrap gap-4 mb-6">
-            <Button
-              onClick={handleDryRun}
-              loading={dryRunMutation.isPending}
-              icon={<Play size={16} />}
-              className="flex items-center gap-2"
-            >
-              Run Dry Run Simulation
-            </Button>
-
-            <Popconfirm
-              title="Export Data to CloudZero"
-              description="This will push the current accumulated cost data to CloudZero. Continue?"
-              onConfirm={handleExport}
-              okText="Export"
-              cancelText="Cancel"
-            >
-              <Button
-                type="primary"
-                loading={exportMutation.isPending}
-                icon={<Upload size={16} />}
-                className="flex items-center gap-2"
-              >
+              <Button onClick={() => setIsExportConfirmOpen(true)} disabled={exportMutation.isPending}>
+                <Upload />
                 Export Data Now
               </Button>
-            </Popconfirm>
-          </div>
-
-          {dryRunResult && (
-            <div className="mt-6 animate-in fade-in slide-in-from-top-4 duration-300">
-              <Alert
-                message="Dry Run Results"
-                description={
-                  <div className="mt-2">
-                    <p className="mb-2 text-gray-600">Simulation output for connection: {settings.connection_id}</p>
-                    <pre className="bg-gray-50 p-4 rounded-md border border-gray-200 overflow-x-auto text-xs font-mono text-gray-800">
-                      {dryRunResult}
-                    </pre>
-                  </div>
-                }
-                type="info"
-                showIcon
-                icon={<CheckCircle className="text-blue-500" />}
-              />
             </div>
-          )}
+
+            {dryRunResult && (
+              <Alert>
+                <CheckCircle />
+                <AlertTitle>Dry Run Results</AlertTitle>
+                <AlertDescription>
+                  <p>Simulation output for connection: {settings.connection_id}</p>
+                  <pre className="overflow-x-auto rounded-md border border-border bg-muted p-4 font-mono text-xs text-foreground">
+                    {dryRunResult}
+                  </pre>
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={isExportConfirmOpen} onOpenChange={setIsExportConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Export Data to CloudZero</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will push the current accumulated cost data to CloudZero. Continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={exportMutation.isPending}>Cancel</AlertDialogCancel>
+            <Button onClick={handleExport} disabled={exportMutation.isPending}>
+              Export
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <CloudZeroUpdateModal
         open={isEditModalOpen}

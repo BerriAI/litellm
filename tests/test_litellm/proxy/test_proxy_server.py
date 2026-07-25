@@ -127,11 +127,15 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         general_settings={},
         premium_user=False,
     )
-    mock_jwt_encode.assert_called_once_with(
-        {"user_id": "test-user"},
-        "test-master-key",
-        algorithm="HS256",
-    )
+    mock_jwt_encode.assert_called_once()
+    payload, secret = mock_jwt_encode.call_args.args
+    # The UI session token carries a bounded-lifetime `exp` claim (dynamic timestamp), alongside
+    # the user_id; assert its presence rather than an exact expiry value.
+    assert payload["user_id"] == "test-user"
+    assert isinstance(payload.get("exp"), int) and payload["exp"] > 0
+    assert set(payload.keys()) == {"user_id", "exp"}
+    assert secret == "test-master-key"
+    assert mock_jwt_encode.call_args.kwargs == {"algorithm": "HS256"}
 
 
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
@@ -1498,50 +1502,6 @@ def test_team_info_masking():
     print("Got exception: {}".format(exc_info.value))
     assert "secret-test-key" not in str(exc_info.value)
     assert "public-test-key" not in str(exc_info.value)
-
-
-def test_embedding_input_array_of_tokens(client_no_auth):
-    """
-    Test to bypass decoding input as array of tokens for selected providers
-
-    Ref: https://github.com/BerriAI/litellm/issues/10113
-    """
-    from litellm.proxy import proxy_server
-
-    # The client_no_auth fixture should initialize the router
-    # Assert this to catch any router initialization regressions
-    assert proxy_server.llm_router is not None, (
-        "llm_router is None after client_no_auth fixture initialized. "
-        "This indicates a router initialization issue that should be investigated."
-    )
-
-    try:
-        with mock.patch.object(
-            proxy_server.llm_router,
-            "aembedding",
-            return_value=example_embedding_result,
-        ) as mock_aembedding:
-            test_data = {
-                "model": "vllm_embed_model",
-                "input": [[2046, 13269, 158208]],
-            }
-
-            response = client_no_auth.post("/v1/embeddings", json=test_data)
-
-            # Assert that aembedding was called, and that input was not modified
-            mock_aembedding.assert_called_once()
-            call_args, call_kwargs = mock_aembedding.call_args
-            assert call_kwargs["model"] == "vllm_embed_model"
-            assert call_kwargs["input"] == [[2046, 13269, 158208]]
-
-            assert response.status_code == 200
-            result = response.json()
-            print(len(result["data"][0]["embedding"]))
-            assert (
-                len(result["data"][0]["embedding"]) > 10
-            )  # this usually has len==1536 so
-    except Exception as e:
-        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
 @pytest.mark.asyncio

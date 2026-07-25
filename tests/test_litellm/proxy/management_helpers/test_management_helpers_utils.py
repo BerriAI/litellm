@@ -1076,6 +1076,13 @@ async def test_add_new_member_creates_missing_user_atomically_via_upsert():
     would race a check-then-create into a duplicate-key failure. The upsert seeds
     teams on create, and the filtered append is a no-op because the team is
     already present on the freshly created row.
+
+    Calling upsert is not on its own enough to be atomic: Prisma only compiles it
+    down to a single INSERT ... ON CONFLICT when the update branch is non-empty,
+    and otherwise emits SELECT-then-INSERT, which loses the race. That is how
+    parallel /team/new calls naming the same new member started returning 500
+    "Unique constraint failed on the fields: (user_id)", so the shape of both
+    branches is pinned here.
     """
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1114,5 +1121,7 @@ async def test_add_new_member_creates_missing_user_atomically_via_upsert():
     # non-atomic standalone create that could race under concurrent provisioning
     mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
     mock_prisma_client.db.litellm_usertable.create.assert_not_called()
-    create_data = mock_prisma_client.db.litellm_usertable.upsert.call_args.kwargs["data"]["create"]
-    assert create_data["teams"] == ["team-1"]
+    upsert_data = mock_prisma_client.db.litellm_usertable.upsert.call_args.kwargs["data"]
+    assert upsert_data["create"]["teams"] == ["team-1"]
+    assert upsert_data["update"], "empty update branch degrades the upsert to a racy SELECT-then-INSERT"
+    assert "teams" not in upsert_data["update"]
