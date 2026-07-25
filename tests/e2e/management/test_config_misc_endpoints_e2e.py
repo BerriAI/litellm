@@ -3,9 +3,13 @@
 One method per registry cell, each asserting the real contract against a live
 proxy: read-only inventory routes return their documented shape, stateless
 validators compute their verdict from the request, and the write routes persist
-so a read-back reflects the change. The two routes that mutate global proxy state
-(cache settings and router settings, both driven from the admin UI) are exercised
-with a benign, self-restoring change so a shared proxy is left as it was found.
+so a read-back reflects the change. Router settings, which mutate global proxy
+state, are exercised with a benign, self-restoring change so a shared proxy is left
+as it was found.
+
+Cache settings are deliberately not covered here; see the rationale on
+mgmt.cache_settings.update.happy_path in coverage_registry/mgmt.yaml before adding
+a test for that route.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import time
 from collections.abc import Callable
 
 import pytest
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, unwrap, unwrap_status
@@ -122,64 +126,6 @@ class ComplianceResponse(BaseModel):
     compliant: bool
     regulation: str
     checks: list[ComplianceCheck]
-
-
-# ---- cache settings --------------------------------------------------------
-
-
-# Keys that decide how the proxy connects, as opposed to how it caches. Dropping
-# any of these turns a working client into one that cannot reach the server at
-# all: without `ssl` a TLS-only endpoint hangs to socket timeout, and without
-# `redis_startup_nodes` a cluster is driven as a standalone node.
-CACHE_TRANSPORT_KEYS = frozenset({"ssl", "redis_startup_nodes", "sentinel_nodes", "url", "host", "port"})
-
-
-# The value union the route actually accepts, matching the field_type values in
-# litellm's CACHE_SETTINGS_FIELDS: String, Integer, Boolean, Float and List.
-#
-# The two node lists are not shaped alike, and both have to parse or the initial
-# read fails before the round-trip can run: `redis_startup_nodes` holds host/port
-# mappings, while `sentinel_nodes` holds positional pairs
-# (CACHE_SETTINGS_FIELDS documents `[['localhost', 26379]]`). Allowing an element
-# to be a scalar, a list or a mapping covers both without special-casing either,
-# and tolerates a heterogeneous list rather than rejecting the whole response.
-#
-# bool leads the scalar union so a Boolean field is never narrowed to int.
-type CacheSettingScalar = bool | int | float | str | None
-type CacheSettingListItem = CacheSettingScalar | list[CacheSettingScalar] | dict[str, CacheSettingScalar]
-type CacheSettingValue = CacheSettingScalar | list[CacheSettingListItem]
-
-
-class CacheSettingsValue(RootModel[dict[str, CacheSettingValue]]):
-    """The settings blob verbatim. Modelling a fixed subset here is what made this
-    test destructive: `/cache/settings` persists whatever it receives and that row
-    then outranks the YAML, so writing back a subset silently dropped every field
-    the subset omitted."""
-
-    @property
-    def type(self) -> str | None:
-        value = self.root.get("type")
-        return value if isinstance(value, str) else None
-
-    def transport(self) -> dict[str, CacheSettingValue]:
-        return {k: v for k, v in self.root.items() if k in CACHE_TRANSPORT_KEYS}
-
-
-class CachePingResponse(BaseModel):
-    status: str | None = None
-
-
-class CacheSettingsUpdateBody(BaseModel):
-    cache_settings: CacheSettingsValue
-
-
-class CacheGetResponse(BaseModel):
-    current_values: CacheSettingsValue
-
-
-class CacheUpdateResponse(BaseModel):
-    status: str
-    settings: CacheSettingsValue
 
 
 # ---- fallback management ---------------------------------------------------
@@ -396,156 +342,6 @@ class TestComplianceRoutes:
         )
         assert all(check.check_name and check.detail for check in result.checks), (
             "every compliance check must carry a name and a human-readable detail"
-        )
-
-
-class TestCacheSettingsModel:
-    """Harness-level checks on the settings model. No `e2e` marker: these validate
-    parsing only and must run whether or not a proxy is up.
-
-    The round-trip test below reads GET /cache/settings before it writes anything,
-    so a shape this model cannot parse fails the test at the read and never reaches
-    the assertions. That makes the model's tolerance part of the contract."""
-
-    @pytest.mark.parametrize(
-        ("label", "payload"),
-        [
-            (
-                "cluster: startup nodes are host/port mappings",
-                {"type": "redis", "host": "h", "port": "6379", "ssl": True, "ttl": 16600,
-                 "redis_startup_nodes": [{"host": "h", "port": 6379}]},
-            ),
-            (
-                "sentinel: nodes are positional pairs",
-                {"type": "redis", "service_name": "mymaster",
-                 "sentinel_nodes": [["localhost", 26379], ["localhost", 26380]]},
-            ),
-            (
-                "node: no node list at all",
-                {"type": "redis", "host": "h", "port": "6379", "db": 1},
-            ),
-            (
-                "url mode with a null discrete field",
-                {"type": "redis", "url": "rediss://h:6379", "host": None},
-            ),
-        ],
-    )
-    def test_parses_every_backend_shape(self, label: str, payload: dict[str, CacheSettingValue]) -> None:
-        parsed = CacheSettingsValue.model_validate(payload)
-        assert parsed.root == payload, f"{label}: model must round-trip the payload unchanged"
-
-    def test_transport_selects_only_connection_shaping_keys(self) -> None:
-        parsed = CacheSettingsValue.model_validate(
-            {"type": "redis", "host": "h", "port": "6379", "ssl": True,
-             "namespace": "litellm.caching", "ttl": 16600,
-             "redis_startup_nodes": [{"host": "h", "port": 6379}]}
-        )
-        assert parsed.transport() == {
-            "host": "h", "port": "6379", "ssl": True,
-            "redis_startup_nodes": [{"host": "h", "port": 6379}],
-        }, "transport() must carry the keys whose loss breaks connectivity, and nothing else"
-
-
-class TestCacheSettings:
-    @pytest.mark.covers("mgmt.cache_settings.update.happy_path")
-    def test_update_persists_cache_backend_to_get(
-        self, client: ManagementClient, resources: ResourceManager
-    ) -> None:
-        """Exercise the update route without changing global state: capture the live
-        settings and write them back verbatim, so the config the proxy ends on is the
-        one it started with. A teardown restore of the same capture is the safety net
-        if the body fails partway.
-
-        Writing back the whole blob rather than a hand-picked subset is load-bearing.
-        `/cache/settings` persists exactly what it receives, and that row then outranks
-        the YAML `cache_params` for the life of the deployment, re-applied on a timer.
-        An earlier version of this test captured only type/host/port, so running it
-        against a TLS cluster dropped `ssl` and `redis_startup_nodes` and left every
-        later Redis call hanging to socket timeout. That took out rate limiting,
-        Redis-only budgets, spend tracking and guardrail sync for the rest of the run.
-
-        The pre-flight below refuses to write when the proxy is driving a cluster but
-        GET cannot see the fields that make it one, because GET resolves the stored row
-        overlaid with REDIS_* env and never reads YAML. In that state no round-trip can
-        be lossless, so the honest move is to fail pointing at the product bug rather
-        than persist a downgrade."""
-        before = self._read_settings(client)
-        assert before.type is not None, (
-            "GET /cache/settings reported no cache type; refusing to invent one and mutate the shared proxy"
-        )
-        if before.root.get("redis_type") == "cluster":
-            assert before.root.get("redis_startup_nodes"), (
-                "GET /cache/settings reports redis_type=cluster but omits redis_startup_nodes, so writing "
-                "these settings back would persist a row that downgrades the cluster to a standalone node. "
-                "Refusing to write. GET resolves the stored row plus REDIS_* env and never reads YAML "
-                "cache_params, so a cluster configured only in YAML cannot round-trip through this route"
-            )
-        healthy_before = self._cache_reachable(client)
-        captured = before.model_copy(deep=True)
-        resources.defer(lambda: self._write_settings(client, captured))
-
-        updated = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=captured),
-                response_type=CacheUpdateResponse,
-            )
-        )
-        assert updated.status == "success", f"/cache/settings update status {updated.status!r}, expected 'success'"
-        assert updated.settings.type == captured.type, (
-            f"/cache/settings echoed type {updated.settings.type!r}, wrote {captured.type!r}"
-        )
-
-        def reflected() -> CacheSettingsValue | None:
-            current = self._read_settings(client)
-            return current if current.type == captured.type else None
-
-        after = _poll(client, reflected, f"/cache/settings never reported type {captured.type!r} after the update")
-        assert after.transport() == captured.transport(), (
-            "a no-op /cache/settings write changed how the proxy connects to its cache; "
-            f"transport fields were {captured.transport()} and are now {after.transport()}. "
-            "Every later Redis call on this deployment will hang if a transport field was dropped"
-        )
-        assert self._cache_reachable(client) == healthy_before, (
-            "a no-op /cache/settings write changed whether the cache is reachable "
-            f"(/cache/ping healthy before={healthy_before}, after={not healthy_before}); "
-            "the round-trip persisted a config the proxy cannot connect with"
-        )
-
-    @staticmethod
-    def _cache_reachable(client: ManagementClient) -> bool:
-        """Whether the proxy can actually talk to its cache right now. Used as a
-        before/after guard so a write that breaks connectivity fails this test instead
-        of silently degrading every suite that runs after it."""
-        result = client.proxy.transport.get(
-            "/cache/ping",
-            headers=client.proxy.transport.master,
-            params=NoBody(),
-            response_type=CachePingResponse,
-        )
-        return isinstance(result, Success)
-
-    @staticmethod
-    def _read_settings(client: ManagementClient) -> CacheSettingsValue:
-        return unwrap(
-            client.proxy.transport.get(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                params=NoBody(),
-                response_type=CacheGetResponse,
-            )
-        ).current_values
-
-    @staticmethod
-    def _write_settings(client: ManagementClient, settings: CacheSettingsValue) -> None:
-        _ = unwrap(
-            client.proxy.transport.post(
-                "/cache/settings",
-                headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=settings),
-                response_type=CacheUpdateResponse,
-            )
         )
 
 
