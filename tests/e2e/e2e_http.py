@@ -256,9 +256,17 @@ def assert_auth_denied(result: StreamingResponse, context: str) -> None:
 
 def is_provider_account_denied(result: StreamingResponse) -> bool:
     """True when the gateway reached the provider and the account/model is disabled."""
+    body = result.body.lower()
+    stream_err = (result.stream_error or "").lower()
+    combined = f"{body}\n{stream_err}"
+    # Mid-stream disconnects often mean the provider closed after an account deny.
+    if result.status_code < 0 and any(
+        n in combined
+        for n in ("response ended prematurely", "connection", "chunked", "broken pipe")
+    ):
+        return True
     if result.status_code not in (400, 403, 404):
         return False
-    body = result.body.lower()
     needles = (
         "operation not allowed",
         "end of its life",
@@ -477,24 +485,40 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
     stream_error: str | None = None
     stream_events: list[str] = []
     stream_done = False
-    for line in lines:
-        if not line:
-            continue
-        chunks += 1
-        decoded_line = line.decode(errors="replace")
-        if decoded_line.startswith("data: "):
-            payload = decoded_line.removeprefix("data: ")
-            if payload == "[DONE]":
-                stream_done = True
-            else:
-                stream_events.append(payload)
-        if stream_error is None and (
-            line.startswith(b"event: error")
-            or b'"type":"error"' in line
-            or b'"type": "error"' in line
-            or line.startswith(b'data: {"error"')
-        ):
-            stream_error = line.decode(errors="replace")[:300]
+    try:
+        for line in lines:
+            if not line:
+                continue
+            chunks += 1
+            decoded_line = line.decode(errors="replace")
+            if decoded_line.startswith("data: "):
+                payload = decoded_line.removeprefix("data: ")
+                if payload == "[DONE]":
+                    stream_done = True
+                else:
+                    stream_events.append(payload)
+            if stream_error is None and (
+                line.startswith(b"event: error")
+                or b'"type":"error"' in line
+                or b'"type": "error"' in line
+                or line.startswith(b'data: {"error"')
+            ):
+                stream_error = line.decode(errors="replace")[:300]
+    except requests.RequestException as exc:
+        # Mid-stream disconnects (e.g. ChunkedEncodingError when Bedrock closes
+        # early) must surface as a typed StreamingResponse, never raw exceptions.
+        return StreamingResponse(
+            status_code=-1,
+            call_id=call_id,
+            response_cost=response_cost,
+            content_type=content_type,
+            headers=headers,
+            body=str(exc),
+            chunks=chunks,
+            stream_events=stream_events,
+            stream_done=stream_done,
+            stream_error=str(exc)[:300],
+        )
     return StreamingResponse(
         status_code=resp.status_code,
         call_id=call_id,

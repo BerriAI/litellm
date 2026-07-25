@@ -7,7 +7,6 @@ missing messages and invalid model handling without crashing the proxy.
 from __future__ import annotations
 
 import pytest
-import requests
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
@@ -107,16 +106,12 @@ class TestBedrockNative:
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
         model, key = _register(proxy, resources)
-        try:
-            result = proxy.transport.send(
-                f"/bedrock/model/{model}/converse-stream",
-                headers=proxy.transport.bearer(key),
-                json=_default_converse(),
-                stream=True,
-            )
-        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError):
-            # Provider closed the stream when the account cannot invoke the model.
-            return
+        result = proxy.transport.send(
+            f"/bedrock/model/{model}/converse-stream",
+            headers=proxy.transport.bearer(key),
+            json=_default_converse(),
+            stream=True,
+        )
         if not require_success_or_provider_denied(result, "bedrock converse-stream"):
             return
         assert result.body or result.chunks > 0 or result.stream_events, (
@@ -142,15 +137,12 @@ class TestBedrockNative:
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
         model, key = _register(proxy, resources)
-        try:
-            result = proxy.transport.send(
-                f"/bedrock/model/{model}/invoke-with-response-stream",
-                headers=proxy.transport.bearer(key),
-                json=_default_invoke(),
-                stream=True,
-            )
-        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError):
-            return
+        result = proxy.transport.send(
+            f"/bedrock/model/{model}/invoke-with-response-stream",
+            headers=proxy.transport.bearer(key),
+            json=_default_invoke(),
+            stream=True,
+        )
         if not require_success_or_provider_denied(result, "bedrock invoke-stream"):
             return
         assert result.body or result.chunks > 0 or result.stream_events, (
