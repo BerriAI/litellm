@@ -20,6 +20,16 @@ describe("CostOptimizationView", () => {
     expect(getByText("Prompt Caching")).toBeInTheDocument();
   });
 
+  it("surfaces the experimental-dashboard notice and links to the discussion", () => {
+    const { getByText, getByRole } = renderView();
+
+    expect(getByText("This is an experimental dashboard")).toBeInTheDocument();
+    expect(getByRole("link", { name: "here" })).toHaveAttribute(
+      "href",
+      "https://github.com/BerriAI/litellm/discussions/32172",
+    );
+  });
+
   it("defaults to the Usage tab and switches the active tab on click", () => {
     const { getByRole } = renderView();
 

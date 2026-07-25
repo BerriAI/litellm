@@ -1,4 +1,5 @@
 import { render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ToolSpendResponse } from "@/components/networking";
 
@@ -93,6 +94,18 @@ describe("UsageTab", () => {
     expect(getByText("$0.1400")).toBeInTheDocument();
     expect(getByText("$0.0160")).toBeInTheDocument();
     expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
+  });
+
+  it("keeps the savings methodology collapsed until its disclosure is opened", async () => {
+    const user = userEvent.setup();
+    const { getByText, queryByText, findByText } = renderWith([day("2026-07-12", {})]);
+
+    expect(getByText("How savings are calculated")).toBeInTheDocument();
+    expect(queryByText(/Savings are computed for each request when it is logged/)).not.toBeInTheDocument();
+
+    await user.click(getByText("How savings are calculated"));
+
+    expect(await findByText(/Savings are computed for each request when it is logged/)).toBeInTheDocument();
   });
 
   it("builds a per-day time series and per-driver donut from the daily rows", () => {
