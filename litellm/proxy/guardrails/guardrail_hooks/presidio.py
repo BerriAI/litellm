@@ -1360,14 +1360,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         inputs["texts"] = new_texts
         return inputs
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: Union[LitellmParams, dict]) -> None:
         """
         Update the guardrails litellm params in memory
+
+        ``litellm_params`` may arrive as a ``LitellmParams`` instance or as the raw DB
+        dict (the PUT /guardrails immediate-sync path reads a Prisma JSON column and
+        never converts it); the base implementation now setattrs either shape, so read
+        these Presidio-specific fields the same way here.
         """
         super().update_in_memory_litellm_params(litellm_params)
-        if litellm_params.pii_entities_config:
-            self.pii_entities_config = litellm_params.pii_entities_config
-        if litellm_params.presidio_score_thresholds:
-            self.presidio_score_thresholds = litellm_params.presidio_score_thresholds
-        if litellm_params.presidio_entities_deny_list:
-            self.presidio_entities_deny_list = litellm_params.presidio_entities_deny_list
+        params = litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
+        if params.get("pii_entities_config"):
+            self.pii_entities_config = params["pii_entities_config"]
+        if params.get("presidio_score_thresholds"):
+            self.presidio_score_thresholds = params["presidio_score_thresholds"]
+        if params.get("presidio_entities_deny_list"):
+            self.presidio_entities_deny_list = params["presidio_entities_deny_list"]

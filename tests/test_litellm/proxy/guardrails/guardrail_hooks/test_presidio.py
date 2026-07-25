@@ -1366,6 +1366,27 @@ def test_update_in_memory_applies_score_thresholds():
     assert guardrail.presidio_score_thresholds == {PiiEntityType.CREDIT_CARD: 0.85}
 
 
+def test_update_in_memory_accepts_raw_db_dict():
+    """The PUT /guardrails immediate-sync path reads litellm_params back from a
+    Prisma JSON column as a plain dict, not a LitellmParams instance. Presidio's
+    override must handle that shape instead of accessing dict fields as attributes."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    guardrail.update_in_memory_litellm_params(
+        {
+            "guardrail": "presidio",
+            "mode": "pre_call",
+            "pii_entities_config": {PiiEntityType.CREDIT_CARD: "MASK"},
+            "presidio_score_thresholds": {PiiEntityType.CREDIT_CARD: 0.85},
+            "presidio_entities_deny_list": [PiiEntityType.CREDIT_CARD],
+        }
+    )
+
+    assert guardrail.pii_entities_config == {PiiEntityType.CREDIT_CARD: "MASK"}
+    assert guardrail.presidio_score_thresholds == {PiiEntityType.CREDIT_CARD: 0.85}
+    assert guardrail.presidio_entities_deny_list == [PiiEntityType.CREDIT_CARD]
+
+
 @pytest.mark.asyncio
 async def test_get_session_iterator_thread_safety(presidio_guardrail):
     """
