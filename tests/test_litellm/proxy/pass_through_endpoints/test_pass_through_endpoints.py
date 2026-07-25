@@ -10,6 +10,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import litellm
 import pytest
 from fastapi import Request, UploadFile
 from starlette.datastructures import FormData, Headers, QueryParams
@@ -1049,6 +1050,82 @@ async def test_create_pass_through_route_with_cost_per_request():
         mock_pass_through.assert_called_once()
         call_kwargs = mock_pass_through.call_args[1]
         assert call_kwargs["cost_per_request"] == 3.75
+
+
+def test_create_pass_through_route_registers_multiple_adapters():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/22645
+
+    Each adapter-backed pass_through_endpoints route must keep its own entry
+    in litellm.adapters. A prior bug overwrote the entire list on every
+    registration, so every route except the last one registered failed
+    lookup at request time with "No matching adapter given".
+    """
+    original_adapters = litellm.adapters
+
+    class _FirstAdapter(CustomLogger):
+        pass
+
+    class _SecondAdapter(CustomLogger):
+        pass
+
+    first_adapter = _FirstAdapter()
+    second_adapter = _SecondAdapter()
+
+    try:
+        litellm.adapters = []
+
+        create_pass_through_route(
+            endpoint="/test/path/unique/adapter_one",
+            target=first_adapter,
+        )
+        create_pass_through_route(
+            endpoint="/test/path/unique/adapter_two",
+            target=second_adapter,
+        )
+
+        assert len(litellm.adapters) == 2
+        assert litellm.adapters[0]["adapter"] is first_adapter
+        assert litellm.adapters[1]["adapter"] is second_adapter
+        assert litellm.adapters[0]["id"] != litellm.adapters[1]["id"]
+    finally:
+        litellm.adapters = original_adapters
+
+
+def test_create_pass_through_route_reregistering_same_adapter_replaces_entry():
+    """
+    Regression test: re-registering the same adapter object (e.g. on the
+    periodic pass-through reload cycle, which re-runs create_pass_through_route
+    for already-registered routes) must replace its existing litellm.adapters
+    entry rather than appending a duplicate. Otherwise the list grows
+    unboundedly with orphaned entries every reload.
+    """
+    original_adapters = litellm.adapters
+
+    class _ReloadedAdapter(CustomLogger):
+        pass
+
+    adapter = _ReloadedAdapter()
+
+    try:
+        litellm.adapters = []
+
+        create_pass_through_route(
+            endpoint="/test/path/unique/reload_adapter",
+            target=adapter,
+        )
+        first_id = litellm.adapters[0]["id"]
+
+        create_pass_through_route(
+            endpoint="/test/path/unique/reload_adapter",
+            target=adapter,
+        )
+
+        assert len(litellm.adapters) == 1
+        assert litellm.adapters[0]["adapter"] is adapter
+        assert litellm.adapters[0]["id"] != first_id
+    finally:
+        litellm.adapters = original_adapters
 
 
 def test_resolve_pass_through_request_timeout_precedence():
