@@ -3272,13 +3272,6 @@ class PrismaClient:
             UserNotificationsRepository(self).table,
         )
 
-    @property
-    def health_check_table(self) -> "_PrismaTable[LiteLLM_HealthCheckTable]":
-        return cast(  # cast-ok: repository .table is declared Any; typed table protocol pins the real shape
-            "_PrismaTable[LiteLLM_HealthCheckTable]",
-            HealthCheckRepository(self).table,
-        )
-
     def get_request_status(self, payload: Union[dict, SpendLogsPayload]) -> Literal["success", "failure"]:
         """
         Determine if a request was successful or failed based on payload metadata.
@@ -5272,7 +5265,13 @@ class PrismaClient:
             health_check_data.update({k: v for k, v in optional_fields.items() if v is not None})
 
             verbose_proxy_logger.debug(f"Saving health check data: {health_check_data}")
-            return await self.health_check_table.create(data=health_check_data)
+            health_check_table = (
+                cast(  # cast-ok: repository .table is declared Any; typed table protocol pins the real shape
+                    "_PrismaTable[LiteLLM_HealthCheckTable]",
+                    HealthCheckRepository(self).table,
+                )
+            )
+            return await health_check_table.create(data=health_check_data)
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error saving health check result for model {model_name}: {e}")
@@ -5295,7 +5294,13 @@ class PrismaClient:
             if status_filter:
                 where_clause["status"] = status_filter
 
-            results = await self.health_check_table.find_many(
+            health_check_table = (
+                cast(  # cast-ok: repository .table is declared Any; typed table protocol pins the real shape
+                    "_PrismaTable[LiteLLM_HealthCheckTable]",
+                    HealthCheckRepository(self).table,
+                )
+            )
+            results = await health_check_table.find_many(
                 where=where_clause,
                 order={"checked_at": "desc"},
                 take=limit,
@@ -5314,7 +5319,13 @@ class PrismaClient:
         (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
         """
         try:
-            return await self.health_check_table.find_many(
+            health_check_table = (
+                cast(  # cast-ok: repository .table is declared Any; typed table protocol pins the real shape
+                    "_PrismaTable[LiteLLM_HealthCheckTable]",
+                    HealthCheckRepository(self).table,
+                )
+            )
+            return await health_check_table.find_many(
                 distinct=["model_id", "model_name"],
                 order=[
                     {"model_id": "asc"},
