@@ -14,8 +14,11 @@ from typing import (
     Dict,
     Iterator,
     List,
+    Mapping,
     NoReturn,
     Optional,
+    Protocol,
+    Sequence,
     Union,
     cast,
 )
@@ -23,6 +26,7 @@ from typing import (
 import anyio
 import httpx
 from pydantic import BaseModel
+from typing_extensions import Required, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -60,10 +64,71 @@ FUNCTION_CALL_ATTRIBUTE = "function_call"
 
 _SYNC_ITER_EXHAUSTED = object()
 
-_GCHUNK_FIELDS: frozenset = frozenset(GChunk.__annotations__)
+_GCHUNK_FIELDS: frozenset[str] = frozenset(GChunk.__annotations__)
 
 
-def _next_sync_or_exhausted(it: Any) -> Any:
+class _LoggedLiteLLMParams(TypedDict, total=False):
+    merge_reasoning_content_in_choices: bool | None
+
+
+class _DumpedDeltaKwargs(TypedDict, total=False):
+    role: str | None
+    finish_reason: str | None
+    tool_calls: Sequence[Mapping[str, object]] | None
+
+
+class _ModelResponseStreamInitKwargs(TypedDict, total=False):
+    model: str | None
+
+
+class _PredibaseStreamDetails(TypedDict):
+    finish_reason: str
+
+
+class _PredibaseStreamData(TypedDict, total=False):
+    token: Mapping[str, str]
+    details: Required[_PredibaseStreamDetails]
+    generated_text: str
+    error: str
+
+
+class _Ai21StreamData(TypedDict):
+    completions: Sequence[Mapping[str, Mapping[str, str]]]
+
+
+class _MaritalkStreamData(TypedDict):
+    answer: str
+
+
+class _NlpCloudStreamData(TypedDict):
+    generated_text: str
+
+
+class _AlephAlphaStreamData(TypedDict):
+    completions: Sequence[Mapping[str, str]]
+
+
+class _AzureStreamChoice(TypedDict):
+    delta: Mapping[str, str] | None
+    finish_reason: str | None
+
+
+class _AzureStreamData(TypedDict):
+    choices: Sequence[_AzureStreamChoice]
+
+
+class _BasetenStreamData(TypedDict, total=False):
+    token: Mapping[str, str]
+    model_output: Mapping[str, Union[Sequence[str], str]] | str
+    completion: object
+
+
+class _TextCompletionStreamChoice(Protocol):
+    text: str
+    finish_reason: str | None
+
+
+def _next_sync_or_exhausted(it: Iterator[object]) -> object:
     """
     Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
 
@@ -77,7 +142,7 @@ def _next_sync_or_exhausted(it: Any) -> Any:
         return _SYNC_ITER_EXHAUSTED
 
 
-def is_async_iterable(obj: Any) -> bool:
+def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
 
@@ -90,7 +155,7 @@ def is_async_iterable(obj: Any) -> bool:
     return isinstance(obj, collections.abc.AsyncIterable)
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         if litellm.set_verbose:
             print(print_statement)  # noqa: T201
@@ -116,7 +181,7 @@ class CustomStreamWrapper:
         self,
         completion_stream,
         model,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObject,
         custom_llm_provider: Optional[str] = None,
         stream_options=None,
         make_call: Optional[Callable] = None,
@@ -131,9 +196,8 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
-            **self.logging_obj.model_call_details.get("litellm_params", {})
-        )
+        _logged_litellm_params: _LoggedLiteLLMParams = self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(**_logged_litellm_params)
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
@@ -195,7 +259,7 @@ class CustomStreamWrapper:
         # Snapshot assumes self._hidden_params is populated from litellm_params
         # at init and never mutated during the stream. If that ever changes,
         # this cache must be removed.
-        self._base_hidden_params: Dict[str, Any] = {
+        self._base_hidden_params: dict[str, object] = {
             **self._hidden_params,
             "response_cost": None,
         }
@@ -257,7 +321,7 @@ class CustomStreamWrapper:
 
         return False
 
-    def process_chunk(self, chunk: str):
+    def process_chunk(self, chunk: str) -> str:
         """
         NLP Cloud streaming returns the entire response, for each chunk. Process this, to only return the delta.
         """
@@ -358,7 +422,7 @@ class CustomStreamWrapper:
             finish_reason = ""
             print_verbose(f"chunk: {chunk}")
             if chunk.startswith("data:"):
-                data_json = json.loads(chunk[5:])
+                data_json: _PredibaseStreamData = json.loads(chunk[5:])
                 print_verbose(f"data json: {data_json}")
                 if "token" in data_json and "text" in data_json["token"]:
                     text = data_json["token"]["text"]
@@ -388,7 +452,7 @@ class CustomStreamWrapper:
 
     def handle_ai21_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        data_json: _Ai21StreamData = json.loads(chunk)
         try:
             text = data_json["completions"][0]["data"]["text"]
             is_finished = True
@@ -403,7 +467,7 @@ class CustomStreamWrapper:
 
     def handle_maritalk_chunk(self, chunk):  # fake streaming
         chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        data_json: _MaritalkStreamData = json.loads(chunk)
         try:
             text = data_json["answer"]
             is_finished = True
@@ -424,7 +488,7 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json = json.loads(chunk)
+                data_json: _NlpCloudStreamData = json.loads(chunk)
                 chunk = data_json["generated_text"]
             text = chunk
             if "[DONE]" in text:
@@ -441,7 +505,7 @@ class CustomStreamWrapper:
 
     def handle_aleph_alpha_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        data_json: _AlephAlphaStreamData = json.loads(chunk)
         try:
             text = data_json["completions"][0]["completion"]
             is_finished = True
@@ -454,7 +518,7 @@ class CustomStreamWrapper:
         except Exception:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
-    def handle_azure_chunk(self, chunk):
+    def handle_azure_chunk(self, chunk: str):
         is_finished = False
         finish_reason = ""
         text = ""
@@ -469,7 +533,7 @@ class CustomStreamWrapper:
                 "finish_reason": finish_reason,
             }
         elif chunk.startswith("data:"):
-            data_json = json.loads(chunk[5:])  # chunk.startswith("data:"):
+            data_json: _AzureStreamData = json.loads(chunk[5:])  # chunk.startswith("data:"):
             try:
                 if len(data_json["choices"]) > 0:
                     delta = data_json["choices"][0]["delta"]
@@ -558,7 +622,7 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = None
-            choices = getattr(chunk, "choices", [])
+            choices: Sequence[_TextCompletionStreamChoice] = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -579,7 +643,7 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             usage = None
-            choices = getattr(chunk, "choices", [])
+            choices: Sequence[_TextCompletionStreamChoice] = getattr(chunk, "choices", [])
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -601,7 +665,7 @@ class CustomStreamWrapper:
             chunk = chunk.decode("utf-8")
             if len(chunk) > 0:
                 if chunk.startswith("data:"):
-                    data_json = json.loads(chunk[5:])
+                    data_json: _BasetenStreamData = json.loads(chunk[5:])
                     if "token" in data_json and "text" in data_json["token"]:
                         return data_json["token"]["text"]
                     else:
@@ -665,19 +729,23 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def model_response_creator(self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None):
+    def model_response_creator(self, chunk: dict[str, object] | None = None, hidden_params: dict | None = None):
         _model = self._cached_model_name
         _logging_obj_llm_provider = self._cached_logging_llm_provider
 
         if chunk is None:
-            args: Dict[str, Any] = {"model": _model}
+            args: dict[str, object] = {"model": _model}
         else:
             chunk.pop("model", None)
             args = {"model": _model}
             if chunk:
                 args.update({k: v for k, v in chunk.items() if k != "stream"})
 
-        model_response = ModelResponseStream(**args)
+        model_response = ModelResponseStream(
+            **cast(  # cast-ok: heterogeneous chunk payload consumed via ModelResponseStream(**kwargs)
+                _ModelResponseStreamInitKwargs, args
+            )
+        )
         if self.response_id is not None:
             model_response.id = self.response_id
         if self.system_fingerprint is not None:
@@ -750,7 +818,11 @@ class CustomStreamWrapper:
         """
         Copy provider_specific_fields from original_chunk to model_response.
         """
-        provider_specific_fields = getattr(original_chunk, "provider_specific_fields", None)
+        provider_specific_fields: dict[str, object] | None = (
+            getattr(  # mutable-ok: assigned straight to ModelResponseStream.provider_specific_fields, declared Optional[Dict[str, Any]]
+                original_chunk, "provider_specific_fields", None
+            )
+        )
         if provider_specific_fields is not None:
             model_response.provider_specific_fields = provider_specific_fields
             for k, v in provider_specific_fields.items():
@@ -814,7 +886,9 @@ class CustomStreamWrapper:
             model_response.choices[0].delta["role"] = "assistant"
             self.sent_first_chunk = True
         elif self.sent_first_chunk is True and hasattr(model_response.choices[0].delta, "role"):
-            _initial_delta = model_response.choices[0].delta.model_dump()
+            _initial_delta = cast(  # cast-ok: Delta.model_dump payload re-enters Delta(**kwargs) which takes extras
+                _DumpedDeltaKwargs, model_response.choices[0].delta.model_dump()
+            )
 
             _initial_delta.pop("role", None)
             model_response.choices[0].delta = Delta(**_initial_delta)
@@ -904,14 +978,17 @@ class CustomStreamWrapper:
 
             if hold is False:
                 ## check if openai/azure chunk
-                original_chunk = response_obj.get("original_chunk", None)
+                original_chunk: ModelResponseStream | None = response_obj.get("original_chunk", None)
                 if original_chunk:
                     if len(original_chunk.choices) > 0:
                         choices = []
                         for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()  # type: ignore
+                                    choice_json = cast(  # cast-ok: choice dump feeds StreamingChoices(**kwargs) which takes extras
+                                        _DumpedDeltaKwargs,
+                                        choice.model_dump(),
+                                    )
                                     choice_json.pop(
                                         "finish_reason", None
                                     )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
@@ -946,7 +1023,11 @@ class CustomStreamWrapper:
                         self.sent_first_chunk = True
                     if response_obj.get("provider_specific_fields") is not None:
                         completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
-                    model_response.choices[0].delta = Delta(**completion_obj)
+                    model_response.choices[0].delta = Delta(
+                        **cast(  # cast-ok: completion payload feeds Delta(**kwargs) which takes extras
+                            _DumpedDeltaKwargs, completion_obj
+                        )
+                    )
                     _index: Optional[int] = completion_obj.get("index")
                     if _index is not None:
                         model_response.choices[0].index = _index
@@ -1111,7 +1192,9 @@ class CustomStreamWrapper:
                 for key, value in anthropic_response_obj["provider_specific_fields"].items():
                     setattr(model_response, key, value)
 
-            response_obj = cast(dict[str, Any], anthropic_response_obj)
+            response_obj = cast(  # cast-ok: GenericStreamingChunk narrows to the plain response mapping
+                dict[str, object], anthropic_response_obj
+            )
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":
             response_obj = self.handle_replicate_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -1295,15 +1378,19 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
-            chunk = cast(ModelResponseStream, chunk)
-            chunk_finish_reason = chunk.choices[0].finish_reason
+            cached_chunk = cast(  # cast-ok: cached_response streams replay ModelResponseStream chunks
+                ModelResponseStream, chunk
+            )
+            chunk_finish_reason = cached_chunk.choices[0].finish_reason
             response_obj = {
-                "text": chunk.choices[0].delta.content,
+                "text": cached_chunk.choices[0].delta.content,
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
-                "original_chunk": chunk,
+                "original_chunk": cached_chunk,
                 "tool_calls": (
-                    chunk.choices[0].delta.tool_calls if hasattr(chunk.choices[0].delta, "tool_calls") else None
+                    cached_chunk.choices[0].delta.tool_calls
+                    if hasattr(cached_chunk.choices[0].delta, "tool_calls")
+                    else None
                 ),
             }
 
@@ -1311,11 +1398,11 @@ class CustomStreamWrapper:
             if response_obj["tool_calls"] is not None:
                 completion_obj["tool_calls"] = response_obj["tool_calls"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
-            if hasattr(chunk, "id"):
-                model_response.id = chunk.id
-                self.response_id = chunk.id
-            if hasattr(chunk, "system_fingerprint"):
-                self.system_fingerprint = chunk.system_fingerprint
+            if hasattr(cached_chunk, "id"):
+                model_response.id = cached_chunk.id
+                self.response_id = cached_chunk.id
+            if hasattr(cached_chunk, "system_fingerprint"):
+                self.system_fingerprint = cached_chunk.system_fingerprint
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         else:  # openai / azure chat model
@@ -1392,7 +1479,9 @@ class CustomStreamWrapper:
 
             model_response.model = self.model
             ## FUNCTION CALL PARSING
-            original_chunk = response_obj.get("original_chunk") if response_obj is not None else None
+            original_chunk: ModelResponseStream | None = (
+                response_obj.get("original_chunk") if response_obj is not None else None
+            )
             if (
                 original_chunk is not None
             ):  # function / tool calling branch - only set for openai/azure compatible endpoints
@@ -1430,7 +1519,9 @@ class CustomStreamWrapper:
                                                 is None
                                             ):
                                                 t.function.arguments = ""
-                            _json_delta = delta.model_dump()
+                            _json_delta = cast(  # cast-ok: delta dump re-enters Delta(**kwargs) which takes extras
+                                _DumpedDeltaKwargs, delta.model_dump()
+                            )
                             if "role" not in _json_delta or _json_delta["role"] is None:
                                 _json_delta["role"] = "assistant"  # mistral's api returns role as None
                             if "tool_calls" in _json_delta and isinstance(_json_delta["tool_calls"], list):
@@ -1458,7 +1549,11 @@ class CustomStreamWrapper:
                                 if original_chunk.choices[0].delta is None
                                 else dict(original_chunk.choices[0].delta)
                             )
-                            model_response.choices[0].delta = Delta(**delta)
+                            model_response.choices[0].delta = Delta(
+                                **cast(  # cast-ok: raw delta mapping feeds Delta(**kwargs) which takes extras
+                                    _DumpedDeltaKwargs, delta
+                                )
+                            )
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
@@ -1497,7 +1592,7 @@ class CustomStreamWrapper:
                 original_exception=e,
             )
 
-    def set_logging_event_loop(self, loop):
+    def set_logging_event_loop(self, loop: asyncio.AbstractEventLoop):
         """
         import litellm, asyncio
 
@@ -1672,7 +1767,9 @@ class CustomStreamWrapper:
         else:
             asyncio.run(self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit))
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
-        litellm_params = self.logging_obj.model_call_details.get("litellm_params", {})
+        litellm_params: dict[str, object] = self.logging_obj.model_call_details.get(
+            "litellm_params", {}
+        )  # mutable-ok: passed to Logging._is_sync_litellm_request, whose parameter is typed dict
         if self.logging_obj._is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
@@ -1700,7 +1797,9 @@ class CustomStreamWrapper:
         usage.cost, copy it into _hidden_params so litellm's cost
         calculator uses it instead of a token-based estimate.
         """
-        _usage = getattr(response, "usage", None)
+        _usage = cast(  # cast-ok: assembled ModelResponse carries an Optional[Usage] attribute
+            Usage | None, getattr(response, "usage", None)
+        )
         if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
             if "additional_headers" not in response._hidden_params:
                 response._hidden_params["additional_headers"] = {}
@@ -2254,7 +2353,7 @@ class CustomStreamWrapper:
         return chunk
 
 
-def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
+def calculate_total_usage(chunks: Sequence[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -2287,7 +2386,7 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     return returned_usage_chunk
 
 
-def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
+def generic_chunk_has_all_required_fields(chunk: Mapping[str, object]) -> bool:
     """
     Checks if the provided chunk dictionary contains all required fields for GenericStreamingChunk.
 

@@ -61,6 +61,116 @@ from .common_utils import (
     drop_params_from_unprocessable_entity_error,
 )
 
+if TYPE_CHECKING:
+    from openai.types.batch import Errors as BatchErrors
+    from openai.types.batch_request_counts import BatchRequestCounts
+    from openai.types.beta.threads.message import Attachment as MessageAttachment
+    from openai.types.beta.threads.message import (
+        IncompleteDetails as MessageIncompleteDetails,
+    )
+    from typing_extensions import NotRequired, TypedDict
+
+    from litellm.types.utils import Usage as LiteLLMUsage
+
+    class _FileObjectDump(TypedDict):
+        id: str
+        bytes: int
+        created_at: int
+        filename: str
+        object: Literal["file"]
+        purpose: OpenAIFilesPurpose
+        status: Literal["uploaded", "processed", "error"]
+        expires_at: int | None
+        status_details: str | None
+
+    class _BatchDump(TypedDict):
+        id: str
+        completion_window: str
+        created_at: int
+        endpoint: str
+        input_file_id: str
+        object: Literal["batch"]
+        status: Literal[
+            "validating",
+            "failed",
+            "in_progress",
+            "finalizing",
+            "completed",
+            "expired",
+            "cancelling",
+            "cancelled",
+        ]
+        cancelled_at: int | None
+        cancelling_at: int | None
+        completed_at: int | None
+        error_file_id: str | None
+        errors: BatchErrors | None
+        expired_at: int | None
+        expires_at: int | None
+        failed_at: int | None
+        finalizing_at: int | None
+        in_progress_at: int | None
+        metadata: Optional[
+            Dict[str, str]
+        ]  # mutable-ok: unpacked into LiteLLMBatch, whose metadata field is declared Dict[str, str]
+        model: str | None
+        output_file_id: str | None
+        request_counts: BatchRequestCounts | None
+        usage: LiteLLMUsage | None
+
+    class _MessageDump(TypedDict):
+        id: str
+        assistant_id: str | None
+        attachments: Optional[
+            list[MessageAttachment]
+        ]  # mutable-ok: unpacked into OpenAIMessage, whose attachments field is declared List[Attachment]
+        completed_at: int | None
+        content: list[
+            MessageContent
+        ]  # mutable-ok: unpacked into OpenAIMessage, whose content field is declared List[MessageContent]
+        created_at: int
+        incomplete_at: int | None
+        incomplete_details: MessageIncompleteDetails | None
+        metadata: Optional[
+            Dict[str, str]
+        ]  # mutable-ok: unpacked into OpenAIMessage, whose metadata field is declared Dict[str, str]
+        object: Literal["thread.message"]
+        role: Literal["user", "assistant"]
+        run_id: str | None
+        status: Literal["in_progress", "incomplete", "completed"]
+        thread_id: str
+
+    class _ThreadDump(TypedDict):
+        id: str
+        created_at: int
+        metadata: object | None
+        object: Literal["thread"]
+
+    class _RunThreadStreamData(TypedDict):
+        thread_id: str
+        assistant_id: str
+        additional_instructions: str | None
+        instructions: str | None
+        metadata: Optional[
+            Dict[str, str]
+        ]  # mutable-ok: unpacked into runs.stream(), whose metadata param is declared Dict[str, str]
+        model: str | None
+        tools: Iterable[AssistantToolParam] | None
+        event_handler: NotRequired[AssistantEventHandler]
+
+    class _AsyncRunThreadStreamData(TypedDict):
+        thread_id: str
+        assistant_id: str
+        additional_instructions: str | None
+        instructions: str | None
+        metadata: Optional[
+            Dict[str, str]
+        ]  # mutable-ok: unpacked into runs.stream(), whose metadata param is declared Dict[str, str]
+        model: str | None
+        tools: Iterable[AssistantToolParam] | None
+        event_handler: NotRequired[AsyncAssistantEventHandler]
+
+
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 openAIGPT5Config = OpenAIGPT5Config()
 
@@ -73,7 +183,9 @@ class MistralEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Dict[str, object] = (
+            locals().copy()
+        )  # mutable-ok: invariant dict pins locals()'s values to object; Mapping re-widens them to Any
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -165,7 +277,9 @@ class OpenAIConfig(BaseConfig):
         top_p: Optional[int] = None,
         response_format: Optional[dict] = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Dict[str, object] = (
+            locals().copy()
+        )  # mutable-ok: invariant dict pins locals()'s values to object; Mapping re-widens them to Any
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -275,16 +389,19 @@ class OpenAIConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: object,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
         logging_obj.post_call(original_response=raw_response.text)
         logging_obj.model_call_details["response_headers"] = raw_response.headers
+        raw_response_json = cast(  # cast-ok: chat completion responses parse to a JSON object
+            "Dict[str, object]", raw_response.json()
+        )
         final_response_obj = cast(
             ModelResponse,
             convert_to_model_response_object(
-                response_object=raw_response.json(),
+                response_object=raw_response_json,
                 model_response_object=model_response,
                 hidden_params={"headers": raw_response.headers},
                 _response_headers=dict(raw_response.headers),
@@ -313,7 +430,7 @@ class OpenAIConfig(BaseConfig):
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
-    ) -> Any:
+    ) -> "OpenAIChatCompletionResponseIterator":
         return OpenAIChatCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -488,14 +605,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     async def _call_agentic_completion_hooks_openai(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: List[Dict],
         optional_params: Dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
         litellm_params: Dict,
-    ) -> Optional[Any]:
+    ) -> ModelResponse | None:
         """
         Call agentic completion hooks for all custom loggers (OpenAI Chat Completions API).
 
@@ -546,15 +663,18 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
 
                         # For OpenAI Chat Completions, use the chat completion agentic loop method
-                        agentic_response = await callback.async_run_chat_completion_agentic_loop(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            optional_params=optional_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
+                        agentic_response = cast(  # cast-ok: chat completion agentic loop yields a ModelResponse
+                            "ModelResponse | None",
+                            await callback.async_run_chat_completion_agentic_loop(
+                                tools=tool_calls,
+                                model=model,
+                                messages=messages,
+                                response=response,
+                                optional_params=optional_params,
+                                logging_obj=logging_obj,
+                                stream=stream,
+                                kwargs=kwargs_with_provider,
+                            ),
                         )
                         # First hook that runs agentic loop wins
                         return agentic_response
@@ -816,7 +936,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_response: httpx.Response | None = getattr(e, "response", None)
             error_body = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
@@ -935,7 +1055,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     raise e
                 # e.message
             except Exception as e:
-                exception_response = getattr(e, "response", None)
+                exception_response: httpx.Response | None = getattr(e, "response", None)
                 status_code = getattr(e, "status_code", 500)
                 exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
@@ -1092,7 +1212,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
                 error_headers = getattr(e, "headers", None)
                 status_code = getattr(e, "status_code", 500)
-                error_response = getattr(e, "response", None)
+                error_response: httpx.Response | None = getattr(e, "response", None)
                 exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
                     error_headers = getattr(error_response, "headers", None)
@@ -1247,7 +1367,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_response: httpx.Response | None = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
@@ -1333,7 +1453,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_response: httpx.Response | None = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
@@ -1626,7 +1746,10 @@ class OpenAIFilesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> OpenAIFileObject:
         response = await openai_client.files.create(**create_file_data)  # type: ignore[arg-type]
-        return OpenAIFileObject(**response.model_dump())
+        response_dict = cast(  # cast-ok: FileObject.model_dump returns its typed fields
+            "_FileObjectDump", response.model_dump()
+        )
+        return OpenAIFileObject(**response_dict)
 
     def create_file(
         self,
@@ -1638,7 +1761,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+    ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1662,7 +1785,10 @@ class OpenAIFilesAPI(BaseLLM):
                 create_file_data=create_file_data, openai_client=openai_client
             )
         response = cast(OpenAI, openai_client).files.create(**create_file_data)  # type: ignore[arg-type]
-        return OpenAIFileObject(**response.model_dump())
+        response_dict = cast(  # cast-ok: FileObject.model_dump returns its typed fields
+            "_FileObjectDump", response.model_dump()
+        )
+        return OpenAIFileObject(**response_dict)
 
     async def afile_content(
         self,
@@ -1682,7 +1808,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+    ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1986,7 +2112,8 @@ class OpenAIBatchesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> LiteLLMBatch:
         response = await openai_client.batches.create(**create_batch_data)  # type: ignore[arg-type]
-        return LiteLLMBatch(**response.model_dump())
+        batch_dict = cast("_BatchDump", response.model_dump())  # cast-ok: Batch.model_dump returns its typed fields
+        return LiteLLMBatch(**batch_dict)
 
     def create_batch(
         self,
@@ -1998,7 +2125,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: Optional[int],
         organization: Optional[str],
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+    ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -2023,7 +2150,8 @@ class OpenAIBatchesAPI(BaseLLM):
             )
         response = cast(OpenAI, openai_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
 
-        return LiteLLMBatch(**response.model_dump())
+        batch_dict = cast("_BatchDump", response.model_dump())  # cast-ok: Batch.model_dump returns its typed fields
+        return LiteLLMBatch(**batch_dict)
 
     async def aretrieve_batch(
         self,
@@ -2032,7 +2160,8 @@ class OpenAIBatchesAPI(BaseLLM):
     ) -> LiteLLMBatch:
         verbose_logger.debug("retrieving batch, args= %s", retrieve_batch_data)
         response = await openai_client.batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
-        return LiteLLMBatch(**response.model_dump())
+        batch_dict = cast("_BatchDump", response.model_dump())  # cast-ok: Batch.model_dump returns its typed fields
+        return LiteLLMBatch(**batch_dict)
 
     def retrieve_batch(
         self,
@@ -2068,7 +2197,8 @@ class OpenAIBatchesAPI(BaseLLM):
                 retrieve_batch_data=retrieve_batch_data, openai_client=openai_client
             )
         response = cast(OpenAI, openai_client).batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
-        return LiteLLMBatch(**response.model_dump())
+        batch_dict = cast("_BatchDump", response.model_dump())  # cast-ok: Batch.model_dump returns its typed fields
+        return LiteLLMBatch(**batch_dict)
 
     async def acancel_batch(
         self,
@@ -2077,7 +2207,8 @@ class OpenAIBatchesAPI(BaseLLM):
     ) -> LiteLLMBatch:
         verbose_logger.debug("async cancelling batch, args= %s", cancel_batch_data)
         response = await openai_client.batches.cancel(**cancel_batch_data)
-        return LiteLLMBatch(**response.model_dump())
+        batch_dict = cast("_BatchDump", response.model_dump())  # cast-ok: Batch.model_dump returns its typed fields
+        return LiteLLMBatch(**batch_dict)
 
     def cancel_batch(
         self,
@@ -2117,7 +2248,8 @@ class OpenAIBatchesAPI(BaseLLM):
         if not isinstance(openai_client, OpenAI):
             raise ValueError("OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client.")
         response = openai_client.batches.cancel(**cancel_batch_data)
-        return LiteLLMBatch(**response.model_dump())
+        batch_dict = cast("_BatchDump", response.model_dump())  # cast-ok: Batch.model_dump returns its typed fields
+        return LiteLLMBatch(**batch_dict)
 
     async def alist_batches(
         self,
@@ -2477,9 +2609,11 @@ class OpenAIAssistantsAPI(BaseLLM):
         response_obj: Optional[OpenAIMessage] = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            message_dict = cast("_MessageDump", thread_message.dict())  # cast-ok: Message.dict returns its typed fields
+            response_obj = OpenAIMessage(**message_dict)
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            message_dict = cast("_MessageDump", thread_message.dict())  # cast-ok: Message.dict returns its typed fields
+            response_obj = OpenAIMessage(**message_dict)
         return response_obj
 
     # fmt: off
@@ -2556,9 +2690,11 @@ class OpenAIAssistantsAPI(BaseLLM):
         response_obj: Optional[OpenAIMessage] = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage(**thread_message.dict())
+            message_dict = cast("_MessageDump", thread_message.dict())  # cast-ok: Message.dict returns its typed fields
+            response_obj = OpenAIMessage(**message_dict)
         else:
-            response_obj = OpenAIMessage(**thread_message.dict())
+            message_dict = cast("_MessageDump", thread_message.dict())  # cast-ok: Message.dict returns its typed fields
+            response_obj = OpenAIMessage(**message_dict)
         return response_obj
 
     async def async_get_messages(
@@ -2680,7 +2816,10 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread = await openai_client.beta.threads.create(**data)  # type: ignore
 
-        return Thread(**message_thread.dict())
+        thread_dict = cast(  # cast-ok: thread dump carries litellm Thread's typed fields
+            "_ThreadDump", message_thread.dict()
+        )
+        return Thread(**thread_dict)
 
     # fmt: off
 
@@ -2766,7 +2905,10 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread = openai_client.beta.threads.create(**data)  # type: ignore
 
-        return Thread(**message_thread.dict())
+        thread_dict = cast(  # cast-ok: thread dump carries litellm Thread's typed fields
+            "_ThreadDump", message_thread.dict()
+        )
+        return Thread(**thread_dict)
 
     async def async_get_thread(
         self,
@@ -2789,7 +2931,8 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        thread_dict = cast("_ThreadDump", response.dict())  # cast-ok: thread dump carries litellm Thread's typed fields
+        return Thread(**thread_dict)
 
     # fmt: off
 
@@ -2855,7 +2998,8 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        thread_dict = cast("_ThreadDump", response.dict())  # cast-ok: thread dump carries litellm Thread's typed fields
+        return Thread(**thread_dict)
 
     def delete_thread(self):
         pass
@@ -2912,7 +3056,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         tools: Optional[Iterable[AssistantToolParam]],
         event_handler: Optional[AssistantEventHandler],
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data: Dict[str, Any] = {
+        data: _AsyncRunThreadStreamData = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -2922,7 +3066,9 @@ class OpenAIAssistantsAPI(BaseLLM):
             "tools": tools,
         }
         if event_handler is not None:
-            data["event_handler"] = event_handler
+            data["event_handler"] = cast(  # cast-ok: async runs stream requires an async event handler
+                "AsyncAssistantEventHandler", event_handler
+            )
         return client.beta.threads.runs.stream(**data)  # type: ignore
 
     def run_thread_stream(
@@ -2937,7 +3083,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         tools: Optional[Iterable[AssistantToolParam]],
         event_handler: Optional[AssistantEventHandler],
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Dict[str, Any] = {
+        data: _RunThreadStreamData = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,

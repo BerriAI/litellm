@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -635,7 +635,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.routing import APIRouter
+from fastapi.routing import APIRoute, APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
@@ -820,13 +820,23 @@ async def proxy_shutdown_event():
 async def _initialize_shared_aiohttp_session():
     """Initialize shared aiohttp session for connection reuse with connection limits."""
     try:
+        import socket
+
         from aiohttp import ClientSession, TCPConnector
 
         from litellm.llms.custom_httpx.http_handler import (
             _build_aiohttp_keepalive_socket_factory,
         )
 
-        connector_kwargs: Dict[str, Any] = {
+        class ConnectorKwargs(TypedDict, total=False):
+            keepalive_timeout: float
+            ttl_dns_cache: int
+            enable_cleanup_closed: bool
+            limit: int
+            limit_per_host: int
+            socket_factory: Callable[[tuple[object, ...]], socket.socket]
+
+        connector_kwargs: ConnectorKwargs = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
         }
@@ -958,7 +968,9 @@ async def proxy_startup_event(app: FastAPI):
 
         async def _run_pw_migration():
             try:
-                result = await migrate_passwords_to_scrypt_async(prisma_client)
+                result = await migrate_passwords_to_scrypt_async(
+                    cast(PrismaClient, prisma_client)  # cast-ok: guarded by the enclosing prisma_client None check
+                )
                 verbose_proxy_logger.info(f"Password migration: {result}")
             except Exception as e:
                 verbose_proxy_logger.warning(f"Password migration skipped: {e}")
@@ -1141,7 +1153,7 @@ async def proxy_startup_event(app: FastAPI):
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
-def _generate_stable_operation_id(route: Any) -> str:
+def _generate_stable_operation_id(route: APIRoute) -> str:
     operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
     route_methods = sorted(route.methods or [])
     if len(route_methods) == 1:
@@ -2782,7 +2794,7 @@ async def update_cache(
     Put any alerting logic in here.
     """
 
-    values_to_update_in_cache: List[Tuple[Any, Any]] = []
+    values_to_update_in_cache: list[tuple[str, object]] = []
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -3513,7 +3525,7 @@ def _scrub_guardrail_inner(inner: Dict[str, Any]) -> None:
         inner["guardrail"] = None
 
 
-def _scrub_db_overlay_remote_module_loads(section: str, db_value: Any) -> Any:
+def _scrub_db_overlay_remote_module_loads(section: str, db_value: object) -> object:
     """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
     fields whose contents reach ``get_instance_fn``. The same scheme is
     allowed from a YAML config (the documented operator flow) but a
@@ -3915,7 +3927,9 @@ class ProxyConfig:
             # if using - db for config - models are in ModelTable
 
             # Make a copy to avoid mutating the original config
-            config_to_save = new_config.copy()
+            config_to_save: dict[str, Any] = (
+                new_config.copy()
+            )  # mutable-ok: keys are popped and re-encrypted in place before the DB write
 
             # environment_variables are persisted to the DB only when a caller
             # explicitly opts in. Most callers reach save_config after
@@ -5390,8 +5404,12 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
-    def decrypt_model_list_from_db(self, new_models: list) -> list:
-        _model_list: list = []
+    def decrypt_model_list_from_db(
+        self, new_models: Sequence[Any]
+    ) -> list[
+        dict[str, Any]
+    ]:  # mutable-ok: result is handed to litellm.Router(model_list=...), which requires a list of dicts
+        _model_list: list[dict[str, Any]] = []  # mutable-ok: appended to once per decrypted deployment below
         for m in new_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, BaseModel):
@@ -5400,7 +5418,9 @@ class ProxyConfig:
                 # decrypt values
                 for k, v in _litellm_params.items():
                     _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+                _litellm_params = cast(  # cast-ok: db params dict has untyped values, validated by pydantic at runtime
+                    Callable[..., LiteLLM_Params], LiteLLM_Params
+                )(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
                     f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
@@ -5448,7 +5468,7 @@ class ProxyConfig:
                 )
                 return
 
-            models_list: list = new_models if isinstance(new_models, list) else []
+            models_list: list[Any] = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
 
@@ -5620,7 +5640,7 @@ class ProxyConfig:
         )
 
     @staticmethod
-    def _parse_router_settings_value(value: Any) -> Optional[dict]:
+    def _parse_router_settings_value(value: object) -> dict | None:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -6251,7 +6271,9 @@ class ProxyConfig:
             if isinstance(litellm_settings, str):
                 litellm_settings = json.loads(litellm_settings)
 
-            mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
+            mcp_semantic_filter_config = cast(  # cast-ok: litellm_settings config rows store a JSON object
+                dict[str, Any], litellm_settings
+            ).get("mcp_semantic_tool_filter", None)
 
             if mcp_semantic_filter_config is None:
                 return
@@ -6386,7 +6408,9 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
 
-            config = config_record.param_value
+            config = cast(  # cast-ok: reload config rows store a JSON object
+                dict[str, Any], config_record.param_value
+            )
             interval_hours = config.get("interval_hours")
             force_reload = config.get("force_reload", False)
 
@@ -6486,7 +6510,9 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
 
-            config = config_record.param_value
+            config = cast(  # cast-ok: reload config rows store a JSON object
+                dict[str, Any], config_record.param_value
+            )
             interval_hours = config.get("interval_hours")
             force_reload = config.get("force_reload", False)
 
@@ -7719,7 +7745,11 @@ class ProxyStartupEvent:
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
-        mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
+        mcp_semantic_filter_config: dict[str, Any] | None = (
+            litellm_settings.get(  # mutable-ok: forwarded to SemanticToolFilterHook.initialize_from_config, which takes Dict
+                "mcp_semantic_tool_filter", None
+            )
+        )
 
         # Only proceed if the feature is configured and enabled
         if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get("enabled", False):
@@ -8857,7 +8887,7 @@ async def model_info(
     )
 
 
-def _blocked_response_usage(original_response: Optional[Any]) -> "litellm.Usage":
+def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
     """
     Token usage for a synthetic guardrail-blocked response.
 
@@ -8971,7 +9001,9 @@ async def chat_completion(
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
         # Capture logging_obj before post_call_failure_hook pops it from _data.
-        _logging_obj = _data.get("litellm_logging_obj")
+        _logging_obj = cast(  # cast-ok: chat request data always carries the litellm logging object
+            LiteLLMLoggingObj, _data.get("litellm_logging_obj")
+        )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -9022,7 +9054,9 @@ async def chat_completion(
                 completion_stream=_iterator,
                 model=data.get("model", ""),
                 custom_llm_provider="cached_response",
-                logging_obj=_data.get("litellm_logging_obj", None),
+                logging_obj=cast(  # cast-ok: chat request data always carries the litellm logging object
+                    LiteLLMLoggingObj, _data.get("litellm_logging_obj", None)
+                ),
             )
             selected_data_generator = select_data_generator(
                 response=_streaming_response,
@@ -11178,13 +11212,20 @@ async def get_all_team_models(
 
     team_db_objects_typed: List[LiteLLM_TeamTable] = []
 
+    team_table_from_row = cast(  # cast-ok: prisma row dump has untyped values, validated by pydantic at runtime
+        Callable[..., LiteLLM_TeamTable], LiteLLM_TeamTable
+    )
     if user_teams == "*":
         team_db_objects = await TeamRepository(prisma_client).table.find_many()
-        team_db_objects_typed = [LiteLLM_TeamTable(**team_db_object.model_dump()) for team_db_object in team_db_objects]
+        team_db_objects_typed = [
+            team_table_from_row(**team_db_object.model_dump()) for team_db_object in team_db_objects
+        ]
     else:
         team_db_objects = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": user_teams}})
 
-        team_db_objects_typed = [LiteLLM_TeamTable(**team_db_object.model_dump()) for team_db_object in team_db_objects]
+        team_db_objects_typed = [
+            team_table_from_row(**team_db_object.model_dump()) for team_db_object in team_db_objects
+        ]
 
     team_models = _add_team_models_to_all_models(
         team_db_objects_typed=team_db_objects_typed,
@@ -11258,7 +11299,9 @@ async def _populate_team_access_on_models(
             where={"user_id": user_api_key_dict.user_id}
         )
         if user_db_object is not None:
-            user_object = LiteLLM_UserTable(**user_db_object.model_dump())
+            user_object = cast(  # cast-ok: prisma row dump has untyped values, validated by pydantic at runtime
+                Callable[..., LiteLLM_UserTable], LiteLLM_UserTable
+            )(**user_db_object.model_dump())
             user_teams = user_object.teams or []
             direct_access_models = get_direct_access_models(
                 user_db_object=user_object,
@@ -11327,7 +11370,9 @@ def _enrich_model_info_with_litellm_data(
         Enriched model dictionary with sensitive info removed
     """
     # provided model_info in config.yaml
-    model_info = model.get("model_info", {})
+    model_info: dict[str, Any] = model.get(
+        "model_info", {}
+    )  # mutable-ok: litellm model-cost keys are written into it before it is stored back on the model
     if debug is True:
         _openai_client = "None"
         if llm_router is not None:
@@ -11344,7 +11389,7 @@ def _enrich_model_info_with_litellm_data(
     # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
     if litellm_model_info == {}:
         # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
+        litellm_params: dict[str, Any] = model.get("litellm_params", {})
         litellm_model = litellm_params.get("model", None)
         try:
             litellm_model_info = litellm.get_model_info(model=litellm_model)
@@ -11375,7 +11420,7 @@ def _enrich_model_info_with_litellm_data(
 
 async def _get_caller_byok_team_scope(
     user_api_key_dict: Optional[UserAPIKeyAuth],
-    prisma_client: Optional[Any],
+    prisma_client: PrismaClient | None,
 ) -> Optional[Set[str]]:
     """
     Return the team IDs whose BYOK rows the caller is allowed to see via
@@ -11432,8 +11477,8 @@ _SORTED_SEARCH_DB_FETCH_CAP = 500
 
 
 async def _fetch_db_models_for_search(
-    prisma_client: Any,
-    proxy_config: Any,
+    prisma_client: PrismaClient,
+    proxy_config: ProxyConfig,
     search_lower: str,
     db_model_ids_in_router: Set[str],
     router_models_count: int,
@@ -11498,8 +11543,8 @@ async def _fetch_db_models_for_search(
 async def _apply_search_filter_to_models(
     all_models: List[Dict[str, Any]],
     search: str,
-    prisma_client: Optional[Any],
-    proxy_config: Any,
+    prisma_client: PrismaClient | None,
+    proxy_config: ProxyConfig,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     page: int = 1,
     size: int = 50,
@@ -11566,7 +11611,7 @@ async def _apply_search_filter_to_models(
     db_model_ids_in_router = set()
 
     for m in filtered_router_models:
-        model_info = m.get("model_info", {})
+        model_info: Mapping[str, Any] = m.get("model_info", {})
         is_db_model = model_info.get("db_model", False)
         model_id = model_info.get("id")
 
@@ -11604,7 +11649,7 @@ async def _apply_search_filter_to_models(
     return filtered_router_models + db_models, search_total_count
 
 
-def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
+def _normalize_datetime_for_sorting(dt: object) -> datetime | None:
     """
     Normalize a datetime value to a timezone-aware UTC datetime for sorting.
 
@@ -11674,7 +11719,7 @@ def _sort_models(
     reverse = sort_order.lower() == "desc"
 
     def get_sort_key(model: Dict[str, Any]) -> Any:
-        model_info = model.get("model_info", {})
+        model_info: Mapping[str, Any] = model.get("model_info", {})
 
         if sort_by == "model_name":
             # Team BYOK models persist an internal `model_name` (e.g.
@@ -11775,7 +11820,7 @@ def _paginate_models_response(
     }
 
 
-def _team_models_resolve_to_names(team_models: List[str], access_groups: Dict[str, Any]) -> List[str]:
+def _team_models_resolve_to_names(team_models: list[str], access_groups: Mapping[str, Sequence[str]]) -> list[str]:
     """Expand team model entries (including access group names) to concrete model names."""
     resolved: List[str] = []
     for name in team_models:
@@ -11793,7 +11838,9 @@ async def _load_team_object_for_model_filter(team_id: str, prisma_client: Prisma
         if team_db_object is None:
             verbose_proxy_logger.warning(f"Team {team_id} not found in database")
             return None
-        return LiteLLM_TeamTable(**team_db_object.model_dump())
+        return cast(  # cast-ok: prisma row dump has untyped values, validated by pydantic at runtime
+            Callable[..., LiteLLM_TeamTable], LiteLLM_TeamTable
+        )(**team_db_object.model_dump())
     except Exception as e:
         verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
         return None
@@ -11935,7 +11982,7 @@ async def _filter_models_by_team_id(
     # every public model the admin can call.
     filtered_models = []
     for _model in all_models:
-        model_info = _model.get("model_info", {})
+        model_info: dict[str, Any] = _model.get("model_info", {})
         model_id = model_info.get("id", None)
 
         # BYOK rows owned by this team are always accessible to it, even if
@@ -12286,7 +12333,9 @@ async def model_streaming_metrics(
         """
 
     _all_api_bases = set()
-    db_response = await prisma_client.db.query_raw(sql_query, _selected_model_group, startTime, endTime)
+    db_response: Sequence[Mapping[str, Any]] | None = await prisma_client.db.query_raw(
+        sql_query, _selected_model_group, startTime, endTime
+    )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
     if db_response is not None:
         for model_data in db_response:
@@ -12408,7 +12457,7 @@ async def model_metrics(
             avg_latency_per_token DESC;
     """
     _all_api_bases = set()
-    db_response = await prisma_client.db.query_raw(
+    db_response: Sequence[Mapping[str, Any]] | None = await prisma_client.db.query_raw(
         sql_query, _selected_model_group, startTime, endTime, api_key, customer
     )
     _daily_entries: dict = {}  # {"Jun 23": {"model1": 0.002, "model2": 0.003}}
@@ -12526,7 +12575,9 @@ ORDER BY
     slow_count DESC;
     """
 
-    db_response = await prisma_client.db.query_raw(
+    db_response: Optional[
+        list[dict[str, Any]]
+    ] = await prisma_client.db.query_raw(  # mutable-ok: each row's api_base is rewritten in place below
         sql_query,
         alerting_threshold,
         _selected_model_group,
@@ -12971,7 +13022,11 @@ def _get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy(**_model_group_info.model_dump()))
+            model_groups.append(
+                cast(  # cast-ok: model group info dump has untyped values, validated by pydantic at runtime
+                    Callable[..., ModelGroupInfoProxy], ModelGroupInfoProxy
+                )(**_model_group_info.model_dump())
+            )
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,
@@ -13553,7 +13608,7 @@ async def login_v2(request: Request):
     from litellm.proxy.utils import get_custom_url
 
     try:
-        body = await request.json()
+        body: Mapping[str, Any] = await request.json()
         username = str(body.get("username"))
         password = str(body.get("password"))
 
@@ -13626,7 +13681,7 @@ async def login_v3(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body = await request.json()
+        body: Mapping[str, Any] = await request.json()
         username = str(body.get("username"))
         password = str(body.get("password"))
 
@@ -13697,7 +13752,7 @@ async def login_v3_exchange(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body = await request.json()
+        body: Mapping[str, Any] = await request.json()
         code = body.get("code")
         if not code:
             raise ProxyException(
@@ -14690,7 +14745,9 @@ async def update_config_general_settings(
         )
 
     try:
-        ConfigGeneralSettings(**{data.field_name: data.field_value})
+        cast(  # cast-ok: field name/value are dynamic user input, validated by pydantic at runtime
+            Callable[..., ConfigGeneralSettings], ConfigGeneralSettings
+        )(**{data.field_name: data.field_value})
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -15003,7 +15060,7 @@ def _general_settings_ui_litellm_default(
     return False if spec["type"] == "Boolean" else None
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+def _validate_general_settings_ui_litellm_value(field_name: str, value: object) -> GeneralSettingsUILiteLLMValue:
     spec = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
     field_type = spec["type"]
     if value is None or value == "":
@@ -15043,7 +15100,7 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> 
 
 
 async def _persist_general_settings_ui_litellm_field(
-    field_name: str, value: Any, user_api_key_dict: UserAPIKeyAuth
+    field_name: str, value: object, user_api_key_dict: UserAPIKeyAuth
 ) -> dict:
     validated = _validate_general_settings_ui_litellm_value(field_name, value)
     config = await proxy_config.get_config()
