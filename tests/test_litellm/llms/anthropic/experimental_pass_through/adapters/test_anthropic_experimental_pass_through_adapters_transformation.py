@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from typing import Any, cast
@@ -1805,6 +1806,38 @@ def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
     result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
     assert result[0]["function"]["name"] == "litellm_unnamed_tool_0"
     assert result[1]["function"]["name"] == "litellm_unnamed_tool_1"
+
+
+def test_translate_anthropic_tools_to_openai_does_not_mutate_caller_input_schema():
+    """Translation must be a pure read: the caller's ``input_schema`` must not be mutated.
+
+    Regression test for the tool-translation path aliasing the caller's ``input_schema``
+    dict and then merging extra top-level tool kwargs (e.g. a ``computer`` tool's
+    ``display_width_px``) into it in place. Because callers reuse the same in-memory tool
+    list (a pre-call guardrail translates the tools, then the real call translates them
+    again), the second pass forwarded a schema polluted with non-schema keys.
+    """
+    tool = {
+        "name": "computer",
+        "type": "computer_20241022",
+        "input_schema": {"type": "object", "properties": {"action": {"type": "string"}}},
+        "display_width_px": 1024,
+        "display_height_px": 768,
+    }
+    input_schema_before = copy.deepcopy(tool["input_schema"])
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=[tool], model="claude-3-5-sonnet")
+
+    assert tool["input_schema"] == input_schema_before
+    assert "display_width_px" not in tool["input_schema"]
+    assert "display_height_px" not in tool["input_schema"]
+
+    translated_parameters = result[0]["function"]["parameters"]
+    assert translated_parameters["display_width_px"] == 1024
+    assert translated_parameters["display_height_px"] == 768
+    assert translated_parameters["properties"] == {"action": {"type": "string"}}
+    assert translated_parameters is not tool["input_schema"]
 
 
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():

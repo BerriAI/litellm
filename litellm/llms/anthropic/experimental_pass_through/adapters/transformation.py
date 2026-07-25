@@ -768,7 +768,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
+                function_chunk["parameters"] = copy.deepcopy(tool["input_schema"])  # type: ignore
             if "description" in tool:
                 function_chunk["description"] = tool["description"]  # type: ignore
 
