@@ -315,29 +315,37 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         where_clause: Dict[str, Any] = {"file_purpose": "batch", **owner_filter}
 
-        fetch_limit = limit or 20
-        if target_model_names:
-            # Oversample so post-fetch model-name filtering still has enough rows.
-            fetch_limit = max(fetch_limit * 3, 100)
+        if after is not None:
+            cursor_row = (
+                await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                    where={**where_clause, "unified_object_id": after}
+                )
+            )
+            if cursor_row is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid 'after' cursor: no batch found with id '{after}'.",
+                )
 
+        page_size = limit or 20
         cursor_args: Dict[str, Any] = (
-            {"cursor": {"unified_object_id": after}, "skip": 1} if after else {}
+            {"cursor": {"unified_object_id": after}, "skip": 1}
+            if after is not None
+            else {}
         )
 
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where=where_clause,
-            take=fetch_limit,
+            take=page_size + 1,
             order=[{"created_at": "desc"}, {"unified_object_id": "desc"}],
             **cursor_args,
         )
 
-        batch_objects: List[LiteLLMBatch] = []
-        for batch in batches:
-            try:
-                # Stop once we have enough after filtering
-                if len(batch_objects) >= (limit or 20):
-                    break
+        has_more = len(batches) > page_size
 
+        batch_objects: List[LiteLLMBatch] = []
+        for batch in batches[:page_size]:
+            try:
                 batch_data = (
                     json.loads(batch.file_object)
                     if isinstance(batch.file_object, str)
@@ -353,9 +361,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
                 continue
 
-        return build_list_page(
-            batch_objects, has_more=len(batch_objects) == (limit or 20)
-        )
+        return build_list_page(batch_objects, has_more=has_more)
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
