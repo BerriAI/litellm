@@ -15,7 +15,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable, Literal, Optional, Union, cast
+from typing import Any, AsyncIterator, Callable, Collection, Literal, Optional, Union, cast
 from urllib.parse import urlparse
 
 import anyio
@@ -1482,6 +1482,7 @@ class MCPServerManager:
             paths = spec.get("paths", {})
             components = spec.get("components", {})
             registered_count = 0
+            route_names: set[str] = set()
 
             verbose_logger.debug(f"Processing {len(paths)} paths from OpenAPI spec")
 
@@ -1524,12 +1525,17 @@ class MCPServerManager:
                         handler=tool_func,
                     )
 
-                    # Update tool name to server id mapping (for both prefixed and base names)
-                    self._register_tool_route(base_tool_name, server.server_id)
-                    self._register_tool_route(prefixed_tool_name, server.server_id)
+                    # Collect tool name to server id routes (both prefixed and base names)
+                    route_names.add(base_tool_name)
+                    route_names.add(prefixed_tool_name)
 
                     registered_count += 1
                     verbose_logger.debug(f"Registered OpenAPI tool: {prefixed_tool_name} for server {server.name}")
+
+            # Only once the whole spec parsed: a mid-loop raise must leave the
+            # previous routes intact rather than commit a partial set, which would
+            # withdraw routes for operations later in the spec that are still served.
+            self._replace_server_tool_routes(server.server_id, route_names)
 
             verbose_logger.info(f"Successfully registered {registered_count} OpenAPI tools for server {server.name}")
 
@@ -1558,12 +1564,7 @@ class MCPServerManager:
             openapi_key_prefix = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
             global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
 
-        for tool_name in list(self.tool_name_to_mcp_server_ids_mapping):
-            remaining = self.tool_name_to_mcp_server_ids_mapping[tool_name] - {server.server_id}
-            if remaining:
-                self.tool_name_to_mcp_server_ids_mapping[tool_name] = remaining
-            else:
-                del self.tool_name_to_mcp_server_ids_mapping[tool_name]
+        self._replace_server_tool_routes(server.server_id, frozenset())
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
@@ -3821,6 +3822,9 @@ class MCPServerManager:
         """
         prefixed_tools = []
         prefix = get_server_prefix(server)
+        # Server-level, so resolve once instead of per tool.
+        known_prefixes = tuple(iter_known_server_prefixes(server))
+        route_names: set[str] = set()
 
         for tool in tools:
             tool_copy = tool.model_copy(deep=True)
@@ -3834,13 +3838,17 @@ class MCPServerManager:
             tool_copy.name = name_to_use
             prefixed_tools.append(tool_copy)
 
-            # Register every known prefix form (alias, server_name, server_id,
+            # Collect every known prefix form (alias, server_name, server_id,
             # short ID) so call_tool can resolve regardless of which form a
             # caller / cached client is using.
-            self._register_tool_route(original_name, server.server_id)
-            for known_prefix in iter_known_server_prefixes(server):
-                qualified = add_server_prefix_to_name(original_name, known_prefix)
-                self._register_tool_route(qualified, server.server_id)
+            route_names.add(original_name)
+            for known_prefix in known_prefixes:
+                route_names.add(add_server_prefix_to_name(original_name, known_prefix))
+
+        # `tools` is this server's complete upstream listing, so it is authoritative:
+        # replace rather than accumulate, or a tool the upstream dropped keeps its
+        # owner and makes the name look ambiguous until restart.
+        self._replace_server_tool_routes(server.server_id, route_names)
 
         verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
         return prefixed_tools
@@ -4818,15 +4826,21 @@ class MCPServerManager:
 
     async def _initialize_tool_name_to_mcp_server_ids_mapping(self):
         """
-        Call list_tools for each server and update the tool name to MCP server name mapping
-        Note: This now handles prefixed tool names
+        Warm the tool-name routing map by listing every server once at startup.
+
+        Listing is what registers the routes: ``_get_tools_from_server`` hands the
+        server's complete tool list to ``_create_prefixed_tools``, which replaces
+        that server's routes via ``_replace_server_tool_routes``. OpenAPI servers
+        registered theirs from the spec in ``_register_openapi_tools``. So nothing is
+        registered here — doing so would re-add names outside the per-server replace
+        and reintroduce rows it cannot withdraw.
         """
         for server in self.get_registry().values():
             if server.needs_user_oauth_token:
                 # Skip OAuth2 servers that rely on user-provided tokens
                 continue
             try:
-                tools = await self._get_tools_from_server(server)
+                await self._get_tools_from_server(server)
             except MCPUpstreamAuthError as e:
                 # Pass-through servers expect a user-supplied bearer token;
                 # at startup we have none, so an upstream 401 is normal.
@@ -4840,22 +4854,48 @@ class MCPServerManager:
                     f"Failed to get tools from server {server.name} during tool name mapping initialization: {str(e)}"
                 )
                 continue
-            for tool in tools:
-                # The tool.name here is already prefixed from _get_tools_from_server
-                # Extract original name for mapping
-                original_name, _ = split_server_prefix_from_name(tool.name)
-                self._register_tool_route(original_name, server.server_id)
-                self._register_tool_route(tool.name, server.server_id)
 
-    def _register_tool_route(self, tool_name: str, server_id: str) -> None:
-        """Record that ``server_id`` serves ``tool_name``, preserving any other owners.
+    def _replace_server_tool_routes(self, server_id: str, route_names: Collection[str]) -> None:
+        """Make ``route_names`` the complete set of routing rows owned by ``server_id``.
 
-        Routing rows accumulate rather than overwrite so that a tool name served by
-        more than one server stays resolvable as ambiguous instead of silently
-        collapsing to whichever server registered last.
+        Rows accumulate *across* servers, so a name several serve stays ambiguous. But
+        within one server this is authoritative rather than additive: a name it no
+        longer serves has ``server_id`` withdrawn and the row goes once unowned.
+        Additive registration pinned owners forever, so a dropped upstream tool kept
+        its name looking ambiguous, a false 409, until restart. Empty ``route_names``
+        means owning nothing, which is how eviction withdraws a departing server.
+
+        Callers must pass a *complete* listing, and both do. Treating one as the truth
+        is safe because ``_fetch_tools_with_timeout`` raises on every failure instead
+        of returning an empty list, and caller-scoped narrowing
+        (``check_allowed_or_banned_tools``, semantic filtering) runs downstream, so
+        neither a failed listing nor one caller's filtered view can evict another's
+        routes. Scanning every row beats a per-server index here: it runs once per
+        server per listing, right after that server's network round trip, so well
+        under a millisecond amortizes into tens of milliseconds of I/O, and a second
+        source of truth could disagree with this one.
+
+        Pre-existing and unchanged: ``ClientSession.list_tools()`` is called without a
+        cursor, so a paginating upstream only yields page one. Every path populating
+        this map shares that listing, so replacing cannot drop a legitimate row.
         """
-        owners = self.tool_name_to_mcp_server_ids_mapping.get(tool_name, frozenset())
-        self.tool_name_to_mcp_server_ids_mapping[tool_name] = owners | {server_id}
+        desired = frozenset(route_names)
+
+        # Mutated in place: the startup listing task is dispatched without being
+        # awaited and holds a reference to this dict, so rebinding drops its writes.
+        for tool_name in list(self.tool_name_to_mcp_server_ids_mapping):
+            owners = self.tool_name_to_mcp_server_ids_mapping[tool_name]
+            if server_id not in owners or tool_name in desired:
+                continue
+            remaining = owners - {server_id}
+            if remaining:
+                self.tool_name_to_mcp_server_ids_mapping[tool_name] = remaining
+            else:
+                del self.tool_name_to_mcp_server_ids_mapping[tool_name]
+
+        for tool_name in desired:
+            owners = self.tool_name_to_mcp_server_ids_mapping.get(tool_name, frozenset())
+            self.tool_name_to_mcp_server_ids_mapping[tool_name] = owners | {server_id}
 
     def resolve_tool_route(
         self,
