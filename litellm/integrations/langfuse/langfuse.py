@@ -74,9 +74,7 @@ def _get_numeric_attr_or_key(obj: Any, keys: Tuple[str, ...], default: int = 0) 
 
 
 def _extract_cache_read_input_tokens(usage_obj) -> int:
-    cache_read_input_tokens = _get_numeric_attr_or_key(
-        usage_obj, ("cache_read_input_tokens",)
-    )
+    cache_read_input_tokens = _get_numeric_attr_or_key(usage_obj, ("cache_read_input_tokens",))
 
     for details_attr in ("input_tokens_details", "prompt_tokens_details"):
         token_details = _get_attr_or_key(usage_obj, details_attr)
@@ -411,15 +409,10 @@ class LangFuseLogger:
             output = response_obj.results
         elif (
             response_obj is not None
-            and (
-                responses_api_response := self._get_responses_api_response(response_obj)
-            )
-            is not None
+            and (responses_api_response := self._get_responses_api_response(response_obj)) is not None
         ):
             input = prompt
-            output = self._get_responses_api_content_for_langfuse(
-                responses_api_response
-            )
+            output = self._get_responses_api_content_for_langfuse(responses_api_response)
         elif (
             kwargs.get("call_type") is not None
             and kwargs.get("call_type") == "_arealtime"
@@ -655,13 +648,9 @@ class LangFuseLogger:
             clean_metadata["litellm_response_cost"] = cost
             hidden_params: Optional[dict] = None
             if standard_logging_object is not None:
-                standard_hidden_params = standard_logging_object.get(
-                    "hidden_params", {}
-                )
+                standard_hidden_params = standard_logging_object.get("hidden_params", {})
                 hidden_params = dict(standard_hidden_params)
-                clean_metadata["hidden_params"] = filter_exceptions_from_params(
-                    hidden_params
-                )
+                clean_metadata["hidden_params"] = filter_exceptions_from_params(hidden_params)
 
             # Fallback: when response_cost is None (e.g. responses API bridge
             # path fails to compute cost), read the cost from the standard
@@ -734,32 +723,17 @@ class LangFuseLogger:
                 usage_response_obj = self._get_responses_api_response(response_obj)
                 if usage_response_obj is None:
                     usage_response_obj = response_obj
-                if (
-                    hasattr(usage_response_obj, "id")
-                    and usage_response_obj.get("id", None) is not None
-                ):
-                    generation_id = litellm.utils.get_logging_id(
-                        start_time, usage_response_obj
-                    )
+                if hasattr(usage_response_obj, "id") and usage_response_obj.get("id", None) is not None:
+                    generation_id = litellm.utils.get_logging_id(start_time, usage_response_obj)
                 _usage_obj = getattr(usage_response_obj, "usage", None)
 
                 if _usage_obj:
-                    prompt_tokens = _get_numeric_attr_or_key(
-                        _usage_obj, ("prompt_tokens", "input_tokens")
-                    )
-                    completion_tokens = _get_numeric_attr_or_key(
-                        _usage_obj, ("completion_tokens", "output_tokens")
-                    )
-                    total_tokens = _get_numeric_attr_or_key(
-                        _usage_obj, ("total_tokens",)
-                    )
+                    prompt_tokens = _get_numeric_attr_or_key(_usage_obj, ("prompt_tokens", "input_tokens"))
+                    completion_tokens = _get_numeric_attr_or_key(_usage_obj, ("completion_tokens", "output_tokens"))
+                    total_tokens = _get_numeric_attr_or_key(_usage_obj, ("total_tokens",))
 
-                    cache_creation_input_tokens = _get_numeric_attr_or_key(
-                        _usage_obj, ("cache_creation_input_tokens",)
-                    )
-                    cache_read_input_tokens = _extract_cache_read_input_tokens(
-                        _usage_obj
-                    )
+                    cache_creation_input_tokens = _get_numeric_attr_or_key(_usage_obj, ("cache_creation_input_tokens",))
+                    cache_read_input_tokens = _extract_cache_read_input_tokens(_usage_obj)
 
                     usage = {
                         "prompt_tokens": prompt_tokens,
