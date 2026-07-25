@@ -25767,6 +25767,21 @@
         "supports_response_schema": false,
         "supports_tool_choice": true
     },
+    "groq/qwen/qwen3.6-27b": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "groq",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "groq/whisper-large-v3": {
         "input_cost_per_second": 3.083e-05,
         "litellm_provider": "groq",
