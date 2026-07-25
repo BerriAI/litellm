@@ -2310,6 +2310,35 @@ async def test_list_batches_rejects_unknown_after_cursor():
 
 
 @pytest.mark.asyncio
+async def test_list_batches_treats_empty_after_as_no_cursor():
+    """``?after=`` means "start from the beginning", as it always has.
+
+    Only a cursor the client actually sent is validated, so an SDK that always
+    emits the query parameter does not get a 400 on its first page.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    rows = [_managed_batch_row(i) for i in range(2)]
+    prisma_client = _fake_managed_object_table(rows)
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    page = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="test-user"), limit=2, after=""
+    )
+
+    assert [batch.id for batch in page["data"]] == [
+        rows[1].unified_object_id,
+        rows[0].unified_object_id,
+    ]
+    prisma_client.db.litellm_managedobjecttable.find_first.assert_not_called()
+    _, call_kwargs = prisma_client.db.litellm_managedobjecttable.find_many.call_args
+    assert "cursor" not in call_kwargs
+
+
+@pytest.mark.asyncio
 async def test_list_batches_rejects_after_cursor_owned_by_another_user():
     """The cursor lookup must be scoped to the rows the caller can list.
 

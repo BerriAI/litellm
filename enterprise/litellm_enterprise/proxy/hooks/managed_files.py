@@ -315,7 +315,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         where_clause: Dict[str, Any] = {"file_purpose": "batch", **owner_filter}
 
-        if after is not None:
+        if after:
             cursor_row = (
                 await self.prisma_client.db.litellm_managedobjecttable.find_first(
                     where={**where_clause, "unified_object_id": after}
@@ -329,9 +329,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         page_size = limit or 20
         cursor_args: Dict[str, Any] = (
-            {"cursor": {"unified_object_id": after}, "skip": 1}
-            if after is not None
-            else {}
+            {"cursor": {"unified_object_id": after}, "skip": 1} if after else {}
         )
 
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
