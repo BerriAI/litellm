@@ -833,9 +833,10 @@ async def _build_end_user_scope_condition(
 
     team_clause: tuple[str, ...] = ()
     if permitted_team_ids:
-        placeholders = ", ".join(f"${len(query_params) + i + 1}" for i in range(len(permitted_team_ids)))
-        query_params.extend(permitted_team_ids)
-        team_clause = (f"team_id IN ({placeholders})",)
+        # = ANY(::text[]) rather than an expanded IN list, matching the clause
+        # ui_view_spend_logs builds: one parameter whatever the team count.
+        query_params.append(permitted_team_ids)
+        team_clause = (f"team_id = ANY(${len(query_params)}::text[])",)
 
     scope_parts = user_clause + team_clause
     if not scope_parts:
