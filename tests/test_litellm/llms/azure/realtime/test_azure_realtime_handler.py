@@ -741,3 +741,39 @@ async def test_realtime_health_check_uses_bearer_token_when_no_api_key(monkeypat
         is True
     )
     assert connect_calls[0]["additional_headers"] == {"Authorization": "Bearer my-entra-token"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch):
+    """
+    The router binds a deployment's `azure_ad_token` to `_arealtime`'s named parameter rather than
+    **kwargs, so it must still reach the handler.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/34654
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
+    monkeypatch.setattr(
+        realtime_main,
+        "get_llm_provider",
+        lambda model, api_base=None, api_key=None: (
+            "gpt-realtime-whisper",
+            "azure",
+            None,
+            "https://my-endpoint.openai.azure.com",
+        ),
+    )
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setattr(realtime_main.litellm, "api_key", None)
+
+    await realtime_main._arealtime(
+        model="azure/gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_version="2024-10-01-preview",
+        azure_ad_token="deployment-entra-token",
+        litellm_logging_obj=MagicMock(),
+    )
+
+    assert mock_async_realtime.call_args.kwargs["azure_ad_token"] == "deployment-entra-token"
