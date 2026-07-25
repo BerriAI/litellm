@@ -293,6 +293,15 @@ def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     assert not gpt5_config._supports_reasoning_effort_level("gpt-5", "none")
     assert not gpt5_config._supports_reasoning_effort_level("gpt-5-mini", "none")
     assert not gpt5_config._supports_reasoning_effort_level("gpt-5-codex", "none")
+    # gpt-5.5 and gpt-5.6 are pure reasoning models that do not support none effort
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.5", "none")
+    assert not gpt5_config._supports_reasoning_effort_level(
+        "gpt-5.5-2026-04-23", "none"
+    )
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.6", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.6-sol", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.6-terra", "none")
+    assert not gpt5_config._supports_reasoning_effort_level("gpt-5.6-luna", "none")
 
 
 def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
@@ -777,6 +786,79 @@ def test_gpt5_4_pro_rejects_non_default_temperature(config: OpenAIConfig):
             model="gpt-5.4-pro",
             drop_params=False,
         )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.5",
+        "gpt-5.5-2026-04-23",
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ],
+)
+def test_gpt5_5_6_rejects_non_default_temperature(config: OpenAIConfig, model: str):
+    """gpt-5.5 and gpt-5.6 variants are pure reasoning models that don't support
+    reasoning_effort='none', so non-default temperature must raise UnsupportedParamsError.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/34301
+    """
+    for temp in [0.0, 0.5, 0.7]:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"temperature": temp},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.5",
+        "gpt-5.5-2026-04-23",
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ],
+)
+def test_gpt5_5_6_allows_temperature_one(config: OpenAIConfig, model: str):
+    """gpt-5.5 and gpt-5.6 variants allow temperature=1 (the only supported value)."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 1.0},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert params["temperature"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-5.5",
+        "gpt-5.5-2026-04-23",
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ],
+)
+def test_gpt5_5_6_drops_non_default_temperature_when_requested(
+    config: OpenAIConfig, model: str
+):
+    """gpt-5.5 and gpt-5.6 variants drop non-default temperature when drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.5},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    assert "temperature" not in params
 
 
 def test_gpt5_1_temperature_without_reasoning_effort(config: OpenAIConfig):

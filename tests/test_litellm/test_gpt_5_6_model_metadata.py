@@ -49,7 +49,7 @@ def test_openai_gpt_5_6_model_info(model):
     assert info["supports_tool_choice"] is True
     assert info["supports_vision"] is True
     assert info["supports_web_search"] is True
-    assert info["supports_none_reasoning_effort"] is True
+    assert info["supports_none_reasoning_effort"] is False
     assert info["supports_xhigh_reasoning_effort"] is True
     assert info["supports_minimal_reasoning_effort"] is False
 
