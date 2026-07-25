@@ -646,7 +646,7 @@ class LangFuseLogger:
             verbose_logger.debug(f"trace: {cost}")
 
             clean_metadata["litellm_response_cost"] = cost
-            hidden_params: Optional[dict] = None
+            hidden_params: dict | None = None
             if standard_logging_object is not None:
                 standard_hidden_params = standard_logging_object.get("hidden_params", {})
                 hidden_params = dict(standard_hidden_params)
@@ -854,7 +854,7 @@ class LangFuseLogger:
     @staticmethod
     def _get_responses_api_response(
         response_obj: Any,
-    ) -> Optional[ResponsesAPIResponse]:
+    ) -> ResponsesAPIResponse | None:
         if isinstance(response_obj, litellm.ResponsesAPIResponse):
             return response_obj
         nested_response = getattr(response_obj, "response", None)
