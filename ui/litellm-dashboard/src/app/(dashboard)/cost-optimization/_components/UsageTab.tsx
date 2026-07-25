@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Collapse } from "antd";
+import { useRouter } from "next/navigation";
 
 import { AreaChart, BarChart, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -11,6 +12,8 @@ import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { buildDailyToolSeries, topToolsBySpend, usd } from "./costOptimizationUtils";
 import { DailyActivityRange } from "./useDailyActivityRange";
+import { migratedHref } from "@/utils/migratedPages";
+import { TOOL_QUERY_PARAM } from "@/components/ToolPoliciesView";
 
 interface UsageTabProps {
   accessToken: string | null;
@@ -82,7 +85,16 @@ const SummaryCard = ({ label, value, hint }: { label: string; value: string; hin
 );
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
+  const router = useRouter();
   const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+
+  const openToolLogs = useCallback(
+    (toolName: string) => {
+      const params = new URLSearchParams({ [TOOL_QUERY_PARAM]: toolName });
+      router.push(`${migratedHref("tool-policies")}?${params.toString()}`);
+    },
+    [router],
+  );
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
@@ -210,7 +222,8 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           <CardTitle>Spend by tool</CardTitle>
           <p className="text-sm text-muted-foreground">
             Spend on requests that called each tool (MCP and client-side tools). A request that used multiple tools
-            counts its full spend toward each, so this attributes rather than partitions spend.
+            counts its full spend toward each, so this attributes rather than partitions spend. Click a bar to see the
+            logs for that tool.
           </p>
           {toolSpendWindowClamped && (
             <p className="text-xs text-muted-foreground">
@@ -237,6 +250,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   yAxisWidth={140}
                   showLegend={false}
                   valueFormatter={usd}
+                  onValueChange={(item) => openToolLogs(String(item.tool_name))}
                 />
               </div>
               <div>
@@ -248,6 +262,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   colors={toolColors}
                   stack
                   valueFormatter={usd}
+                  onValueChange={(item) => openToolLogs(item.categoryClicked)}
                 />
               </div>
             </div>

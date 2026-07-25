@@ -5,9 +5,15 @@ import type { ToolSpendResponse } from "@/components/networking";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 const mockGetToolSpend = vi.fn();
+const mockPush = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
 
 vi.mock("@/components/networking", () => ({
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
+  serverRootPath: "",
 }));
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({
@@ -22,8 +28,26 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: ({ data, label }: { data: unknown; label: string }) => (
     <div data-testid="donut-chart" data-label={label} data-slices={JSON.stringify(data)} />
   ),
-  BarChart: ({ data, categories }: { data: unknown; categories: string[] }) => (
-    <div data-testid="bar-chart" data-categories={categories.join(",")} data-series={JSON.stringify(data)} />
+  BarChart: ({
+    data,
+    categories,
+    onValueChange,
+  }: {
+    data: Record<string, unknown>[];
+    categories: string[];
+    onValueChange?: (item: Record<string, unknown> & { categoryClicked: string }) => void;
+  }) => (
+    <div data-testid="bar-chart" data-categories={categories.join(",")} data-series={JSON.stringify(data)}>
+      {data.map((datum, i) =>
+        categories.map((category) => (
+          <button
+            key={`${i}-${category}`}
+            data-testid={`bar-${i}-${category}`}
+            onClick={() => onValueChange?.({ ...datum, categoryClicked: category })}
+          />
+        )),
+      )}
+    </div>
   ),
   DEFAULT_COLOR_CYCLE: ["emerald", "blue", "violet", "amber"],
 }));
@@ -136,6 +160,23 @@ describe("UsageTab", () => {
     const bars = await findAllByTestId("bar-chart");
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
+  });
+
+  it("opens the tool's logs when a bar is clicked", async () => {
+    const toolSpend = {
+      by_tool: [{ tool_name: "my tool/read", spend: 4.0, call_count: 3, total_tokens: 150 }],
+      daily: [{ date: "2026-07-12", tool_name: "my tool/read", spend: 4.0, call_count: 3 }],
+      total_spend: 4.0,
+      start_date: "2026-07-12",
+      end_date: "2026-07-12",
+    };
+    const { findByTestId } = renderWith([day("2026-07-12", {})], toolSpend);
+
+    (await findByTestId("bar-0-spend")).click();
+    expect(mockPush).toHaveBeenCalledWith("/ui/tool-policies?tool=my+tool%2Fread");
+
+    (await findByTestId("bar-0-my tool/read")).click();
+    expect(mockPush).toHaveBeenLastCalledWith("/ui/tool-policies?tool=my+tool%2Fread");
   });
 
   it("notes the 30-day cap when the server clamps the tool spend window", async () => {
