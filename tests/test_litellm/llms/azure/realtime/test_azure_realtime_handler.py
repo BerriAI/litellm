@@ -617,6 +617,40 @@ async def test_async_realtime_uses_bearer_token_when_no_api_key():
 
 
 @pytest.mark.asyncio
+async def test_async_realtime_sends_no_auth_header_when_no_credentials():
+    """
+    With neither an api-key nor an Azure AD token, the handshake must send an
+    empty auth header set rather than a `None` api-key value.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    mock_backend_ws = AsyncMock()
+
+    with (
+        patch(
+            "websockets.connect",
+            return_value=_DummyAsyncContextManager(mock_backend_ws),
+        ) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_streaming,
+    ):
+        mock_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-realtime-whisper",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key=None,
+            api_version="2024-10-01-preview",
+            azure_ad_token=None,
+        )
+
+    headers = mock_ws_connect.call_args.kwargs["additional_headers"]
+    assert headers == {}
+
+
+@pytest.mark.asyncio
 async def test_arealtime_resolves_and_forwards_azure_ad_token(monkeypatch):
     """
     _arealtime must resolve an Azure AD token via get_azure_ad_token and forward
