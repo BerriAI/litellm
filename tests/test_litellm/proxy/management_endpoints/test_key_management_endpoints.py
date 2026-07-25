@@ -6354,6 +6354,9 @@ async def test_list_keys_user_email_resolves_to_user_ids():
         assert mock_find_many.call_args.kwargs["where"] == {
             "user_email": {"contains": "alias@example.com", "mode": "insensitive"}
         }
+        assert mock_find_many.call_args.kwargs["take"] == 1000, (
+            "user lookup must be bounded; a broad substring like '@' matches every user"
+        )
         assert mock_list_key_helper.call_args.kwargs["user_ids_for_email"] == ["user-1", "user-2"]
 
         mock_find_many.return_value = []

@@ -42813,7 +42813,7 @@ export interface operations {
                 size?: number;
                 /** @description Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 user_id?: string | null;
-                /** @description Filter keys by the owning user's email. Case-insensitive substring match against the user table; only keys whose user_id belongs to a matching user are returned. */
+                /** @description Filter keys by the owning user's email. Case-insensitive substring match against the user table, capped at the first 1000 matching users; only keys whose user_id belongs to a matching user are returned. */
                 user_email?: string | null;
                 /** @description Filter keys by team ID */
                 team_id?: string | null;

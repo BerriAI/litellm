@@ -5176,6 +5176,7 @@ async def get_member_team_ids(
 
 
 VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
+USER_EMAIL_KEY_FILTER_MAX_USERS = 1000
 
 
 @router.get(
@@ -5195,7 +5196,7 @@ async def list_keys(
     ),
     user_email: str | None = Query(
         None,
-        description="Filter keys by the owning user's email. Case-insensitive substring match against the user table; only keys whose user_id belongs to a matching user are returned.",
+        description="Filter keys by the owning user's email. Case-insensitive substring match against the user table, capped at the first 1000 matching users; only keys whose user_id belongs to a matching user are returned.",
     ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(None, description="Filter keys by organization ID"),
@@ -5329,7 +5330,8 @@ async def list_keys(
             [
                 user.user_id
                 for user in await UserRepository(prisma_client).table.find_many(
-                    where={"user_email": {"contains": user_email, "mode": "insensitive"}}
+                    where={"user_email": {"contains": user_email, "mode": "insensitive"}},
+                    take=USER_EMAIL_KEY_FILTER_MAX_USERS,
                 )
             ]
             if user_email and isinstance(user_email, str)
