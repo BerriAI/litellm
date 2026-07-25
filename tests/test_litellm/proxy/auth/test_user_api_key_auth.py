@@ -41,6 +41,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
     _user_api_key_auth_builder,
+    check_api_key_for_custom_headers_or_pass_through_endpoints,
     get_api_key,
     user_api_key_auth,
 )
@@ -5192,3 +5193,55 @@ async def test_temp_budget_increase_applied_for_cached_key():
 
     cached_after = await user_api_key_cache.async_get_cache(key=hashed_token)
     assert cached_after.max_budget == 2.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server_root_path,route",
+    [
+        ("", "/anthropic/v1/messages"),
+        ("/", "/anthropic/v1/messages"),
+        ("/api/v1", "/anthropic/v1/messages"),
+        ("/api/v1", "/api/v1/anthropic/v1/messages"),
+        ("", "/vertex_ai/v1/projects/foo"),
+        ("/api/v1", "/vertex_ai/v1/projects/foo"),
+        ("/api/v1", "/api/v1/vertex_ai/v1/projects/foo"),
+    ],
+)
+async def test_mapped_pass_through_route_honors_litellm_user_api_key_header(
+    monkeypatch, server_root_path, route
+):
+    """
+    Mapped pass-through routes swap in the ``litellm_user_api_key`` header. The
+    route arrives from ``get_request_route()`` with SERVER_ROOT_PATH already
+    stripped, so the allowlist has to match the bare route too.
+    """
+    monkeypatch.setenv("SERVER_ROOT_PATH", server_root_path)
+    mock_request = MagicMock()
+    mock_request.headers = {"litellm_user_api_key": "sk-from-header"}
+
+    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=mock_request,
+        route=route,
+        pass_through_endpoints=None,
+        api_key="sk-original",
+    )
+
+    assert result == "sk-from-header"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_root_path", ["", "/", "/api/v1"])
+async def test_non_mapped_route_keeps_original_api_key(monkeypatch, server_root_path):
+    monkeypatch.setenv("SERVER_ROOT_PATH", server_root_path)
+    mock_request = MagicMock()
+    mock_request.headers = {"litellm_user_api_key": "sk-from-header"}
+
+    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=mock_request,
+        route="/not_a_provider/v1/messages",
+        pass_through_endpoints=None,
+        api_key="sk-original",
+    )
+
+    assert result == "sk-original"
