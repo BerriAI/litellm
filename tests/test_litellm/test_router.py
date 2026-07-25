@@ -6351,6 +6351,48 @@ def test_strip_http_framing_headers_non_dict_headers():
     assert exc.headers == "not-a-mapping"
 
 
+def test_stream_chunks_have_generated_content_detects_text_and_non_text():
+    from litellm.router import _stream_chunks_have_generated_content
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        StreamingChoices,
+    )
+
+    def _chunk(delta):
+        return litellm.ModelResponseStream(
+            id="chatcmpl-1",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=delta)],
+        )
+
+    assert _stream_chunks_have_generated_content([]) is False
+
+    empty_chunk = _chunk(Delta(role="assistant"))
+    assert _stream_chunks_have_generated_content([empty_chunk]) is False
+
+    text_chunk = _chunk(Delta(content="Hello"))
+    assert _stream_chunks_have_generated_content([text_chunk]) is True
+
+    reasoning_chunk = _chunk(Delta(reasoning_content="Thinking"))
+    assert _stream_chunks_have_generated_content([reasoning_chunk]) is True
+
+    tool_call_delta = Delta(
+        tool_calls=[
+            ChatCompletionDeltaToolCall(
+                id="call_1",
+                function=Function(name="get_weather", arguments="{}"),
+                type="function",
+                index=0,
+            )
+        ]
+    )
+    tool_call_chunk = _chunk(tool_call_delta)
+    assert _stream_chunks_have_generated_content([tool_call_chunk]) is True
+
+
 def test_get_configured_token_limits_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
