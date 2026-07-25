@@ -728,6 +728,7 @@ openai_compatible_endpoints: List = [
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
+    "https://llm.wavespeed.ai/v1",
 ]
 
 
@@ -795,6 +796,7 @@ openai_compatible_providers: List = [
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
+    "wavespeed",  # WaveSpeedAI - JSON-configured provider
 ]
 openai_text_completion_compatible_providers: List = [  # providers that support `/v1/completions`
     "together_ai",
