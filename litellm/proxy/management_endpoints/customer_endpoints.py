@@ -914,6 +914,9 @@ async def list_customer_aliases(
 
         # The inner LIMIT is the safety bound: it walks the startTime index newest
         # first and stops, so DISTINCT never runs over an unbounded row set.
+        # request_id breaks startTime ties so the cut-off row is deterministic and
+        # successive OFFSET pages agree on the set they are paging through; the
+        # (startTime, request_id) index means the tiebreaker costs nothing.
         # size + 1: one row beyond the page reveals has_more without a COUNT(*).
         params = query_params + [MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS, size + 1, (page - 1) * size]
         scan_idx = len(params) - 2
@@ -922,7 +925,7 @@ async def list_customer_aliases(
             f" SELECT end_user"
             f' FROM "LiteLLM_SpendLogs"'
             f" WHERE {' AND '.join(where_parts)}"
-            f' ORDER BY "startTime" DESC'
+            f' ORDER BY "startTime" DESC, request_id DESC'
             f" LIMIT ${scan_idx}"
             f") recent"
             f" ORDER BY end_user ASC"
