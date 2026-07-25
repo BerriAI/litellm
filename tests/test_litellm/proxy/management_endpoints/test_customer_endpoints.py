@@ -885,7 +885,7 @@ def test_customer_aliases_applies_no_scope_for_a_proxy_admin(mock_prisma_client,
 
     sql = query_raw.call_args.args[0]
     assert '"user" =' not in sql
-    assert "team_id IN" not in sql
+    assert "team_id" not in sql
 
 
 @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY])
@@ -904,8 +904,10 @@ def test_customer_aliases_scopes_a_team_admin_to_their_own_rows_and_teams(mock_p
 
     assert response.status_code == 200
     sql = query_raw.call_args.args[0]
-    assert '("user" = $3 OR team_id IN ($4, $5))' in sql
-    assert query_raw.call_args.args[3:6] == ("team-admin-1", "team-a", "team-b")
+    # Same clause shape ui_view_spend_logs builds, so the two cannot diverge.
+    assert '("user" = $3 OR team_id = ANY($4::text[]))' in sql
+    assert query_raw.call_args.args[3] == "team-admin-1"
+    assert query_raw.call_args.args[4] == ["team-a", "team-b"]
 
 
 def test_customer_aliases_scopes_a_teamless_user_to_their_own_rows(mock_prisma_client):
@@ -923,7 +925,7 @@ def test_customer_aliases_scopes_a_teamless_user_to_their_own_rows(mock_prisma_c
     assert response.status_code == 200
     sql = query_raw.call_args.args[0]
     assert '("user" = $3)' in sql
-    assert "team_id IN" not in sql
+    assert "team_id" not in sql
     assert query_raw.call_args.args[3] == "solo"
 
 
@@ -960,7 +962,7 @@ def test_customer_aliases_scopes_when_permitted_team_lookup_fails(mock_prisma_cl
     assert response.status_code == 200
     sql = query_raw.call_args.args[0]
     assert '("user" = $3)' in sql
-    assert "team_id IN" not in sql
+    assert "team_id" not in sql
 
 
 def test_customer_aliases_fetches_one_extra_row_and_trims_it(mock_prisma_client, mock_user_api_key_auth):
