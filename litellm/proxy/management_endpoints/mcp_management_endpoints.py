@@ -21,7 +21,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Literal, Optional, Set
+from typing import Any, Dict, Iterable, List, Literal, Optional, Set, cast
 
 from fastapi import (
     APIRouter,
@@ -615,6 +615,20 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
 
+    def _cloud_provider_credentials(existing_server: MCPServer) -> MCPCredentials:
+        candidates: tuple[tuple[str, str | None], ...] = (
+            ("aws_access_key_id", existing_server.aws_access_key_id),
+            ("aws_secret_access_key", existing_server.aws_secret_access_key),
+            ("aws_session_token", existing_server.aws_session_token),
+            ("aws_region_name", existing_server.aws_region_name),
+            ("aws_service_name", existing_server.aws_service_name),
+            ("gcp_credentials", existing_server.gcp_credentials),
+            ("gcp_project_id", existing_server.gcp_project_id),
+        )
+        return cast(  # cast-ok: comprehension over literal MCPCredentials keys, unmodelable by TypedDict
+            MCPCredentials, {field: value for field, value in candidates if value}
+        )
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
@@ -634,17 +648,7 @@ if MCP_AVAILABLE:
             inherited_credentials["client_secret"] = existing_server.client_secret
         if existing_server.scopes:
             inherited_credentials["scopes"] = existing_server.scopes
-        # AWS SigV4 fields
-        if existing_server.aws_access_key_id:
-            inherited_credentials["aws_access_key_id"] = existing_server.aws_access_key_id
-        if existing_server.aws_secret_access_key:
-            inherited_credentials["aws_secret_access_key"] = existing_server.aws_secret_access_key
-        if existing_server.aws_session_token:
-            inherited_credentials["aws_session_token"] = existing_server.aws_session_token
-        if existing_server.aws_region_name:
-            inherited_credentials["aws_region_name"] = existing_server.aws_region_name
-        if existing_server.aws_service_name:
-            inherited_credentials["aws_service_name"] = existing_server.aws_service_name
+        inherited_credentials.update(_cloud_provider_credentials(existing_server))
 
         if not inherited_credentials:
             return payload

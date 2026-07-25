@@ -36,6 +36,7 @@ class MCPAuth(str, enum.Enum):
     authorization = "authorization"
     oauth2 = "oauth2"
     aws_sigv4 = "aws_sigv4"
+    gcp_service_account = "gcp_service_account"
     token = "token"
     oauth2_token_exchange = "oauth2_token_exchange"
     oauth2_id_jag = "oauth2_id_jag"
@@ -61,6 +62,7 @@ MCPAuthType = Optional[
         MCPAuth.authorization,
         MCPAuth.oauth2,
         MCPAuth.aws_sigv4,
+        MCPAuth.gcp_service_account,
         MCPAuth.token,
         MCPAuth.oauth2_token_exchange,
         MCPAuth.oauth2_id_jag,
@@ -131,6 +133,14 @@ class MCPCredentials(TypedDict, total=False):
 
     aws_session_name: Optional[str]
     """Session name for STS AssumeRole (used in CloudTrail). Not a secret — stored unencrypted."""
+
+    gcp_credentials: Optional[str]
+    """Google service account JSON (inline or file path) used to mint OAuth access tokens for
+    GCP-managed MCP servers. Optional — falls back to Application Default Credentials (e.g. the
+    GKE workload identity of the pod running the proxy)."""
+
+    gcp_project_id: Optional[str]
+    """Google Cloud project billed for the request, sent as ``x-goog-user-project``. Not a secret — stored unencrypted."""
 
     audience: Optional[str]
     """

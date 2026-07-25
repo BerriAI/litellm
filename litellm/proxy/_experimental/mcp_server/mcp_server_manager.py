@@ -45,7 +45,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.experimental_mcp_client.client import MCPClient, MCPGoogleAuth, MCPSigV4Auth
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -750,8 +750,28 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
     )
 
 
+_SELF_CREDENTIALED_AUTH_TYPES = frozenset({MCPAuth.aws_sigv4, MCPAuth.gcp_service_account})
+
+
+def _build_google_auth(server: MCPServer) -> MCPGoogleAuth | None:
+    """The Google access-token auth for a GCP-managed MCP server, or None for any other auth type."""
+    if server.auth_type != MCPAuth.gcp_service_account:
+        return None
+    return MCPGoogleAuth(
+        gcp_credentials=server.gcp_credentials,
+        gcp_project_id=server.gcp_project_id,
+    )
+
+
 _REGISTRY_DUMP_SECRET_FIELDS = frozenset(
-    {"authentication_token", "client_secret", "client_private_key", "aws_secret_access_key", "aws_session_token"}
+    {
+        "authentication_token",
+        "client_secret",
+        "client_private_key",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "gcp_credentials",
+    }
 )
 
 
@@ -1225,7 +1245,7 @@ class MCPServerManager:
         if (
             server.auth_type
             and server.auth_type != MCPAuth.none
-            and server.auth_type != MCPAuth.aws_sigv4
+            and server.auth_type not in _SELF_CREDENTIALED_AUTH_TYPES
             and not server.authentication_token
         ):
             return
@@ -1509,6 +1529,8 @@ class MCPServerManager:
                 aws_service_name=server_config.get("aws_service_name", None),
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
+                gcp_credentials=server_config.get("gcp_credentials", None),
+                gcp_project_id=server_config.get("gcp_project_id", None),
                 instructions=server_config.get("instructions", None),
                 # Token Exchange (OBO) fields
                 token_exchange_endpoint=server_config.get("token_exchange_endpoint", None),
@@ -1899,6 +1921,7 @@ class MCPServerManager:
 
         # AWS SigV4 credential fields
         aws_creds = self._extract_aws_credentials(credentials_dict, credentials_are_encrypted)
+        gcp_creds = self._extract_gcp_credentials(credentials_dict, credentials_are_encrypted)
 
         scopes: Optional[list[str]] = None
         if credentials_dict:
@@ -2007,6 +2030,8 @@ class MCPServerManager:
             aws_service_name=aws_creds.get("aws_service_name"),
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
+            gcp_credentials=gcp_creds.get("gcp_credentials"),
+            gcp_project_id=gcp_creds.get("gcp_project_id"),
             instructions=mcp_server.instructions,
             # Token exchange (OBO) fields: dedicated columns, with the credentials blob as a
             # back-compat fallback for servers persisted before the columns existed.
@@ -3176,6 +3201,8 @@ class MCPServerManager:
                     elicitation_callback=elicitation_cb,
                 )
 
+            google_auth = _build_google_auth(server)
+
             # Create SigV4 auth if configured
             aws_auth = None
             if server.auth_type == MCPAuth.aws_sigv4:
@@ -3197,6 +3224,7 @@ class MCPServerManager:
                 timeout=(server.timeout if server.timeout is not None else MCP_CLIENT_TIMEOUT),
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
+                google_auth=google_auth,
                 sampling_callback=sampling_cb,
                 elicitation_callback=elicitation_cb,
             )
@@ -4042,6 +4070,23 @@ class MCPServerManager:
             "aws_service_name": credentials_dict.get("aws_service_name"),
             "aws_role_name": credentials_dict.get("aws_role_name"),
             "aws_session_name": credentials_dict.get("aws_session_name"),
+        }
+
+    def _extract_gcp_credentials(
+        self,
+        credentials_dict: dict[str, str] | None,
+        credentials_are_encrypted: bool,
+    ) -> dict[str, str | None]:
+        """Extract and decrypt Google Cloud credential fields from credentials dict."""
+        if not credentials_dict:
+            return {}
+        return {
+            "gcp_credentials": self._decrypt_credential_field(
+                credentials_dict.get("gcp_credentials"),
+                "gcp_credentials",
+                credentials_are_encrypted,
+            ),
+            "gcp_project_id": credentials_dict.get("gcp_project_id"),
         }
 
     def _extract_scopes(self, scopes_value: Any) -> Optional[list[str]]:
@@ -5679,11 +5724,11 @@ class MCPServerManager:
         if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
-        # (except aws_sigv4 which uses its own credential fields)
+        # (except cloud-provider auth types which use their own credential fields)
         elif (
             server.auth_type
             and server.auth_type != MCPAuth.none
-            and server.auth_type != MCPAuth.aws_sigv4
+            and server.auth_type not in _SELF_CREDENTIALED_AUTH_TYPES
             and not server.authentication_token
         ):
             should_skip_health_check = True

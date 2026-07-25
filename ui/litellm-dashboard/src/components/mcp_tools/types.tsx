@@ -41,6 +41,7 @@ export const AUTH_TYPE = {
   OAUTH2: "oauth2",
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
   AWS_SIGV4: "aws_sigv4",
+  GCP_SERVICE_ACCOUNT: "gcp_service_account",
   TRUE_PASSTHROUGH: "true_passthrough",
   OAUTH_DELEGATE: "oauth_delegate",
 };

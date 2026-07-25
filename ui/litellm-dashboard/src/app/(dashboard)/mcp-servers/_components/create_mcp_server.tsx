@@ -61,6 +61,7 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.OAUTH2,
   AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
   AUTH_TYPE.AWS_SIGV4,
+  AUTH_TYPE.GCP_SERVICE_ACCOUNT,
   AUTH_TYPE.TRUE_PASSTHROUGH,
   AUTH_TYPE.OAUTH_DELEGATE,
 ];
@@ -140,6 +141,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
+  const isGcpServiceAccountAuthType = authType === AUTH_TYPE.GCP_SERVICE_ACCOUNT;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
   const persistCreateUiState = () => {
@@ -1070,7 +1072,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     children: (
                       <>
                         <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
-                          <Select placeholder="Select auth type" className="rounded-lg" size="large">
+                          <Select placeholder="Select auth type" className="rounded-lg" size="large" virtual={false}>
                             <Select.Option value="none">None</Select.Option>
                             <Select.Option value="api_key">API Key</Select.Option>
                             <Select.Option value="bearer_token">Bearer Token</Select.Option>
@@ -1079,6 +1081,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                            <Select.Option value="gcp_service_account">Google Cloud (GCP-managed MCPs)</Select.Option>
                             <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
                             <Select.Option value="oauth_delegate">
                               OAuth Delegate (client-supplied upstream token)
@@ -1301,6 +1304,47 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 >
                   <Input
                     placeholder="litellm-prod (optional, auto-generated if blank)"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+              </>
+            )}
+
+            {transportType !== "stdio" && transportType !== "" && isGcpServiceAccountAuthType && (
+              <>
+                <p className="text-sm text-gray-500 mb-2">
+                  For GCP-managed MCP servers (e.g. https://bigquery.googleapis.com/mcp). LiteLLM mints a Google access
+                  token for every request.
+                </p>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Service Account JSON
+                      <Tooltip title="Optional. Service account key JSON or a path to it. If blank, LiteLLM uses Application Default Credentials (e.g. the GKE workload identity of the proxy pod).">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "gcp_credentials"]}
+                >
+                  <Input.Password
+                    placeholder='{"type": "service_account", ...} (optional — uses workload identity if blank)'
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      GCP Project ID
+                      <Tooltip title="Optional. Project billed for the request, sent as x-goog-user-project.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name={["credentials", "gcp_project_id"]}
+                >
+                  <Input
+                    placeholder="my-gcp-project (optional)"
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>

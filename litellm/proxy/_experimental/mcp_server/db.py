@@ -401,6 +401,12 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: Optional[st
             new_encryption_key=encryption_key,
         )
     # aws_region_name and aws_service_name are NOT secrets — stored as-is
+    gcp_credentials = credentials.get("gcp_credentials")
+    if gcp_credentials is not None:
+        credentials["gcp_credentials"] = encrypt_value_helper(
+            value=gcp_credentials,
+            new_encryption_key=encryption_key,
+        )
     return credentials
 
 
@@ -416,6 +422,7 @@ def decrypt_credentials(
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
+        "gcp_credentials",
     ]
     for field in secret_fields:
         value = credentials.get(field)  # type: ignore[literal-required]
