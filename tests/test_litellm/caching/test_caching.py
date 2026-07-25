@@ -1,6 +1,8 @@
 import logging
 import re
 
+import pytest
+
 from litellm.caching.caching import Cache
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
@@ -146,3 +148,22 @@ def test_exact_cache_key_still_includes_prompt():
         model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
     )
     assert key_a != key_b
+
+
+@pytest.mark.parametrize(
+    "anthropic_param",
+    [
+        {"system": "answer ALPHA"},
+        {"top_k": 5},
+        {"stop_sequences": ["STOP"]},
+    ],
+)
+def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
+    """Anthropic /v1/messages params with no OpenAI equivalent must still key the
+    cache; without them two requests that differ only by system prompt collide."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    messages = [{"role": "user", "content": "which greek letter?"}]
+    baseline = cache.get_cache_key(model="claude-sonnet-4-5", messages=messages)
+    assert baseline != cache.get_cache_key(
+        model="claude-sonnet-4-5", messages=messages, **anthropic_param
+    )

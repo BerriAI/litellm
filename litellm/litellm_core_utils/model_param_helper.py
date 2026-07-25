@@ -18,6 +18,7 @@ from openai.types.responses.response_create_params import (
 )
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
 
 
@@ -40,7 +41,7 @@ class ModelParamHelper:
 
     @staticmethod
     def get_exclude_params_for_model_parameters() -> Set[str]:
-        return set(["messages", "prompt", "input"])
+        return set(["messages", "prompt", "input", "system"])
 
     @staticmethod
     def _get_relevant_args_to_use_for_logging() -> Set[str]:
@@ -73,6 +74,7 @@ class ModelParamHelper:
         transcription_kwargs = ModelParamHelper._get_litellm_supported_transcription_kwargs()
         rerank_kwargs = ModelParamHelper._get_litellm_supported_rerank_kwargs()
         responses_api_kwargs = ModelParamHelper._get_litellm_supported_responses_api_kwargs()
+        anthropic_messages_kwargs = ModelParamHelper._get_litellm_supported_anthropic_messages_kwargs()
         exclude_kwargs = ModelParamHelper._get_exclude_kwargs()
 
         combined_kwargs = chat_completion_kwargs.union(
@@ -81,6 +83,7 @@ class ModelParamHelper:
             transcription_kwargs,
             rerank_kwargs,
             responses_api_kwargs,
+            anthropic_messages_kwargs,
         )
         combined_kwargs = combined_kwargs.difference(exclude_kwargs)
         return combined_kwargs
@@ -168,11 +171,23 @@ class ModelParamHelper:
         return non_streaming_params.union(streaming_params)
 
     @staticmethod
+    def _get_litellm_supported_anthropic_messages_kwargs() -> set[str]:
+        """
+        Get the litellm supported Anthropic /v1/messages kwargs
+
+        This follows the Anthropic Messages API spec. `system`, `top_k` and
+        `stop_sequences` have no OpenAI equivalent, so without them the cache key
+        for a /v1/messages request ignores them and collides across requests that
+        differ only by system prompt.
+        """
+        return set(getattr(AnthropicMessagesRequest, "__annotations__", {}).keys())
+
+    @staticmethod
     def _get_exclude_kwargs() -> Set[str]:
         """
         Get the kwargs to exclude from the cache key
         """
-        return set(["metadata"])
+        return set(["metadata", "litellm_metadata"])
 
 
 ModelParamHelper._relevant_logging_args = frozenset(ModelParamHelper._get_relevant_args_to_use_for_logging())
