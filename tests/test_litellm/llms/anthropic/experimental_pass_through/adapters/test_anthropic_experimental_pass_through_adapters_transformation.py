@@ -3222,3 +3222,78 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_messages_to_openai_web_search_tool_result():
+    """web_search_tool_result blocks must be converted to tool_result so they
+    are not silently dropped (leaving the assistant tool_call orphaned)."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "ws_1", "name": "web_search", "input": {"query": "test"}}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "ws_1",
+                    "content": [{"type": "web_search_result", "title": "Results", "url": "https://example.com"}],
+                }
+            ],
+        ),
+    ]
+    result = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    # Should have assistant tool_call AND a tool message for ws_1
+    tool_messages = [m for m in result if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "ws_1"
+
+
+def test_translate_completion_input_params_repairs_orphaned_tool_use():
+    """An assistant tool_use with no matching tool_result must be repaired
+    by injecting a synthetic tool_result before OpenAI translation, so the
+    output has a matching role:"tool" message instead of an orphaned
+    tool_call."""
+    adapter = AnthropicAdapter()
+    request = {
+        "model": "claude-3-5-sonnet-20241022",
+        "max_tokens": 100,
+        "messages": [
+            {"role": "user", "content": "search for linear issues"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "ToolSearch:4", "name": "ToolSearch", "input": {"query": "linear"}}],
+            },
+            {"role": "user", "content": "list them"},  # no tool_result
+        ],
+    }
+    result, _ = adapter.translate_completion_input_params_with_tool_mapping(dict(request))
+    assert result is not None
+    # Must have a tool message for ToolSearch_4
+    tool_messages = [m for m in result["messages"] if isinstance(m, dict) and m.get("role") == "tool"]
+    assert any(m.get("tool_call_id") == "ToolSearch_4" for m in tool_messages), (
+        "orphaned ToolSearch:4 must be repaired with a synthetic tool message"
+    )
+
+
+def test_openai_transform_request_repairs_orphaned_tool_calls():
+    """OpenAIGPTConfig.transform_request must inject a synthetic role:'tool'
+    message for any orphaned assistant tool_call before building the request
+    body."""
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    cfg = OpenAIGPTConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "ToolSearch:4", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}},
+        ]},
+        {"role": "user", "content": "done"},  # no tool message
+    ]
+    body = cfg.transform_request(model="kimi-k3", messages=messages, optional_params={}, litellm_params={}, headers={})
+    tool_messages = [m for m in body["messages"] if isinstance(m, dict) and m.get("role") == "tool"]
+    assert any(m.get("tool_call_id") == "ToolSearch:4" for m in tool_messages), (
+        "orphaned ToolSearch:4 must be repaired in transform_request"
+    )

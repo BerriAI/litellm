@@ -437,6 +437,45 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         messages = self._transform_messages(messages=messages, model=model)
+
+        # Repair orphaned assistant tool_calls with no matching tool message
+        # before building the request body.  Clients that consume tool results
+        # internally (e.g. Claude Desktop's deferred-tool-loading ToolSearch)
+        # replay the assistant tool_call without a tool_result; the adapter
+        # faithfully translates this to an OpenAI tool_call with no matching
+        # role:"tool" message, and OpenAI-compatible backends reject the
+        # request (400: "tool_call_ids did not have response messages").
+        # Inject a synthetic role:"tool" message for each orphan so the
+        # backend sees a valid tool_call/tool pair.
+        answered = set()
+        for m in messages:
+            if isinstance(m, dict) and m.get("role") == "tool":
+                answered.add(m.get("tool_call_id"))
+        repaired = []
+        for m in messages:
+            repaired.append(m)
+            if not (
+                isinstance(m, dict)
+                and m.get("role") == "assistant"
+                and m.get("tool_calls")
+            ):
+                continue
+            for tc in m.get("tool_calls") or []:
+                tc_id = (
+                    tc.get("id")
+                    if isinstance(tc, dict)
+                    else getattr(tc, "id", None)
+                )
+                if tc_id and tc_id not in answered:
+                    repaired.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": "(tool result unavailable)",
+                        }
+                    )
+        messages = repaired
+
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
         ):
@@ -463,6 +502,39 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         headers: dict,
     ) -> dict:
         transformed_messages = await self._transform_messages(messages=messages, model=model, is_async=True)
+
+        # Repair orphaned assistant tool_calls (duplicated from transform_request
+        # so the base-class early-return path at ``_is_base_class`` below is also
+        # covered).  See transform_request for the full rationale.
+        answered = set()
+        for m in transformed_messages:
+            if isinstance(m, dict) and m.get("role") == "tool":
+                answered.add(m.get("tool_call_id"))
+        repaired = []
+        for m in transformed_messages:
+            repaired.append(m)
+            if not (
+                isinstance(m, dict)
+                and m.get("role") == "assistant"
+                and m.get("tool_calls")
+            ):
+                continue
+            for tc in m.get("tool_calls") or []:
+                tc_id = (
+                    tc.get("id")
+                    if isinstance(tc, dict)
+                    else getattr(tc, "id", None)
+                )
+                if tc_id and tc_id not in answered:
+                    repaired.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": "(tool result unavailable)",
+                        }
+                    )
+        transformed_messages = repaired
+
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
         ):
