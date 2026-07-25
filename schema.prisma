@@ -1094,6 +1094,7 @@ model LiteLLM_SpendLogToolIndex {
 
   @@id([request_id, tool_name])
   @@index([tool_name, start_time])
+  @@index([start_time])
 }
 
 // Prompt table for storing prompt configurations
