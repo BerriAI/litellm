@@ -736,8 +736,10 @@ class CustomGuardrail(CustomLogger):
         apply_guardrail_to_model_groups: frozenset[str] = getattr(self, "apply_guardrail_to_model_groups", frozenset())
         if apply_guardrail_to_model_groups:
             model = str(data.get("model") or "").strip().lower()
-            model_group = str(self._resolve_metadata_model_group(data) or "").strip().lower()
-            if model not in apply_guardrail_to_model_groups and model_group not in apply_guardrail_to_model_groups:
+            model_groups = {g.lower() for g in self._resolve_metadata_model_groups(data)}
+            if model not in apply_guardrail_to_model_groups and apply_guardrail_to_model_groups.isdisjoint(
+                model_groups
+            ):
                 return False
 
         requested_guardrails = self.get_guardrail_from_metadata(data)
@@ -801,14 +803,27 @@ class CustomGuardrail(CustomLogger):
         return True
 
     @staticmethod
-    def _resolve_metadata_model_group(data: dict[str, object]) -> str | None:
+    def _resolve_metadata_model_groups(data: dict[str, object]) -> list[str]:
+        """Collect every candidate model_group from request metadata.
+
+        ``metadata`` and ``litellm_metadata`` are both client-addressable top-level
+        request fields (OpenAI's own `metadata` field and litellm's newer
+        `litellm_metadata`); only whichever one the router actually writes deployment
+        info into for this call type is authoritative, and which one that is depends
+        on call type. Rather than guessing a single "authoritative" container (which a
+        client can defeat by populating the container the router does *not* write for
+        their call type with an out-of-scope value), return every candidate so the
+        caller can match on any of them - a client can only ever widen the match, never
+        narrow it to force a scoped guardrail to be skipped.
+        """
+        candidates = []
         for dict_key in ("litellm_metadata", "metadata"):
             container = data.get(dict_key) or {}
             if isinstance(container, dict) and container:
                 value = container.get("model_group")
                 if value is not None:
-                    return str(value).strip()
-        return None
+                    candidates.append(str(value).strip())
+        return candidates
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """

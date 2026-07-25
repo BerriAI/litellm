@@ -2155,6 +2155,25 @@ class TestShouldRunGuardrailModelGroupGate:
         )
         assert result is False
 
+    def test_client_supplied_litellm_metadata_cannot_shadow_authoritative_metadata_group(self):
+        """For a regular /chat/completions call, the router writes the authoritative
+        routed group into metadata.model_group and never touches litellm_metadata; a
+        client can still set litellm_metadata.model_group directly in their request
+        body. A client should not be able to use that to make an in-scope request look
+        out-of-scope and skip its own guardrail."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"ai-gateway-low-intelligence-general"}))
+        result = g.should_run_guardrail(
+            data={
+                "model": "bedrock/anthropic.claude-haiku-3",
+                "metadata": {"model_group": "ai-gateway-low-intelligence-general"},
+                "litellm_metadata": {"model_group": "attacker-supplied-out-of-scope-group"},
+            },
+            event_type=GuardrailEventHooks.post_call,
+        )
+        assert result is True
+
     def test_update_in_memory_normalizes_model_groups(self):
         from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 
@@ -2204,25 +2223,25 @@ class TestShouldRunGuardrailModelGroupGate:
         ) is False
 
 
-class TestResolveMetadataModelGroup:
-    def test_litellm_metadata_takes_priority(self):
+class TestResolveMetadataModelGroups:
+    def test_returns_both_containers_values(self):
         data = {
             "litellm_metadata": {"model_group": "from-litellm"},
             "metadata": {"model_group": "from-metadata"},
         }
-        assert CustomGuardrail._resolve_metadata_model_group(data) == "from-litellm"
+        assert CustomGuardrail._resolve_metadata_model_groups(data) == ["from-litellm", "from-metadata"]
 
-    def test_metadata_fallback_when_litellm_metadata_absent(self):
+    def test_metadata_used_when_litellm_metadata_absent(self):
         data = {"metadata": {"model_group": "from-metadata"}}
-        assert CustomGuardrail._resolve_metadata_model_group(data) == "from-metadata"
+        assert CustomGuardrail._resolve_metadata_model_groups(data) == ["from-metadata"]
 
-    def test_returns_none_when_neither_container_present(self):
-        assert CustomGuardrail._resolve_metadata_model_group({}) is None
+    def test_returns_empty_list_when_neither_container_present(self):
+        assert CustomGuardrail._resolve_metadata_model_groups({}) == []
 
-    def test_returns_none_when_model_group_key_absent(self):
+    def test_returns_empty_list_when_model_group_key_absent(self):
         data = {"litellm_metadata": {"something_else": "value"}}
-        assert CustomGuardrail._resolve_metadata_model_group(data) is None
+        assert CustomGuardrail._resolve_metadata_model_groups(data) == []
 
     def test_strips_whitespace(self):
         data = {"metadata": {"model_group": "  scoped-group  "}}
-        assert CustomGuardrail._resolve_metadata_model_group(data) == "scoped-group"
+        assert CustomGuardrail._resolve_metadata_model_groups(data) == ["scoped-group"]
