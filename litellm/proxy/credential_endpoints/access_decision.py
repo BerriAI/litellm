@@ -70,7 +70,8 @@ def decide_credential_patch(
     modify any immutable ``credential_info`` field, and (c) limits its
     ``access`` change to appending team_ids the caller is team-admin of to
     ``access.teams`` (no removals, no foreign ids, no ``global``/``orgs``
-    edits).
+    edits), and (d) does not remove the last explicit grant from an
+    ``auto_enable`` destination, whose empty-grant fallback is proxy-wide.
     """
     if is_proxy_admin:
         return Allow()
@@ -126,6 +127,16 @@ def decide_credential_patch(
     if foreign_added:
         return Deny(
             "team-admin may only grant their own team_ids: " + ", ".join(sorted(foreign_added)),
+            from_user_input=True,
+        )
+
+    auto_enable = existing_info.auto_enable if existing_info is not None else False
+    had_explicit_grants = bool(existing_global or existing_teams or existing_orgs)
+    grants_after_merge = bool(existing_global or existing_orgs or patch_teams)
+    if auto_enable and had_explicit_grants and not grants_after_merge:
+        return Deny(
+            "removing the last grant would make this auto-enabled destination "
+            "proxy-wide; only the proxy admin can remove it",
             from_user_input=True,
         )
 
