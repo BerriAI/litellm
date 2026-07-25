@@ -102,6 +102,12 @@ class AnthropicMessageBody(BaseModel):
     stream: bool = False
 
 
+class VllmChatBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int = 64
+
+
 def _tags_header(tags: list[str] | None) -> str | None:
     return ",".join(tags) if tags else None
 
@@ -183,6 +189,19 @@ class PassthroughClient:
                 stream=stream,
             ),
             stream=stream,
+        )
+
+    def vllm_chat(
+        self, key: str, model: str, text: str, *, max_tokens: int = 64
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/vllm/v1/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=VllmChatBody(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[ChatMessage(role="user", content=text)],
+            ),
         )
 
 
