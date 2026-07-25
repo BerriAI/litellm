@@ -563,3 +563,181 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
             mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
             is True
         )
+
+
+class _DummyAsyncContextManager:
+    def __init__(self, value):
+        self.value = value
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_uses_bearer_token_when_no_api_key():
+    """
+    Entra ID-only Azure realtime deployments have no static api-key, so the handshake must
+    authenticate with `Authorization: Bearer <azure_ad_token>` and must not send `api-key`.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/34654
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    mock_backend_ws = AsyncMock()
+
+    with (
+        patch(
+            "websockets.connect",
+            return_value=_DummyAsyncContextManager(mock_backend_ws),
+        ) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+    ):
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+
+        await handler.async_realtime(
+            model="gpt-realtime-whisper",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key=None,
+            api_version="2024-10-01-preview",
+            azure_ad_token="my-entra-token",
+        )
+
+    headers = mock_ws_connect.call_args.kwargs["additional_headers"]
+    assert headers == {"Authorization": "Bearer my-entra-token"}
+
+
+def test_get_auth_headers_prefers_api_key_and_never_sends_both():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    assert AzureOpenAIRealtime.get_auth_headers(api_key="test-key", azure_ad_token="my-entra-token") == {
+        "api-key": "test-key"
+    }
+
+
+def test_get_auth_headers_without_credentials_raises():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    with pytest.raises(ValueError, match="Missing Azure credentials"):
+        AzureOpenAIRealtime.get_auth_headers(api_key=None, azure_ad_token=None)
+
+
+@pytest.mark.asyncio
+async def test_arealtime_resolves_azure_ad_token_when_no_api_key(monkeypatch):
+    """
+    `_arealtime` must resolve an Azure AD token (managed identity, service principal, etc.)
+    and forward it to the handler when the deployment has no api_key.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/34654
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
+    monkeypatch.setattr(
+        realtime_main,
+        "get_llm_provider",
+        lambda model, api_base=None, api_key=None: (
+            "gpt-realtime-whisper",
+            "azure",
+            None,
+            "https://my-endpoint.openai.azure.com",
+        ),
+    )
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+
+    captured_params = {}
+
+    def fake_get_azure_ad_token(litellm_params):
+        captured_params["tenant_id"] = litellm_params.get("tenant_id")
+        return "my-entra-token"
+
+    monkeypatch.setattr(realtime_main, "get_azure_ad_token", fake_get_azure_ad_token)
+
+    await realtime_main._arealtime(
+        model="azure/gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_version="2024-10-01-preview",
+        litellm_logging_obj=MagicMock(),
+        tenant_id="my-tenant",
+        client_id="my-client",
+        client_secret="my-secret",
+    )
+
+    assert mock_async_realtime.call_args.kwargs["azure_ad_token"] == "my-entra-token"
+    assert captured_params["tenant_id"] == "my-tenant"
+
+
+@pytest.mark.asyncio
+async def test_arealtime_does_not_resolve_azure_ad_token_when_api_key_present(monkeypatch):
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
+    monkeypatch.setattr(
+        realtime_main,
+        "get_llm_provider",
+        lambda model, api_base=None, api_key=None: (
+            "gpt-realtime-whisper",
+            "azure",
+            "test-key",
+            "https://my-endpoint.openai.azure.com",
+        ),
+    )
+
+    def fail_get_azure_ad_token(litellm_params):
+        raise AssertionError("should not resolve an AD token when an api_key is configured")
+
+    monkeypatch.setattr(realtime_main, "get_azure_ad_token", fail_get_azure_ad_token)
+
+    await realtime_main._arealtime(
+        model="azure/gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_key="test-key",
+        api_version="2024-10-01-preview",
+        litellm_logging_obj=MagicMock(),
+    )
+
+    assert mock_async_realtime.call_args.kwargs["azure_ad_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_realtime_health_check_uses_bearer_token_when_no_api_key(monkeypatch):
+    """
+    An Entra ID-only realtime deployment must also pass its realtime health check.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/34654
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    connect_calls = []
+
+    monkeypatch.setattr(
+        realtime_main,
+        "get_azure_ad_token",
+        lambda litellm_params: "my-entra-token",
+    )
+
+    def fake_connect(url, **kwargs):
+        connect_calls.append(kwargs)
+        return _DummyAsyncContextManager(MagicMock())
+
+    monkeypatch.setattr("websockets.connect", fake_connect)
+
+    assert (
+        await realtime_main._realtime_health_check(
+            model="gpt-realtime-whisper",
+            custom_llm_provider="azure",
+            api_key=None,
+            api_base="https://my-endpoint.openai.azure.com",
+            api_version="2024-10-01-preview",
+            model_params={"tenant_id": "my-tenant"},
+        )
+        is True
+    )
+    assert connect_calls[0]["additional_headers"] == {"Authorization": "Bearer my-entra-token"}
