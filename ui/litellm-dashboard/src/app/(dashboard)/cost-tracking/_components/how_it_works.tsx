@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
-import { Text, TextInput } from "@tremor/react";
 import CodeBlock from "@/components/CodeBlock";
+import { Input } from "@/components/ui/input";
 
 const HowItWorks: React.FC = () => {
   const [responseCost, setResponseCost] = useState("");
@@ -28,30 +28,30 @@ const HowItWorks: React.FC = () => {
   return (
     <div className="space-y-4 pt-2">
       <div>
-        <Text className="font-medium text-gray-900 text-sm mb-1">Cost Calculation</Text>
-        <Text className="text-xs text-gray-600">
+        <p className="mb-1 text-sm font-medium text-foreground">Cost Calculation</p>
+        <p className="text-xs text-muted-foreground">
           Discounts are applied to provider costs:{" "}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded-sm text-xs">
+          <code className="rounded-sm bg-muted px-1.5 py-0.5 text-xs">
             final_cost = base_cost × (1 - discount%/100)
           </code>
-        </Text>
+        </p>
       </div>
       <div>
-        <Text className="font-medium text-gray-900 text-sm mb-1">Example</Text>
-        <Text className="text-xs text-gray-600">
+        <p className="mb-1 text-sm font-medium text-foreground">Example</p>
+        <p className="text-xs text-muted-foreground">
           A 5% discount on a $10.00 request results in: $10.00 × (1 - 0.05) = $9.50
-        </Text>
+        </p>
       </div>
       <div>
-        <Text className="font-medium text-gray-900 text-sm mb-1">Valid Range</Text>
-        <Text className="text-xs text-gray-600">Discount percentages must be between 0% and 100%</Text>
+        <p className="mb-1 text-sm font-medium text-foreground">Valid Range</p>
+        <p className="text-xs text-muted-foreground">Discount percentages must be between 0% and 100%</p>
       </div>
 
-      <div className="pt-4 border-t border-gray-200">
-        <Text className="font-medium text-gray-900 text-sm mb-2">Validating Discounts</Text>
-        <Text className="text-xs text-gray-600 mb-3">
+      <div className="border-t border-border pt-4">
+        <p className="mb-2 text-sm font-medium text-foreground">Validating Discounts</p>
+        <p className="mb-3 text-xs text-muted-foreground">
           Make a test request and check the response headers to verify discounts are applied:
-        </Text>
+        </p>
         <CodeBlock
           language="bash"
           code={`curl -X POST -i http://your-proxy:4000/chat/completions \\
@@ -62,78 +62,80 @@ const HowItWorks: React.FC = () => {
     "messages": [{"role": "user", "content": "Hello"}]
   }'`}
         />
-        <Text className="text-xs text-gray-600 mt-3 mb-2">Look for these headers in the response:</Text>
+        <p className="mt-3 mb-2 text-xs text-muted-foreground">Look for these headers in the response:</p>
         <div className="space-y-1.5">
           <div className="flex items-start gap-3">
-            <code className="bg-gray-100 px-2 py-1 rounded-sm text-xs font-mono text-gray-800 whitespace-nowrap">
+            <code className="rounded-sm bg-muted px-2 py-1 font-mono text-xs whitespace-nowrap">
               x-litellm-response-cost
             </code>
-            <Text className="text-xs text-gray-600">Final cost after discount</Text>
+            <p className="text-xs text-muted-foreground">Final cost after discount</p>
           </div>
           <div className="flex items-start gap-3">
-            <code className="bg-gray-100 px-2 py-1 rounded-sm text-xs font-mono text-gray-800 whitespace-nowrap">
+            <code className="rounded-sm bg-muted px-2 py-1 font-mono text-xs whitespace-nowrap">
               x-litellm-response-cost-original
             </code>
-            <Text className="text-xs text-gray-600">Original cost before discount</Text>
+            <p className="text-xs text-muted-foreground">Original cost before discount</p>
           </div>
           <div className="flex items-start gap-3">
-            <code className="bg-gray-100 px-2 py-1 rounded-sm text-xs font-mono text-gray-800 whitespace-nowrap">
+            <code className="rounded-sm bg-muted px-2 py-1 font-mono text-xs whitespace-nowrap">
               x-litellm-response-cost-discount-amount
             </code>
-            <Text className="text-xs text-gray-600">Amount discounted</Text>
+            <p className="text-xs text-muted-foreground">Amount discounted</p>
           </div>
         </div>
       </div>
 
-      <div className="pt-4 border-t border-gray-200">
-        <Text className="font-medium text-gray-900 text-sm mb-3">Discount Calculator</Text>
-        <Text className="text-xs text-gray-600 mb-3">
+      <div className="border-t border-border pt-4">
+        <p className="mb-3 text-sm font-medium text-foreground">Discount Calculator</p>
+        <p className="mb-3 text-xs text-muted-foreground">
           Enter values from your response headers to verify the discount:
-        </Text>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        </p>
+        <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">
+            <label className="mb-1 block text-xs font-medium text-foreground" htmlFor="how-it-works-response-cost">
               Response Cost (x-litellm-response-cost)
             </label>
-            <TextInput
+            <Input
+              id="how-it-works-response-cost"
               placeholder="0.0171938125"
               value={responseCost}
-              onValueChange={setResponseCost}
+              onChange={(event) => setResponseCost(event.target.value)}
               className="text-sm"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">
+            <label className="mb-1 block text-xs font-medium text-foreground" htmlFor="how-it-works-discount-amount">
               Discount Amount (x-litellm-response-cost-discount-amount)
             </label>
-            <TextInput
+            <Input
+              id="how-it-works-discount-amount"
               placeholder="0.0009049375"
               value={discountAmount}
-              onValueChange={setDiscountAmount}
+              onChange={(event) => setDiscountAmount(event.target.value)}
               className="text-sm"
             />
           </div>
         </div>
 
         {calculatedDiscount && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <Text className="text-sm font-medium text-blue-900 mb-2">Calculated Results</Text>
+          <div className="rounded-lg border border-border bg-muted p-4">
+            <p className="mb-2 text-sm font-medium text-foreground">Calculated Results</p>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Text className="text-xs text-blue-800">Original Cost:</Text>
-                <code className="text-xs font-mono text-blue-900">${calculatedDiscount.originalCost}</code>
+                <p className="text-xs text-muted-foreground">Original Cost:</p>
+                <code className="font-mono text-xs text-foreground">${calculatedDiscount.originalCost}</code>
               </div>
               <div className="flex items-center justify-between">
-                <Text className="text-xs text-blue-800">Final Cost:</Text>
-                <code className="text-xs font-mono text-blue-900">${calculatedDiscount.finalCost}</code>
+                <p className="text-xs text-muted-foreground">Final Cost:</p>
+                <code className="font-mono text-xs text-foreground">${calculatedDiscount.finalCost}</code>
               </div>
               <div className="flex items-center justify-between">
-                <Text className="text-xs text-blue-800">Discount Amount:</Text>
-                <code className="text-xs font-mono text-blue-900">${calculatedDiscount.discountAmount}</code>
+                <p className="text-xs text-muted-foreground">Discount Amount:</p>
+                <code className="font-mono text-xs text-foreground">${calculatedDiscount.discountAmount}</code>
               </div>
-              <div className="flex items-center justify-between pt-2 border-t border-blue-300">
-                <Text className="text-xs font-semibold text-blue-900">Discount Applied:</Text>
-                <Text className="text-sm font-bold text-blue-900">{calculatedDiscount.discountPercentage}%</Text>
+              <div className="flex items-center justify-between border-t border-border pt-2">
+                <p className="text-xs font-semibold text-foreground">Discount Applied:</p>
+                <p className="text-sm font-bold text-foreground">{calculatedDiscount.discountPercentage}%</p>
               </div>
             </div>
           </div>

@@ -1,7 +1,6 @@
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Button } from "antd";
+import { Button } from "@/components/ui/button";
 import BulkEditUserModal from "./BulkEditUsers";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import EditUserModal from "./edit_user";
@@ -34,7 +33,8 @@ import DefaultUserSettings from "./DefaultUserSettings";
 import { UsersTable } from "./view_users/UsersTable";
 import UserInfoView from "./view_users/user_info_view";
 import { UserInfo } from "@/components/networking";
-import { Skeleton } from "antd";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface ViewUserDashboardProps {
   accessToken: string | null;
@@ -353,9 +353,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         <div className="flex space-x-3">
           {userListQuery.isLoading && (
             <>
-              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
-              <Skeleton.Button active size="default" shape="default" style={{ width: 145, height: 36 }} />
-              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+              <Skeleton className="h-9 w-[110px]" />
+              <Skeleton className="h-9 w-[145px]" />
+              <Skeleton className="h-9 w-[110px]" />
             </>
           )}
           {!userListQuery.isLoading && userID && accessToken && (
@@ -372,8 +372,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
               {isProxyAdmin && (
                 <Button
                   onClick={handleToggleSelectionMode}
-                  type={selectionMode ? "primary" : "default"}
-                  className="flex items-center"
+                  variant={selectionMode ? "default" : "outline"}
                   data-testid="toggle-user-selection"
                 >
                   {selectionMode ? "Cancel Selection" : "Select Users"}
@@ -382,10 +381,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
               {isProxyAdmin && selectionMode && (
                 <Button
-                  type="primary"
                   onClick={() => setIsBulkEditModalVisible(true)}
                   disabled={selectedUsers.length === 0}
-                  className="flex items-center"
                   data-testid="bulk-edit-users"
                 >
                   Bulk Edit ({selectedUsers.length} selected)
@@ -397,31 +394,39 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       </div>
 
       {isProxyAdmin ? (
-        <TabGroup defaultIndex={0}>
-          <TabList className="mb-4">
-            <Tab>Users</Tab>
-            <Tab>Default User Settings</Tab>
-          </TabList>
+        <Tabs defaultValue="users">
+          <TabsList className="mb-4">
+            <TabsTrigger value="users" className="flex-none">
+              Users
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="flex-none">
+              Default User Settings
+            </TabsTrigger>
+          </TabsList>
 
-          <TabPanels>
-            <TabPanel>{usersTable}</TabPanel>
+          <TabsContent value="users">{usersTable}</TabsContent>
 
-            <TabPanel>
-              {!userID || !userRole || !accessToken ? (
-                <div className="flex justify-center items-center h-64">
-                  <Skeleton active paragraph={{ rows: 4 }} />
+          <TabsContent value="settings">
+            {!userID || !userRole || !accessToken ? (
+              <div className="flex h-64 items-center justify-center">
+                <div className="w-full max-w-md space-y-3">
+                  <Skeleton className="h-5 w-1/3" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-2/3" />
                 </div>
-              ) : (
-                <DefaultUserSettings
-                  accessToken={accessToken}
-                  possibleUIRoles={possibleUIRoles}
-                  userID={userID}
-                  userRole={userRole}
-                />
-              )}
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+              </div>
+            ) : (
+              <DefaultUserSettings
+                accessToken={accessToken}
+                possibleUIRoles={possibleUIRoles}
+                userID={userID}
+                userRole={userRole}
+              />
+            )}
+          </TabsContent>
+        </Tabs>
       ) : (
         usersTable
       )}

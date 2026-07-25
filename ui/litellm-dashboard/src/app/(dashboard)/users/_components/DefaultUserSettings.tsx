@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Divider, TextInput } from "@tremor/react";
-import { Button, Typography, Spin, Switch, Select, InputNumber } from "antd";
-import { PlusOutlined, DeleteOutlined } from "@ant-design/icons";
+import { Plus, Trash2 } from "lucide-react";
 import { getInternalUserSettings, updateInternalUserSettings, modelAvailableCall } from "@/components/networking";
 import BudgetDurationDropdown, {
   getBudgetDurationLabel,
@@ -9,6 +7,25 @@ import BudgetDurationDropdown, {
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import NotificationManager from "@/components/molecules/notifications_manager";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+} from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
 interface DefaultUserSettingsProps {
   accessToken: string | null;
@@ -23,6 +40,13 @@ interface TeamEntry {
   user_role: "user" | "admin";
 }
 
+const TEAM_MEMBER_ROLES: TeamEntry["user_role"][] = ["user", "admin"];
+
+const TEAM_MEMBER_ROLE_LABELS: Record<TeamEntry["user_role"], string> = {
+  user: "User",
+  admin: "Admin",
+};
+
 const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   accessToken,
   possibleUIRoles,
@@ -35,8 +59,6 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   const [editedValues, setEditedValues] = useState<any>({});
   const [saving, setSaving] = useState<boolean>(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const { Paragraph } = Typography;
-  const { Option } = Select;
 
   useEffect(() => {
     const fetchSSOSettings = async () => {
@@ -129,16 +151,48 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     });
   };
 
+  const renderMultiSelect = (key: string, options: string[], placeholder: string, getLabel: (o: string) => string) => {
+    const selected: string[] = editedValues[key] || [];
+
+    return (
+      <Combobox
+        multiple
+        items={options}
+        value={selected}
+        onValueChange={(value: string[]) => handleTextInputChange(key, value)}
+      >
+        <ComboboxChips className="mt-2">
+          <ComboboxValue>
+            {(values: string[]) =>
+              values.map((option) => (
+                <ComboboxChip key={option} aria-label={getLabel(option)}>
+                  {getLabel(option)}
+                </ComboboxChip>
+              ))
+            }
+          </ComboboxValue>
+          <ComboboxChipsInput placeholder={placeholder} className="border-0 bg-transparent" />
+        </ComboboxChips>
+        <ComboboxContent>
+          <ComboboxEmpty>No options found</ComboboxEmpty>
+          <ComboboxList>
+            {(option: string) => (
+              <ComboboxItem key={option} value={option}>
+                {getLabel(option)}
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    );
+  };
+
   // Teams editor component
   const renderTeamsEditor = (teams: any[]) => {
     const normalizedTeams = normalizeTeams(teams);
 
     const updateTeam = (index: number, field: keyof TeamEntry, value: any) => {
-      const updatedTeams = [...normalizedTeams];
-      updatedTeams[index] = {
-        ...updatedTeams[index],
-        [field]: value,
-      };
+      const updatedTeams = normalizedTeams.map((team, i) => (i === index ? { ...team, [field]: value } : team));
       handleTextInputChange("teams", updatedTeams);
     };
 
@@ -158,53 +212,69 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     return (
       <div className="space-y-3">
         {normalizedTeams.map((team, index) => (
-          <div key={index} className="border rounded-lg p-4 bg-gray-50">
-            <div className="flex items-center justify-between mb-3">
-              <Text className="font-medium">Team {index + 1}</Text>
-              <Button size="small" danger icon={<DeleteOutlined />} onClick={() => removeTeam(index)}>
+          <div key={index} className="rounded-lg border border-border bg-muted/40 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="font-medium">Team {index + 1}</p>
+              <Button size="sm" variant="destructive" onClick={() => removeTeam(index)}>
+                <Trash2 />
                 Remove
               </Button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
-                <Text className="text-sm font-medium mb-1">Team ID</Text>
-                <TextInput
+                <p className="mb-1 text-sm font-medium">Team ID</p>
+                <Input
                   value={team.team_id}
-                  onChange={(e) => updateTeam(index, "team_id", e.target.value)}
+                  onChange={(event) => updateTeam(index, "team_id", event.target.value)}
                   placeholder="Enter team ID"
                 />
               </div>
 
               <div>
-                <Text className="text-sm font-medium mb-1">Max Budget in Team</Text>
-                <InputNumber
-                  style={{ width: "100%" }}
-                  value={team.max_budget_in_team}
-                  onChange={(value) => updateTeam(index, "max_budget_in_team", value)}
+                <p className="mb-1 text-sm font-medium">Max Budget in Team</p>
+                <Input
+                  type="number"
+                  value={team.max_budget_in_team ?? ""}
+                  onChange={(event) =>
+                    updateTeam(
+                      index,
+                      "max_budget_in_team",
+                      event.target.value === "" ? undefined : Number(event.target.value),
+                    )
+                  }
                   placeholder="Optional"
                   min={0}
                   step={0.01}
-                  precision={2}
                 />
               </div>
 
               <div>
-                <Text className="text-sm font-medium mb-1">User Role</Text>
+                <p className="mb-1 text-sm font-medium">User Role</p>
                 <Select
-                  style={{ width: "100%" }}
                   value={team.user_role}
-                  onChange={(value) => updateTeam(index, "user_role", value)}
+                  onValueChange={(value: TeamEntry["user_role"] | null) =>
+                    updateTeam(index, "user_role", value ?? "user")
+                  }
                 >
-                  <Option value="user">User</Option>
-                  <Option value="admin">Admin</Option>
+                  <SelectTrigger className="w-full">
+                    <SelectValue>{TEAM_MEMBER_ROLE_LABELS[team.user_role]}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TEAM_MEMBER_ROLES.map((role) => (
+                      <SelectItem key={role} value={role}>
+                        {TEAM_MEMBER_ROLE_LABELS[role]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
             </div>
           </div>
         ))}
 
-        <Button icon={<PlusOutlined />} onClick={addTeam} className="w-full">
+        <Button variant="outline" onClick={addTeam} className="w-full">
+          <Plus />
           Add Team
         </Button>
       </div>
@@ -217,23 +287,24 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     if (key === "teams") {
       return <div className="mt-2">{renderTeamsEditor(editedValues[key] || [])}</div>;
     } else if (key === "user_role" && possibleUIRoles) {
+      const internalUserRoles = Object.entries(possibleUIRoles).filter(([role]) => role.includes("internal_user"));
+      const selectedRole = editedValues[key] || null;
+
       return (
-        <Select
-          style={{ width: "100%" }}
-          value={editedValues[key] || ""}
-          onChange={(value) => handleTextInputChange(key, value)}
-          className="mt-2"
-        >
-          {Object.entries(possibleUIRoles)
-            .filter(([role]) => role.includes("internal_user"))
-            .map(([role, { ui_label, description }]) => (
-              <Option key={role} value={role}>
-                <div className="flex items-center">
-                  <span>{ui_label}</span>
-                  <span className="ml-2 text-xs text-gray-500">{description}</span>
-                </div>
-              </Option>
+        <Select value={selectedRole} onValueChange={(role: string) => handleTextInputChange(key, role)}>
+          <SelectTrigger className="mt-2 w-full">
+            <SelectValue>
+              {selectedRole ? possibleUIRoles[selectedRole]?.ui_label || selectedRole : "Select a role"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {internalUserRoles.map(([role, { ui_label, description }]) => (
+              <SelectItem key={role} value={role}>
+                <span>{ui_label}</span>
+                <span className="ml-2 text-xs text-muted-foreground">{description}</span>
+              </SelectItem>
             ))}
+          </SelectContent>
         </Select>
       );
     } else if (key === "budget_duration") {
@@ -247,67 +318,47 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     } else if (type === "boolean") {
       return (
         <div className="mt-2">
-          <Switch checked={!!editedValues[key]} onChange={(checked) => handleTextInputChange(key, checked)} />
+          <Switch
+            checked={!!editedValues[key]}
+            onCheckedChange={(checked: boolean) => handleTextInputChange(key, checked)}
+          />
         </div>
       );
     } else if (type === "array" && property.items?.enum) {
-      return (
-        <Select
-          mode="multiple"
-          style={{ width: "100%" }}
-          value={editedValues[key] || []}
-          onChange={(value) => handleTextInputChange(key, value)}
-          className="mt-2"
-        >
-          {property.items.enum.map((option: string) => (
-            <Option key={option} value={option}>
-              {option}
-            </Option>
-          ))}
-        </Select>
-      );
+      return renderMultiSelect(key, property.items.enum as string[], "Select options", (option) => option);
     } else if (key === "models") {
-      return (
-        <Select
-          mode="multiple"
-          style={{ width: "100%" }}
-          value={editedValues[key] || []}
-          onChange={(value) => handleTextInputChange(key, value)}
-          className="mt-2"
-        >
-          <Option key="no-default-models" value="no-default-models">
-            No Default Models
-          </Option>
-          <Option key="all-proxy-models" value="all-proxy-models">
-            All Proxy Models
-          </Option>
-          {availableModels.map((model: string) => (
-            <Option key={model} value={model}>
-              {getModelDisplayName(model)}
-            </Option>
-          ))}
-        </Select>
+      return renderMultiSelect(
+        key,
+        ["no-default-models", "all-proxy-models", ...availableModels],
+        "Select models",
+        (model) => {
+          if (model === "no-default-models") return "No Default Models";
+          if (model === "all-proxy-models") return "All Proxy Models";
+          return getModelDisplayName(model);
+        },
       );
     } else if (type === "string" && property.enum) {
+      const selected = editedValues[key] || null;
+
       return (
-        <Select
-          style={{ width: "100%" }}
-          value={editedValues[key] || ""}
-          onChange={(value) => handleTextInputChange(key, value)}
-          className="mt-2"
-        >
-          {property.enum.map((option: string) => (
-            <Option key={option} value={option}>
-              {option}
-            </Option>
-          ))}
+        <Select value={selected} onValueChange={(option: string) => handleTextInputChange(key, option)}>
+          <SelectTrigger className="mt-2 w-full">
+            <SelectValue placeholder={`Select ${key.replace(/_/g, " ")}`} />
+          </SelectTrigger>
+          <SelectContent>
+            {(property.enum as string[]).map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       );
     } else {
       return (
-        <TextInput
-          value={editedValues[key] !== undefined ? String(editedValues[key]) : ""}
-          onChange={(e) => handleTextInputChange(key, e.target.value)}
+        <Input
+          value={editedValues[key] !== undefined && editedValues[key] !== null ? String(editedValues[key]) : ""}
+          onChange={(event) => handleTextInputChange(key, event.target.value)}
           placeholder={property.description || ""}
           className="mt-2"
         />
@@ -316,33 +367,33 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   };
 
   const renderValue = (key: string, value: any): JSX.Element => {
-    if (value === null || value === undefined) return <span className="text-gray-400">Not set</span>;
+    if (value === null || value === undefined) return <span className="text-muted-foreground">Not set</span>;
 
     if (key === "teams" && Array.isArray(value)) {
-      if (value.length === 0) return <span className="text-gray-400">No teams assigned</span>;
+      if (value.length === 0) return <span className="text-muted-foreground">No teams assigned</span>;
 
       const normalizedTeams = normalizeTeams(value);
 
       return (
-        <div className="space-y-2 mt-1">
+        <div className="mt-1 space-y-2">
           {normalizedTeams.map((team, index) => (
-            <div key={index} className="border rounded-lg p-3 bg-white">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+            <div key={index} className="rounded-lg border border-border bg-card p-3">
+              <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
                 <div>
-                  <span className="font-medium text-gray-600">Team ID:</span>
-                  <p className="text-gray-900">{team.team_id || "Not specified"}</p>
+                  <span className="font-medium text-muted-foreground">Team ID:</span>
+                  <p>{team.team_id || "Not specified"}</p>
                 </div>
                 <div>
-                  <span className="font-medium text-gray-600">Max Budget:</span>
-                  <p className="text-gray-900">
+                  <span className="font-medium text-muted-foreground">Max Budget:</span>
+                  <p>
                     {team.max_budget_in_team !== undefined
                       ? `$${formatNumberWithCommas(team.max_budget_in_team, 4)}`
                       : "No limit"}
                   </p>
                 </div>
                 <div>
-                  <span className="font-medium text-gray-600">Role:</span>
-                  <p className="text-gray-900 capitalize">{team.user_role}</p>
+                  <span className="font-medium text-muted-foreground">Role:</span>
+                  <p className="capitalize">{team.user_role}</p>
                 </div>
               </div>
             </div>
@@ -356,7 +407,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
       return (
         <div>
           <span className="font-medium">{ui_label}</span>
-          {description && <p className="text-xs text-gray-500 mt-1">{description}</p>}
+          {description && <p className="mt-1 text-xs text-muted-foreground">{description}</p>}
         </div>
       );
     }
@@ -370,14 +421,14 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     }
 
     if (key === "models" && Array.isArray(value)) {
-      if (value.length === 0) return <span className="text-gray-400">None</span>;
+      if (value.length === 0) return <span className="text-muted-foreground">None</span>;
 
       return (
-        <div className="flex flex-wrap gap-2 mt-1">
+        <div className="mt-1 flex flex-wrap gap-2">
           {value.map((model, index) => (
-            <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+            <Badge key={index} variant="secondary">
               {getModelDisplayName(model)}
-            </span>
+            </Badge>
           ))}
         </div>
       );
@@ -385,22 +436,20 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
 
     if (typeof value === "object") {
       if (Array.isArray(value)) {
-        if (value.length === 0) return <span className="text-gray-400">None</span>;
+        if (value.length === 0) return <span className="text-muted-foreground">None</span>;
 
         return (
-          <div className="flex flex-wrap gap-2 mt-1">
+          <div className="mt-1 flex flex-wrap gap-2">
             {value.map((item, index) => (
-              <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+              <Badge key={index} variant="secondary">
                 {typeof item === "object" ? JSON.stringify(item) : String(item)}
-              </span>
+              </Badge>
             ))}
           </div>
         );
       }
 
-      return (
-        <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">{JSON.stringify(value, null, 2)}</pre>
-      );
+      return <pre className="mt-1 overflow-auto rounded-sm bg-muted p-2 text-xs">{JSON.stringify(value, null, 2)}</pre>;
     }
 
     return <span>{String(value)}</span>;
@@ -408,8 +457,8 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <Spin size="large" />
+      <div className="flex h-64 items-center justify-center">
+        <UiLoadingSpinner />
       </div>
     );
   }
@@ -417,7 +466,9 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
   if (!settings) {
     return (
       <Card>
-        <Text>No settings available or you do not have permission to view them.</Text>
+        <CardContent>
+          <p>No settings available or you do not have permission to view them.</p>
+        </CardContent>
       </Card>
     );
   }
@@ -427,7 +478,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
     const { values, field_schema } = settings;
 
     if (!field_schema || !field_schema.properties) {
-      return <Text>No schema information available</Text>;
+      return <p>No schema information available</p>;
     }
 
     return Object.entries(field_schema.properties).map(([key, property]: [string, any]) => {
@@ -435,16 +486,14 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
       const displayName = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
 
       return (
-        <div key={key} className="mb-6 pb-6 border-b border-gray-200 last:border-0">
-          <Text className="font-medium text-lg">{displayName}</Text>
-          <Paragraph className="text-sm text-gray-500 mt-1">
-            {property.description || "No description available"}
-          </Paragraph>
+        <div key={key} className="mb-6 border-b border-border pb-6 last:border-0">
+          <p className="text-lg font-medium">{displayName}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{property.description || "No description available"}</p>
 
           {isEditing ? (
             <div className="mt-2">{renderEditableField(key, property, value)}</div>
           ) : (
-            <div className="mt-1 p-2 bg-gray-50 rounded-sm">{renderValue(key, value)}</div>
+            <div className="mt-1 rounded-sm bg-muted p-2">{renderValue(key, value)}</div>
           )}
         </div>
       );
@@ -453,38 +502,38 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
 
   return (
     <Card>
-      <div className="flex justify-between items-center mb-4">
-        <Title>Default User Settings</Title>
-        {!loading &&
-          settings &&
-          (isEditing ? (
-            <div className="flex gap-2">
-              <Button
-                onClick={() => {
-                  setIsEditing(false);
-                  setEditedValues(settings.values || {});
-                }}
-                disabled={saving}
-              >
-                Cancel
-              </Button>
-              <Button type="primary" onClick={handleSaveSettings} loading={saving}>
-                Save Changes
-              </Button>
-            </div>
-          ) : (
-            <Button type="primary" onClick={() => setIsEditing(true)}>
-              Edit Settings
-            </Button>
-          ))}
-      </div>
+      <CardContent>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Default User Settings</h2>
+          {!loading &&
+            settings &&
+            (isEditing ? (
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsEditing(false);
+                    setEditedValues(settings.values || {});
+                  }}
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={handleSaveSettings} disabled={saving}>
+                  {saving && <UiLoadingSpinner className="size-4" />}
+                  Save Changes
+                </Button>
+              </div>
+            ) : (
+              <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
+            ))}
+        </div>
 
-      {settings?.field_schema?.description && (
-        <Paragraph className="mb-4">{settings.field_schema.description}</Paragraph>
-      )}
-      <Divider />
+        {settings?.field_schema?.description && <p className="mb-4">{settings.field_schema.description}</p>}
+        <Separator />
 
-      <div className="mt-4 space-y-4">{renderSettings()}</div>
+        <div className="mt-4 space-y-4">{renderSettings()}</div>
+      </CardContent>
     </Card>
   );
 };
