@@ -11,6 +11,7 @@ class KeyManagementSystem(enum.Enum):
     GOOGLE_SECRET_MANAGER = "google_secret_manager"
     HASHICORP_VAULT = "hashicorp_vault"
     CYBERARK = "cyberark"
+    KEEPER = "keeper"
     LOCAL = "local"
     AWS_KMS = "aws_kms"
     CUSTOM = "custom"

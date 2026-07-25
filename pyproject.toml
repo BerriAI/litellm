@@ -93,6 +93,7 @@ extra_proxy = [
     "resend>=2.23.0,<3.0",
     "redisvl>=0.4.1,<1.0",
     "a2a-sdk>=1.1.0,<2.0",
+    "keeper-secrets-manager-core>=17.3.0,<18.0",
 ]
 utils = [
     # Not in Docker or PyPI proxy extra.
