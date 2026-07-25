@@ -15,7 +15,7 @@ export function createTabRoutes<Slug extends string>(baseSegment: string, slugs:
 
   const slugFromPathname = (pathname: string): string => {
     const parts = pathname.split("/").filter(Boolean);
-    const idx = parts.indexOf(baseSegment);
+    const idx = parts.lastIndexOf(baseSegment);
     if (idx === -1) {
       return "";
     }
