@@ -126,9 +126,11 @@ def apply_upstream_reported_usage(
     return reported
 
 
-def upstream_reported_cost(logging_obj: LiteLLMLoggingObj) -> float | None:
-    """The cost the upstream reported for this request, if it reported one."""
-    reported = logging_obj.model_call_details.get(UPSTREAM_REPORTED_USAGE_KEY)
-    if not isinstance(reported, UpstreamReportedUsage):
-        return None
-    return reported.response_cost
+def has_upstream_reported_usage(logging_obj: LiteLLMLoggingObj) -> bool:
+    """Whether the upstream spoke this contract on the request's response.
+
+    True even when the value it sent was unusable: a target that reports its
+    own totals owns the cost for the request, and a header we could not parse
+    means zero, never a fallback to someone else's estimate.
+    """
+    return isinstance(logging_obj.model_call_details.get(UPSTREAM_REPORTED_USAGE_KEY), UpstreamReportedUsage)
