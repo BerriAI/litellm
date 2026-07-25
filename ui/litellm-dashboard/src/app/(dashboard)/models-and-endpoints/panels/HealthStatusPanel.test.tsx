@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import HealthStatusPage from "./page";
+import HealthStatusPanel from "./HealthStatusPanel";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/models-and-endpoints/health",
@@ -27,7 +27,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({ useModelCostM
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: [] }) }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "123" }) }));
 
-describe("HealthStatusPage", () => {
+describe("HealthStatusPanel", () => {
   beforeEach(() => {
     mockHealthCheckComponent.mockClear();
   });
@@ -44,7 +44,7 @@ describe("HealthStatusPage", () => {
       isLoading: false,
     });
 
-    render(<HealthStatusPage />);
+    render(<HealthStatusPanel />);
 
     expect(mockHealthCheckComponent).toHaveBeenCalled();
     const props = mockHealthCheckComponent.mock.calls[0][0];

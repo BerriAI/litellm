@@ -13,7 +13,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { vertexCredentialsUploadProps } from "@/app/(dashboard)/models-and-endpoints/vertexCredentialsUpload";
 
-export default function AddModelPage() {
+export default function AddModelPanel() {
   const { accessToken, userRole } = useAuthorized();
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
