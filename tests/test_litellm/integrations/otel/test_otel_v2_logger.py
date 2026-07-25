@@ -29,9 +29,9 @@ from litellm.integrations.otel import (  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     reset_mcp_message_trace_carrier,
-    reset_mcp_message_transport_span_context,
+    reset_mcp_message_transport_span,
     set_mcp_message_trace_carrier,
-    set_mcp_message_transport_span_context,
+    set_mcp_message_transport_span,
     set_request_root_span,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
@@ -58,11 +58,11 @@ def _reset_request_root_span():
 
     _otel_context._request_root_span.set(None)
     _otel_context._mcp_message_trace_carrier.set(None)
-    _otel_context._mcp_message_transport_span_context.set(None)
+    _otel_context._mcp_message_transport_span.set(None)
     yield
     _otel_context._request_root_span.set(None)
     _otel_context._mcp_message_trace_carrier.set(None)
-    _otel_context._mcp_message_transport_span_context.set(None)
+    _otel_context._mcp_message_transport_span.set(None)
 
 
 def _payload(**overrides):
@@ -580,15 +580,13 @@ def test_mcp_span_nests_under_this_messages_transport_not_the_session_opener(
     )
 
     async def session_task():
-        token = set_mcp_message_transport_span_context(
-            this_message.get_span_context()
-        )
+        token = set_mcp_message_transport_span(this_message)
         try:
             await logger.async_log_success_event(
                 {"standard_logging_object": make_payload()}, None, None, None
             )
         finally:
-            reset_mcp_message_transport_span_context(token)
+            reset_mcp_message_transport_span(token)
 
     async def initialize_request():
         # The anchor the session task inherits is the one ``initialize`` left behind;
@@ -750,9 +748,7 @@ def test_mcp_span_links_this_messages_transport_when_context_is_propagated():
     trace_token = set_mcp_message_trace_carrier(
         {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
     )
-    transport_token = set_mcp_message_transport_span_context(
-        this_message.get_span_context()
-    )
+    transport_token = set_mcp_message_transport_span(this_message)
     try:
         asyncio.run(
             logger.async_log_success_event(
@@ -760,7 +756,7 @@ def test_mcp_span_links_this_messages_transport_when_context_is_propagated():
             )
         )
     finally:
-        reset_mcp_message_transport_span_context(transport_token)
+        reset_mcp_message_transport_span(transport_token)
         reset_mcp_message_trace_carrier(trace_token)
     session_opener.end()
     this_message.end()
@@ -1020,6 +1016,101 @@ def test_async_post_call_failure_hook_falls_back_to_user_api_key_parent_span():
     (span,) = exporter.get_finished_spans()
     assert span.attributes["error.type"] == "ProxyException"
     assert span.attributes["litellm.provider.error.code"] == "401"
+
+
+def test_async_post_call_failure_hook_stamps_the_mcp_messages_own_transport():
+    """A failed MCP tool call is handled on the session's task, where the request
+    root anchor is still the request that opened the session — an ended span, so the
+    SDK dropped the write and the POST that actually failed carried no error at all.
+    The hook must stamp the transport the gateway published for this message."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    session_opener = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    this_message = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+
+    async def session_task():
+        token = set_mcp_message_transport_span(this_message)
+        try:
+            await logger.async_post_call_failure_hook(
+                request_data={},
+                original_exception=_proxy_exc("Authorization failed for tool 'x'", 403),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        finally:
+            reset_mcp_message_transport_span(token)
+
+    async def initialize_request():
+        set_request_root_span(session_opener)
+        await asyncio.create_task(session_task())
+
+    asyncio.run(initialize_request())
+    session_opener.end()
+    this_message.end()
+    by_id = {s.context.span_id: s for s in exporter.get_finished_spans()}
+    failed = by_id[this_message.get_span_context().span_id]
+    opener = by_id[session_opener.get_span_context().span_id]
+    assert failed.attributes["error.type"] == "ProxyException"
+    assert failed.status.status_code is StatusCode.ERROR
+    assert "error.type" not in opener.attributes
+    assert opener.status.status_code is not StatusCode.ERROR
+
+
+def test_mcp_message_transport_reanchors_request_level_spans():
+    """Publishing the message's transport also re-anchors the request root, so
+    everything else the message emits lands on the request that carried it. Without
+    that, a guardrail run during a tool call — like the identity attributes seeded
+    onto the server span — attaches to the request that opened the session."""
+    logger, exporter = _logger()
+    session_opener = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    this_message = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+
+    async def session_task():
+        token = set_mcp_message_transport_span(this_message)
+        try:
+            logger.emit_guardrail_span({"guardrail_name": "my_guard", "guardrail_status": "success"})
+        finally:
+            reset_mcp_message_transport_span(token)
+
+    async def initialize_request():
+        set_request_root_span(session_opener)
+        await asyncio.create_task(session_task())
+
+    asyncio.run(initialize_request())
+    session_opener.end()
+    this_message.end()
+    guard = next(s for s in exporter.get_finished_spans() if s.name == "execute_guardrail my_guard")
+    assert guard.parent.span_id == this_message.get_span_context().span_id
+    assert guard.parent.span_id != session_opener.get_span_context().span_id
+
+
+def test_async_post_call_failure_hook_skips_a_transport_that_already_answered():
+    """The published transport is only writable while its request is open. A
+    notification POST answers before the session task is done with the message, and
+    writing to the finished span is a no-op the SDK logs and discards, so the hook
+    must fall through to the anchor instead of aiming at it."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    anchor = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    answered = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    answered.end()
+    set_request_root_span(anchor)
+    token = set_mcp_message_transport_span(answered)
+    try:
+        asyncio.run(
+            logger.async_post_call_failure_hook(
+                request_data={},
+                original_exception=_proxy_exc("boom", 403),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        )
+    finally:
+        reset_mcp_message_transport_span(token)
+    anchor.end()
+    by_id = {s.context.span_id: s for s in exporter.get_finished_spans()}
+    assert by_id[anchor.get_span_context().span_id].attributes["error.type"] == "ProxyException"
+    assert "error.type" not in by_id[answered.get_span_context().span_id].attributes
 
 
 def test_record_error_attributes_on_span_decorates_without_ending():
