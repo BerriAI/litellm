@@ -73,30 +73,41 @@ class SpendLogCleanup:
             )
             return False
 
-    async def _delete_old_logs(self, prisma_client: PrismaClient, cutoff_date: datetime) -> int:
+    async def _delete_old_rows_batched(
+        self,
+        prisma_client: PrismaClient,
+        cutoff_date: datetime,
+        table_name: str,
+        key_columns: tuple[str, ...],
+        time_column: str,
+    ) -> int:
         """
-        Helper method to delete old logs in batches.
-        Returns the total number of logs deleted.
+        Helper method to delete a table's rows older than the cutoff in batches.
+        Returns the total number of rows deleted.
         """
+        key_list = ", ".join(f'"{col}"' for col in key_columns)
+        delete_sql = f"""
+            DELETE FROM "{table_name}"
+            WHERE ({key_list}) IN (
+                SELECT {key_list} FROM "{table_name}"
+                WHERE "{time_column}" < $1::timestamptz
+                LIMIT $2
+            )
+            """
         total_deleted = 0
         run_count = 0
         consecutive_failures = 0
         while True:
             if run_count > SPEND_LOG_RUN_LOOPS:
-                verbose_proxy_logger.info("Max logs deleted - 1,00,000, rest of the logs will be deleted in next run")
+                verbose_proxy_logger.info(
+                    "Max batches reached for %s cleanup, remaining rows will be deleted in next run", table_name
+                )
                 break
-            # Step 1: Find logs and delete them in one go without fetching to application
+            # Step 1: Find rows and delete them in one go without fetching to application
             # Delete in batches, limited by self.batch_size
             try:
                 deleted_result = await prisma_client.db.execute_raw(
-                    """
-                    DELETE FROM "LiteLLM_SpendLogs"
-                    WHERE ("request_id", "startTime") IN (
-                        SELECT "request_id", "startTime" FROM "LiteLLM_SpendLogs"
-                        WHERE "startTime" < $1::timestamptz
-                        LIMIT $2
-                    )
-                    """,
+                    delete_sql,
                     cutoff_date,
                     self.batch_size,
                 )
@@ -105,9 +116,10 @@ class SpendLogCleanup:
                 # the whole run — subsequent batches may still succeed.
                 consecutive_failures += 1
                 verbose_proxy_logger.exception(
-                    "Spend log cleanup batch failed "
+                    "%s cleanup batch failed "
                     "(run_count=%d, consecutive_failures=%d, batch_size=%d, "
                     "cutoff=%s, total_deleted_so_far=%d): %s: %s",
+                    table_name,
                     run_count,
                     consecutive_failures,
                     self.batch_size,
@@ -118,8 +130,8 @@ class SpendLogCleanup:
                 )
                 if consecutive_failures >= SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES:
                     verbose_proxy_logger.error(
-                        "Aborting spend log cleanup after %d consecutive batch "
-                        "failures; total deleted before abort: %d",
+                        "Aborting %s cleanup after %d consecutive batch failures; total deleted before abort: %d",
+                        table_name,
                         consecutive_failures,
                         total_deleted,
                     )
@@ -134,15 +146,15 @@ class SpendLogCleanup:
                 deleted_count = deleted_result
             else:
                 verbose_proxy_logger.error(
-                    f"Unexpected execute_raw return type for spend log cleanup: {type(deleted_result)}; "
+                    f"Unexpected execute_raw return type for {table_name} cleanup: {type(deleted_result)}; "
                     "aborting cleanup to avoid infinite loop"
                 )
                 break
 
-            verbose_proxy_logger.info(f"Deleted {deleted_count} logs in this batch")
+            verbose_proxy_logger.info(f"Deleted {deleted_count} {table_name} rows in this batch")
 
             if deleted_count == 0:
-                verbose_proxy_logger.info(f"No more logs to delete. Total deleted: {total_deleted}")
+                verbose_proxy_logger.info(f"No more {table_name} rows to delete. Total deleted: {total_deleted}")
                 break
 
             total_deleted += deleted_count
@@ -152,6 +164,26 @@ class SpendLogCleanup:
             await asyncio.sleep(0.1)
 
         return total_deleted
+
+    async def _delete_old_logs(self, prisma_client: PrismaClient, cutoff_date: datetime) -> int:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_SpendLogs",
+            key_columns=("request_id", "startTime"),
+            time_column="startTime",
+        )
+
+    async def _delete_old_tool_index_rows(self, prisma_client: PrismaClient, cutoff_date: datetime) -> int:
+        # SpendLogToolIndex rows are derived from spend logs, so they expire on the
+        # same cutoff; rows older than retention point at already-deleted logs.
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_SpendLogToolIndex",
+            key_columns=("request_id", "tool_name"),
+            time_column="start_time",
+        )
 
     async def cleanup_old_spend_logs(self, prisma_client: PrismaClient) -> None:
         """
@@ -208,6 +240,9 @@ class SpendLogCleanup:
             else:
                 total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
                 verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
+
+            index_deleted = await self._delete_old_tool_index_rows(prisma_client, cutoff_date)
+            verbose_proxy_logger.info(f"Deleted {index_deleted} expired tool index rows")
 
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import TOOL_SPEND_MAX_WINDOW_DAYS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -209,6 +210,11 @@ async def get_tool_spend(
     counts its full spend toward each of those tools, so per-tool numbers are
     attributions. ``total_spend`` is the deduplicated spend of every request that
     called at least one tool in the window, so it never double counts.
+
+    ``start_date`` is clamped to at most 30 days before ``end_date`` (serving up to
+    31 calendar dates inclusive, the same width as the endpoint's default window):
+    a wider requested range is clamped, and the response's ``start_date`` reflects
+    the effective window actually served.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -226,9 +232,19 @@ async def get_tool_spend(
 
     now = datetime.now(timezone.utc)
     end_day = _parse_day_start(end_date)
-    start_dt = _parse_day_start(start_date) or ((end_day or now) - timedelta(days=30))
+    # Anchor the floor to a midnight so the clamp compares dates with dates:
+    # parsed start_dates are midnight-aligned, and a floor carrying now's
+    # time-of-day would invisibly truncate an explicit start_date to mid-day.
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_floor = (end_day or today) - timedelta(days=TOOL_SPEND_MAX_WINDOW_DAYS)
+    start_dt = _parse_day_start(start_date) or window_floor
+    if start_dt < window_floor:
+        start_dt = window_floor
     end_exclusive = (end_day + timedelta(days=1)) if end_day else now
 
+    # ti.start_time defines the window in both queries; the sl."startTime" bounds
+    # exist only so the planner can use the SpendLogs startTime index, and carry a
+    # 1s margin because the two writers can disagree by ~1ms on the same request.
     rows = await prisma_client.db.query_raw(
         """
         SELECT to_char(ti.start_time, 'YYYY-MM-DD') AS date,
@@ -240,6 +256,8 @@ async def get_tool_spend(
         JOIN "LiteLLM_SpendLogs" sl ON sl.request_id = ti.request_id
         WHERE ti.start_time >= ($1::timestamptz AT TIME ZONE 'UTC')
           AND ti.start_time < ($2::timestamptz AT TIME ZONE 'UTC')
+          AND sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC') - interval '1 second'
+          AND sl."startTime" < ($2::timestamptz AT TIME ZONE 'UTC') + interval '1 second'
         GROUP BY date, ti.tool_name
         ORDER BY date ASC, spend DESC
         """,
@@ -250,7 +268,9 @@ async def get_tool_spend(
         """
         SELECT COALESCE(SUM(sl.spend), 0)::double precision AS total_spend
         FROM "LiteLLM_SpendLogs" sl
-        WHERE EXISTS (
+        WHERE sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC') - interval '1 second'
+          AND sl."startTime" < ($2::timestamptz AT TIME ZONE 'UTC') + interval '1 second'
+          AND EXISTS (
             SELECT 1
             FROM "LiteLLM_SpendLogToolIndex" ti
             WHERE ti.request_id = sl.request_id

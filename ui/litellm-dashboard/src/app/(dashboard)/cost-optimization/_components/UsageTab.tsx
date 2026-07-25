@@ -108,6 +108,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
+  const toolSpendWindowClamped = !!toolSpend?.start_date && !!startTime && toolSpend.start_date > isoDay(startTime);
 
   const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
   const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
@@ -211,6 +212,12 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
             Spend on requests that called each tool (MCP and client-side tools). A request that used multiple tools
             counts its full spend toward each, so this attributes rather than partitions spend.
           </p>
+          {toolSpendWindowClamped && (
+            <p className="text-xs text-muted-foreground">
+              Tool spend is capped at 30 days before the end of the selected range; showing spend since{" "}
+              {toolSpend?.start_date}.
+            </p>
+          )}
         </CardHeader>
         <CardContent>
           {topTools.length === 0 ? (

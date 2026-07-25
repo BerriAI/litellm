@@ -27417,7 +27417,7 @@
       },
       "/v1/tool/spend": {
         "get": {
-          "description": "Spend attributed to each tool over a date range, for the Cost Optimization dashboard.\n\nJoins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to\n``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools\ncounts its full spend toward each of those tools, so per-tool numbers are\nattributions. ``total_spend`` is the deduplicated spend of every request that\ncalled at least one tool in the window, so it never double counts.",
+          "description": "Spend attributed to each tool over a date range, for the Cost Optimization dashboard.\n\nJoins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to\n``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools\ncounts its full spend toward each of those tools, so per-tool numbers are\nattributions. ``total_spend`` is the deduplicated spend of every request that\ncalled at least one tool in the window, so it never double counts.\n\n``start_date`` is clamped to at most 30 days before ``end_date`` (serving up to\n31 calendar dates inclusive, the same width as the endpoint's default window):\na wider requested range is clamped, and the response's ``start_date`` reflects\nthe effective window actually served.",
           "operationId": "get_tool_spend_v1_tool_spend_get",
           "parameters": [
             {
