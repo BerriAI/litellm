@@ -68,6 +68,7 @@ def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
             append(ch)
     return "".join(parts)
 
+PROMETHEUS_METRICS_WILDCARD = "*"
 
 @dataclass
 class MetricValidationError:
@@ -775,7 +776,13 @@ class PrometheusMetricLabels:
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
-        default_labels = getattr(PrometheusMetricLabels, label_name)
+        # Some entries in DEFINED_PROMETHEUS_METRICS (e.g. litellm_in_flight_requests)
+        # have no matching class attribute here, because that metric is created
+        # with a fixed, empty label set and never goes through get_labels_for_metric().
+        # Default to no labels instead of raising, so anything that legitimately
+        # iterates over every defined metric name (e.g. a wildcard config group)
+        # doesn't blow up on a metric like this.
+        default_labels = getattr(PrometheusMetricLabels, label_name, [])
         custom_labels = []
 
         # Add custom metadata labels
@@ -835,7 +842,6 @@ _USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Dict[str, str] = {
     # Some tests / call sites use ``api_key_hash``; Prometheus field is ``hashed_api_key``.
     "api_key_hash": "hashed_api_key",
 }
-
 
 @dataclass(frozen=True, init=False)
 class UserAPIKeyLabelValues:
@@ -933,7 +939,17 @@ class UserAPIKeyLabelValues:
 
 @dataclass
 class PrometheusMetricsConfig:
-    """Configuration for filtering Prometheus metrics (parsed once from proxy config)."""
+    """
+    Configuration for filtering Prometheus metrics (parsed once from proxy config).
+
+    `metrics` is normally a list of names from DEFINED_PROMETHEUS_METRICS. It
+    can also be `[PROMETHEUS_METRICS_WILDCARD]` ("*") to apply `include_labels`
+    as the default label set for every metric, instead of listing all of them.
+    A wildcard group only sets defaults - it never disables a metric, and a
+    group naming a specific metric still wins over the wildcard for that one
+    metric. A group can't mix the wildcard with real metric names; use two
+    groups instead (see PrometheusLogger._build_label_filters).
+    """
 
     group: str
     metrics: List[str]
