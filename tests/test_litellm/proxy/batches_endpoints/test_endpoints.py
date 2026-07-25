@@ -561,10 +561,11 @@ async def test_create__unified_file_id_resolves_real_storage_url(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_db_error_fails_closed_503(harness):
-    """A lookup error leaves the token unresolved, so it fails closed with a
-    retryable 503 rather than dispatching the opaque id into the provider crash
-    it cannot parse. Nothing is dispatched."""
+async def test_create__unified_file_id_db_error_falls_back_to_raw_id(harness):
+    """Resolution is additive and best-effort: a lookup error leaves the id
+    unresolved and dispatch falls back to the original id, exactly as before
+    this change (the managed-files deployment hook still maps it). No new
+    failure mode is introduced."""
     set_body(
         harness,
         {
@@ -585,12 +586,9 @@ async def test_create__unified_file_id_db_error_fails_closed_503(harness):
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        with pytest.raises(ProxyException) as exc:
-            await call_create(harness)
+        await call_create(harness)
 
-    assert exc.value.code == "503"
-    harness.router_acreate.assert_not_called()
-    harness.litellm_acreate.assert_not_called()
+    assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
 
 
 @pytest.mark.asyncio
@@ -626,11 +624,11 @@ async def test_create__multi_model_unified_file_with_loadbalancing_keeps_router_
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_missing_row_fails_closed_404(harness):
-    """With a database present, a managed unified id that has no row cannot be
-    resolved to a real storage location, so it fails closed with a 404 rather
-    than dispatching the opaque token, which would hit the Vertex
-    publishers-segment IndexError this PR exists to prevent."""
+async def test_create__unified_file_id_missing_row_falls_back_to_raw_id(harness):
+    """Resolution is additive: when no managed-file row exists there is nothing
+    to substitute, so dispatch falls back to the original id exactly as before
+    this change (the managed-files deployment hook still maps it). No new
+    failure mode is introduced for this case."""
     set_body(
         harness,
         {
@@ -651,12 +649,9 @@ async def test_create__unified_file_id_missing_row_fails_closed_404(harness):
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        with pytest.raises(ProxyException) as exc:
-            await call_create(harness)
+        await call_create(harness)
 
-    assert exc.value.code == "404"
-    harness.router_acreate.assert_not_called()
-    harness.litellm_acreate.assert_not_called()
+    assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
 
 
 @pytest.mark.asyncio
