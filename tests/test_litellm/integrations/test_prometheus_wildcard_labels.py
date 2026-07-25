@@ -63,17 +63,21 @@ def test_named_group_overrides_wildcard_for_that_metric():
     assert label_filters["litellm_total_tokens_metric"] == ["hashed_api_key", "team"]
 
 
-def test_wildcard_group_does_not_disable_other_metrics():
+def test_wildcard_group_does_not_disable_other_metrics(monkeypatch):
     """A wildcard-only config should leave every metric enabled - it's a
     label filter, not an allowlist."""
     logger = _bare_logger()
-    litellm.prometheus_metrics_config = [
-        {
-            "group": "defaults",
-            "metrics": [PROMETHEUS_METRICS_WILDCARD],
-            "include_labels": ["team"],
-        }
-    ]
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [
+            {
+                "group": "defaults",
+                "metrics": [PROMETHEUS_METRICS_WILDCARD],
+                "include_labels": ["team"],
+            }
+        ],
+    )
 
     logger._parse_prometheus_config()
 
@@ -82,21 +86,25 @@ def test_wildcard_group_does_not_disable_other_metrics():
     assert logger._is_metric_enabled("litellm_mcp_tool_calls_total") is True
 
 
-def test_wildcard_combined_with_named_enable_list():
+def test_wildcard_combined_with_named_enable_list(monkeypatch):
     """Wildcard for labels + a separate group naming which metrics are
     enabled - the two concerns are independent."""
     logger = _bare_logger()
-    litellm.prometheus_metrics_config = [
-        {
-            "group": "enabled",
-            "metrics": ["litellm_spend_metric", "litellm_total_tokens_metric"],
-        },
-        {
-            "group": "defaults",
-            "metrics": [PROMETHEUS_METRICS_WILDCARD],
-            "include_labels": ["team"],
-        },
-    ]
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [
+            {
+                "group": "enabled",
+                "metrics": ["litellm_spend_metric", "litellm_total_tokens_metric"],
+            },
+            {
+                "group": "defaults",
+                "metrics": [PROMETHEUS_METRICS_WILDCARD],
+                "include_labels": ["team"],
+            },
+        ],
+    )
 
     label_filters = logger._parse_prometheus_config()
 
@@ -107,7 +115,6 @@ def test_wildcard_combined_with_named_enable_list():
     assert logger._is_metric_enabled("litellm_spend_metric") is True
     assert logger._is_metric_enabled("litellm_cache_hits_metric") is False
     assert label_filters["litellm_spend_metric"] == ["team"]
-
 
 def test_wildcard_mixed_with_named_metric_in_same_group_raises():
     logger = _bare_logger()

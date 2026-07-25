@@ -669,14 +669,21 @@ class PrometheusLogger(CustomLogger):
                 parsed_config = group_config
 
             parsed_configs.append(parsed_config)
-            self.enabled_metrics.update(parsed_config.metrics)
+
+            # A wildcard group only sets a default label filter - it should
+            # never narrow down which metrics get created. Only groups that
+            # name real metrics feed into enabled_metrics, same as before.
+            if parsed_config.metrics != [PROMETHEUS_METRICS_WILDCARD]:
+                self.enabled_metrics.update(parsed_config.metrics)
 
         # Validate all configurations
         validation_results = self._validate_all_configurations(parsed_configs)
 
         if validation_results.has_errors:
             self._pretty_print_validation_errors(validation_results)
-            error_message = "Configuration validation failed:\n" + "\n".join(validation_results.all_error_messages)
+            error_message = "Configuration validation failed:\n" + "\n".join(
+                validation_results.all_error_messages
+            )
             raise ValueError(error_message)
 
         # Build label filters from valid configurations
@@ -688,20 +695,53 @@ class PrometheusLogger(CustomLogger):
 
     def _validate_all_configurations(self, parsed_configs: List) -> ValidationResults:
         """Validate all metric configurations and return collected errors"""
+        from typing import get_args
+
         metric_errors = []
         label_errors = []
 
         for config in parsed_configs:
+            if PROMETHEUS_METRICS_WILDCARD in config.metrics:
+                if len(config.metrics) > 1:
+                    raise ValueError(
+                        f"Prometheus metrics group '{config.group}' mixes the "
+                        f"wildcard '{PROMETHEUS_METRICS_WILDCARD}' with named "
+                        f"metrics ({config.metrics}). Put named-metric overrides "
+                        "in a separate group - the wildcard group only sets the "
+                        "default label filter, it can't also be scoped."
+                    )
+
+                if config.include_labels:
+                    all_valid_labels = {
+                        label
+                        for metric_name in get_args(DEFINED_PROMETHEUS_METRICS)
+                        for label in PrometheusMetricLabels.get_labels(metric_name)
+                    }
+                    unknown_labels = [
+                        label
+                        for label in config.include_labels
+                        if label not in all_valid_labels
+                    ]
+                    if unknown_labels:
+                        label_errors.append(
+                            LabelValidationError(
+                                metric_name=PROMETHEUS_METRICS_WILDCARD,
+                                invalid_labels=unknown_labels,
+                                valid_labels=sorted(all_valid_labels),
+                            )
+                        )
+                continue
+
             for metric_name in config.metrics:
-                # Validate metric name
                 metric_error = self._validate_single_metric_name(metric_name)
                 if metric_error:
                     metric_errors.append(metric_error)
-                    continue  # Skip label validation if metric name is invalid
+                    continue
 
-                # Validate labels if provided
                 if config.include_labels:
-                    label_error = self._validate_single_metric_labels(metric_name, config.include_labels)
+                    label_error = self._validate_single_metric_labels(
+                        metric_name, config.include_labels
+                    )
                     if label_error:
                         label_errors.append(label_error)
 
@@ -738,12 +778,26 @@ class PrometheusLogger(CustomLogger):
 
     def _build_label_filters(self, parsed_configs: List) -> Dict[str, List[str]]:
         """Build label filters from validated configurations"""
-        label_filters = {}
+        from typing import get_args
 
-        for config in parsed_configs:
+        label_filters: Dict[str, List[str]] = {}
+
+        wildcard_configs = [
+            c for c in parsed_configs if c.metrics == [PROMETHEUS_METRICS_WILDCARD]
+        ]
+        named_configs = [
+            c for c in parsed_configs if c.metrics != [PROMETHEUS_METRICS_WILDCARD]
+        ]
+
+        for config in wildcard_configs:
+            if not config.include_labels:
+                continue
+            for metric_name in get_args(DEFINED_PROMETHEUS_METRICS):
+                label_filters[metric_name] = config.include_labels
+
+        for config in named_configs:
             for metric_name in config.metrics:
                 if config.include_labels:
-                    # Only add if metric name is valid (validation already passed)
                     if self._validate_single_metric_name(metric_name) is None:
                         label_filters[metric_name] = config.include_labels
 
