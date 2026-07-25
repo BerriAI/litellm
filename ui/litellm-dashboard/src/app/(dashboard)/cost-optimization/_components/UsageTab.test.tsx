@@ -137,4 +137,31 @@ describe("UsageTab", () => {
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
   });
+
+  it("notes the 30-day cap when the server clamps the tool spend window", async () => {
+    const toolSpend = {
+      by_tool: [{ tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 }],
+      daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
+      total_spend: 4.0,
+      start_date: "2026-07-05",
+      end_date: "2026-07-14",
+    };
+    const { findByText } = renderWith([day("2026-07-12", {})], toolSpend);
+
+    expect(await findByText(/most recent 30 days of the selected range/)).toBeInTheDocument();
+  });
+
+  it("shows no cap note when the served window matches the request", async () => {
+    const toolSpend = {
+      by_tool: [{ tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 }],
+      daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
+      total_spend: 4.0,
+      start_date: "2026-07-01",
+      end_date: "2026-07-14",
+    };
+    const { findAllByTestId, queryByText } = renderWith([day("2026-07-12", {})], toolSpend);
+
+    await findAllByTestId("bar-chart");
+    expect(queryByText(/most recent 30 days of the selected range/)).not.toBeInTheDocument();
+  });
 });

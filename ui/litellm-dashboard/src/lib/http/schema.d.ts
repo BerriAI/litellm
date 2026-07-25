@@ -17976,6 +17976,10 @@ export interface paths {
          *     counts its full spend toward each of those tools, so per-tool numbers are
          *     attributions. ``total_spend`` is the deduplicated spend of every request that
          *     called at least one tool in the window, so it never double counts.
+         *
+         *     The window is capped at the most recent 30 days ending at ``end_date``: a wider
+         *     requested range is clamped, and the response's ``start_date`` reflects the
+         *     effective window actually served.
          */
         get: operations["get_tool_spend_v1_tool_spend_get"];
         put?: never;
