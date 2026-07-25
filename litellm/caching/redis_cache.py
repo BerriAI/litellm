@@ -1286,17 +1286,15 @@ class RedisCache(BaseCache):
         Returns:
             dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
         """
+        from .._redis import get_redis_async_client
+
         try:
-            import redis.asyncio as redis_async
+            redis_client = get_redis_async_client(**self.redis_kwargs)
 
-            # Create a fresh Redis client with current settings
-            redis_client = redis_async.Redis(**self.redis_kwargs)
-
-            # Test the connection
-            ping_result = await redis_client.ping()  # type: ignore[misc]
-
-            # Close the connection
-            await redis_client.aclose()  # type: ignore[attr-defined]
+            try:
+                ping_result = await redis_client.ping()  # type: ignore[misc]
+            finally:
+                await redis_client.aclose()  # type: ignore[attr-defined]
 
             if ping_result:
                 return {
