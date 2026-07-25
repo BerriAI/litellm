@@ -9,7 +9,7 @@ imports these inside function bodies to avoid circular imports.
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -231,6 +231,31 @@ class TestToolManagementEndpoints:
         for call in prisma.db.query_raw.await_args_list:
             assert call.args[1] == datetime(2026, 6, 25, tzinfo=timezone.utc).isoformat()
         assert resp.json()["start_date"] == "2026-06-25"
+
+    def test_tool_spend_start_honored_when_end_date_omitted(self):
+        # Regression: with end_date omitted the floor anchors to today's UTC
+        # midnight, not now's time-of-day, so an explicit start_date exactly 30
+        # days back is served from midnight rather than truncated to mid-day.
+        prisma = MagicMock()
+        prisma.db.query_raw = AsyncMock(return_value=[])
+        floor_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get(f"/v1/tool/spend?start_date={floor_day.strftime('%Y-%m-%d')}")
+        assert resp.status_code == 200
+        for call in prisma.db.query_raw.await_args_list:
+            assert call.args[1] == floor_day.isoformat()
+        assert resp.json()["start_date"] == floor_day.strftime("%Y-%m-%d")
+
+    def test_tool_spend_clamp_without_end_date_lands_on_midnight(self):
+        prisma = MagicMock()
+        prisma.db.query_raw = AsyncMock(return_value=[])
+        floor_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2020-01-01")
+        assert resp.status_code == 200
+        for call in prisma.db.query_raw.await_args_list:
+            assert call.args[1] == floor_day.isoformat()
+        assert resp.json()["start_date"] == floor_day.strftime("%Y-%m-%d")
 
     def test_tool_spend_total_query_bounds_outer_spendlogs_scan(self):
         prisma = MagicMock()
