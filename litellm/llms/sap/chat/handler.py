@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import time
-from typing import AsyncIterator, Iterator, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.types.llms.openai import OpenAIChatCompletionChunk
+from litellm.types.llms.openai import ChatCompletionThinkingBlock, OpenAIChatCompletionChunk
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
@@ -29,6 +29,58 @@ class GenAIHubOrchestrationError(BaseLLMException):
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _to_thinking_block(block: dict[str, Any] | str) -> ChatCompletionThinkingBlock:
+    if isinstance(block, str):
+        return ChatCompletionThinkingBlock(type="thinking", thinking=block, signature=None)
+    return ChatCompletionThinkingBlock(
+        type="thinking",
+        thinking=block.get("content") or block.get("text") or "",
+        signature=block.get("signature"),
+    )
+
+
+def _normalized_message(message: dict[str, Any]) -> dict[str, Any]:
+    blocks = message.get("reasoning_content")
+    if not isinstance(blocks, list):
+        return message
+
+    thinking_blocks = [_to_thinking_block(block) for block in blocks if isinstance(block, (dict, str))]
+    reasoning_text = "".join(block["thinking"] for block in thinking_blocks)
+    return {
+        **message,
+        "reasoning_content": reasoning_text or None,
+        "thinking_blocks": message.get("thinking_blocks") or thinking_blocks or None,
+    }
+
+
+def normalize_reasoning_content(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    SAP returns `reasoning_content` as a list of blocks for some models (e.g. `gemini-3.5-flash`),
+    while the OpenAI-compatible schema expects a string; the structured blocks are kept in
+    `thinking_blocks`
+    """
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return payload
+
+    return {
+        **payload,
+        "choices": [
+            {
+                **choice,
+                **{
+                    key: _normalized_message(choice[key])
+                    for key in ("message", "delta")
+                    if isinstance(choice.get(key), dict)
+                },
+            }
+            if isinstance(choice, dict)
+            else choice
+            for choice in choices
+        ],
+    }
 
 
 def _is_terminal_chunk(chunk: OpenAIChatCompletionChunk) -> bool:
@@ -55,20 +107,22 @@ class _StreamParser:
             return None
 
         return OpenAIChatCompletionChunk.model_validate(
-            {
-                "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
-                "object": orc.get("object") or "chat.completion.chunk",
-                "created": orc.get("created") or evt.get("created") or _now_ts(),
-                "model": orc.get("model") or "unknown",
-                "choices": [
-                    {
-                        "index": c.get("index", 0),
-                        "delta": c.get("delta") or {},
-                        "finish_reason": c.get("finish_reason"),
-                    }
-                    for c in (orc.get("choices") or [])
-                ],
-            }
+            normalize_reasoning_content(
+                {
+                    "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
+                    "object": orc.get("object") or "chat.completion.chunk",
+                    "created": orc.get("created") or evt.get("created") or _now_ts(),
+                    "model": orc.get("model") or "unknown",
+                    "choices": [
+                        {
+                            "index": c.get("index", 0),
+                            "delta": c.get("delta") or {},
+                            "finish_reason": c.get("finish_reason"),
+                        }
+                        for c in (orc.get("choices") or [])
+                    ],
+                }
+            )
         )
 
     @staticmethod
@@ -92,7 +146,7 @@ class _StreamParser:
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(fr)
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(fr))
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -100,7 +154,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(event_obj)
+            return OpenAIChatCompletionChunk.model_validate(normalize_reasoning_content(event_obj))
 
         # Unknown / heartbeat / metrics
         return None
