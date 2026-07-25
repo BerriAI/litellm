@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, unwrap, unwrap_status
@@ -127,24 +127,46 @@ class ComplianceResponse(BaseModel):
 # ---- cache settings --------------------------------------------------------
 
 
-class CacheSettingsValue(BaseModel):
-    type: str
-    host: str = ""
-    port: str = ""
+# Keys that decide how the proxy connects, as opposed to how it caches. Dropping
+# any of these turns a working client into one that cannot reach the server at
+# all: without `ssl` a TLS-only endpoint hangs to socket timeout, and without
+# `redis_startup_nodes` a cluster is driven as a standalone node.
+CACHE_TRANSPORT_KEYS = frozenset({"ssl", "redis_startup_nodes", "sentinel_nodes", "url", "host", "port"})
+
+
+# The value union the route actually accepts, matching the field_type values in
+# litellm's CACHE_SETTINGS_FIELDS: String, Integer, Boolean, Float and List. Node
+# lists (redis_startup_nodes, sentinel_nodes) arrive as host/port mappings. bool
+# leads the scalar union so a Boolean field is never narrowed to int.
+type CacheSettingScalar = bool | int | float | str | None
+type CacheSettingValue = CacheSettingScalar | list[CacheSettingScalar] | list[dict[str, CacheSettingScalar]]
+
+
+class CacheSettingsValue(RootModel[dict[str, CacheSettingValue]]):
+    """The settings blob verbatim. Modelling a fixed subset here is what made this
+    test destructive: `/cache/settings` persists whatever it receives and that row
+    then outranks the YAML, so writing back a subset silently dropped every field
+    the subset omitted."""
+
+    @property
+    def type(self) -> str | None:
+        value = self.root.get("type")
+        return value if isinstance(value, str) else None
+
+    def transport(self) -> dict[str, CacheSettingValue]:
+        return {k: v for k, v in self.root.items() if k in CACHE_TRANSPORT_KEYS}
+
+
+class CachePingResponse(BaseModel):
+    status: str | None = None
 
 
 class CacheSettingsUpdateBody(BaseModel):
     cache_settings: CacheSettingsValue
 
 
-class CacheCurrentValues(BaseModel):
-    type: str | None = None
-    host: str | None = None
-    port: str | None = None
-
-
 class CacheGetResponse(BaseModel):
-    current_values: CacheCurrentValues
+    current_values: CacheSettingsValue
 
 
 class CacheUpdateResponse(BaseModel):
@@ -375,16 +397,36 @@ class TestCacheSettings:
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         """Exercise the update route without changing global state: capture the live
-        cache backend and write exactly that back, so the config the proxy ends on is
-        byte-for-byte the one it started with. A teardown restore of the same captured
-        settings is the safety net if the body fails partway. The update route is only
-        meaningful against a configured cache, so an unconfigured proxy fails loudly
-        here rather than being silently switched to redis."""
+        settings and write them back verbatim, so the config the proxy ends on is the
+        one it started with. A teardown restore of the same capture is the safety net
+        if the body fails partway.
+
+        Writing back the whole blob rather than a hand-picked subset is load-bearing.
+        `/cache/settings` persists exactly what it receives, and that row then outranks
+        the YAML `cache_params` for the life of the deployment, re-applied on a timer.
+        An earlier version of this test captured only type/host/port, so running it
+        against a TLS cluster dropped `ssl` and `redis_startup_nodes` and left every
+        later Redis call hanging to socket timeout. That took out rate limiting,
+        Redis-only budgets, spend tracking and guardrail sync for the rest of the run.
+
+        The pre-flight below refuses to write when the proxy is driving a cluster but
+        GET cannot see the fields that make it one, because GET resolves the stored row
+        overlaid with REDIS_* env and never reads YAML. In that state no round-trip can
+        be lossless, so the honest move is to fail pointing at the product bug rather
+        than persist a downgrade."""
         before = self._read_settings(client)
         assert before.type is not None, (
             "GET /cache/settings reported no cache type; refusing to invent one and mutate the shared proxy"
         )
-        captured = CacheSettingsValue(type=before.type, host=before.host or "", port=before.port or "")
+        if before.root.get("redis_type") == "cluster":
+            assert before.root.get("redis_startup_nodes"), (
+                "GET /cache/settings reports redis_type=cluster but omits redis_startup_nodes, so writing "
+                "these settings back would persist a row that downgrades the cluster to a standalone node. "
+                "Refusing to write. GET resolves the stored row plus REDIS_* env and never reads YAML "
+                "cache_params, so a cluster configured only in YAML cannot round-trip through this route"
+            )
+        healthy_before = self._cache_reachable(client)
+        captured = before.model_copy(deep=True)
         resources.defer(lambda: self._write_settings(client, captured))
 
         updated = unwrap(
@@ -400,18 +442,37 @@ class TestCacheSettings:
             f"/cache/settings echoed type {updated.settings.type!r}, wrote {captured.type!r}"
         )
 
-        def reflected() -> CacheCurrentValues | None:
+        def reflected() -> CacheSettingsValue | None:
             current = self._read_settings(client)
             return current if current.type == captured.type else None
 
         after = _poll(client, reflected, f"/cache/settings never reported type {captured.type!r} after the update")
-        assert after.host == captured.host and after.port == captured.port, (
-            f"/cache/settings persisted host/port {after.host!r}/{after.port!r}, "
-            f"wrote {captured.host!r}/{captured.port!r}"
+        assert after.transport() == captured.transport(), (
+            "a no-op /cache/settings write changed how the proxy connects to its cache; "
+            f"transport fields were {captured.transport()} and are now {after.transport()}. "
+            "Every later Redis call on this deployment will hang if a transport field was dropped"
+        )
+        assert self._cache_reachable(client) == healthy_before, (
+            "a no-op /cache/settings write changed whether the cache is reachable "
+            f"(/cache/ping healthy before={healthy_before}, after={not healthy_before}); "
+            "the round-trip persisted a config the proxy cannot connect with"
         )
 
     @staticmethod
-    def _read_settings(client: ManagementClient) -> CacheCurrentValues:
+    def _cache_reachable(client: ManagementClient) -> bool:
+        """Whether the proxy can actually talk to its cache right now. Used as a
+        before/after guard so a write that breaks connectivity fails this test instead
+        of silently degrading every suite that runs after it."""
+        result = client.proxy.transport.get(
+            "/cache/ping",
+            headers=client.proxy.transport.master,
+            params=NoBody(),
+            response_type=CachePingResponse,
+        )
+        return isinstance(result, Success)
+
+    @staticmethod
+    def _read_settings(client: ManagementClient) -> CacheSettingsValue:
         return unwrap(
             client.proxy.transport.get(
                 "/cache/settings",
