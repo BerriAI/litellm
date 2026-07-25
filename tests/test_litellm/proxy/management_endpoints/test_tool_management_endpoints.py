@@ -203,6 +203,43 @@ class TestToolManagementEndpoints:
             assert tuple(call.args[1:]) == expected_binds
         assert resp.json()["end_date"] == "2026-07-02"
 
+    def test_tool_spend_window_clamped_to_most_recent_30_days(self):
+        prisma = MagicMock()
+        prisma.db.query_raw = AsyncMock(return_value=[])
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2026-01-01&end_date=2026-07-01")
+        assert resp.status_code == 200
+        expected_binds = (
+            datetime(2026, 6, 1, tzinfo=timezone.utc).isoformat(),
+            datetime(2026, 7, 2, tzinfo=timezone.utc).isoformat(),
+        )
+        assert prisma.db.query_raw.await_count == 2
+        for call in prisma.db.query_raw.await_args_list:
+            assert tuple(call.args[1:]) == expected_binds
+        assert resp.json()["start_date"] == "2026-06-01"
+        assert resp.json()["end_date"] == "2026-07-01"
+
+    def test_tool_spend_range_within_cap_is_not_clamped(self):
+        prisma = MagicMock()
+        prisma.db.query_raw = AsyncMock(return_value=[])
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2026-06-25&end_date=2026-07-01")
+        assert resp.status_code == 200
+        for call in prisma.db.query_raw.await_args_list:
+            assert call.args[1] == datetime(2026, 6, 25, tzinfo=timezone.utc).isoformat()
+        assert resp.json()["start_date"] == "2026-06-25"
+
+    def test_tool_spend_total_query_bounds_outer_spendlogs_scan(self):
+        prisma = MagicMock()
+        prisma.db.query_raw = AsyncMock(return_value=[])
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            resp = self.client.get("/v1/tool/spend?start_date=2026-07-01&end_date=2026-07-02")
+        assert resp.status_code == 200
+        for call in prisma.db.query_raw.await_args_list:
+            sql = call.args[0]
+            assert 'sl."startTime" >=' in sql
+            assert 'sl."startTime" <' in sql
+
     @pytest.mark.parametrize(
         "query",
         [
