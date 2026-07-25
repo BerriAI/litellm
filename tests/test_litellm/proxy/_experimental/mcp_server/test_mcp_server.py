@@ -805,6 +805,9 @@ async def test_mcp_get_prompt_success():
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
+        # An id_jag server resolves its stored SSO assertion by user id, so dropping the caller
+        # identity here would make prompts fail closed while tools/call still succeeded.
+        user_api_key_auth=user_api_key_auth,
     )
     assert result is prompt_result
 
@@ -866,6 +869,7 @@ async def test_mcp_read_resource_success():
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
         raw_headers=None,
+        user_api_key_auth=user_api_key_auth,
     )
     assert result is read_result
 
@@ -7726,3 +7730,60 @@ class TestPreemptive401ModeAware:
             await self._run(delegate, None, has_stored_token=False)
         assert exc.value.status_code == 401
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+
+class TestPreemptiveIdJagPreflight:
+    """The transport-edge chokepoint runs the id_jag preflight on single-server routes only,
+    with the caller's raw headers, so a dead stored assertion surfaces its re-login 401 where a
+    WWW-Authenticate still reaches the client — and a multi-server aggregate keeps absorbing
+    per-server failures instead of letting one server 401 the whole connect."""
+
+    def _id_jag_server(self, alias: str):
+        return MCPServer(
+            server_id=f"id-{alias}",
+            name=alias,
+            alias=alias,
+            server_name=alias,
+            url=f"https://{alias}.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gw-client",
+            client_secret="gw-secret",
+            token_exchange_endpoint="https://org-idp.test/token",
+            id_jag_resource_token_endpoint="https://res-as.test/token",
+            mcp_info={"server_name": alias},
+        )
+
+    async def _run(self, mcp_servers, server, raw_headers=None):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        preflight = AsyncMock(return_value=None)
+        with (
+            patch.object(server_module.global_mcp_server_manager, "get_mcp_server_by_name", return_value=server),
+            patch.object(server_module.global_mcp_server_manager, "preflight_id_jag", preflight),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": f"/mcp/{server.alias}", "headers": []},
+                mcp_servers=mcp_servers,
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+                client_ip=None,
+                raw_headers=raw_headers,
+            )
+        return preflight
+
+    @pytest.mark.asyncio
+    async def test_single_server_route_runs_the_preflight_with_the_raw_headers(self):
+        server = self._id_jag_server("emasrv")
+        raw = {"x-litellm-api-key": "sk-litellm-virtual-key"}
+        preflight = await self._run([server.alias], server, raw_headers=raw)
+        preflight.assert_awaited_once()
+        assert preflight.await_args.kwargs["raw_headers"] == raw
+        assert preflight.await_args.kwargs["server"] is server
+
+    @pytest.mark.asyncio
+    async def test_multi_server_aggregate_skips_the_preflight(self):
+        server = self._id_jag_server("emasrv")
+        preflight = await self._run([server.alias, "other-server"], server)
+        preflight.assert_not_awaited()

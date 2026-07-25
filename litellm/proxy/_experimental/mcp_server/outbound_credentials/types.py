@@ -383,6 +383,15 @@ AuthConfig = Annotated[
 ]
 
 
+# What the inbound bearer is, classified once at the edge so each exchange arm gates on the
+# exact shape its mode requires. `gateway_credential` is one this gateway issued (never exchange
+# material, any mode). `external_jwt` is a non-gateway JWT, i.e. an id_token candidate id_jag can
+# exchange. `external_opaque` is a non-gateway non-JWT: id_jag rejects it (an id_token is a JWT)
+# and falls to the stored assertion, while token_exchange (OBO) may still forward it per its
+# exchange-what-was-presented contract.
+InboundTokenProvenance = Literal["absent", "gateway_credential", "external_jwt", "external_opaque"]
+
+
 class Subject(BaseModel):
     """The validated inbound principal. NOT the v1 request object and NOT the LiteLLM key."""
 
@@ -392,6 +401,8 @@ class Subject(BaseModel):
     subject_id: str
     # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
     inbound_token: SecretStr | None = None
+    # What `inbound_token` is, classified once at the edge (`to_subject`); each arm gates on it.
+    inbound_provenance: InboundTokenProvenance = "absent"
 
 
 class ServerSpec(BaseModel):

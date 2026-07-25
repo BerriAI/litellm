@@ -90,6 +90,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    LiveSsoAssertionSource,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
     build_token_exchanger,
 )
@@ -809,6 +812,25 @@ def _caller_authorization_fans_out(
     )
 
 
+def _obo_retry_covers_caller(
+    auth_type: MCPAuthType | None,
+    subject_token: str | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> bool:
+    """Whether the invalidate-and-retry path has a subject to re-mint with after an upstream 401.
+
+    ``token_exchange`` re-mints only from the caller's inbound token. ``id_jag`` also re-mints
+    from the stored SSO assertion, which the resolver looks up by the caller's user id, so a
+    caller with a user identity but no inbound assertion (an admission-key or session caller)
+    must route through the retry path too or its rejected cached bearer is never evicted.
+    """
+    if auth_type not in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag):
+        return False
+    if subject_token:
+        return True
+    return auth_type == MCPAuth.oauth2_id_jag and user_api_key_auth is not None and bool(user_api_key_auth.user_id)
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[tuple[int, Optional[str]]]:
@@ -1153,6 +1175,7 @@ class MCPServerManager:
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
+            sso_assertions=LiveSsoAssertionSource(),
         )
         self.registry: dict[str, MCPServer] = {}
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -1251,6 +1274,7 @@ class MCPServerManager:
                 mcp_auth_header=None,
                 extra_headers=extra_headers,
                 stdio_env=None,
+                user_api_key_auth=None,  # internal path (cache warm-up / health check): no caller identity
             )
 
             async def _noop(_session):
@@ -2739,20 +2763,35 @@ class MCPServerManager:
             return auth_value
         return None
 
-    def _obo_subject_token(
+    def _subject_bearer_token(
         self,
         server: MCPServer,
         raw_headers: Optional[dict[str, str]],
+        oauth2_headers: dict[str, str] | None = None,
     ) -> Optional[str]:
-        """The caller's bearer as the token_exchange (OBO) subject token, for that mode only.
+        """The caller's bearer as the exchange subject material, resolved by the ONE rule every
+        egress surface shares: only the two exchange modes (token_exchange OBO and id_jag) read
+        the inbound bearer, and every surface (tools call and list, prompts, resources) resolves
+        it here so the RULE cannot diverge per surface. The INPUTS still can: the prompt/resource
+        helpers receive no ``oauth2_headers``, so a client-side oauth2 header participates only on
+        the tool surfaces until someone threads it through those signatures. Other modes return
+        None to avoid forwarding it.
 
-        Prompts/resources discovery and reads on a token_exchange server must exchange the caller's
-        token like the tools paths do, not connect with no credential. Other modes never read the
-        inbound bearer, so return None to avoid forwarding it.
+        For id_jag the bearer must additionally BE the credential that authenticated the caller:
+        admission prefers the explicit litellm key header, so when that header is present the
+        Authorization bearer is an unvalidated free rider bound to nobody, and exchanging it
+        would let a caller act upstream under any identity whose token they hold. Binding is
+        admission's job, so the rule is structural (was this the admission credential), never a
+        claims comparison re-deriving what admission already decided. Such callers resolve
+        through the stored assertion, which is bound to the authenticated user by construction.
+        The OBO mode keeps its documented exchange-what-was-presented semantics; its identical
+        free-rider shape predates this seam and is tracked as a follow-up.
         """
-        if server.auth_type != MCPAuth.oauth2_token_exchange:
+        if server.auth_type not in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag):
             return None
-        return self._extract_bearer_token(None, raw_headers)
+        if server.auth_type == MCPAuth.oauth2_id_jag and MCPRequestHandler.authorization_is_free_rider(raw_headers):
+            return None
+        return self._extract_bearer_token(oauth2_headers, raw_headers)
 
     def _build_stdio_env(
         self,
@@ -3036,6 +3075,39 @@ class MCPServerManager:
                     )
                 raise_public(err)
 
+    async def preflight_id_jag(
+        self,
+        server: MCPServer,
+        oauth2_headers: dict[str, str] | None,
+        raw_headers: dict[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> None:
+        """Run the ID-JAG exchange at the transport edge, where an HTTP status and
+        ``WWW-Authenticate`` still reach the client.
+
+        The list handlers cannot surface auth failures (the MCP session manager serializes a
+        raise into a JSON-RPC error, losing the header), so without this preflight a dead stored
+        assertion reads as an empty tool/prompt/resource catalog on single-server routes. Unlike
+        the OBO preflight there is no subject-not-yet-supplied case to wave through: id_jag
+        sources its subject from the caller's presented id_token or the stored SSO assertion, so
+        every resolution outcome is already the caller's answer — the re-login 401 (with the
+        resolver's challenge header), the retryable 503 of a store or IdP outage, or the 412 of a
+        user who never signed in. The subject bearer is selected by the same one rule egress uses,
+        so the preflight and the session it admits cannot disagree. A successful exchange is
+        cached by the resolver, so the session's list/call reuses it.
+        """
+        if server.auth_type != MCPAuth.oauth2_id_jag:
+            return
+        spec = to_server_spec(server)
+        if spec is None or not isinstance(spec.config, IdJagConfig):
+            return
+        subject_token = self._subject_bearer_token(server, raw_headers, oauth2_headers)
+        match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
+            case Ok(_):
+                return
+            case Error(err):
+                raise_public(err)
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -3280,14 +3352,7 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
-            # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
-            # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
-            subject_token = (
-                self._extract_bearer_token(oauth2_headers, raw_headers)
-                if server.auth_type == MCPAuth.oauth2_token_exchange
-                else None
-            )
+            subject_token = self._subject_bearer_token(server, raw_headers, oauth2_headers=oauth2_headers)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3354,6 +3419,16 @@ class MCPServerManager:
                     server_name=server.name,
                 ) from e
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
+            if e.status_code == 503:
+                # The resolver's retryable verdict (credential store or IdP did not answer). Keep
+                # it retryable on the listing edge: "internal" would report the gateway itself
+                # failed and turn a transient outage into a 500.
+                raise MCPServerListError(ServerListFault(tag="unavailable", status_code=503), server.name) from e
+            if e.status_code == 412:
+                # The resolver's per-caller precondition (e.g. no stored SSO identity assertion,
+                # remedied only by the caller signing in to the gateway). Neither an upstream auth
+                # challenge nor a gateway fault.
+                raise MCPServerListError(ServerListFault(tag="precondition", status_code=412), server.name) from e
             raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
         except MCPServerListError:
             raise
@@ -3368,6 +3443,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[Prompt]:
         """
         Helper method to get prompts from a single MCP server with prefixed names.
@@ -3392,7 +3468,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
-            subject_token = self._obo_subject_token(server, raw_headers)
+            subject_token = self._subject_bearer_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3400,6 +3476,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             prompts = await client.list_prompts()
@@ -3419,6 +3496,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[Resource]:
         """Fetch available resources from a single MCP server."""
 
@@ -3434,7 +3512,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
-            subject_token = self._obo_subject_token(server, raw_headers)
+            subject_token = self._subject_bearer_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3442,6 +3520,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resources = await client.list_resources()
@@ -3461,6 +3540,7 @@ class MCPServerManager:
         extra_headers: Optional[dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[ResourceTemplate]:
         """Fetch available resource templates from a single MCP server."""
 
@@ -3476,7 +3556,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
-            subject_token = self._obo_subject_token(server, raw_headers)
+            subject_token = self._subject_bearer_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3484,6 +3564,7 @@ class MCPServerManager:
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
             )
 
             resource_templates = await client.list_resource_templates()
@@ -3505,6 +3586,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, dict[str, str]]] = None,
         extra_headers: Optional[dict[str, str]] = None,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
@@ -3517,7 +3599,7 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
-        subject_token = self._obo_subject_token(server, raw_headers)
+        subject_token = self._subject_bearer_token(server, raw_headers)
 
         client = await self._create_mcp_client(
             server=server,
@@ -3525,6 +3607,7 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         return await client.read_resource(url)
@@ -3537,6 +3620,7 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, dict[str, str]]] = None,
         extra_headers: Optional[dict[str, str]] = None,
         raw_headers: Optional[dict[str, str]] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
@@ -3549,7 +3633,7 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
-        subject_token = self._obo_subject_token(server, raw_headers)
+        subject_token = self._subject_bearer_token(server, raw_headers)
 
         client = await self._create_mcp_client(
             server=server,
@@ -3557,6 +3641,7 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         get_prompt_request_params = GetPromptRequestParams(
@@ -4593,12 +4678,14 @@ class MCPServerManager:
         subject_token: Optional[str],
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> CallToolResult:
-        """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
+        """Call an exchange-mode (token_exchange OBO or id_jag) tool; on an upstream 401/403
+        re-mint the token once and retry.
 
         The exchanged token is baked into the client at build time, so the retry invalidates the
-        cached exchange and rebuilds the client (which re-exchanges). One retry only: a non-auth
-        failure or a second auth failure degrades to the normal ``isError`` result, and a re-exchange
-        that now fails surfaces its own 401 challenge from ``_create_mcp_client``.
+        cached exchange and rebuilds the client (which re-exchanges — for id_jag stored-assertion
+        callers that includes re-reading the assertion). One retry only: a non-auth failure or a
+        second auth failure degrades to the normal ``isError`` result, and a re-exchange that now
+        fails surfaces its own 401 challenge from ``_create_mcp_client``.
         """
         try:
             return await client.call_tool(
@@ -4633,7 +4720,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[dict[str, str]] = None,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -4680,15 +4767,10 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # Extract subject token for OAuth2 Token Exchange (OBO) and ID-JAG flows
-        subject_token: Optional[str] = None
+        subject_token: str | None = self._subject_bearer_token(mcp_server, raw_headers, oauth2_headers=oauth2_headers)
+        # The exchange modes leave extra_headers None (the resolver injects the minted bearer).
         extra_headers: Optional[dict[str, str]] = None
-        if mcp_server.auth_type in (
-            MCPAuth.oauth2_token_exchange,
-            MCPAuth.oauth2_id_jag,
-        ):
-            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
-        elif mcp_server.auth_type == MCPAuth.oauth2:
+        if mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
                 # For M2M OAuth servers, Authorization must come from token fetch.
                 extra_headers = None
@@ -4788,7 +4870,7 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        if mcp_server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag) and subject_token:
+        if _obo_retry_covers_caller(mcp_server.auth_type, subject_token, user_api_key_auth):
             # OBO / ID-JAG: the exchanged token may have been revoked/rotated upstream since it was
             # cached, so an upstream 401 gets one invalidate + re-mint + retry. Gated to these modes;
             # all others keep the plain single call below.
@@ -5041,7 +5123,7 @@ class MCPServerManager:
 
         subject_token: str | None = None
         if isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
-            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+            subject_token = self._subject_bearer_token(mcp_server, raw_headers, oauth2_headers=oauth2_headers)
         elif isinstance(spec.config, PassthroughConfig):
             inbound_token, forwarded_headers = _take_forwarded_authorization(forwarded_headers)
             per_server_token = _passthrough_token_from_mcp_auth_header(mcp_auth_header)
@@ -5703,6 +5785,7 @@ class MCPServerManager:
                 mcp_auth_header=None,
                 extra_headers=extra_headers,
                 stdio_env=None,
+                user_api_key_auth=None,  # internal path (cache warm-up / health check): no caller identity
             )
 
             try:
@@ -5795,7 +5878,7 @@ class MCPServerManager:
 
     async def get_all_allowed_mcp_servers(
         self,
-        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to.

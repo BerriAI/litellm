@@ -2164,6 +2164,7 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
 
                 all_prompts.extend(prompts)
@@ -2217,6 +2218,7 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
                 all_resources.extend(resources)
 
@@ -2268,6 +2270,7 @@ if MCP_AVAILABLE:
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
                 )
                 all_resource_templates.extend(resource_templates)
                 verbose_logger.debug(
@@ -3113,6 +3116,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
             raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
         )
 
     async def mcp_read_resource(
@@ -3162,6 +3166,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
             raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
         )
 
     def _get_standard_logging_mcp_tool_call(
@@ -3634,6 +3639,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         client_ip: Optional[str],
         allowed_server_ids: Optional[Set[str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
         didn't receive it on this request. Covers both gateway-managed OAuth2
@@ -3745,6 +3751,21 @@ if MCP_AVAILABLE:
                 await global_mcp_server_manager.preflight_token_exchange(
                     server=server,
                     oauth2_headers=oauth2_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
+
+            # id_jag (EMA): resolve the exchange here at the transport edge for the same reason as
+            # the OBO preflight above — the in-session list handlers can only serialize a raise
+            # into a JSON-RPC error, so a dead stored SSO assertion would read as an empty catalog
+            # instead of the re-login 401 the resolver minted for it. There is no subject-header
+            # gate: id_jag sources its subject from the caller's id_token or the stored assertion,
+            # so resolution always has an answer. Gated to single-server routes; the multi-server
+            # aggregate keeps absorbing per-server auth failures.
+            if server and server.auth_type == MCPAuth.oauth2_id_jag and len(mcp_servers or []) == 1:
+                await global_mcp_server_manager.preflight_id_jag(
+                    server=server,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
                 )
 
@@ -4071,6 +4092,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers.  Must run after
@@ -4393,6 +4415,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers: surface upstream

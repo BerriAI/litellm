@@ -269,6 +269,12 @@ async def test_stale_read_after_refresh_rereads_before_starting_new_refresh():
 
 
 async def test_refresh_failure_is_shared_by_joiners_not_re_run():
+    """Pins the ``TokenRefresher`` contract: a refresher's raised exception MUST propagate to the
+    refresh winner and every single-flight waiter alike, and the failed attempt runs once. Domain
+    refreshers (the EMA assertion refresher) raise verdicts richer than ``OAuthToken | None``;
+    catching them here and returning None would silently collapse "the grant is dead" (re-login)
+    into "no token" (a different remedy and status)."""
+
     class _FailingRefresher:
         def __init__(self) -> None:
             self.calls = 0

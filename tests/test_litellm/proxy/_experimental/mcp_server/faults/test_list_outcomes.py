@@ -94,6 +94,8 @@ def test_wire_value_carries_no_prose():
         ("timeout", None, 504),
         ("unreachable", None, 502),
         ("upstream_error", 500, 502),
+        ("unavailable", 503, 503),
+        ("precondition", 412, 412),
         ("internal", None, 500),
     ],
 )

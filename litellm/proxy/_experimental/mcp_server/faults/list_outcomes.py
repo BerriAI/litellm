@@ -30,6 +30,8 @@ ListFaultCategory: TypeAlias = Literal[
     "timeout",
     "unreachable",
     "upstream_error",
+    "unavailable",
+    "precondition",
     "internal",
 ]
 
@@ -43,8 +45,11 @@ class ServerListOk(BaseModel):
 class ServerListFault(BaseModel):
     """Why a server contributed nothing to a listing: the caller must authenticate upstream
     (``auth_required``/``forbidden``), the upstream did not answer (``timeout``/``unreachable``),
-    the upstream answered outside its contract (``upstream_error``), or the gateway itself failed
-    (``internal``). ``status_code`` is the upstream HTTP status when one exists."""
+    the upstream answered outside its contract (``upstream_error``), a dependency the gateway
+    needs to authorize egress did not answer so the caller should retry (``unavailable``), a
+    per-caller requirement is unmet and only the caller can meet it, e.g. a gateway SSO sign-in
+    (``precondition``), or the gateway itself failed (``internal``). ``status_code`` is the
+    upstream HTTP status when one exists."""
 
     model_config = ConfigDict(frozen=True)
     tag: ListFaultCategory
@@ -149,7 +154,16 @@ def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     match outcome.tag:
         case "ok":
             return {"status": "ok", "tool_count": outcome.tool_count}
-        case "auth_required" | "forbidden" | "timeout" | "unreachable" | "upstream_error" | "internal":
+        case (
+            "auth_required"
+            | "forbidden"
+            | "timeout"
+            | "unreachable"
+            | "upstream_error"
+            | "unavailable"
+            | "precondition"
+            | "internal"
+        ):
             return {
                 "status": outcome.tag,
                 **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
@@ -171,6 +185,10 @@ def list_fault_http_status(fault: ServerListFault) -> int:
             return 504
         case "unreachable" | "upstream_error":
             return 502
+        case "unavailable":
+            return 503
+        case "precondition":
+            return 412
         case "internal":
             return 500
         case _:
