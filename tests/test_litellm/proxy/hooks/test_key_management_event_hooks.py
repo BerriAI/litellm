@@ -472,8 +472,10 @@ class TestKeyUpdatedAuditLogObjectId:
                 response=MagicMock(),
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin-key", user_id="admin"),
             )
-            pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-            await asyncio.gather(*pending)
+            for _ in range(100):
+                if captured:
+                    break
+                await asyncio.sleep(0.01)
 
         assert len(captured) == 1
         return captured[0]
