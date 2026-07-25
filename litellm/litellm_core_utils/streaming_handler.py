@@ -2023,12 +2023,65 @@ class CustomStreamWrapper:
         except Exception as e:
             self._log_stream_failure_and_raise(e)
 
+    async def _build_complete_streaming_response_offloaded(
+        self,
+    ) -> tuple[Any, asyncio.CancelledError | None]:
+        """Assemble the final response without holding the event loop.
+
+        stream_chunk_builder is CPU-bound and grows with chunk count, so running
+        it inline stalls the loop for every other request once a stream ends. It
+        runs in a worker thread behind a shielded await, so a consumer cancelling
+        mid-finalization cannot drop the cache write or the usage accounting.
+
+        Returns the assembled response together with the CancelledError to
+        re-raise once accounting has finished, or None when nothing cancelled us.
+        """
+        cancellation_error: asyncio.CancelledError | None = None
+        try:
+            builder_task = asyncio.create_task(
+                asyncio.to_thread(
+                    litellm.stream_chunk_builder,
+                    chunks=self.chunks,
+                    messages=self.messages,
+                    logging_obj=self.logging_obj,
+                )
+            )
+            try:
+                complete_streaming_response = await asyncio.shield(builder_task)
+            except asyncio.CancelledError as exc:
+                if builder_task.cancelled():
+                    raise
+                cancellation_error = exc
+                with anyio.CancelScope(shield=True):
+                    while True:
+                        try:
+                            complete_streaming_response = await asyncio.shield(builder_task)
+                            break
+                        except asyncio.CancelledError:
+                            if builder_task.cancelled():
+                                raise
+        except Exception as e:
+            # see sync __next__: a raise from stream_chunk_builder inside this
+            # except handler escapes __anext__ and drops the request from SpendLogs.
+            # Recover best-effort usage from the raw chunks so cost is still tracked
+            verbose_logger.warning(
+                "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
+                str(e),
+            )
+            try:
+                complete_streaming_response = self.model_response_creator(
+                    chunk={"usage": calculate_total_usage(chunks=self.chunks)}
+                )
+            except Exception:
+                complete_streaming_response = None
+        return complete_streaming_response, cancellation_error
+
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
             if self._async_finalization_complete:
                 raise StopAsyncIteration
             # log the final chunk with accurate streaming values
-            cancellation_error: Optional[asyncio.CancelledError] = None
+            cancellation_error: asyncio.CancelledError | None = None
             if self._async_finalization_assembled:
                 # send_stream_usage streams re-enter this method to emit the usage
                 # chunk and then again for accounting. Reuse the response assembled
@@ -2036,47 +2089,10 @@ class CustomStreamWrapper:
                 complete_streaming_response = self._async_complete_streaming_response
                 response = self._async_finalization_response
             else:
-                try:
-                    # stream_chunk_builder is CPU-bound and grows with chunk count, so
-                    # running it inline stalls the event loop for every other request
-                    # once the stream ends. Offload it and shield the await: a consumer
-                    # cancelling here must not lose cache writes or usage accounting.
-                    builder_task = asyncio.create_task(
-                        asyncio.to_thread(
-                            litellm.stream_chunk_builder,
-                            chunks=self.chunks,
-                            messages=self.messages,
-                            logging_obj=self.logging_obj,
-                        )
-                    )
-                    try:
-                        complete_streaming_response = await asyncio.shield(builder_task)
-                    except asyncio.CancelledError as exc:
-                        if builder_task.cancelled():
-                            raise
-                        cancellation_error = exc
-                        with anyio.CancelScope(shield=True):
-                            while True:
-                                try:
-                                    complete_streaming_response = await asyncio.shield(builder_task)
-                                    break
-                                except asyncio.CancelledError:
-                                    if builder_task.cancelled():
-                                        raise
-                except Exception as e:
-                    # see sync __next__: a raise from stream_chunk_builder inside this
-                    # except handler escapes __anext__ and drops the request from SpendLogs.
-                    # Recover best-effort usage from the raw chunks so cost is still tracked
-                    verbose_logger.warning(
-                        "stream_chunk_builder raised at end-of-stream (%s); logging best-effort usage from chunks.",
-                        str(e),
-                    )
-                    try:
-                        complete_streaming_response = self.model_response_creator(
-                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
-                        )
-                    except Exception:
-                        complete_streaming_response = None
+                (
+                    complete_streaming_response,
+                    cancellation_error,
+                ) = await self._build_complete_streaming_response_offloaded()
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
