@@ -6255,6 +6255,130 @@ def test_build_key_filter_conditions_agent_id_narrows_visibility():
     assert "agent_id" not in json.dumps(where_without)
 
 
+def test_build_key_filter_conditions_user_email_ids_narrow_visibility():
+    """
+    Filtering /key/list by user_email resolves to a list of user IDs which must
+    be ANDed on top of the caller's visibility conditions (narrow, never widen).
+    An email that matches no users must produce a match-nothing filter rather
+    than being dropped (dropping it would return every visible key).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="some-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+        user_ids_for_email=["user-1", "user-2"],
+    )
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert {"user_id": {"in": ["user-1", "user-2"]}} in where["AND"], f"user_id in-filter not ANDed: {where}"
+
+    where_no_match = _build_key_filter_conditions(
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        user_ids_for_email=[],
+    )
+    assert {"user_id": {"in": []}} in where_no_match["AND"], (
+        f"an email matching no users must match nothing, got: {where_no_match}"
+    )
+
+    where_without = _build_key_filter_conditions(
+        user_id="some-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+    )
+    assert '"in"' not in json.dumps(where_without)
+
+
+@pytest.mark.asyncio
+async def test_list_keys_user_email_resolves_to_user_ids():
+    """
+    list_keys must resolve the user_email filter to user IDs via a
+    case-insensitive substring lookup on the user table and pass them to
+    _list_key_helper. No email filter (including the Query default object
+    from direct calls) must skip the lookup entirely.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    mock_prisma_client = AsyncMock()
+    mock_find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="user-1"), SimpleNamespace(user_id="user-2")]
+    )
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_list_key_helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+            mock_list_key_helper,
+        ),
+    ):
+        admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=admin,
+            user_email="alias@example.com",
+            include_team_keys=False,
+            include_created_by_keys=False,
+            status=None,
+        )
+        assert mock_find_many.call_args.kwargs["where"] == {
+            "user_email": {"contains": "alias@example.com", "mode": "insensitive"}
+        }
+        assert mock_list_key_helper.call_args.kwargs["user_ids_for_email"] == ["user-1", "user-2"]
+
+        mock_find_many.return_value = []
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=admin,
+            user_email="nobody@example.com",
+            include_team_keys=False,
+            include_created_by_keys=False,
+            status=None,
+        )
+        assert mock_list_key_helper.call_args.kwargs["user_ids_for_email"] == []
+
+        mock_find_many.reset_mock()
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=admin,
+            include_team_keys=False,
+            include_created_by_keys=False,
+            status=None,
+        )
+        mock_find_many.assert_not_called()
+        assert mock_list_key_helper.call_args.kwargs["user_ids_for_email"] is None
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """

@@ -5193,6 +5193,10 @@ async def list_keys(
         None,
         description="Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
+    user_email: str | None = Query(
+        None,
+        description="Filter keys by the owning user's email. Case-insensitive substring match against the user table; only keys whose user_id belongs to a matching user are returned.",
+    ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(None, description="Filter keys by organization ID"),
     key_hash: Optional[str] = Query(None, description="Filter keys by key hash"),
@@ -5321,6 +5325,17 @@ async def list_keys(
         if not user_id and not is_proxy_admin:
             user_id = user_api_key_dict.user_id
 
+        user_ids_for_email = (
+            [
+                user.user_id
+                for user in await UserRepository(prisma_client).table.find_many(
+                    where={"user_email": {"contains": user_email, "mode": "insensitive"}}
+                )
+            ]
+            if user_email and isinstance(user_email, str)
+            else None
+        )
+
         response = await _list_key_helper(
             prisma_client=prisma_client,
             page=page,
@@ -5343,6 +5358,7 @@ async def list_keys(
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
             expires_filter=expires if isinstance(expires, str) else None,
+            user_ids_for_email=user_ids_for_email,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5571,6 +5587,7 @@ def _build_key_filter_conditions(
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
     expires_filter: str | None = None,
+    user_ids_for_email: List[str] | None = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5678,6 +5695,8 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
     if agent_id and isinstance(agent_id, str):
         where = {"AND": [where, {"agent_id": agent_id}]}
+    if user_ids_for_email is not None:
+        where = {"AND": [where, {"user_id": {"in": user_ids_for_email}}]}
     if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES:
         where = {"AND": [where, _build_expires_where_clause(expires_filter, datetime.now(timezone.utc))]}
 
@@ -5710,6 +5729,7 @@ async def _list_key_helper(
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
     expires_filter: str | None = None,
+    user_ids_for_email: List[str] | None = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5748,6 +5768,7 @@ async def _list_key_helper(
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
         expires_filter=expires_filter,
+        user_ids_for_email=user_ids_for_email,
     )
 
     # Calculate skip for pagination
