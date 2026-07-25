@@ -336,9 +336,6 @@
     }
   },
   "src/app/(dashboard)/guardrails-monitor/_components/EvaluationSettingsModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -351,9 +348,6 @@
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailDetail.tsx": {
     "no-nested-ternary": {
       "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsMonitorView.tsx": {
@@ -1486,16 +1480,10 @@
   },
   "src/app/(dashboard)/projects/_components/ProjectDetailsPage.tsx": {
     "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
+      "count": 2
     }
   },
   "src/app/(dashboard)/projects/_components/ProjectKeysSection.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1524,11 +1512,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/projects/_components/ProjectsPage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/prompts/_components/add_prompt_form.tsx": {
@@ -2105,16 +2088,6 @@
     }
   },
   "src/components/DebugWarningBanner.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedKeysPage/DeletedKeysPage.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -3827,11 +3800,6 @@
       "count": 1
     }
   },
-  "src/components/ui/AntDLoadingSpinner.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/ui/alert-dialog.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -4040,11 +4008,6 @@
       "count": 1
     }
   },
-  "src/components/view_logs/AuditLogDrawer/AuditLogDrawer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/CostBreakdownViewer.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -4206,9 +4169,6 @@
   },
   "src/components/view_logs/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
