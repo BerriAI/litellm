@@ -1,13 +1,28 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ToolSpendResponse } from "@/components/networking";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
+const mockUsePaginatedDailyActivity = vi.fn();
+const mockUseQuery = vi.fn();
+const mockUiSpendLogsCall = vi.fn();
+
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: (args: unknown) => mockUseQuery(args),
+}));
+
 const mockGetToolSpend = vi.fn();
 
 vi.mock("@/components/networking", () => ({
+  getCostOptimizationUsageLogs: vi.fn(),
+  uiSpendLogsCall: (args: unknown) => mockUiSpendLogsCall(args),
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
+}));
+
+vi.mock("@/components/view_logs/LogDetailsDrawer", () => ({
+  LogDetailsDrawer: ({ open, logEntry }: { open: boolean; logEntry: { request_id: string } | null }) =>
+    open && logEntry ? <div data-testid="log-details-drawer">{logEntry.request_id}</div> : null,
 }));
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({
@@ -58,7 +73,78 @@ const day = (date: string, metrics: Partial<SpendMetrics>): DailyData => ({
   },
 });
 
-const renderWith = (results: DailyData[], toolSpend = emptyToolSpend) => {
+const detailLog = {
+  request_id: "req-123456789",
+  api_key: "key",
+  team_id: "team",
+  model: "test-model",
+  model_id: "model-id",
+  call_type: "completion",
+  spend: 0.02,
+  total_tokens: 150,
+  prompt_tokens: 100,
+  completion_tokens: 50,
+  startTime: "2026-07-13T12:00:00Z",
+  endTime: "2026-07-13T12:00:01Z",
+  messages: [],
+  response: {},
+  cache_hit: "",
+  metadata: {},
+};
+
+const renderWith = (results: DailyData[]) => {
+  mockGetToolSpend.mockResolvedValue(emptyToolSpend);
+  mockUseQuery.mockImplementation((args: { queryKey: string[] }) =>
+    args.queryKey[0] === "cost-optimization-usage-logs"
+      ? {
+          data: {
+            logs: [
+              {
+                request_id: "req-123456789",
+                timestamp: "2026-07-13T12:00:00Z",
+                model: "test-model",
+                total_tokens: 150,
+                optimization_type: "both",
+                spend: 0.02,
+                savings: 0.14,
+                original_cost: 0.16,
+                compression_savings_spend: 0.1,
+                prompt_caching_savings_spend: 0.04,
+                tokens_saved: 100,
+                cache_read_tokens: 50,
+              },
+            ],
+            total: 1,
+            page: 1,
+            page_size: 50,
+            total_pages: 1,
+          },
+          isLoading: false,
+          isFetching: false,
+          error: null,
+        }
+      : {
+          data: { data: [detailLog], total: 1 },
+          isLoading: false,
+          isFetching: false,
+          error: null,
+        },
+  );
+  return render(
+    <UsageTab
+      accessToken="test-token"
+      activity={{
+        dateValue: { from: new Date("2026-07-01"), to: new Date("2026-07-14") },
+        onDateChange: vi.fn(),
+        results,
+        loading: false,
+        isFetchingMore: false,
+      }}
+    />,
+  );
+};
+
+const renderWithToolSpend = (results: DailyData[], toolSpend: ToolSpendResponse) => {
   mockGetToolSpend.mockResolvedValue(toolSpend);
   return render(
     <UsageTab
@@ -76,7 +162,7 @@ const renderWith = (results: DailyData[], toolSpend = emptyToolSpend) => {
 
 describe("UsageTab", () => {
   it("sums compression and caching dollars across days into the summary cards", () => {
-    const { getByText } = renderWith([
+    const { getByText, getAllByText } = renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.04,
         prompt_caching_savings_spend: 0.006,
@@ -90,7 +176,7 @@ describe("UsageTab", () => {
     ]);
 
     expect(getByText("$0.1560")).toBeInTheDocument();
-    expect(getByText("$0.1400")).toBeInTheDocument();
+    expect(getAllByText("$0.1400")[0]).toBeInTheDocument();
     expect(getByText("$0.0160")).toBeInTheDocument();
     expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
   });
@@ -119,7 +205,36 @@ describe("UsageTab", () => {
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([{ driver: "Compression", usd: expect.closeTo(0.04, 5) }]);
   });
+  it("renders recent optimized requests with savings and optimization type", () => {
+    const { getByText } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
 
+    expect(getByText("Recent Optimized Requests")).toBeInTheDocument();
+    expect(getByText("req-123456789")).toBeInTheDocument();
+    expect(getByText("Both")).toBeInTheDocument();
+    expect(getByText("$0.1600")).toBeInTheDocument();
+    expect(getByText("$0.0200")).toBeInTheDocument();
+    expect(getByText("$0.1400")).toBeInTheDocument();
+  });
+
+  it("fetches and opens request details when an optimized request is clicked", async () => {
+    const { getByText, getByTestId } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
+
+    fireEvent.click(getByText("req-123456789"));
+
+    const detailQuery = mockUseQuery.mock.calls
+      .map(([args]) => args as { queryKey: string[]; queryFn: () => Promise<unknown> })
+      .filter((args) => args.queryKey[0] === "cost-optimization-spend-log")
+      .at(-1);
+    expect(detailQuery).toBeDefined();
+    await detailQuery?.queryFn();
+    expect(mockUiSpendLogsCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessToken: "test-token",
+        params: { request_id: "req-123456789" },
+      }),
+    );
+    expect(getByTestId("log-details-drawer")).toHaveTextContent("req-123456789");
+  });
   it("renders spend-by-tool bars from the tool spend endpoint", async () => {
     const toolSpend = {
       by_tool: [
@@ -131,7 +246,7 @@ describe("UsageTab", () => {
       start_date: "2026-07-12",
       end_date: "2026-07-12",
     };
-    const { findAllByTestId } = renderWith([day("2026-07-12", {})], toolSpend);
+    const { findAllByTestId } = renderWithToolSpend([day("2026-07-12", {})], toolSpend);
 
     const bars = await findAllByTestId("bar-chart");
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
