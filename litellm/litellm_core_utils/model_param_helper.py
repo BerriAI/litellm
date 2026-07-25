@@ -174,13 +174,8 @@ class ModelParamHelper:
     def _get_litellm_supported_anthropic_messages_kwargs() -> set[str]:
         """
         Get the litellm supported Anthropic /v1/messages kwargs
-
-        This follows the Anthropic Messages API spec. `system`, `top_k` and
-        `stop_sequences` have no OpenAI equivalent, so without them the cache key
-        for a /v1/messages request ignores them and collides across requests that
-        differ only by system prompt.
         """
-        return set(getattr(AnthropicMessagesRequest, "__annotations__", {}).keys())
+        return set(AnthropicMessagesRequest.__annotations__.keys())
 
     @staticmethod
     def _get_exclude_kwargs() -> Set[str]:

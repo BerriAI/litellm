@@ -18,6 +18,7 @@ import asyncio
 import datetime
 import inspect
 import time
+from collections.abc import AsyncIterator
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1058,14 +1059,6 @@ class LLMCachingHandler:
         )
 
     def wrap_streaming_result_for_cache(self, result: Any, call_type: str) -> Any:
-        """
-        Tee a streaming result so it still reaches the cache.
-
-        Streaming responses are returned to the caller before ``async_set_cache``
-        runs. Chat/text completion streams are teed inside ``CustomStreamWrapper``
-        and Responses API streams inside their own iterator; Anthropic Messages
-        streams have no such hook, so they are wrapped here.
-        """
         if call_type not in (
             CallTypes.anthropic_messages.value,
             CallTypes.aanthropic_messages.value,
@@ -1075,7 +1068,7 @@ class LLMCachingHandler:
             original_function=self.original_function, kwargs=self.request_kwargs
         ):
             return result
-        if not hasattr(result, "__anext__"):
+        if not isinstance(result, AsyncIterator):
             return result
         from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
             AnthropicMessagesStreamCacheWriter,
