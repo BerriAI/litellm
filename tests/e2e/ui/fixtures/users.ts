@@ -1,3 +1,5 @@
+import { STATE_DIR } from "../constants";
+
 export enum Role {
   ProxyAdmin = "proxy_admin",
   ProxyAdminViewer = "proxy_admin_viewer",
@@ -30,9 +32,9 @@ export const users: Record<Role, { email: string; password: string }> = {
 };
 
 export const STORAGE_PATHS: Record<Role, string> = {
-  [Role.ProxyAdmin]: "admin.storageState.json",
-  [Role.ProxyAdminViewer]: "adminViewer.storageState.json",
-  [Role.InternalUser]: "internalUser.storageState.json",
-  [Role.InternalUserViewer]: "internalViewer.storageState.json",
-  [Role.TeamAdmin]: "teamAdmin.storageState.json",
+  [Role.ProxyAdmin]: `${STATE_DIR}/admin.storageState.json`,
+  [Role.ProxyAdminViewer]: `${STATE_DIR}/adminViewer.storageState.json`,
+  [Role.InternalUser]: `${STATE_DIR}/internalUser.storageState.json`,
+  [Role.InternalUserViewer]: `${STATE_DIR}/internalViewer.storageState.json`,
+  [Role.TeamAdmin]: `${STATE_DIR}/teamAdmin.storageState.json`,
 };
