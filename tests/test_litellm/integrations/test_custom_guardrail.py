@@ -2177,6 +2177,32 @@ class TestShouldRunGuardrailModelGroupGate:
             data={"model": "ai-gateway-other"}, event_type=GuardrailEventHooks.pre_call
         ) is False
 
+    def test_update_in_memory_normalizes_model_groups_from_raw_db_dict(self):
+        """The PUT /guardrails immediate-sync path reads litellm_params back from a
+        Prisma JSON column as a plain dict, not a LitellmParams instance (the proxy
+        only `cast()`s it, which is a no-op at runtime). update_in_memory_litellm_params
+        must handle that shape instead of calling vars() on a dict and raising TypeError."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._guardrail()
+        g.update_in_memory_litellm_params(
+            {
+                "guardrail": "test-guardrail",
+                "mode": "pre_call",
+                "default_on": True,
+                "apply_guardrail_to_model_groups": ["  AI-Gateway-Low  ", "AI-GATEWAY-HIGH"],
+            }
+        )
+        stored = getattr(g, "apply_guardrail_to_model_groups")
+        assert isinstance(stored, frozenset)
+        assert stored == frozenset({"ai-gateway-low", "ai-gateway-high"})
+        assert g.should_run_guardrail(
+            data={"model": "ai-gateway-low"}, event_type=GuardrailEventHooks.pre_call
+        ) is True
+        assert g.should_run_guardrail(
+            data={"model": "ai-gateway-other"}, event_type=GuardrailEventHooks.pre_call
+        ) is False
+
 
 class TestResolveMetadataModelGroup:
     def test_litellm_metadata_takes_priority(self):

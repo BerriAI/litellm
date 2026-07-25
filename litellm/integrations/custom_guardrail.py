@@ -1161,11 +1161,16 @@ class CustomGuardrail(CustomLogger):
         # Mask the content
         return content_string[:start_index] + mask_string + content_string[end_index:]
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: Union[LitellmParams, dict]) -> None:
         """
         Update the guardrails litellm params in memory
+
+        ``litellm_params`` may arrive as a ``LitellmParams`` instance (config-driven
+        updates) or as the raw DB dict (the PUT /guardrails immediate-sync path reads
+        a Prisma JSON column and never converts it), so handle both shapes.
         """
-        for key, value in vars(litellm_params).items():
+        params = litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
+        for key, value in params.items():
             if key == "apply_guardrail_to_model_groups" and isinstance(value, list):
                 value = frozenset(str(v).strip().lower() for v in value if str(v).strip())
             setattr(self, key, value)

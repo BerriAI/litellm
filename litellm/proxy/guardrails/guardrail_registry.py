@@ -588,7 +588,10 @@ class InMemoryGuardrailHandler:
 
         custom_guardrail_callback = self.guardrail_id_to_custom_guardrail.get(guardrail_id)
         if custom_guardrail_callback:
-            updated_litellm_params = cast(LitellmParams, guardrail.get("litellm_params", {}))
+            # ``guardrail`` may come from a DB read (a Prisma JSON column, deserialized
+            # to a plain dict) rather than a constructed ``LitellmParams`` instance;
+            # update_in_memory_litellm_params accepts either shape.
+            updated_litellm_params = guardrail.get("litellm_params", {})
             custom_guardrail_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
