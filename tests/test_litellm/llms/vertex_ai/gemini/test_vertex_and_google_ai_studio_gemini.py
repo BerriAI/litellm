@@ -2273,82 +2273,8 @@ def test_is_gemini_3_or_newer():
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
 
-def test_forward_gemini_function_call_id_vertex_vs_google_ai_studio():
-    """Vertex AI rejects `id` on function_call/function_response; Google AI Studio accepts it on Gemini 3.5+."""
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
-
-    model = "gemini-3.5-flash"
-    assert (
-        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai") is False
-    )
-    assert (
-        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai_beta")
-        is False
-    )
-    assert VertexGeminiConfig._forward_gemini_function_call_id(model, "gemini") is True
-    assert VertexGeminiConfig._forward_gemini_function_call_id(model, None) is False
-    assert (
-        VertexGeminiConfig._forward_gemini_function_call_id(
-            "gemini-2.5-flash", "gemini"
-        )
-        is False
-    )
-
-
-def test_vertex_ai_gemini_35_tool_calls_omit_function_call_id():
-    """Regression: Vertex must not send OpenAI tool_call id inside Gemini function_call parts."""
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
-    )
-
-    messages = [
-        {"role": "user", "content": "Explore this directory"},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call_50e7e0fe0989464a89f188eda443",
-                    "type": "function",
-                    "function": {
-                        "name": "read",
-                        "arguments": '{"filePath": "/tmp"}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_50e7e0fe0989464a89f188eda443",
-            "content": "ok",
-        },
-    ]
-
-    contents = _gemini_convert_messages_with_history(
-        messages=messages,
-        model="gemini-3.5-flash",
-        custom_llm_provider="vertex_ai",
-    )
-
-    for content in contents:
-        for part in content.get("parts", []):
-            fc = part.get("function_call")
-            if fc is not None:
-                assert "id" not in fc, f"Vertex payload must not include id: {fc}"
-            fr = part.get("function_response")
-            if fr is not None:
-                assert "id" not in fr, f"Vertex payload must not include id: {fr}"
-
-
-def test_google_ai_studio_gemini_35_tool_calls_include_function_call_id():
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
-    )
-
-    tool_call_id = "call_50e7e0fe0989464a89f188eda443"
-    messages = [
+def _tool_call_messages(tool_call_id: str):
+    return [
         {"role": "user", "content": "hi"},
         {
             "role": "assistant",
@@ -2371,12 +2297,8 @@ def test_google_ai_studio_gemini_35_tool_calls_include_function_call_id():
         },
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages,
-        model="gemini-3.5-flash",
-        custom_llm_provider="gemini",
-    )
 
+def _collect_function_call_ids(contents):
     function_call_ids = []
     function_response_ids = []
     for content in contents:
@@ -2387,9 +2309,120 @@ def test_google_ai_studio_gemini_35_tool_calls_include_function_call_id():
             fr = part.get("function_response")
             if fr is not None:
                 function_response_ids.append(fr.get("id"))
+    return function_call_ids, function_response_ids
 
-    assert function_call_ids == [tool_call_id]
-    assert function_response_ids == [tool_call_id]
+
+def test_forward_gemini_function_call_id_is_gated_on_model_version_only():
+    """Gemini 3+ takes `id` on Vertex AI and Google AI Studio alike; older models reject it."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-3.5-flash") is True
+    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-3-pro") is True
+    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-2.5-flash") is False
+    assert VertexGeminiConfig._forward_gemini_function_call_id("gemini-2.0-flash") is False
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "vertex_ai_beta", "gemini"])
+def test_gemini_35_tool_calls_include_function_call_id(custom_llm_provider):
+    """Vertex AI accepts `id` on Gemini 3+, so it must be sent there and not just on AI Studio.
+
+    Both parts are asserted together: Vertex pairs a result to its call by id, so emitting one
+    side without the other would break strict tool-call matching.
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    tool_call_id = "call_50e7e0fe0989464a89f188eda443"
+    contents = _gemini_convert_messages_with_history(
+        messages=_tool_call_messages(tool_call_id),
+        model="gemini-3.5-flash",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert _collect_function_call_ids(contents) == ([tool_call_id], [tool_call_id])
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_gemini_25_tool_calls_omit_function_call_id(custom_llm_provider):
+    """Regression: models older than Gemini 3 reject `id`, so the key must be absent entirely."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    contents = _gemini_convert_messages_with_history(
+        messages=_tool_call_messages("call_50e7e0fe0989464a89f188eda443"),
+        model="gemini-2.5-flash",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    for content in contents:
+        for part in content.get("parts", []):
+            fc = part.get("function_call")
+            if fc is not None:
+                assert "id" not in fc, f"gemini-2.5 payload must not include id: {fc}"
+            fr = part.get("function_response")
+            if fr is not None:
+                assert "id" not in fr, f"gemini-2.5 payload must not include id: {fr}"
+
+
+def test_vertex_ai_forwarded_function_call_id_strips_thought_signature_suffix():
+    """The thought signature rides along on the OpenAI id but must not reach Vertex.
+
+    Vertex now sees this code path for the first time, so the suffix has to be stripped here too.
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        THOUGHT_SIGNATURE_SEPARATOR,
+    )
+
+    bare_id = "call_50e7e0fe0989464a89f188eda443"
+    contents = _gemini_convert_messages_with_history(
+        messages=_tool_call_messages(f"{bare_id}{THOUGHT_SIGNATURE_SEPARATOR}sig123"),
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+    )
+
+    _, function_response_ids = _collect_function_call_ids(contents)
+    assert function_response_ids == [bare_id]
+
+
+@pytest.mark.parametrize("model", ["gemini-3.5-flash", "gemini-2.5-flash"])
+def test_tool_response_without_matching_tool_call_is_rejected(model):
+    """An unpairable tool result must raise, not ship a functionResponse with no matching call."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_50e7e0fe0989464a89f188eda443",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"filePath": "/tmp"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "content": "ok"},
+    ]
+
+    with pytest.raises(Exception, match="Missing corresponding tool call"):
+        _gemini_convert_messages_with_history(
+            messages=messages,
+            model=model,
+            custom_llm_provider="vertex_ai",
+        )
 
 
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():

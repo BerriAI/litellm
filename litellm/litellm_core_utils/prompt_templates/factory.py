@@ -1266,7 +1266,7 @@ def _get_dummy_thought_signature() -> str:
 def convert_to_gemini_tool_call_invoke(
     message: ChatCompletionAssistantMessage,
     model: Optional[str] = None,
-    custom_llm_provider: Optional[str] = None,
+    forward_function_call_id: bool = False,
 ) -> List[VertexPartType]:
     """
     OpenAI tool invokes:
@@ -1316,16 +1316,12 @@ def convert_to_gemini_tool_call_invoke(
             VertexGeminiConfig,
         )
 
-        forward_tool_call_id = bool(
-            model and VertexGeminiConfig._forward_gemini_function_call_id(model, custom_llm_provider)
-        )
-
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
                     gemini_function_call: Optional[VertexFunctionCall] = _gemini_tool_call_invoke_helper(
                         function_call_params=tool["function"],
-                        tool_call_id=(tool.get("id") if forward_tool_call_id else None),
+                        tool_call_id=(tool.get("id") if forward_function_call_id else None),
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {"function_call": gemini_function_call}
@@ -1377,8 +1373,7 @@ def convert_to_gemini_tool_call_invoke(
 def convert_to_gemini_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
-    model: Optional[str] = None,
-    custom_llm_provider: Optional[str] = None,
+    forward_function_call_id: bool = False,
 ) -> Union[VertexPartType, List[VertexPartType]]:
     """
     OpenAI message with a tool result looks like:
@@ -1500,14 +1495,8 @@ def convert_to_gemini_tool_call_result(
                 name = tool.get("function", {}).get("name", "")
 
     # Echo the OpenAI tool_call_id on functionResponse (strip thought-signature suffix).
-    # Only Google AI Studio Gemini 3+ accepts `id` on function_response parts.
-    # Vertex AI and older Gemini models reject the field with HTTP 400.
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
-
     gemini_call_id: Optional[str] = None
-    if model and VertexGeminiConfig._forward_gemini_function_call_id(model, custom_llm_provider):
+    if forward_function_call_id:
         raw_tool_call_id = message.get("tool_call_id")
         if raw_tool_call_id and isinstance(raw_tool_call_id, str):
             stripped_id = raw_tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
