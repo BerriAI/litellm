@@ -22,7 +22,7 @@ interface RouterSettings {
   num_retries?: number | null;
 }
 
-export default function ModelRetrySettingsPage() {
+export default function ModelRetrySettingsPanel() {
   const { accessToken, userId: userID, userRole } = useAuthorized();
   const { availableModelGroups } = useModelDashboardData();
   const updateRetryPolicy = useUpdateRetryPolicy(accessToken);

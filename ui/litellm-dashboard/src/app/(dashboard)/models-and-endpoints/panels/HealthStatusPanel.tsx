@@ -13,7 +13,7 @@ import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/de
 
 const HEALTH_PAGE_SIZE = 50;
 
-export default function HealthStatusPage() {
+export default function HealthStatusPanel() {
   const { accessToken } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: modelCostMapData } = useModelCostMap();

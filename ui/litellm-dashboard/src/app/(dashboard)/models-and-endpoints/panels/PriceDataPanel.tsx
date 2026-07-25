@@ -2,6 +2,6 @@
 
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 
-export default function PriceDataPage() {
+export default function PriceDataPanel() {
   return <PriceDataManagementTab />;
 }
