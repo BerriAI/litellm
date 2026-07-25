@@ -989,11 +989,17 @@ class LiteLLMAnthropicMessagesAdapter:
         if not reasoning_effort:
             return
 
+        thinking_type = thinking.get("type") if isinstance(thinking, dict) else None
+
         # For adaptive thinking, override with output_config.effort if available
-        if isinstance(thinking, dict) and thinking.get("type") == "adaptive":
+        if thinking_type == "adaptive":
             output_config = anthropic_message_request.get("output_config")
             if isinstance(output_config, dict) and output_config.get("effort"):
                 reasoning_effort = output_config["effort"]
+
+        if thinking_type == "disabled":
+            new_kwargs["reasoning_effort"] = reasoning_effort
+            return
 
         summary = thinking.get("summary") if isinstance(thinking, dict) else None
         auto_summary = is_reasoning_auto_summary_enabled()

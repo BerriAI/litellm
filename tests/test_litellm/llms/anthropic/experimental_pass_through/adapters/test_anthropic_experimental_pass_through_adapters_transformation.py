@@ -1593,6 +1593,23 @@ def test_thinking_disabled_translated_to_reasoning_effort_none_for_non_claude_mo
     assert new_kwargs["reasoning_effort"] == "none"
 
 
+def test_thinking_disabled_stays_plain_string_when_auto_summary_enabled():
+    import litellm
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    thinking = {"type": "disabled"}
+
+    original = litellm.reasoning_auto_summary
+    try:
+        litellm.reasoning_auto_summary = True
+        new_kwargs = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+        adapter._translate_thinking_to_openai(cast(Any, {"thinking": thinking}), cast(Any, new_kwargs))
+    finally:
+        litellm.reasoning_auto_summary = original
+
+    assert new_kwargs["reasoning_effort"] == "none"
+
+
 def test_stop_sequences_translated_to_stop_for_non_claude_model():
     from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
