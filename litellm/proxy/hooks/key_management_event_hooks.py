@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.utils import _hash_token_if_needed
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
@@ -124,7 +125,7 @@ class KeyManagementEventHooks:
                         ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=data.key,
+                        object_id=_hash_token_if_needed(data.key),
                         action="updated",
                         updated_values=_updated_values,
                         before_value=_before_value,
