@@ -73,11 +73,13 @@ class TestTeamDisableGlobalGuardrail:
         exercised_on=["chat_completions"],
     )
     def test_team_with_disable_flag_bypasses_global_guardrail(
-        self, client: GuardrailsClient, resources: ResourceManager
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         banned = unique_marker()
         guardrail_id = client.create_content_filter_guardrail(f"e2e-content-filter-{banned}", banned)
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        _assert_eventually_blocked(client, scoped_key, banned)
 
         team_id = client.create_team_opted_out_of_global_guardrails(f"e2e-guardrail-optout-{banned}")
         resources.defer(lambda: client.delete_team(team_id))
@@ -87,6 +89,6 @@ class TestTeamDisableGlobalGuardrail:
         chat = unwrap(client.chat(key, MODEL, _prompt_with(banned)))
 
         assert chat.choices, (
-            f"team opted out of global guardrails, so the banned keyword must pass "
-            f"through and the call must succeed, but no choices came back: {chat}"
+            f"the same prompt was just blocked for a key outside the team, so the opt-out "
+            f"is what must let it through, but no choices came back: {chat}"
         )

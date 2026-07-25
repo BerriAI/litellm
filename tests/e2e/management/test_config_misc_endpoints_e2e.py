@@ -131,6 +131,7 @@ class CacheSettingsValue(BaseModel):
     type: str
     host: str = ""
     port: str = ""
+    namespace: str | None = None
 
 
 class CacheSettingsUpdateBody(BaseModel):
@@ -141,6 +142,7 @@ class CacheCurrentValues(BaseModel):
     type: str | None = None
     host: str | None = None
     port: str | None = None
+    namespace: str | None = None
 
 
 class CacheGetResponse(BaseModel):
@@ -374,40 +376,49 @@ class TestCacheSettings:
     def test_update_persists_cache_backend_to_get(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        """Exercise the update route without changing global state: capture the live
-        cache backend and write exactly that back, so the config the proxy ends on is
-        byte-for-byte the one it started with. A teardown restore of the same captured
-        settings is the safety net if the body fails partway. The update route is only
-        meaningful against a configured cache, so an unconfigured proxy fails loudly
-        here rather than being silently switched to redis."""
+        """Write a value the proxy did not already hold, so a route that silently
+        dropped the write cannot pass. The only field changed is the key namespace, a
+        label prefixed to cache keys that leaves the backend connection untouched, and
+        teardown restores the captured original so a shared proxy keeps the config it
+        started with. The update route is only meaningful against a configured cache,
+        so an unconfigured proxy fails loudly here rather than being silently switched
+        to redis."""
         before = self._read_settings(client)
         assert before.type is not None, (
             "GET /cache/settings reported no cache type; refusing to invent one and mutate the shared proxy"
         )
-        captured = CacheSettingsValue(type=before.type, host=before.host or "", port=before.port or "")
+        captured = CacheSettingsValue(
+            type=before.type, host=before.host or "", port=before.port or "", namespace=before.namespace
+        )
         resources.defer(lambda: self._write_settings(client, captured))
 
+        namespace = f"e2e-cache-ns-{unique_marker()}"
+        target = CacheSettingsValue(type=captured.type, host=captured.host, port=captured.port, namespace=namespace)
         updated = unwrap(
             client.proxy.transport.post(
                 "/cache/settings",
                 headers=client.proxy.transport.master,
-                json=CacheSettingsUpdateBody(cache_settings=captured),
+                json=CacheSettingsUpdateBody(cache_settings=target),
                 response_type=CacheUpdateResponse,
             )
         )
         assert updated.status == "success", f"/cache/settings update status {updated.status!r}, expected 'success'"
-        assert updated.settings.type == captured.type, (
-            f"/cache/settings echoed type {updated.settings.type!r}, wrote {captured.type!r}"
+        assert updated.settings.namespace == namespace, (
+            f"/cache/settings echoed namespace {updated.settings.namespace!r}, wrote {namespace!r}"
         )
 
         def reflected() -> CacheCurrentValues | None:
             current = self._read_settings(client)
-            return current if current.type == captured.type else None
+            return current if current.namespace == namespace else None
 
-        after = _poll(client, reflected, f"/cache/settings never reported type {captured.type!r} after the update")
-        assert after.host == captured.host and after.port == captured.port, (
-            f"/cache/settings persisted host/port {after.host!r}/{after.port!r}, "
-            f"wrote {captured.host!r}/{captured.port!r}"
+        after = _poll(
+            client,
+            reflected,
+            f"/cache/settings still reports namespace {before.namespace!r} instead of the written {namespace!r}",
+        )
+        assert after.type == captured.type and after.host == captured.host and after.port == captured.port, (
+            f"/cache/settings persisted type/host/port {after.type!r}/{after.host!r}/{after.port!r}, "
+            f"wrote {captured.type!r}/{captured.host!r}/{captured.port!r}"
         )
 
     @staticmethod
