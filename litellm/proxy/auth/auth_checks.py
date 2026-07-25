@@ -1614,6 +1614,29 @@ async def _get_fuzzy_user_object(
     return response
 
 
+async def _backfill_null_user_email(
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    user_row: LiteLLM_UserTable,
+    user_email: str | None,
+) -> LiteLLM_UserTable:
+    if user_email is None or user_row.user_email is not None or prisma_client is None:
+        return user_row
+
+    await UserRepository(prisma_client).update_user(
+        user_id=user_row.user_id,
+        user_email=user_email,
+    )
+    updated_row = user_row.model_copy(update={"user_email": user_email})
+    await user_api_key_cache.async_set_cache(
+        key=user_row.user_id,
+        value=updated_row,
+        model_type=LiteLLM_UserTable,
+        ttl=get_management_object_ttl(user_api_key_cache),
+    )
+    return updated_row
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: Optional[str],
@@ -1642,7 +1665,12 @@ async def get_user_object(
             model_type=LiteLLM_UserTable,
         )
         if cached_user_obj is not None:
-            return cached_user_obj
+            return await _backfill_null_user_email(
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_row=cached_user_obj,
+                user_email=user_email,
+            )
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -1709,6 +1737,12 @@ async def get_user_object(
             response.organization_memberships = _dumped_memberships
 
         _response = LiteLLM_UserTable(**dict(response))
+        _response = await _backfill_null_user_email(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_row=_response,
+            user_email=user_email,
+        )
         response_dict = _response.model_dump()
 
         # save the user object to cache

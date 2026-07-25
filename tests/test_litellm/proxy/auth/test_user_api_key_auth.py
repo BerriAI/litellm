@@ -1990,6 +1990,84 @@ class TestJWTOAuth2Coexistence:
         assert result.user_email == "validated@example.com"
 
     @pytest.mark.asyncio
+    async def test_mapped_virtual_key_backfills_and_sets_user_email(self):
+        """
+        Regression (LIT-4710): when a JWT resolves straight to an existing
+        virtual-key mapping (skipping auth_builder), the token's user_email must
+        still backfill the resolved user and be set on the returned
+        UserAPIKeyAuth. Before the fix the mapped path never passed the email
+        through, so user_api_key_user_email stayed null on every request.
+        """
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        general_settings = {"enable_jwt_auth": True}
+        user_api_key_cache = DualCache()
+        prisma_client = MagicMock()
+        jwt_handler = MagicMock()
+        jwt_handler.is_jwt.return_value = True
+        jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
+        jwt_handler.get_user_email = MagicMock(return_value="mapped@example.com")
+        jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+            virtual_key_claim_field="sub",
+            user_email_jwt_field="sub",
+            virtual_key_mapping_cache_ttl=300,
+        )
+
+        mapped_key = UserAPIKeyAuth(
+            token="hashed-mapped-key",
+            api_key="hashed-mapped-key",
+            user_id="mapped-user",
+            user_email=None,
+        )
+        backfilled_user = LiteLLM_UserTable(
+            user_id="mapped-user",
+            user_email="mapped@example.com",
+            user_role="internal_user",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+        mock_request.state = SimpleNamespace()
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+                new_callable=AsyncMock,
+                return_value=mapped_key,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=backfilled_user,
+            ) as mock_get_user_object,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=jwt_token,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o-mini"},
+            )
+
+        assert result.user_id == "mapped-user"
+        assert result.user_email == "mapped@example.com"
+        assert (
+            mock_get_user_object.call_args_list[0].kwargs["user_email"]
+            == "mapped@example.com"
+        )
+
+    @pytest.mark.asyncio
     async def test_routing_override_routes_matching_jwt_to_oauth2(self):
         """
         When routing_overrides match JWT claims, route JWT-shaped token to OAuth2.
