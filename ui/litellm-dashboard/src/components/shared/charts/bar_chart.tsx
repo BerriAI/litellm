@@ -46,6 +46,17 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   className,
   style,
 }: BarChartProps<TDatum>) {
+  if (data.length === 0) {
+    return (
+      <div
+        className={cn("flex h-80 w-full items-center justify-center rounded-lg border border-dashed", className)}
+        style={style}
+      >
+        <p className="text-sm text-muted-foreground">No data</p>
+      </div>
+    );
+  }
+
   const fills = categoryFills(categories.length, colors);
   const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
   const vertical = layout === "vertical";
