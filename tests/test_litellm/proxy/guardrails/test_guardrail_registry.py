@@ -407,3 +407,37 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+def test_resolve_env_references_expands_every_string_field(monkeypatch):
+    """Regression: only api_key/api_base used to be expanded, so a guardrail set up
+    with aws_region_name="os.environ/AWS_REGION" handed boto3 the literal string and
+    failed with "Invalid AWS region format"."""
+    from litellm.proxy.guardrails.guardrail_registry import _resolve_env_references
+
+    monkeypatch.setenv("TEST_GUARDRAIL_REGION", "us-east-1")
+    monkeypatch.setenv("TEST_GUARDRAIL_KEY", "sk-guardrail")
+    monkeypatch.setenv("TEST_GUARDRAIL_ANALYZER", "https://analyzer.example")
+    monkeypatch.delenv("TEST_GUARDRAIL_ABSENT", raising=False)
+
+    resolved = _resolve_env_references(
+        LitellmParams(
+            guardrail="bedrock",
+            mode="pre_call",
+            api_key="os.environ/TEST_GUARDRAIL_KEY",
+            aws_region_name="os.environ/TEST_GUARDRAIL_REGION",
+            presidio_analyzer_api_base="os.environ/TEST_GUARDRAIL_ANALYZER",
+            aws_secret_access_key="os.environ/TEST_GUARDRAIL_ABSENT",
+            aws_access_key_id="AKIA_LITERAL_VALUE",
+        )
+    )
+
+    assert resolved.aws_region_name == "us-east-1"
+    assert resolved.presidio_analyzer_api_base == "https://analyzer.example"
+    assert resolved.api_key == "sk-guardrail"
+    # An unset name must not become the string "None", which boto3 would treat as a credential.
+    assert resolved.aws_secret_access_key is None
+    # Literal values are left alone, and unrelated fields survive the copy.
+    assert resolved.aws_access_key_id == "AKIA_LITERAL_VALUE"
+    assert resolved.guardrail == "bedrock"
+    assert resolved.mode == "pre_call"
