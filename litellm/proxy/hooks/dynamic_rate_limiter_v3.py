@@ -4,7 +4,7 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from fastapi import HTTPException
 
@@ -19,8 +19,10 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     map_v3_rate_limit_type,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    CHECK_ONLY,
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
+    RateLimitIncrementAmounts,
     _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -442,9 +444,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if priority_descriptors and should_enforce_priority:
             enforced_descriptors.extend(priority_descriptors)
 
-        per_request_increment: Dict[Literal["requests", "tokens"], int] = {
+        per_request_increment: RateLimitIncrementAmounts = {
             "requests": 1,
-            "tokens": 0,
+            "tokens": CHECK_ONLY,
         }
         atomic_response = await self.v3_limiter.atomic_check_and_increment_by_n(
             descriptors=enforced_descriptors,

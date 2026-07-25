@@ -18,6 +18,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    CHECK_ONLY,
     MAX_PARALLEL_SLOT_ACQUIRED_KEY,
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
 )
@@ -4652,3 +4653,116 @@ async def test_streaming_mirror_matches_non_streaming_header_shape(monkeypatch):
         f" non_streaming={_rl_only(non_stream_headers)}"
     )
     assert "x-ratelimit-model_per_key-remaining-requests" in stream_slp_headers
+
+
+def _tpm_only_descriptor(limit: int) -> Dict[str, Any]:
+    return {
+        "key": "priority_model",
+        "value": "my-model:team_a",
+        "rate_limit": {"tokens_per_unit": limit, "window_size": 60},
+    }
+
+
+def test_check_only_increment_still_emits_a_token_key():
+    """
+    A non-positive int increment means "don't track this dimension", but
+    CHECK_ONLY means "enforce it without advancing it" and must still put the
+    token counter on the Lua KEYS list (LIT-4800).
+    """
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptor = _tpm_only_descriptor(180)
+
+    untracked_keys, _, _ = handler._build_descriptor_atomic_payload(
+        descriptor=descriptor,
+        increment_amounts={"requests": 1, "tokens": 0},
+    )
+    assert untracked_keys == []
+
+    keys, args, meta = handler._build_descriptor_atomic_payload(
+        descriptor=descriptor,
+        increment_amounts={"requests": 1, "tokens": CHECK_ONLY},
+    )
+    assert keys == [
+        "{priority_model:my-model:team_a}:window",
+        "{priority_model:my-model:team_a}:tokens",
+    ]
+    assert args == [180, 0, 60, 60]
+    assert meta[0]["increment"] == 0
+
+
+@pytest.mark.asyncio
+async def test_check_only_tokens_reject_at_limit_without_advancing_counter():
+    """
+    CHECK_ONLY rejects at `current >= limit`, the same point an increment of 1
+    rejects at, and leaves the counter untouched when it admits.
+    """
+    internal_usage_cache = InternalUsageCache(DualCache())
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
+    descriptor = _tpm_only_descriptor(180)
+    counter_key = "{priority_model:my-model:team_a}:tokens"
+
+    async def set_tokens(value: int) -> None:
+        await internal_usage_cache.async_set_cache(
+            key=counter_key,
+            value=value,
+            litellm_parent_otel_span=None,
+            local_only=True,
+        )
+
+    async def read_tokens() -> int:
+        return int(
+            await internal_usage_cache.async_get_cache(
+                key=counter_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
+        )
+
+    await set_tokens(179)
+    under_limit = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[{"tokens": CHECK_ONLY}],
+    )
+    assert under_limit["overall_code"] == "OK"
+    assert await read_tokens() == 179
+
+    await set_tokens(180)
+    at_limit = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[{"tokens": CHECK_ONLY}],
+    )
+    assert at_limit["overall_code"] == "OVER_LIMIT"
+    assert at_limit["statuses"][0]["rate_limit_type"] == "tokens"
+    assert await read_tokens() == 180
+
+
+@pytest.mark.asyncio
+async def test_token_only_increment_does_not_enforce_rpm():
+    """
+    check_and_increment_tokens passes tokens only; RPM is enforced separately
+    by should_rate_limit, so a zero requests increment must stay untracked
+    rather than double-enforcing.
+    """
+    internal_usage_cache = InternalUsageCache(DualCache())
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
+    descriptor: Dict[str, Any] = {
+        "key": "key",
+        "value": "sk-1",
+        "rate_limit": {"requests_per_unit": 1, "tokens_per_unit": 1000, "window_size": 60},
+    }
+    await internal_usage_cache.async_set_cache(
+        key="{key:sk-1}:requests",
+        value=1,
+        litellm_parent_otel_span=None,
+        local_only=True,
+    )
+
+    response = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[{"tokens": 10}],
+    )
+
+    assert response["overall_code"] == "OK"
+    assert [status["rate_limit_type"] for status in response["statuses"]] == ["tokens"]

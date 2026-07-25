@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -1772,3 +1773,123 @@ async def test_priority_429_includes_model_name_and_configured_limits():
     assert "Priority: prod" in error_msg, error_msg
     assert "Rate limit type: tokens" in error_msg, error_msg
     assert "Model saturation:" in error_msg, error_msg
+
+
+async def _seed_token_counter(handler, descriptor_key: str, descriptor_value: str, tokens: int) -> None:
+    await handler.internal_usage_cache.async_set_cache(
+        key=handler.v3_limiter.create_rate_limit_keys(
+            key=descriptor_key,
+            value=descriptor_value,
+            rate_limit_type="tokens",
+        ),
+        value=tokens,
+        litellm_parent_otel_span=None,
+        local_only=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_priority_pool_over_tpm_reservation_is_rejected():
+    """
+    A priority pool that has already burned more tokens than its reservation
+    must be rejected pre-call, even though the request's own token count is
+    unknown at that point (LIT-4800: the TPM branch never ran).
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"team_a": 0.6, "team_b": 0.4}
+    litellm.priority_reservation_settings.saturation_threshold = 0.5
+
+    model = "tpm-only-priority-model"
+    total_tpm = 300
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "test-key",
+                        "tpm": total_tpm,
+                    },
+                }
+            ]
+        )
+    )
+
+    # team_a reserved TPM is 180; the pool is over it while the model as a
+    # whole (200/300) still has headroom, so the priority pool is the only
+    # descriptor that can reject.
+    await _seed_token_counter(handler, "model_saturation_check", model, 200)
+    await _seed_token_counter(handler, "priority_model", f"{model}:team_a", 200)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-team-a", metadata={"priority": "team_a"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"model": model},
+            call_type="completion",
+        )
+
+    assert exc_info.value.status_code == 429
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert "Priority-based rate limit exceeded" in detail["error"], detail
+    assert "Rate limit type: tokens" in detail["error"], detail
+
+
+@pytest.mark.asyncio
+async def test_priority_pool_under_tpm_reservation_is_allowed_without_advancing_tokens():
+    """
+    The pre-call TPM check is read-only: a pool under its reservation is
+    admitted and its token counter is left untouched, since real usage is
+    only known post-call.
+    """
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"team_a": 0.6, "team_b": 0.4}
+    litellm.priority_reservation_settings.saturation_threshold = 0.5
+
+    model = "tpm-only-priority-model-under-limit"
+    total_tpm = 300
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "test-key",
+                        "tpm": total_tpm,
+                    },
+                }
+            ]
+        )
+    )
+
+    await _seed_token_counter(handler, "model_saturation_check", model, 200)
+    await _seed_token_counter(handler, "priority_model", f"{model}:team_a", 100)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-team-a", metadata={"priority": "team_a"})
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data={"model": model},
+        call_type="completion",
+    )
+
+    pool_tokens = await handler.internal_usage_cache.async_get_cache(
+        key=handler.v3_limiter.create_rate_limit_keys(
+            key="priority_model",
+            value=f"{model}:team_a",
+            rate_limit_type="tokens",
+        ),
+        litellm_parent_otel_span=None,
+        local_only=True,
+    )
+    assert int(pool_tokens) == 100
