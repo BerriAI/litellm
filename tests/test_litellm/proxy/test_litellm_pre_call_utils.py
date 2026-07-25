@@ -27,6 +27,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     check_if_token_is_service_account,
     clean_headers,
+    _is_transmittable_header,
 )
 from litellm.types.utils import CredentialItem
 
@@ -5400,6 +5401,52 @@ async def test_overwrite_user_with_key_hash_stamps_master_key_alias(monkeypatch)
     )
 
     assert updated_data["user"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.parametrize(
+    "name, value, expected",
+    [
+        ("x-project", "acme", True),
+        ("x-project", b"\xe4\xb8\xad", True),
+        ("x-project", "中文", False),
+        ("x-project", "café", False),
+        ("x-中文", "acme", False),
+        ("x-count", 5, False),
+    ],
+)
+def test_is_transmittable_header(name, value, expected):
+    assert _is_transmittable_header(name, value) is expected
+
+
+def test_add_headers_to_llm_call_drops_non_ascii_header_values():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34633
+
+    A forwarded header whose value contains non-ASCII characters must not reach
+    httpx/http.client (which encode header values with a single-byte codec and
+    raise UnicodeEncodeError -> 500). ASCII headers alongside it must survive.
+    """
+    import httpx
+
+    non_ascii_wire_value = "中文".encode("utf-8")
+    headers = Headers(
+        raw=[
+            (b"x-keep", b"plain-ascii"),
+            (b"x-non-ascii", non_ascii_wire_value),
+            (b"anthropic-beta", b"prompt-caching-2024-07-31"),
+        ]
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+
+    result = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
+        headers, user_api_key_dict
+    )
+
+    assert result == {
+        "x-keep": "plain-ascii",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+    }
+    httpx.Request("POST", "http://localhost:4000", headers=result)
 
 
 @pytest.mark.asyncio

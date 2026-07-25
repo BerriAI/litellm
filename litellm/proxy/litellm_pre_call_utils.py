@@ -703,6 +703,29 @@ def clean_headers(
     return clean_headers
 
 
+def _is_transmittable_header(name: object, value: object) -> bool:
+    """
+    Whether a header name/value pair can be forwarded over HTTP.
+
+    httpx (and Python's http.client) encode header values with a single-byte
+    codec, so a non-ASCII value such as CJK text raises UnicodeEncodeError deep
+    in the request stack and surfaces to the client as a 500. See
+    https://github.com/BerriAI/litellm/issues/34633
+    """
+    if not isinstance(name, str):
+        return False
+    if isinstance(value, bytes):
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        name.encode("ascii")
+        value.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 class LiteLLMProxyRequestSetup:
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> Optional[float]:
@@ -875,7 +898,18 @@ class LiteLLMProxyRequestSetup:
                 else:
                     returned_headers["x-litellm-{}".format(k)] = str(v)
 
-        return returned_headers
+        transmittable_headers = {
+            name: value for name, value in returned_headers.items() if _is_transmittable_header(name, value)
+        }
+        dropped_headers = returned_headers.keys() - transmittable_headers.keys()
+        if dropped_headers:
+            verbose_logger.warning(
+                "Skipping non-ASCII request header(s) %s when forwarding to the LLM provider; "
+                "HTTP header values must be ASCII-encodable (see issue #34633)",
+                sorted(dropped_headers),
+            )
+
+        return transmittable_headers
 
     @staticmethod
     def add_headers_to_llm_call_by_model_group(data: dict, headers: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
