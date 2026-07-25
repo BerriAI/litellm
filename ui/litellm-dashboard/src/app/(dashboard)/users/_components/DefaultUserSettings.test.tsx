@@ -150,4 +150,105 @@ describe("DefaultUserSettings", () => {
 
     expect(screen.getByText("Edit Settings")).toBeInTheDocument();
   });
+
+  describe("editable fields", () => {
+    const editableSettings = {
+      values: {
+        sso_enabled: false,
+        teams: [],
+      },
+      field_schema: {
+        description: "Default user settings",
+        properties: {
+          sso_enabled: {
+            type: "boolean",
+            description: "Whether SSO is enabled for new users",
+          },
+          teams: {
+            type: "array",
+            description: "Teams",
+          },
+        },
+      },
+    };
+
+    const enterEditMode = async () => {
+      mockGetInternalUserSettings.mockResolvedValue(editableSettings);
+      mockUpdateInternalUserSettings.mockResolvedValue({ settings: {} });
+
+      render(<DefaultUserSettings {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Edit Settings")).toBeInTheDocument();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByText("Edit Settings"));
+      });
+    };
+
+    const savedPayload = () => mockUpdateInternalUserSettings.mock.calls[0][1] as Record<string, unknown>;
+
+    it("sends the toggled value of a boolean field when saving", async () => {
+      await enterEditMode();
+
+      act(() => {
+        fireEvent.click(screen.getByRole("switch"));
+      });
+      act(() => {
+        fireEvent.click(screen.getByText("Save Changes"));
+      });
+
+      await waitFor(() => {
+        expect(mockUpdateInternalUserSettings).toHaveBeenCalled();
+      });
+      expect(savedPayload().sso_enabled).toBe(true);
+    });
+
+    it("sends a team added through the teams editor when saving", async () => {
+      await enterEditMode();
+
+      expect(screen.queryByText("Team 1")).not.toBeInTheDocument();
+
+      act(() => {
+        fireEvent.click(screen.getByText("Add Team"));
+      });
+      expect(screen.getByText("Team 1")).toBeInTheDocument();
+
+      act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Enter team ID"), { target: { value: "team-abc" } });
+      });
+      act(() => {
+        fireEvent.click(screen.getByText("Save Changes"));
+      });
+
+      await waitFor(() => {
+        expect(mockUpdateInternalUserSettings).toHaveBeenCalled();
+      });
+      expect(savedPayload().teams).toEqual([{ team_id: "team-abc", user_role: "user" }]);
+    });
+
+    it("drops a team removed through the teams editor", async () => {
+      await enterEditMode();
+
+      act(() => {
+        fireEvent.click(screen.getByText("Add Team"));
+      });
+      expect(screen.getByText("Team 1")).toBeInTheDocument();
+
+      act(() => {
+        fireEvent.click(screen.getByText("Remove"));
+      });
+      expect(screen.queryByText("Team 1")).not.toBeInTheDocument();
+
+      act(() => {
+        fireEvent.click(screen.getByText("Save Changes"));
+      });
+
+      await waitFor(() => {
+        expect(mockUpdateInternalUserSettings).toHaveBeenCalled();
+      });
+      expect(savedPayload().teams).toEqual([]);
+    });
+  });
 });
