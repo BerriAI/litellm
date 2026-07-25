@@ -232,7 +232,11 @@ async def get_tool_spend(
 
     now = datetime.now(timezone.utc)
     end_day = _parse_day_start(end_date)
-    window_floor = (end_day or now) - timedelta(days=TOOL_SPEND_MAX_WINDOW_DAYS)
+    # Anchor the floor to a midnight so the clamp compares dates with dates:
+    # parsed start_dates are midnight-aligned, and a floor carrying now's
+    # time-of-day would invisibly truncate an explicit start_date to mid-day.
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_floor = (end_day or today) - timedelta(days=TOOL_SPEND_MAX_WINDOW_DAYS)
     start_dt = _parse_day_start(start_date) or window_floor
     if start_dt < window_floor:
         start_dt = window_floor
