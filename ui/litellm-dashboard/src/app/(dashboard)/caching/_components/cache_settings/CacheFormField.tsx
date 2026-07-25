@@ -7,22 +7,29 @@ export interface EmbeddingModelOption {
   label: string;
 }
 
+export const SECRET_ALREADY_SET_PLACEHOLDER = "Already set. Enter a new value to replace it.";
+
 interface CacheFormFieldProps {
   field: CacheField;
   embeddingModels: EmbeddingModelOption[];
+  isSecretConfigured?: boolean;
 }
 
-const renderControl = (field: CacheField, embeddingModels: EmbeddingModelOption[]): React.ReactNode => {
+const renderControl = (
+  field: CacheField,
+  embeddingModels: EmbeddingModelOption[],
+  placeholder: string,
+): React.ReactNode => {
   switch (field.type) {
     case "boolean":
       return <Switch />;
     case "password":
-      return <Input.Password placeholder={field.helpText} autoComplete="new-password" />;
+      return <Input.Password placeholder={placeholder} autoComplete="new-password" />;
     case "integer":
     case "float":
-      return <Input inputMode="decimal" placeholder={field.helpText} />;
+      return <Input inputMode="decimal" placeholder={placeholder} />;
     case "list":
-      return <Input.TextArea rows={4} placeholder={field.helpText} />;
+      return <Input.TextArea rows={4} placeholder={placeholder} />;
     case "model-select":
       return (
         <Select
@@ -35,11 +42,11 @@ const renderControl = (field: CacheField, embeddingModels: EmbeddingModelOption[
         />
       );
     default:
-      return <Input placeholder={field.helpText} />;
+      return <Input placeholder={placeholder} />;
   }
 };
 
-const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels }) => (
+const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels, isSecretConfigured = false }) => (
   <Form.Item
     name={field.name}
     label={field.label}
@@ -47,7 +54,7 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels 
     rules={field.rules}
     valuePropName={field.type === "boolean" ? "checked" : "value"}
   >
-    {renderControl(field, embeddingModels)}
+    {renderControl(field, embeddingModels, isSecretConfigured ? SECRET_ALREADY_SET_PLACEHOLDER : field.helpText)}
   </Form.Item>
 );
 

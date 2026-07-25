@@ -39,10 +39,9 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
 
-const asset_logos_folder = "/ui/assets/logos/";
-export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
+export const mcpLogoImg = mcpLogo.src;
 
 interface CreateMCPServerProps {
   userRole: string;
@@ -791,7 +790,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </button>
           )}
           <img
-            src={resolveLogoSrc(mcpLogoImg)}
+            src={mcpLogoImg}
             alt="MCP Logo"
             className="w-8 h-8 object-contain"
             style={{

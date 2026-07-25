@@ -15,6 +15,7 @@ import types
 import uuid
 from datetime import datetime
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -27,7 +28,6 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -59,6 +59,9 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_server_name,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    _redact_mcp_resource_url,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -105,26 +108,8 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
 
-
-def _redact_mcp_resource_url(url: Optional[str]) -> Optional[str]:
-    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
-
-    Everything else is dropped: userinfo (``user:pass@``), the query string, the
-    fragment, and the path, because hosted MCP servers routinely embed the
-    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
-    in spend-log metadata that a caller who can invoke the tool can read back.
-    Returns None when the URL has no host to identify (nothing safe to log).
-    """
-    if not isinstance(url, str) or not url:
-        return None
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return None
-    if not parts.hostname:
-        return None
-    netloc = f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
-    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
+if TYPE_CHECKING:
+    from opentelemetry.trace import SpanContext
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -261,10 +246,12 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[dict[str, str]]:
     """The W3C trace context (``traceparent``/``tracestate``) the MCP client
     propagated in the request's ``params._meta`` (SEP-414), or ``None``.
 
-    Per the OTel MCP semconv the MCP span parents to this propagated context rather
-    than to the HTTP/session transport (which is recorded as a link instead), so a
-    streamable-HTTP session that multiplexes many messages does not glue every
-    message under the session's first request. The client's W3C Baggage is
+    When present, per the OTel MCP semconv the MCP span parents to this propagated
+    context rather than to the HTTP transport (which is recorded as a link instead).
+    When absent, the span nests under the transport span of the request carrying
+    this specific message, so a streamable-HTTP session that multiplexes many
+    messages still does not glue every message under the session's first request;
+    see ``resolve_mcp_span_context``. The client's W3C Baggage is
     deliberately excluded: it is caller-controlled, and the otel baggage processor
     stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,
     ...) onto the span, so honoring remote baggage would let a client spoof a
@@ -303,6 +290,56 @@ def _otel_reset_mcp_trace_carrier(token: object) -> None:
         )
 
         reset_mcp_message_trace_carrier(token)
+    except ImportError:
+        return
+
+
+def _otel_request_transport_span_context() -> Optional["SpanContext"]:
+    """The tracing span of the HTTP request being handled, as a portable value.
+
+    Resolved on the ASGI request task, where the proxy's server span is anchored,
+    and carried to the MCP message handler on the authenticated-user object. A
+    stateful streamable-HTTP session handles every message on the task spawned by
+    its ``initialize`` POST, so the handler's own task cannot see later requests'
+    spans; this is the same reason per-request auth is carried across rather than
+    read from a ContextVar. Lazily imported so opentelemetry stays an optional
+    dependency; returns ``None`` when otel_v2 is unavailable or no request span is
+    anchored."""
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            request_root_span_context,
+        )
+
+        return request_root_span_context()
+    except ImportError:
+        return None
+
+
+def _otel_set_mcp_transport_span_context(span_context: Optional["SpanContext"]) -> object:
+    """Publish the current message's transport span for the otel_v2 MCP span and
+    return a reset token, or ``None`` when otel_v2 is unavailable."""
+    if span_context is None:
+        return None
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            set_mcp_message_transport_span_context,
+        )
+
+        return set_mcp_message_transport_span_context(span_context)
+    except ImportError:
+        return None
+
+
+def _otel_reset_mcp_transport_span_context(token: object) -> None:
+    """Paired with ``_otel_set_mcp_transport_span_context``."""
+    if token is None:
+        return
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            reset_mcp_message_transport_span_context,
+        )
+
+        reset_mcp_message_transport_span_context(token)
     except ImportError:
         return
 
@@ -348,6 +385,7 @@ if MCP_AVAILABLE:
         CallToolResult,
         EmbeddedResource,
         ImageContent,
+        ListToolsResult,
         Prompt,
         TextContent,
     )
@@ -355,6 +393,14 @@ if MCP_AVAILABLE:
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
+    )
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        SERVER_OUTCOMES_META_KEY,
+        AggregateToolListing,
+        ServerListOk,
+        ServerOutcome,
+        classify_list_exception,
+        outcome_wire_value,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
@@ -367,6 +413,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
         _request_extra_headers,
+        _request_resolved_auth_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -663,10 +710,25 @@ if MCP_AVAILABLE:
     ############### MCP Server Routes #######################
     ########################################################
 
-    @server.list_tools()
-    async def handle_list_tools() -> List[Tool]:
+    def _current_transport_span_context() -> Optional["SpanContext"]:
+        """The transport span of the HTTP request carrying the message being handled.
+
+        Published by the ASGI request task onto the authenticated-user object, because
+        a stateful session's message handler runs on the task spawned by that session's
+        ``initialize`` POST and so cannot read later requests' spans from its own task.
         """
-        List all available tools.
+        auth_user = auth_context_var.get()
+        if not isinstance(auth_user, MCPAuthenticatedUser):
+            auth_user = _recover_auth_from_session()
+        return auth_user.transport_span_context if auth_user is not None else None
+
+    @server.list_tools()
+    async def handle_list_tools() -> "ListToolsResult | List[Tool]":
+        """
+        List all available tools, with each server's listing outcome attached to the result's
+        ``_meta`` (SERVER_OUTCOMES_META_KEY) so a broken upstream is distinguishable from a healthy
+        server with no tools. Returning a ListToolsResult (rather than a bare list) makes the MCP SDK
+        pass the result through unwrapped, which is what lets the ``_meta`` survive to the client.
         Also captures the active session for propagation to callbacks.
         """
         from mcp.server.lowlevel.server import request_ctx
@@ -676,9 +738,11 @@ if MCP_AVAILABLE:
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
+        _transport_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
+            _transport_token = _otel_set_mcp_transport_span_context(_current_transport_span_context())
             # Get user authentication from context variable
             (
                 user_api_key_auth,
@@ -709,7 +773,7 @@ if MCP_AVAILABLE:
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
-            tools = await _list_mcp_tools(
+            listing = await _list_mcp_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -719,14 +783,22 @@ if MCP_AVAILABLE:
                 log_list_tools_to_spendlogs=True,
                 list_tools_log_source="mcp_protocol",
             )
-            verbose_logger.info(f"MCP list_tools - Successfully returned {len(tools)} tools")
-            return tools
+            verbose_logger.info(f"MCP list_tools - Successfully returned {len(listing.tools)} tools")
+            if not listing.outcomes:
+                return listing.tools
+            outcome_meta = {
+                SERVER_OUTCOMES_META_KEY: {
+                    key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()
+                }
+            }
+            return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
         except Exception as e:
             verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
         finally:
+            _otel_reset_mcp_transport_span_context(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -900,9 +972,11 @@ if MCP_AVAILABLE:
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
+        _transport_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
+            _transport_token = _otel_set_mcp_transport_span_context(_current_transport_span_context())
             # Validate arguments
             (
                 user_api_key_auth,
@@ -957,7 +1031,17 @@ if MCP_AVAILABLE:
                     data = await add_litellm_data_to_request(
                         data=body_data,
                         request=request,
-                        user_api_key_dict=user_api_key_auth,
+                        # Bill a team-derived call to the team that granted it. A keyless admitted
+                        # subject carries no team_id, so spend skipped team updates entirely and
+                        # charged the user's PRIMARY org — the granting team's budget never
+                        # accumulated (so it could never begin to block) and, cross-org, the wrong
+                        # organization was charged. This is the ACCOUNTING half; the enforcement
+                        # half (an already-over-budget team stops granting) lives in the source gate.
+                        # Authorization is unaffected: it ran before this, and the union is resolved
+                        # from the untouched auth object passed to call_mcp_tool below.
+                        user_api_key_dict=await MCPRequestHandler.billing_auth_for_tool_call(
+                            user_api_key_auth, tool_name=name
+                        ),
                         proxy_config=proxy_config,
                     )
                 else:
@@ -1031,6 +1115,7 @@ if MCP_AVAILABLE:
 
             return response
         finally:
+            _otel_reset_mcp_transport_span_context(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -1746,6 +1831,13 @@ if MCP_AVAILABLE:
             _mcp_gateway_initialize_instructions.reset(instructions_token)
             _mcp_gateway_server_name.reset(server_name_token)
 
+    def _aggregate_server_key(server: MCPServer) -> str:
+        """The client-visible key for a server in listing outcomes and spend metadata: the same
+        display prefix (alias, or the short prefix when that mode is enabled) the caller already
+        sees on the tool names. Canonical internal server names never key a caller-readable
+        surface; when the display naming deliberately hides them, the outcome keys must too."""
+        return get_server_prefix(server) or "unknown"
+
     async def _get_tools_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
@@ -1758,7 +1850,7 @@ if MCP_AVAILABLE:
         litellm_trace_id: Optional[str] = None,
         request_tags: Optional[list[str]] = None,
         client_ip: Optional[str] = None,
-    ) -> List[MCPTool]:
+    ) -> AggregateToolListing:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
 
@@ -1770,10 +1862,11 @@ if MCP_AVAILABLE:
             oauth2_headers: Optional dict of oauth2 headers
 
         Returns:
-            List[MCPTool]: Combined list of tools from filtered servers
+            AggregateToolListing: Combined tools from filtered servers plus each server's
+            classified listing outcome
         """
         if not MCP_AVAILABLE:
-            return []
+            return AggregateToolListing(tools=[], outcomes={})
 
         list_tools_start_time = datetime.now()
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = None
@@ -1858,10 +1951,12 @@ if MCP_AVAILABLE:
 
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
-            ) -> List[MCPTool]:
-                """Fetch and filter tools from a single server with error handling."""
+            ) -> "tuple[List[MCPTool], ServerOutcome]":
+                """Fetch and filter tools from a single server, classifying any failure into that
+                server's outcome so the aggregate can keep serving the healthy subset without a
+                broken server masquerading as an empty one."""
                 if server is None:
-                    return []
+                    return [], ServerListOk(tool_count=0)
 
                 server_auth_header, extra_headers = _prepare_mcp_server_headers(
                     server=server,
@@ -1931,8 +2026,8 @@ if MCP_AVAILABLE:
                     verbose_logger.debug(
                         f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                     )
-                    return filtered_tools
-                except MCPUpstreamAuthError:
+                    return filtered_tools, ServerListOk(tool_count=len(filtered_tools))
+                except MCPUpstreamAuthError as e:
                     # Absorb so one unauthenticated server does not empty every other server's
                     # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
                     # intentionally not done here: raising from this list handler cannot produce a
@@ -1940,31 +2035,30 @@ if MCP_AVAILABLE:
                     # error). Single-server routes surface it via the request-scope preemptive
                     # check in _raise_preemptive_401_for_unauthenticated_servers instead.
                     verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
-                    return []
+                    return [], classify_list_exception(e)
                 except Exception as e:
                     verbose_logger.exception(f"Error getting tools from server {server.name}: {str(e)}")
-                    return []
+                    return [], classify_list_exception(e)
 
             # Fetch tools from all servers in parallel
             tasks = [_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers]
             results = await asyncio.gather(*tasks)
 
             # Flatten results into single list
-            all_tools: List[MCPTool] = [tool for tools in results for tool in tools]
+            all_tools: List[MCPTool] = [tool for tools, _ in results for tool in tools]
+            server_outcomes: Dict[str, ServerOutcome] = {
+                _aggregate_server_key(server): outcome
+                for server, (_, outcome) in zip(allowed_mcp_servers, results)
+                if server is not None
+            }
 
             # If logging is enabled, enrich spend_logs_metadata with counts
             if litellm_logging_obj:
-                per_server_tool_counts: Dict[str, int] = {}
-                for server, server_tools in zip(allowed_mcp_servers, results):
-                    if server is None:
-                        continue
-                    server_key = (
-                        getattr(server, "server_name", None)
-                        or getattr(server, "alias", None)
-                        or getattr(server, "name", None)
-                        or "unknown"
-                    )
-                    per_server_tool_counts[str(server_key)] = len(server_tools)
+                per_server_tool_counts: Dict[str, int] = {
+                    _aggregate_server_key(server): len(server_tools)
+                    for server, (server_tools, _) in zip(allowed_mcp_servers, results)
+                    if server is not None
+                }
 
                 metadata_dict = litellm_logging_obj.model_call_details.get("metadata")
                 if isinstance(metadata_dict, dict):
@@ -1975,6 +2069,9 @@ if MCP_AVAILABLE:
                     spend_meta["allowed_server_count"] = len(allowed_mcp_servers)
                     spend_meta["tool_count_total"] = len(all_tools)
                     spend_meta["per_server_tool_counts"] = per_server_tool_counts
+                    spend_meta["per_server_list_outcomes"] = {
+                        key: outcome_wire_value(outcome) for key, outcome in server_outcomes.items()
+                    }
 
                 end_time = datetime.now()
                 try:
@@ -1995,7 +2092,7 @@ if MCP_AVAILABLE:
 
             verbose_logger.info(f"Successfully fetched {len(all_tools)} tools total from all MCP servers")
 
-            return all_tools
+            return AggregateToolListing(tools=all_tools, outcomes=server_outcomes)
         except Exception as e:
             # Only fire failure hook if logging was requested for this list-tools execution
             if log_list_tools_to_spendlogs and user_api_key_auth is not None:
@@ -2228,7 +2325,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         client_ip: Optional[str] = None,
-    ) -> List[MCPTool]:
+    ) -> AggregateToolListing:
         """
         List all available MCP tools.
 
@@ -2240,15 +2337,14 @@ if MCP_AVAILABLE:
             client_ip: Client IP for IP-based server access control
 
         Returns:
-            List[MCPTool]: Combined list of tools from all accessible servers
+            AggregateToolListing: Combined tools from all accessible servers plus each server's
+            classified listing outcome
         """
         if not MCP_AVAILABLE:
-            return []
+            return AggregateToolListing(tools=[], outcomes={})
 
-        # Get tools from managed MCP servers with error handling
-        managed_tools = []
         try:
-            managed_tools = await _get_tools_from_mcp_servers(
+            listing = await _get_tools_from_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -2259,12 +2355,12 @@ if MCP_AVAILABLE:
                 list_tools_log_source=list_tools_log_source,
                 client_ip=client_ip,
             )
-            verbose_logger.debug(f"Successfully fetched {len(managed_tools)} tools from managed MCP servers")
+            verbose_logger.debug(f"Successfully fetched {len(listing.tools)} tools from managed MCP servers")
+            return listing
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
-            # Continue with empty managed tools list instead of failing completely
-
-        return managed_tools
+            # Continue with an empty listing instead of failing completely
+            return AggregateToolListing(tools=[], outcomes={})
 
     async def _list_mcp_prompts(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
@@ -2755,13 +2851,29 @@ if MCP_AVAILABLE:
                             forwarded_headers = {}
                         forwarded_headers[header_name] = value
 
+            resolved_auth_headers: dict[str, str] | None = None
+            if mcp_server:
+                (
+                    resolved_auth_headers,
+                    forwarded_headers,
+                ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
+                    mcp_server=mcp_server,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    user_api_key_auth=user_api_key_auth,
+                    forwarded_headers=forwarded_headers,
+                )
+
             _auth_token = _request_auth_header.set(auth_header_value)
             _extra_token = _request_extra_headers.set(forwarded_headers)
+            _resolved_token = _request_resolved_auth_headers.set(resolved_auth_headers)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
                 _request_extra_headers.reset(_extra_token)
+                _request_resolved_auth_headers.reset(_resolved_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)
@@ -4159,6 +4271,7 @@ if MCP_AVAILABLE:
                     session_id=session_id if use_stateful else None,
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
                     copy_existing_session_auth_context=is_initialize,
+                    transport_span_context=_otel_request_transport_span_context(),
                 )
                 local_send = send
                 if use_stateful and is_initialize:
@@ -4383,6 +4496,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
+        transport_span_context: Optional["SpanContext"] = None,
     ) -> None:
         auth_user.user_api_key_auth = user_api_key_auth
         auth_user.mcp_auth_header = mcp_auth_header
@@ -4391,6 +4505,7 @@ if MCP_AVAILABLE:
         auth_user.oauth2_headers = oauth2_headers
         auth_user.raw_headers = raw_headers
         auth_user.client_ip = client_ip
+        auth_user.transport_span_context = transport_span_context
 
     def set_auth_context(
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -4400,6 +4515,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
+        transport_span_context: Optional["SpanContext"] = None,
     ) -> MCPAuthenticatedUser:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -4410,6 +4526,7 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names and access groups to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
             client_ip: Client IP address for MCP access control
+            transport_span_context: Tracing span of the HTTP request carrying this message
         """
         auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
@@ -4419,6 +4536,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            transport_span_context=transport_span_context,
         )
         auth_context_var.set(auth_user)
         return auth_user
@@ -4434,6 +4552,7 @@ if MCP_AVAILABLE:
         session_id: Optional[str] = None,
         touch_last_seen: bool = True,
         copy_existing_session_auth_context: bool = False,
+        transport_span_context: Optional["SpanContext"] = None,
     ) -> MCPAuthenticatedUser:
         auth_user = _stateful_session_auth_contexts.get(session_id) if session_id else None
         if auth_user is not None and session_id is not None:
@@ -4448,6 +4567,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     client_ip=client_ip,
+                    transport_span_context=transport_span_context,
                 )
             _update_auth_context(
                 auth_user=auth_user,
@@ -4458,6 +4578,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                transport_span_context=transport_span_context,
             )
             auth_context_var.set(auth_user)
             return auth_user
@@ -4469,6 +4590,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            transport_span_context=transport_span_context,
         )
 
     def _wrap_send_with_stateful_session_auth_context(

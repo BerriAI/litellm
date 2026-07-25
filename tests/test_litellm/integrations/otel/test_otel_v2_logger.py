@@ -29,7 +29,9 @@ from litellm.integrations.otel import (  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     reset_mcp_message_trace_carrier,
+    reset_mcp_message_transport_span_context,
     set_mcp_message_trace_carrier,
+    set_mcp_message_transport_span_context,
     set_request_root_span,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
@@ -56,9 +58,11 @@ def _reset_request_root_span():
 
     _otel_context._request_root_span.set(None)
     _otel_context._mcp_message_trace_carrier.set(None)
+    _otel_context._mcp_message_transport_span_context.set(None)
     yield
     _otel_context._request_root_span.set(None)
     _otel_context._mcp_message_trace_carrier.set(None)
+    _otel_context._mcp_message_transport_span_context.set(None)
 
 
 def _payload(**overrides):
@@ -528,15 +532,15 @@ _MCP_SPAN_CASES = [
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_roots_and_links_transport_without_propagated_context(
+def test_mcp_span_nests_under_transport_without_propagated_context(
     make_payload, span_name
 ):
-    """MCP and the HTTP transport are independent lifecycles (one streamable-HTTP
-    session multiplexes many messages), so per the MCP semconv the message span
-    must NOT nest under the session/transport span — that is what made it render
-    skewed at the session's start. With no propagated ``params._meta`` context it
-    starts its own root trace and records the transport span as a *link*, never
-    the parent."""
+    """Almost no MCP client implements SEP-414, so ``params._meta`` normally carries
+    no trace context. Rooting the span there split one tool call into two traces
+    joined only by a link, which is how it surfaced in APM: the ``POST`` transaction
+    and the ``tools/call`` span shared no ``trace_id``. With no remote parent to
+    honor the span nests under the transport span instead, and records no link since
+    the transport is now the real parent."""
     logger, exporter = _logger()
     transport = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -549,11 +553,75 @@ def test_mcp_span_roots_and_links_transport_without_propagated_context(
     )
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert span.context.trace_id == transport.get_span_context().trace_id
+    assert span.links == ()
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_nests_under_this_messages_transport_not_the_session_opener(
+    make_payload, span_name
+):
+    """A *stateful* streamable-HTTP session runs every message on the single task
+    spawned by that session's ``initialize`` POST, so the ``_request_root_span``
+    ContextVar the ASGI request task writes is frozen at ``initialize`` inside the
+    handler and never sees the later ``tools/call`` POST. Nesting on that anchor
+    would hang every tool call of the session off the first request's (already
+    ended) span, rendering skewed at the session's start. The gateway resolves the
+    current message's transport on the request task and publishes it, so the span
+    parents to the POST that actually carried this message."""
+    logger, exporter = _logger()
+    session_opener = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    this_message = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+
+    async def session_task():
+        token = set_mcp_message_transport_span_context(
+            this_message.get_span_context()
+        )
+        try:
+            await logger.async_log_success_event(
+                {"standard_logging_object": make_payload()}, None, None, None
+            )
+        finally:
+            reset_mcp_message_transport_span_context(token)
+
+    async def initialize_request():
+        # The anchor the session task inherits is the one ``initialize`` left behind;
+        # spawning here reproduces the SDK's session task, which outlives this request.
+        set_request_root_span(session_opener)
+        await asyncio.create_task(session_task())
+
+    asyncio.run(initialize_request())
+    session_opener.end()
+    this_message.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is not None
+    assert span.parent.span_id == this_message.get_span_context().span_id
+    assert span.context.trace_id == this_message.get_span_context().trace_id
+    assert span.parent.span_id != session_opener.get_span_context().span_id
+    assert span.context.trace_id != session_opener.get_span_context().trace_id
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_roots_without_transport_or_propagated_context(
+    make_payload, span_name
+):
+    """With neither a remote parent nor a transport span there is nothing to nest
+    under, so the span legitimately starts its own root trace with no links."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": make_payload()}, None, None, None
+        )
+    )
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
     assert span.parent is None
-    assert span.context.trace_id != transport.get_span_context().trace_id
-    assert [link.context.span_id for link in span.links] == [
-        transport.get_span_context().span_id
-    ]
+    assert span.links == ()
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
@@ -641,10 +709,11 @@ def test_mcp_span_carries_authenticated_identity(make_payload, span_name):
     assert span.attributes[LiteLLM.TEAM_ID] == "t1"
 
 
-def test_mcp_span_malformed_traceparent_starts_root():
+def test_mcp_span_malformed_traceparent_nests_under_transport():
     """A malformed traceparent in ``params._meta`` must not crash or parent to a
-    bogus span: the propagator ignores it, so the span starts its own root trace and
-    still links the transport span."""
+    bogus span: the propagator ignores it, leaving no remote parent, so the span
+    falls back to nesting under the transport span rather than starting a
+    disconnected root trace."""
     logger, exporter = _logger()
     transport = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -661,9 +730,44 @@ def test_mcp_span_malformed_traceparent_starts_root():
         reset_mcp_message_trace_carrier(token)
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
-    assert span.parent is None
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert span.links == ()
+
+
+def test_mcp_span_links_this_messages_transport_when_context_is_propagated():
+    """On the semconv path the transport is recorded as a link, and that link must
+    point at the POST carrying this message too. Reading the stale session anchor
+    would attribute the tool call to whichever request opened the session."""
+    logger, exporter = _logger()
+    session_opener = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    this_message = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(session_opener)
+    trace_token = set_mcp_message_trace_carrier(
+        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
+    )
+    transport_token = set_mcp_message_transport_span_context(
+        this_message.get_span_context()
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": _mcp_list_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_transport_span_context(transport_token)
+        reset_mcp_message_trace_carrier(trace_token)
+    session_opener.end()
+    this_message.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
+    assert span.parent is not None and span.parent.span_id == 0x2222222222222222
     assert [link.context.span_id for link in span.links] == [
-        transport.get_span_context().span_id
+        this_message.get_span_context().span_id
     ]
 
 
@@ -858,6 +962,120 @@ def test_guardrail_span_anchors_to_root_inside_active_phase_span():
     auth_span = by_name["auth /chat/completions"]
     assert guard.parent.span_id == server.get_span_context().span_id
     assert guard.parent.span_id != auth_span.get_span_context().span_id
+
+
+# --------------------------------------------------------------------------- #
+#  LIT-4179 — proxy-level failures that never reach an LLM call must still stamp
+#  the structured error.* attributes onto the request's spans, restoring the v1
+#  behavior v2 dropped when it stopped subclassing ``OpenTelemetry``.
+# --------------------------------------------------------------------------- #
+
+
+def _proxy_exc(message, code):
+    from litellm.proxy._types import ProxyException
+
+    return ProxyException(message=message, type="bad_request_error", param=None, code=code)
+
+
+def test_async_post_call_failure_hook_stamps_error_on_root_span():
+    """PATH B: an endpoint-level failure (empty body rejected before dispatch)
+    reaches ``async_post_call_failure_hook``; it must stamp error.* + an exception
+    event on the anchored request root span."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc("litellm.BadRequestError: messages is required", 400)
+    result = asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth()
+        )
+    )
+    server.end()
+    assert result is None
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["error.type"] == "ProxyException"
+    assert "messages is required" in span.attributes["error.message"]
+    assert span.attributes["litellm.provider.error.code"] == "400"
+    assert span.status.status_code is StatusCode.ERROR
+    assert any(e.name == "exception" for e in span.events)
+
+
+def test_async_post_call_failure_hook_falls_back_to_user_api_key_parent_span():
+    """With no anchor set (a path that never captured the root), the hook must fall
+    back to ``user_api_key_dict.parent_otel_span`` rather than dropping the error."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={},
+            original_exception=_proxy_exc("boom", 401),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=server),
+        )
+    )
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["error.type"] == "ProxyException"
+    assert span.attributes["litellm.provider.error.code"] == "401"
+
+
+def test_record_error_attributes_on_span_decorates_without_ending():
+    """PATH A: a failure that dies before any LLM-call span (malformed body,
+    validation) is stamped onto the instrumentor-owned SERVER span. The method must
+    not end the span or emit a duplicate exception event, and must pin error.code
+    to the real response status (not the exception's own code)."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    logger.record_error_attributes_on_span(server, _proxy_exc("Invalid JSON body", 400), 422)
+    assert server.is_recording()
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["error.type"] == "ProxyException"
+    assert span.attributes["error.message"] == "Invalid JSON body"
+    assert span.attributes["litellm.provider.error.code"] == "422"
+    assert all(e.name != "exception" for e in span.events)
+
+
+def test_record_error_attributes_on_span_ignores_below_400_and_missing_span():
+    logger, _ = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    logger.record_error_attributes_on_span(None, _proxy_exc("boom", 400), 400)  # no span → no-op
+    logger.record_error_attributes_on_span(server, None, 400)  # no exception → no-op
+    server.end()
+    assert "error.type" not in (server.attributes or {})
+
+
+def test_start_phase_span_stamps_error_attributes_on_failure():
+    """An ``auth`` phase span that dies (expired key) must carry the structured
+    error.* attributes, not only the exception event ``use_span`` records."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc = _proxy_exc("Authentication Error, ExpiredToken", 401)
+    with trace.use_span(server, end_on_exit=False):
+        with contextlib.suppress(Exception):
+            with logger.start_phase_span("auth /chat/completions"):
+                raise exc
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    auth = by_name["auth /chat/completions"]
+    assert auth.attributes["error.type"] == "ProxyException"
+    assert "ExpiredToken" in auth.attributes["error.message"]
+    assert auth.attributes["litellm.provider.error.code"] == "401"
+    assert auth.status.status_code is StatusCode.ERROR
+    assert any(e.name == "exception" for e in auth.events)
+
+
+def test_start_phase_span_success_carries_no_error():
+    logger, exporter = _logger()
+    with logger.start_phase_span("auth /chat/completions"):
+        pass
+    (span,) = exporter.get_finished_spans()
+    assert "error.type" not in span.attributes
+    assert span.status.status_code is not StatusCode.ERROR
 
 
 def test_real_logging_pre_call_opens_span_end_to_end():

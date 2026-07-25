@@ -2560,6 +2560,108 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
+def test_add_litellm_metadata_from_anthropic_user_id_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_anthropic_user_id_dict_sets_session_id():
+    data = {
+        "metadata": {
+            "user_id": {
+                "device_id": "device",
+                "account_uuid": "account",
+                "session_id": "sess_4f8c1d2a-1234",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["user_id"] == "sess_4f8c1d2a-1234"
+    assert data["metadata"]["session_id"] == "sess_4f8c1d2a-1234"
+    assert data["litellm_session_id"] == "sess_4f8c1d2a-1234"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id():
+    data = {
+        "metadata": {
+            "user_id": "user_abc123_account__session_body-session-id",
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+def test_add_litellm_metadata_from_headers_session_id_beats_anthropic_user_id_dict():
+    data = {
+        "metadata": {
+            "user_id": {
+                "session_id": "body-session-id",
+            }
+        }
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-litellm-session-id": "header-session-id"},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert data["metadata"]["session_id"] == "header-session-id"
+    assert data["litellm_session_id"] == "header-session-id"
+    assert data["litellm_trace_id"] == "header-session-id"
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "user_abc123_account__session_",
+        "user_abc123_account_",
+        "user_abc123_account__session_invalid!",
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_ignores_invalid_session_id(user_id: str):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        {},
+        {"session_id": 123},
+        {"session_id": "invalid session id"},
+        {"session_id": ""},
+    ],
+)
+def test_add_litellm_metadata_from_anthropic_user_id_dict_ignores_invalid_session_id(
+    user_id: object,
+):
+    data = {"metadata": {"user_id": user_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="metadata"
+    )
+    assert data == {"metadata": {"user_id": user_id}}
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {
@@ -4992,17 +5094,23 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
         ("claude-cli/2.0.69 (external, cli)", False, None, False),
         ("claude-cli/2.0.69 (external, cli)", None, False, None),
         ("claude-cli/2.0.69 (external, cli)", None, True, None),
+        ("codex_cli_rs/0.144.5 (Mac OS 26.4.0; arm64) WezTerm", None, None, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64) WarpTerminal (codex_exec; 0.144.5)", None, None, True),
+        ("codex_vscode/0.144.5 (Mac OS 26.4.0; arm64) vscode/1.104.1", None, None, True),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", False, None, False),
+        ("codex_exec/0.144.5 (Mac OS 26.4.0; arm64)", None, True, None),
         ("PostmanRuntime/7.53.0", None, None, None),
         (None, None, None, None),
     ],
 )
-async def test_add_litellm_data_to_request_claude_code_drop_params(
+async def test_add_litellm_data_to_request_agentic_cli_drop_params(
     user_agent, request_drop_params, operator_drop_params, expected_drop_params
 ):
-    """Claude Code sends Anthropic-specific params that fail on non-Anthropic
-    providers, so its user agent must turn on drop_params automatically,
-    without overriding an explicit caller value, an explicit operator-level
-    litellm_settings value, or affecting other clients.
+    """Claude Code sends Anthropic-specific params and Codex sends
+    service_tier, both of which fail on providers that reject them, so those
+    user agents must turn on drop_params automatically, without overriding an
+    explicit caller value, an explicit operator-level litellm_settings value,
+    or affecting other clients.
     """
     headers = {"Content-Type": "application/json"}
     if user_agent is not None:
@@ -5118,3 +5226,198 @@ async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags
     tags = updated["litellm_metadata"]["tags"]
     assert "header-tag" in tags
     assert "body-tag" in tags
+
+
+def _make_chat_request_mock() -> MagicMock:
+    return _make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"})
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_clobbers_caller_supplied_user(monkeypatch):
+    """The flag exists so providers can ban by a tamper-proof id; a caller-chosen
+    `user` must never survive, and the raw sk- key must never be forwarded."""
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_key = "sk-overwrite-user-test-1234"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o", "user": "attacker-chosen-id"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hash_token(raw_key)
+    assert updated_data["user"] != "attacker-chosen-id"
+    assert raw_key not in updated_data["user"]
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_sets_user_when_absent(monkeypatch):
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_key = "sk-overwrite-user-test-5678"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == hash_token(raw_key)
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_disabled_preserves_caller_user():
+    assert litellm.overwrite_user_with_key_hash is False
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-overwrite-user-test-9999")
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o", "user": "caller-chosen-id"}
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_skips_custom_auth_credential(monkeypatch):
+    """Custom-auth credentials are not sk-prefixed or JWTs, so UserAPIKeyAuth stores
+    them raw; the stamp must skip them entirely so auth material never leaks."""
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    raw_credential = "my-custom-auth-credential-abc123"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_credential)
+    assert user_api_key_dict.api_key == raw_credential
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_skips_jwt_auth(monkeypatch):
+    """A hashed JWT rotates on every token re-issue, so it is useless as a stable
+    ban id; JWT-authenticated requests are not stamped."""
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    hashed_jwt = f"hashed-jwt-{hash_token('some-jwt-token')}"
+    user_api_key_dict = UserAPIKeyAuth(api_key=hashed_jwt)
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_skips_hex_shaped_custom_credential(monkeypatch):
+    """A custom-auth credential that happens to be 64 hex chars is indistinguishable
+    from a key hash by shape alone; only the server-set via_virtual_key marker may
+    authorize stamping, so this raw credential must never be forwarded."""
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    hex_shaped_credential = "a" * 64
+    user_api_key_dict = UserAPIKeyAuth(api_key=hex_shaped_credential)
+    assert user_api_key_dict.api_key == hex_shaped_credential
+    assert user_api_key_dict.via_virtual_key is False
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"
+
+
+def test_via_virtual_key_cannot_be_forged_from_validated_input():
+    from_kwargs = UserAPIKeyAuth(api_key="b" * 64, via_virtual_key=True)
+    assert from_kwargs.via_virtual_key is False
+
+    from_dict = UserAPIKeyAuth.model_validate({"api_key": "b" * 64, "via_virtual_key": True})
+    assert from_dict.via_virtual_key is False
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_stamps_master_key_alias(monkeypatch):
+    """Master-key requests carry the stable alias instead of a hash (so the master
+    key never propagates anywhere); the alias is the stampable id for them."""
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+    user_api_key_dict.via_virtual_key = True
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "attacker-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.asyncio
+async def test_overwrite_user_with_key_hash_rejects_alias_without_marker(monkeypatch):
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", True)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+    assert user_api_key_dict.via_virtual_key is False
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "user": "caller-chosen-id"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "caller-chosen-id"

@@ -396,3 +396,130 @@ async def test_build_agentic_loop_plan_missing_key_fallback():
         plan.request_patch.messages[-1]["content"][0]["content"]
         == "[compressed content key 'not_found.py' not found]"
     )
+
+
+def _stub_compress_result(original_tokens, compressed_tokens, cache):
+    return {
+        "messages": [{"role": "user", "content": "stubbed"}],
+        "original_tokens": original_tokens,
+        "compressed_tokens": compressed_tokens,
+        "compression_ratio": 0.5,
+        "cache": cache,
+        "tools": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_records_compression_savings_in_litellm_metadata(monkeypatch):
+    """
+    When compression fires, the hook must record tokens_before/after/saved into
+    the request's litellm_metadata IN PLACE (the proxy and logging object hold
+    references to the same dict), so the savings land in the SpendLog row's
+    metadata JSON under ``compression_savings``.
+    """
+    logger = CompressionInterceptionLogger()
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        lambda **kwargs: _stub_compress_result(12000, 5000, {"auth.py": "content"}),
+    )
+
+    litellm_metadata = {"user_api_key": "hashed-key", "user_api_key_user_id": "u1"}
+    kwargs = {
+        "model": "claude-sonnet-5",
+        "messages": [{"role": "user", "content": "very large context"}],
+        "litellm_metadata": litellm_metadata,
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
+
+    assert result is not None
+    assert result["litellm_metadata"] is litellm_metadata
+    assert litellm_metadata["compression_savings"] == {
+        "tokens_before": 12000,
+        "tokens_after": 5000,
+        "tokens_saved": 7000,
+        "source": "compression_interception",
+    }
+    assert litellm_metadata["user_api_key"] == "hashed-key"
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_creates_litellm_metadata_when_absent(monkeypatch):
+    """SDK-direct calls have no litellm_metadata dict yet; the hook creates it."""
+    logger = CompressionInterceptionLogger()
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        lambda **kwargs: _stub_compress_result(300, 100, {"k": "v"}),
+    )
+
+    kwargs = {
+        "model": "claude-sonnet-5",
+        "messages": [{"role": "user", "content": "ctx"}],
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
+
+    assert result is not None
+    assert result["litellm_metadata"]["compression_savings"]["tokens_saved"] == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "original_tokens,compressed_tokens",
+    [
+        (None, 5000),
+        (12000, None),
+        ("12000", 5000),
+        (12000, "5000"),
+        (True, 5000),
+        (5000, 12000),
+        (12000, -1),
+    ],
+)
+async def test_pre_call_hook_invalid_token_counts_fail_open(monkeypatch, original_tokens, compressed_tokens):
+    """Invalid token counts must never crash the request; savings simply are not recorded."""
+    logger = CompressionInterceptionLogger()
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        lambda **kwargs: _stub_compress_result(original_tokens, compressed_tokens, {"k": "v"}),
+    )
+
+    litellm_metadata = {"user_api_key": "hashed-key"}
+    kwargs = {
+        "model": "claude-sonnet-5",
+        "messages": [{"role": "user", "content": "ctx"}],
+        "litellm_metadata": litellm_metadata,
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
+
+    assert result is not None
+    assert "compression_savings" not in litellm_metadata
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_no_compression_records_no_savings(monkeypatch):
+    """When compression is a no-op (empty cache) nothing is recorded."""
+    logger = CompressionInterceptionLogger()
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        lambda **kwargs: {
+            "messages": [],
+            "original_tokens": 100,
+            "compressed_tokens": 100,
+            "cache": {},
+            "tools": [],
+            "compression_skipped_reason": "below_trigger",
+        },
+    )
+
+    litellm_metadata = {"user_api_key": "hashed-key"}
+    kwargs = {
+        "model": "claude-sonnet-5",
+        "messages": [{"role": "user", "content": "small"}],
+        "litellm_metadata": litellm_metadata,
+    }
+
+    await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.anthropic_messages)
+
+    assert "compression_savings" not in litellm_metadata
