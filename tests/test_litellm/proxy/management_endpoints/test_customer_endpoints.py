@@ -818,7 +818,7 @@ def test_customer_aliases_reads_spend_logs_not_the_end_user_table(mock_prisma_cl
 
 def test_customer_aliases_caps_the_rows_it_scans(mock_prisma_client, mock_user_api_key_auth):
     """The inner LIMIT is the crash guard: DISTINCT must never see an unbounded set."""
-    from litellm.constants import MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS
+    from litellm.proxy.management_endpoints.customer_endpoints import SPEND_LOGS_FILTER_SCAN_CAP
 
     query_raw = _mock_alias_rows(mock_prisma_client, [])
 
@@ -827,8 +827,24 @@ def test_customer_aliases_caps_the_rows_it_scans(mock_prisma_client, mock_user_a
     sql = query_raw.call_args.args[0]
     inner = sql[sql.index("FROM (") : sql.index(") recent")]
     assert "LIMIT $3" in inner
-    assert query_raw.call_args.args[3] == MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS
+    assert query_raw.call_args.args[3] == SPEND_LOGS_FILTER_SCAN_CAP
     assert 'ORDER BY "startTime" DESC' in inner
+
+
+def test_spend_logs_filter_scan_cap_matches_the_logs_page_bound():
+    """Pin the cap's value, not just that it is passed through.
+
+    Asserting the param equals the constant is tautological: raising the constant
+    to a billion keeps that assertion green while removing the bound entirely.
+    The documented rationale is that both reads of LiteLLM_SpendLogs stop at the
+    same depth, so tie it to the count cap ui_view_spend_logs already uses.
+    """
+    from litellm.proxy.management_endpoints.customer_endpoints import SPEND_LOGS_FILTER_SCAN_CAP
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        SPEND_LOGS_PAGINATION_COUNT_CAP,
+    )
+
+    assert SPEND_LOGS_FILTER_SCAN_CAP == SPEND_LOGS_PAGINATION_COUNT_CAP
 
 
 def test_customer_aliases_breaks_start_time_ties_deterministically(mock_prisma_client, mock_user_api_key_auth):
