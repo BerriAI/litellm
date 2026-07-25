@@ -476,6 +476,7 @@ class TestOpenAIChatCompletions:
                     tools=[_WEATHER_TOOL],
                     tool_choice="required",
                     max_tokens=128,
+                    reasoning_effort="none",
                 ),
             )
         )
@@ -623,6 +624,7 @@ class TestOpenAIChatCompletions:
                 tools=[_WEATHER_TOOL],
                 tool_choice="required",
                 max_tokens=128,
+                reasoning_effort="none",
                 stream=True,
             ),
         )
