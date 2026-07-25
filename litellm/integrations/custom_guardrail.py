@@ -1184,19 +1184,18 @@ class CustomGuardrail(CustomLogger):
         updates) or as the raw DB dict (the PUT /guardrails immediate-sync path reads
         a Prisma JSON column and never converts it), so handle both shapes.
 
-        ``LitellmParams`` merges every guardrail subclass's config fields into one
-        flat model, so a partial update (a PUT payload that only intends to change
-        one field) still serializes every *other* field as ``None`` - either because
-        it's irrelevant to this guardrail type, or because the admin simply didn't
-        set it. Skip ``None`` values here rather than overwriting existing config with
-        them, so a partial update can't silently null out a field it never mentioned;
-        clearing a field to empty requires an explicit empty value (``[]``/``{}``/``""``),
-        not omission.
+        PUT /guardrails replaces the guardrail's whole config rather than merging a
+        partial patch (the endpoint fetches the existing DB row only to check it
+        exists, then overwrites it with exactly what the caller sent), so an explicit
+        ``None`` for a field is the caller's real signal to clear it, not evidence the
+        field was merely omitted - apply it. A subclass whose field must never be
+        ``None`` at rest (e.g. a list a downstream method iterates unconditionally)
+        should coalesce it to a safe default in its own override, the way ``__init__``
+        already does for that field, rather than this loop guessing at every subclass's
+        invariants.
         """
         params = litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
         for key, value in params.items():
-            if value is None:
-                continue
             if key == "apply_guardrail_to_model_groups" and isinstance(value, list):
                 value = frozenset(str(v).strip().lower() for v in value if str(v).strip())
             setattr(self, key, value)

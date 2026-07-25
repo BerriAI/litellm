@@ -2222,18 +2222,31 @@ class TestShouldRunGuardrailModelGroupGate:
             data={"model": "ai-gateway-other"}, event_type=GuardrailEventHooks.pre_call
         ) is False
 
-    def test_update_in_memory_does_not_null_out_omitted_fields(self):
-        """LitellmParams merges every guardrail subclass's fields into one flat model,
-        so a partial update that only intends to change one field still serializes
-        every other field as None. A None value must not overwrite an existing
-        attribute the update never mentioned - e.g. clearing a previously-set
-        run_in_parallel just because a later update omits it."""
+    def test_update_in_memory_applies_explicit_none(self):
+        """PUT /guardrails replaces the whole config rather than merging a partial
+        patch (it never reads the existing DB row's fields back into the update), so
+        an explicit None for a field is the caller's real signal to clear it, not
+        evidence it was merely omitted - update_in_memory_litellm_params must apply
+        it rather than silently keeping the old value."""
         g = self._guardrail(run_in_parallel=True)
         assert g.run_in_parallel is True
 
         g.update_in_memory_litellm_params({"guardrail": "test-guardrail", "mode": "pre_call", "run_in_parallel": None})
 
-        assert g.run_in_parallel is True
+        assert g.run_in_parallel is None
+
+    def test_update_in_memory_clears_model_group_scope_on_explicit_none(self):
+        """apply_guardrail_to_model_groups=None must clear a previously-set scope
+        restriction, not leave should_run_guardrail still gating on the old allowlist."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._with_allowlist(self._guardrail(), frozenset({"group-a"}))
+
+        g.update_in_memory_litellm_params(
+            {"guardrail": "test-guardrail", "mode": "pre_call", "apply_guardrail_to_model_groups": None}
+        )
+
+        assert g.should_run_guardrail(data={"model": "group-b"}, event_type=GuardrailEventHooks.pre_call) is True
 
 
 class TestResolveMetadataModelGroups:

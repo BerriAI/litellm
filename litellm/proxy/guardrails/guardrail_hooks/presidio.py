@@ -1366,14 +1366,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         ``litellm_params`` may arrive as a ``LitellmParams`` instance or as the raw DB
         dict (the PUT /guardrails immediate-sync path reads a Prisma JSON column and
-        never converts it); the base implementation now setattrs either shape, so read
-        these Presidio-specific fields the same way here.
+        never converts it); the base implementation now setattrs either shape.
+
+        PUT /guardrails replaces the whole config, so the base class's setattr applies
+        these fields verbatim, including an explicit ``None`` (the caller's real signal
+        to clear a field). Re-coalesce them to the same empty defaults ``__init__``
+        uses, so a cleared or omitted field lands as ``{}``/``[]`` rather than ``None`` -
+        filter_analyze_results_by_score and friends iterate these unconditionally.
         """
         super().update_in_memory_litellm_params(litellm_params)
         params = litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
-        if params.get("pii_entities_config"):
-            self.pii_entities_config = params["pii_entities_config"]
-        if params.get("presidio_score_thresholds"):
-            self.presidio_score_thresholds = params["presidio_score_thresholds"]
-        if params.get("presidio_entities_deny_list"):
-            self.presidio_entities_deny_list = params["presidio_entities_deny_list"]
+        self.pii_entities_config = params.get("pii_entities_config") or {}
+        self.presidio_score_thresholds = params.get("presidio_score_thresholds") or {}
+        self.presidio_entities_deny_list = params.get("presidio_entities_deny_list") or []
