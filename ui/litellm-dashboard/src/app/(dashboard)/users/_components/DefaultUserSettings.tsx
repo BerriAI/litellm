@@ -115,7 +115,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
           team_id: team,
           user_role: "user" as const,
         };
-      } else if (typeof team === "object" && team.team_id) {
+      } else if (typeof team === "object" && team !== null && "team_id" in team) {
         return {
           team_id: team.team_id,
           max_budget_in_team: team.max_budget_in_team,

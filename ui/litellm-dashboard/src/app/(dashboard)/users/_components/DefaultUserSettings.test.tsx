@@ -150,4 +150,111 @@ describe("DefaultUserSettings", () => {
 
     expect(screen.getByText("Edit Settings")).toBeInTheDocument();
   });
+
+  describe("editable fields", () => {
+    const teamsOnlySettings = {
+      values: {
+        teams: [],
+      },
+      field_schema: {
+        description: "Default user settings",
+        properties: {
+          teams: {
+            type: "array",
+            description: "Teams",
+          },
+        },
+      },
+    };
+
+    const enterEditMode = async () => {
+      mockGetInternalUserSettings.mockResolvedValue(teamsOnlySettings);
+      mockUpdateInternalUserSettings.mockResolvedValue({ settings: {} });
+
+      render(<DefaultUserSettings {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Edit Settings")).toBeInTheDocument();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByText("Edit Settings"));
+      });
+    };
+
+    const savedPayload = () => mockUpdateInternalUserSettings.mock.calls[0][1] as Record<string, unknown>;
+
+    const selectUserRole = async (optionText: string) => {
+      act(() => {
+        fireEvent.mouseDown(document.querySelector(".ant-select-selector")!);
+      });
+
+      await waitFor(() => {
+        expect(document.querySelectorAll(".ant-select-item-option").length).toBeGreaterThan(0);
+      });
+
+      const option = Array.from(document.querySelectorAll(".ant-select-item-option")).find((el) =>
+        el.textContent?.includes(optionText),
+      );
+      expect(option).toBeTruthy();
+
+      act(() => {
+        fireEvent.click(option!);
+      });
+    };
+
+    it("keeps the stored role and max budget of a team saved without an ID", async () => {
+      mockGetInternalUserSettings.mockResolvedValue({
+        ...teamsOnlySettings,
+        values: { teams: [{ team_id: "", max_budget_in_team: 25, user_role: "admin" }] },
+      });
+      mockUpdateInternalUserSettings.mockResolvedValue({ settings: {} });
+
+      render(<DefaultUserSettings {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Edit Settings")).toBeInTheDocument();
+      });
+      act(() => {
+        fireEvent.click(screen.getByText("Edit Settings"));
+      });
+
+      expect(screen.getByPlaceholderText("Enter team ID")).toHaveValue("");
+      expect(screen.getByPlaceholderText("Optional")).toHaveValue("25.00");
+      expect(document.querySelector(".ant-select-selection-item")).toHaveTextContent("Admin");
+    });
+
+    it("keeps showing the selected role of a team whose ID has not been typed yet", async () => {
+      await enterEditMode();
+
+      act(() => {
+        fireEvent.click(screen.getByText("Add Team"));
+      });
+      await selectUserRole("Admin");
+
+      expect(document.querySelector(".ant-select-selection-item")).toHaveTextContent("Admin");
+    });
+
+    it("keeps the role and max budget of a team whose ID has not been typed yet", async () => {
+      await enterEditMode();
+
+      act(() => {
+        fireEvent.click(screen.getByText("Add Team"));
+      });
+
+      act(() => {
+        fireEvent.change(screen.getByPlaceholderText("Optional"), { target: { value: "25" } });
+      });
+      await selectUserRole("Admin");
+
+      act(() => {
+        fireEvent.click(screen.getByText("Save Changes"));
+      });
+
+      await waitFor(() => {
+        expect(mockUpdateInternalUserSettings).toHaveBeenCalled();
+      });
+      expect(savedPayload().teams).toEqual([{ team_id: "", max_budget_in_team: 25, user_role: "admin" }]);
+    });
+  });
 });
