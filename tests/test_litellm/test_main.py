@@ -1043,6 +1043,58 @@ def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat
     assert model_info.get("mode") != "responses"
 
 
+def test_responses_api_bridge_check_custom_api_base_via_global_with_unset_effort_stays_chat(monkeypatch):
+    """
+    A custom base set through the litellm.api_base global (not the call arg) is resolved the
+    same way the chat handler resolves it, so the unset-effort arm must not reroute a chat-only
+    backend to a /responses route it lacks. Regression guard: the gate previously inspected only
+    the call-level api_base and bridged these requests.
+    """
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "api_base", "http://vllm.internal:8000/v1")
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+@pytest.mark.parametrize("env_var", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
+def test_responses_api_bridge_check_custom_api_base_via_env_with_unset_effort_stays_chat(monkeypatch, env_var):
+    """
+    A custom base set via OPENAI_BASE_URL/OPENAI_API_BASE env is resolved identically to the chat
+    handler, so the unset-effort arm leaves the request on chat instead of bridging it.
+    """
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setenv(env_var, "http://vllm.internal:8000/v1")
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_routes():
     """Explicit reasoning_effort keeps its pre-existing bridging behavior on any api_base."""
     from litellm.main import responses_api_bridge_check
