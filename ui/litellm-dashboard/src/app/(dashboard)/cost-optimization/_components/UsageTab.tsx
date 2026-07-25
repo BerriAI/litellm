@@ -214,7 +214,8 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           </p>
           {toolSpendWindowClamped && (
             <p className="text-xs text-muted-foreground">
-              Tool spend is limited to the most recent 30 days of the selected range (since {toolSpend?.start_date}).
+              Tool spend is capped at 30 days before the end of the selected range; showing spend since{" "}
+              {toolSpend?.start_date}.
             </p>
           )}
         </CardHeader>
