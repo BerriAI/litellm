@@ -120,6 +120,19 @@ class ModerationRequest(BaseModel):
     input: str
 
 
+class GenerateContentPart(BaseModel):
+    text: str
+
+
+class GenerateContentContent(BaseModel):
+    role: str = "user"
+    parts: list[GenerateContentPart]
+
+
+class GenerateContentBody(BaseModel):
+    contents: list[GenerateContentContent]
+
+
 class ResponsesOutputContent(BaseModel):
     type: str | None = None
     text: str | None = None
@@ -398,6 +411,30 @@ class EndpointsClient:
             file_content_type="image/png",
             file_field="image",
             response_type=ImagesResult,
+        )
+
+    def generate_content(self, key: str, model: str, text: str) -> StreamingResponse:
+        """Google-native GenerateContent on a litellm-managed deployment.
+
+        This is the un-prefixed `/v1beta/models/...` route the google-genai and
+        Vertex SDKs talk to, not the `/gemini/...` or `/vertex_ai/...` passthrough.
+        """
+        return self._send(
+            f"/v1beta/models/{model}:generateContent",
+            key,
+            GenerateContentBody(
+                contents=[GenerateContentContent(parts=[GenerateContentPart(text=text)])]
+            ),
+        )
+
+    def stream_generate_content(self, key: str, model: str, text: str) -> StreamingResponse:
+        return self._send(
+            f"/v1beta/models/{model}:streamGenerateContent",
+            key,
+            GenerateContentBody(
+                contents=[GenerateContentContent(parts=[GenerateContentPart(text=text)])]
+            ),
+            stream=True,
         )
 
 
