@@ -447,6 +447,31 @@ async def test_delete_old_logs_continues_on_valid_int_return():
 
 
 @pytest.mark.asyncio
+async def test_delete_old_rows_stops_at_max_batches(monkeypatch):
+    """The run-loop backstop must halt a cleanup that keeps finding rows, so a
+    huge backlog is spread across scheduled runs instead of one unbounded loop."""
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    monkeypatch.setattr(cleanup_module, "SPEND_LOG_RUN_LOOPS", 2)
+
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_db.execute_raw = AsyncMock(return_value=1000)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "7d"}
+    )
+
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
+    total_deleted = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date)
+
+    # run_count exceeds the cap only after 3 full batches (0, 1, 2)
+    assert mock_db.execute_raw.call_count == 3
+    assert total_deleted == 3000
+
+
+@pytest.mark.asyncio
 async def test_delete_old_tool_index_rows_deletes_on_composite_key():
     """Tool index rows are derived from spend logs and expire on the same cutoff;
     the delete must match on the table's composite primary key."""
