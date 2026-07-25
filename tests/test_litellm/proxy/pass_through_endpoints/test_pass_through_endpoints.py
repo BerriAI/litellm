@@ -19,12 +19,15 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     _registered_pass_through_routes,
+    _update_metadata_with_tags_in_header,
     create_pass_through_route,
     initialize_pass_through_endpoints,
     pass_through_request,
@@ -32,6 +35,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_llm_passthrough_timeout,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -300,6 +304,82 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     assert "files" in call_args
     assert "json" not in call_args
     assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
+
+
+def test_update_metadata_with_tags_in_header_dedupes():
+    request = MagicMock(spec=Request)
+    request.headers = Headers({"tags": "tag1,tag2", "x-litellm-tags": "tag2,tag3"})
+
+    result = _update_metadata_with_tags_in_header(
+        request=request,
+        metadata={"tags": ["tag1"]},
+    )
+
+    assert result["tags"] == ["tag1", "tag2", "tag3"]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_tags_visible_to_custom_pre_call_hook(
+    monkeypatch,
+):
+    class CaptureTagsLogger(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.tags = None
+            self.call_type = None
+
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict,
+            cache,
+            data,
+            call_type,
+        ):
+            self.tags = data.get("metadata", {}).get("tags")
+            self.call_type = call_type
+            return data
+
+    capture_logger = CaptureTagsLogger()
+    monkeypatch.setattr(litellm, "callbacks", [capture_logger])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    request = MagicMock(spec=Request)
+    request.headers = Headers({"x-litellm-tags": "team:alpha,user:dev@example.com"})
+    request.query_params = QueryParams()
+    request.method = "POST"
+    request.state = SimpleNamespace()
+    request.body = AsyncMock(
+        return_value=json.dumps(
+            {
+                "model": "claude-sonnet-4-5-20250929",
+                "max_tokens": 256,
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+        ).encode()
+    )
+
+    mock_response = httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json={"mock": "response"},
+    )
+
+    try:
+        with (
+            patch("httpx.AsyncClient.send", return_value=mock_response),
+            patch("httpx.AsyncClient.request", return_value=mock_response),
+        ):
+            await pass_through_request(
+                request=request,
+                target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            )
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert capture_logger.call_type == "pass_through_endpoint"
+    assert capture_logger.tags == ["team:alpha", "user:dev@example.com"]
 
 
 @pytest.mark.asyncio
