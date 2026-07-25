@@ -747,7 +747,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "anthropic.claude-haiku-4-5@20251001": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -773,7 +774,8 @@
         "supports_native_streaming": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -2220,7 +2222,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "bedrock_converse_supports_strict_tools": false
     },
     "global.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -2252,7 +2255,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "bedrock_converse_supports_strict_tools": false
     },
     "us.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -2284,7 +2288,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "bedrock_converse_supports_strict_tools": false
     },
     "eu.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -2316,7 +2321,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "bedrock_converse_supports_strict_tools": false
     },
     "au.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -2348,7 +2354,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "bedrock_converse_supports_strict_tools": false
     },
     "jp.anthropic.claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -2380,7 +2387,8 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "bedrock_converse_supports_strict_tools": false
     },
     "anthropic.claude-sonnet-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2697,7 +2705,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "apac.anthropic.claude-3-sonnet-20240229-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -15900,7 +15909,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -21880,7 +21890,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "global.amazon.nova-2-lite-v1:0": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -26258,7 +26269,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "crusoe/deepseek-ai/DeepSeek-R1-0528": {
         "input_cost_per_token": 3e-06,
@@ -34928,7 +34940,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "us.anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
@@ -35143,7 +35156,8 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "bedrock_converse_supports_strict_tools": false
     },
     "us.anthropic.claude-opus-4-20250514-v1:0": {
         "cache_creation_input_token_cost": 1.875e-05,
