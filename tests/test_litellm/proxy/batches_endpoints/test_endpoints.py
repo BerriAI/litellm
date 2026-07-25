@@ -561,10 +561,10 @@ async def test_create__unified_file_id_resolves_real_storage_url(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__unified_file_id_db_error_falls_back_to_raw_id(harness):
-    """A lookup failure must not abort batch creation. Resolution is best-effort
-    crash prevention, so on a database error it falls back to dispatching the
-    original id, which the managed-files deployment hook can still map."""
+async def test_create__unified_file_id_db_error_fails_closed_503(harness):
+    """A lookup error leaves the token unresolved, so it fails closed with a
+    retryable 503 rather than dispatching the opaque id into the provider crash
+    it cannot parse. Nothing is dispatched."""
     set_body(
         harness,
         {
@@ -585,9 +585,12 @@ async def test_create__unified_file_id_db_error_falls_back_to_raw_id(harness):
         patch.object(proxy_server, "prisma_client", MagicMock()),
         patch.object(endpoints, "ManagedFileRepository", fake_repo_cls),
     ):
-        await call_create(harness)
+        with pytest.raises(ProxyException) as exc:
+            await call_create(harness)
 
-    assert harness.router_kwargs()["input_file_id"] == "litellm_proxy_unified_id"
+    assert exc.value.code == "503"
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
 
 
 @pytest.mark.asyncio

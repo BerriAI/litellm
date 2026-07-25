@@ -49,11 +49,12 @@ async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | 
 
     Provider batch handlers (e.g. Vertex AI, which parses a `publishers/`
     segment out of the file URI) need a real storage location; the opaque
-    unified token crashes them. Returns None when there is no database, the
-    lookup fails, or the row has no storage_url yet, so callers fall back to
-    the original id (which the managed-files deployment hook can still map).
-    Raises a 404 when no managed-file row exists, since the token cannot be
-    resolved and dispatching it would crash the provider.
+    unified token crashes them. Returns None only when there is no database or
+    the row has no storage_url yet, so callers fall back to the original id
+    (which the managed-files deployment hook can still map). Fails closed
+    rather than dispatch a token that cannot be resolved: 404 when no
+    managed-file row exists, 503 when the lookup itself errors so the caller
+    can retry.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -63,7 +64,10 @@ async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | 
         db_file = await ManagedFileRepository(prisma_client).table.find_first(where={"unified_file_id": input_file_id})
     except Exception as e:
         verbose_proxy_logger.warning("create_batch: managed file lookup failed for %s: %s", input_file_id, e)
-        return None
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "Could not resolve managed file; please retry"},
+        )
     if db_file is None:
         raise HTTPException(
             status_code=404,
