@@ -12,6 +12,7 @@ import litellm
 from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import RATE_LIMIT_CHECK_ONLY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
@@ -19,7 +20,6 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     map_v3_rate_limit_type,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    CHECK_ONLY,
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitIncrementAmounts,
@@ -446,7 +446,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         per_request_increment: RateLimitIncrementAmounts = {
             "requests": 1,
-            "tokens": CHECK_ONLY,
+            "tokens": RATE_LIMIT_CHECK_ONLY,
         }
         atomic_response = await self.v3_limiter.atomic_check_and_increment_by_n(
             descriptors=enforced_descriptors,

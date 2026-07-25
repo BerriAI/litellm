@@ -17,8 +17,8 @@ import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.constants import RATE_LIMIT_CHECK_ONLY
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    CHECK_ONLY,
     MAX_PARALLEL_SLOT_ACQUIRED_KEY,
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
 )
@@ -4666,7 +4666,7 @@ def _tpm_only_descriptor(limit: int) -> Dict[str, Any]:
 def test_check_only_increment_still_emits_a_token_key():
     """
     A non-positive int increment means "don't track this dimension", but
-    CHECK_ONLY means "enforce it without advancing it" and must still put the
+    RATE_LIMIT_CHECK_ONLY means "enforce it without advancing it" and must still put the
     token counter on the Lua KEYS list (LIT-4800).
     """
     handler = _PROXY_MaxParallelRequestsHandler(
@@ -4682,7 +4682,7 @@ def test_check_only_increment_still_emits_a_token_key():
 
     keys, args, meta = handler._build_descriptor_atomic_payload(
         descriptor=descriptor,
-        increment_amounts={"requests": 1, "tokens": CHECK_ONLY},
+        increment_amounts={"requests": 1, "tokens": RATE_LIMIT_CHECK_ONLY},
     )
     assert keys == [
         "{priority_model:my-model:team_a}:window",
@@ -4695,7 +4695,7 @@ def test_check_only_increment_still_emits_a_token_key():
 @pytest.mark.asyncio
 async def test_check_only_tokens_reject_at_limit_without_advancing_counter():
     """
-    CHECK_ONLY rejects at `current >= limit`, the same point an increment of 1
+    RATE_LIMIT_CHECK_ONLY rejects at `current >= limit`, the same point an increment of 1
     rejects at, and leaves the counter untouched when it admits.
     """
     internal_usage_cache = InternalUsageCache(DualCache())
@@ -4723,7 +4723,7 @@ async def test_check_only_tokens_reject_at_limit_without_advancing_counter():
     await set_tokens(179)
     under_limit = await handler.atomic_check_and_increment_by_n(
         descriptors=[descriptor],
-        increments=[{"tokens": CHECK_ONLY}],
+        increments=[{"tokens": RATE_LIMIT_CHECK_ONLY}],
     )
     assert under_limit["overall_code"] == "OK"
     assert await read_tokens() == 179
@@ -4731,7 +4731,7 @@ async def test_check_only_tokens_reject_at_limit_without_advancing_counter():
     await set_tokens(180)
     at_limit = await handler.atomic_check_and_increment_by_n(
         descriptors=[descriptor],
-        increments=[{"tokens": CHECK_ONLY}],
+        increments=[{"tokens": RATE_LIMIT_CHECK_ONLY}],
     )
     assert at_limit["overall_code"] == "OVER_LIMIT"
     assert at_limit["statuses"][0]["rate_limit_type"] == "tokens"

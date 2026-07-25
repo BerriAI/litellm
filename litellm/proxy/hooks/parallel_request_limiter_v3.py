@@ -14,7 +14,6 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Final,
     List,
     Literal,
     Mapping,
@@ -29,7 +28,10 @@ from typing import (
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
+from litellm.constants import (
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    RATE_LIMIT_CHECK_ONLY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -68,8 +70,6 @@ else:
     Span = Any
     InternalUsageCache = Any
 
-CHECK_ONLY: Final[Literal["check_only"]] = "check_only"
-
 RateLimitIncrement = Union[int, Literal["check_only"]]
 RateLimitIncrementAmounts = Mapping[Literal["requests", "tokens"], RateLimitIncrement]
 
@@ -80,10 +80,10 @@ def _resolve_increment(raw: RateLimitIncrement | None) -> int | None:
 
     Returns None when the counter should not be tracked or enforced at all,
     and 0 when it should be enforced against usage recorded so far without
-    advancing it (`CHECK_ONLY`).
+    advancing it (`RATE_LIMIT_CHECK_ONLY`).
     """
     if isinstance(raw, str):
-        return 0 if raw == CHECK_ONLY else None
+        return 0 if raw == RATE_LIMIT_CHECK_ONLY else None
     if raw is None or raw <= 0:
         return None
     return raw
@@ -163,9 +163,6 @@ for i = 1, descriptor_count do
     local window_expired = (not window_start) or
         ((now - tonumber(window_start)) >= window_size)
 
-    -- Token counters are written post-call by the success logger, which
-    -- never touches the window key, so a check-only counter reads the raw
-    -- value and relies on the counter's TTL to bound staleness.
     local current_counter
     if window_expired and increment > 0 then
         current_counter = 0
@@ -173,8 +170,6 @@ for i = 1, descriptor_count do
         current_counter = tonumber(redis.call('GET', counter_key) or 0)
     end
 
-    -- A check-only counter (increment 0) rejects at `current >= limit`, the
-    -- same point an increment of 1 rejects at.
     local check_increment = increment
     if check_increment < 1 then
         check_increment = 1
@@ -1273,9 +1268,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors: rate-limit descriptors to check
             increments: per-descriptor increment amounts, indexed parallel to
                 `descriptors`. Each entry is
-                `{"requests": int | CHECK_ONLY, "tokens": int | CHECK_ONLY}`.
+                `{"requests": int | RATE_LIMIT_CHECK_ONLY, "tokens": int | RATE_LIMIT_CHECK_ONLY}`.
                 A missing or non-positive int means "do not track this
-                dimension at all"; `CHECK_ONLY` means "enforce this dimension
+                dimension at all"; `RATE_LIMIT_CHECK_ONLY` means "enforce this dimension
                 against usage already recorded, without advancing it".
 
         Returns:
