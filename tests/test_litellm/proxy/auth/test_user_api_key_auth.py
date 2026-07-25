@@ -2006,6 +2006,7 @@ class TestJWTOAuth2Coexistence:
         jwt_handler.is_jwt.return_value = True
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
         jwt_handler.get_user_email = MagicMock(return_value="mapped@example.com")
+        jwt_handler.get_user_id = MagicMock(return_value="mapped-user")
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
             user_email_jwt_field="sub",
@@ -2066,6 +2067,152 @@ class TestJWTOAuth2Coexistence:
             mock_get_user_object.call_args_list[0].kwargs["user_email"]
             == "mapped@example.com"
         )
+
+    @pytest.mark.asyncio
+    async def test_mapped_virtual_key_does_not_backfill_mismatched_owner(self):
+        """
+        LIT-4710 security guard: when an admin-created mapping points a JWT at a
+        virtual key owned by a different user, the JWT principal's email must not
+        be written onto the mapped key owner's record. Backfill only runs when the
+        mapped key owner is the JWT principal.
+        """
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        general_settings = {"enable_jwt_auth": True}
+        user_api_key_cache = DualCache()
+        prisma_client = MagicMock()
+        jwt_handler = MagicMock()
+        jwt_handler.is_jwt.return_value = True
+        jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "jwt-principal"})
+        jwt_handler.get_user_email = MagicMock(return_value="principal@example.com")
+        jwt_handler.get_user_id = MagicMock(return_value="jwt-principal")
+        jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+            virtual_key_claim_field="sub",
+            user_email_jwt_field="sub",
+            virtual_key_mapping_cache_ttl=300,
+        )
+
+        mapped_key = UserAPIKeyAuth(
+            token="hashed-mapped-key",
+            api_key="hashed-mapped-key",
+            user_id="other-owner",
+            user_email=None,
+        )
+        other_owner = LiteLLM_UserTable(
+            user_id="other-owner",
+            user_email=None,
+            user_role="internal_user",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+        mock_request.state = SimpleNamespace()
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+                new_callable=AsyncMock,
+                return_value=mapped_key,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=other_owner,
+            ) as mock_get_user_object,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=jwt_token,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o-mini"},
+            )
+
+        assert result.user_id == "other-owner"
+        assert result.user_email is None
+        assert all(
+            call.kwargs.get("user_email") != "principal@example.com"
+            for call in mock_get_user_object.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_mapped_virtual_key_backfill_failure_does_not_break_auth(self):
+        """
+        LIT-4710 resilience: a mapped-key request served from a valid cached key
+        must still authenticate when the best-effort email backfill cannot reach
+        the database, retaining null email rather than failing the request.
+        """
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        general_settings = {"enable_jwt_auth": True}
+        user_api_key_cache = DualCache()
+        prisma_client = MagicMock()
+        jwt_handler = MagicMock()
+        jwt_handler.is_jwt.return_value = True
+        jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
+        jwt_handler.get_user_email = MagicMock(return_value="mapped@example.com")
+        jwt_handler.get_user_id = MagicMock(return_value="mapped-user")
+        jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+            virtual_key_claim_field="sub",
+            user_email_jwt_field="sub",
+            virtual_key_mapping_cache_ttl=300,
+        )
+
+        mapped_key = UserAPIKeyAuth(
+            token="hashed-mapped-key",
+            api_key="hashed-mapped-key",
+            user_id="mapped-user",
+            user_email=None,
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+        mock_request.state = SimpleNamespace()
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+                new_callable=AsyncMock,
+                return_value=mapped_key,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                side_effect=Exception("can't reach database server"),
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=jwt_token,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o-mini"},
+            )
+
+        assert result.user_id == "mapped-user"
+        assert result.user_email is None
 
     @pytest.mark.asyncio
     async def test_routing_override_routes_matching_jwt_to_oauth2(self):

@@ -199,6 +199,13 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
         return await self.update(user_id, data, id_field="user_id")
 
+    async def backfill_null_user_email(self, user_id: str, user_email: str) -> None:
+        """Set user_email only when the stored value is null, atomically at the database."""
+        await self.table.update_many(
+            where={"user_id": user_id, "user_email": None},
+            data={"user_email": user_email},
+        )
+
     async def delete_user(self, user_id: str) -> Optional[LiteLLM_UserTable]:
         """Delete a user."""
         return await self.delete(user_id, id_field="user_id")

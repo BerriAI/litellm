@@ -1228,20 +1228,25 @@ async def _user_api_key_auth_builder(
                         valid_token.jwt_claims = jwt_claims
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
-                        if valid_token.user_id is not None:
+                        if valid_token.user_id is not None and valid_token.user_email is None:
                             mapped_user_email = jwt_handler.get_user_email(token=jwt_claims or {}, default_value=None)
-                            if mapped_user_email is not None:
-                                mapped_user_obj = await get_user_object(
-                                    user_id=valid_token.user_id,
-                                    prisma_client=prisma_client,
-                                    user_api_key_cache=user_api_key_cache,
-                                    user_id_upsert=False,
-                                    parent_otel_span=parent_otel_span,
-                                    proxy_logging_obj=proxy_logging_obj,
-                                    user_email=mapped_user_email,
-                                )
-                                if valid_token.user_email is None and mapped_user_obj is not None:
-                                    valid_token.user_email = mapped_user_obj.user_email
+                            mapped_jwt_user_id = jwt_handler.get_user_id(token=jwt_claims or {}, default_value=None)
+                            if mapped_user_email is not None and mapped_jwt_user_id == valid_token.user_id:
+                                try:
+                                    mapped_user_obj = await get_user_object(
+                                        user_id=valid_token.user_id,
+                                        prisma_client=prisma_client,
+                                        user_api_key_cache=user_api_key_cache,
+                                        user_id_upsert=False,
+                                        parent_otel_span=parent_otel_span,
+                                        proxy_logging_obj=proxy_logging_obj,
+                                        user_email=mapped_user_email,
+                                    )
+                                except Exception as e:
+                                    verbose_proxy_logger.debug(f"JWT mapped-key user_email backfill skipped: {e}")
+                                else:
+                                    if mapped_user_obj is not None:
+                                        valid_token.user_email = mapped_user_obj.user_email
                     elif isinstance(resolve_result, _PendingAutoRegister):
                         # Run full JWT policy (RBAC, scope, custom_validate,
                         # email-domain) via auth_builder, then create the key

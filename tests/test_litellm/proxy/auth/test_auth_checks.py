@@ -900,7 +900,7 @@ async def test_get_user_object_backfills_null_email_from_cache_hit():
     )
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
 
     result = await get_user_object(
         user_id="jwt-user-1",
@@ -914,9 +914,9 @@ async def test_get_user_object_backfills_null_email_from_cache_hit():
     assert result is not None
     assert result.user_email == "jwt-user-1@example.com"
 
-    mock_prisma_client.db.litellm_usertable.update.assert_called_once()
-    update_kwargs = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs
-    assert update_kwargs["where"] == {"user_id": "jwt-user-1"}
+    mock_prisma_client.db.litellm_usertable.update_many.assert_called_once()
+    update_kwargs = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs
+    assert update_kwargs["where"] == {"user_id": "jwt-user-1", "user_email": None}
     assert update_kwargs["data"]["user_email"] == "jwt-user-1@example.com"
 
     refreshed = await cache.async_get_cache(
@@ -940,7 +940,7 @@ async def test_get_user_object_backfills_null_email_from_db_read():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
 
     with patch(
         "litellm.proxy.auth.auth_checks._should_check_db", return_value=True
@@ -956,7 +956,7 @@ async def test_get_user_object_backfills_null_email_from_db_read():
 
     assert result is not None
     assert result.user_email == "jwt-user-3@example.com"
-    mock_prisma_client.db.litellm_usertable.update.assert_called_once()
+    mock_prisma_client.db.litellm_usertable.update_many.assert_called_once()
 
     refreshed = await cache.async_get_cache(
         key="jwt-user-3", model_type=LiteLLM_UserTable
@@ -983,7 +983,7 @@ async def test_get_user_object_does_not_overwrite_existing_email():
     )
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=0)
 
     result = await get_user_object(
         user_id="jwt-user-2",
@@ -996,7 +996,7 @@ async def test_get_user_object_does_not_overwrite_existing_email():
 
     assert result is not None
     assert result.user_email == "operator-set@example.com"
-    mock_prisma_client.db.litellm_usertable.update.assert_not_called()
+    mock_prisma_client.db.litellm_usertable.update_many.assert_not_called()
 
 
 def test_log_budget_lookup_failure_dry_run():

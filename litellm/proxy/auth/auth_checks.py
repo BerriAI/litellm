@@ -1623,7 +1623,7 @@ async def _backfill_null_user_email(
     if user_email is None or user_row.user_email is not None or prisma_client is None:
         return user_row
 
-    await UserRepository(prisma_client).update_user(
+    await UserRepository(prisma_client).backfill_null_user_email(
         user_id=user_row.user_id,
         user_email=user_email,
     )
