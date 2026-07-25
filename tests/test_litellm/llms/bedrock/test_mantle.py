@@ -687,3 +687,91 @@ async def test_mantle_anthropic_messages_streaming_sends_stream_and_passes_throu
     assert "event: message_start" in text
     assert '"text": "pong"' in text
     assert "event: message_stop" in text
+
+
+@pytest.fixture
+def local_cost_map(monkeypatch):
+    import litellm
+
+    original_model_cost = litellm.model_cost
+    try:
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "model_id,max_input,max_output,input_cost,output_cost",
+    [
+        ("anthropic.claude-opus-5", 1_000_000, 128_000, 5e-06, 2.5e-05),
+        ("anthropic.claude-sonnet-5", 1_000_000, 128_000, 2e-06, 1e-05),
+        ("anthropic.claude-haiku-4-5", 200_000, 64_000, 1e-06, 5e-06),
+    ],
+)
+def test_mantle_route_resolves_exact_model_info(
+    local_cost_map, model_id, max_input, max_output, input_cost, output_cost
+):
+    """The mantle/ routing prefix must resolve the exact bare-model cost-map
+    entry, not a generalization fallback. Before the fix,
+    strip_bedrock_routing_prefix left the mantle/ prefix in place, so
+    bedrock/mantle/anthropic.claude-opus-5 resolved generic 200k/64k limits
+    instead of the 1M/128k entry, and anthropic.claude-haiku-4-5 (the dateless
+    ID the Mantle endpoint uses) had no entry at all and cost $0."""
+    import litellm
+
+    info = litellm.get_model_info(f"bedrock/mantle/{model_id}")
+    assert info["max_input_tokens"] == max_input
+    assert info["max_output_tokens"] == max_output
+    assert info["input_cost_per_token"] == input_cost
+    assert info["output_cost_per_token"] == output_cost
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "anthropic.claude-opus-5",
+        "anthropic.claude-sonnet-5",
+        "anthropic.claude-haiku-4-5",
+    ],
+)
+def test_get_bedrock_route_mantle_claude_models(model_id):
+    assert BedrockModelInfo.get_bedrock_route(f"mantle/{model_id}") == "mantle"
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/mantle/{model_id}") == "mantle"
+
+
+def test_strip_bedrock_routing_prefix_strips_mantle_but_not_provider_prefix():
+    from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+
+    assert (
+        strip_bedrock_routing_prefix("bedrock/mantle/anthropic.claude-opus-5")
+        == "anthropic.claude-opus-5"
+    )
+    assert (
+        strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5")
+        == "anthropic.claude-sonnet-5"
+    )
+    assert (
+        strip_bedrock_routing_prefix("bedrock_mantle/openai.gpt-5.5")
+        == "bedrock_mantle/openai.gpt-5.5"
+    )
+
+
+def test_mantle_haiku_4_5_cost_tracking(local_cost_map):
+    """Regression: the Mantle endpoint serves Haiku 4.5 under the dateless ID
+    anthropic.claude-haiku-4-5 (bedrock-runtime uses the dated
+    anthropic.claude-haiku-4-5-20251001-v1:0). Without a dateless entry,
+    completion_cost silently returned 0.0."""
+    import litellm
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    response = ModelResponse(
+        model="anthropic.claude-haiku-4-5",
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000),
+    )
+    cost = litellm.completion_cost(completion_response=response, custom_llm_provider="bedrock")
+    assert cost == pytest.approx(1000 * 1e-06 + 1000 * 5e-06)
