@@ -47,7 +47,10 @@ class TestBedrockGuardrail:
         )
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        result = client.chat(scoped_key, MODEL, BLOCKED_PROMPT)
+        # Selected per request rather than registered default_on, so an upstream
+        # ApplyGuardrail failure surfaces here instead of 403ing every other suite
+        # running against this proxy.
+        result = client.chat(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name])
 
         match result:
             case UnknownApiError(status_code=status, body=body):
