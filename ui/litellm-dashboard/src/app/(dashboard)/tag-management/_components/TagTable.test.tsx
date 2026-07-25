@@ -1,8 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import { formatCellDate } from "@/components/shared/table_cells";
-import TagTable from "./TagTable";
 import { Tag } from "@/components/tag_management/types";
+
+import TagTable from "./TagTable";
 
 describe("TagTable", () => {
   const mockOnEdit = vi.fn();
@@ -41,28 +44,28 @@ describe("TagTable", () => {
     vi.clearAllMocks();
   });
 
-  it("should render", () => {
+  it("should render every column header", () => {
     render(<TagTable {...defaultProps} />);
-    expect(screen.getByText("Tag Name")).toBeInTheDocument();
-    expect(screen.getByText("Description")).toBeInTheDocument();
-    expect(screen.getByText("Allowed Models")).toBeInTheDocument();
-    expect(screen.getByText("Created")).toBeInTheDocument();
-    expect(screen.getByText("Actions")).toBeInTheDocument();
+    for (const header of ["Tag Name", "Description", "Allowed Models", "Created"]) {
+      expect(screen.getByText(header)).toBeInTheDocument();
+    }
   });
 
-  it("should display no tags found message when data is empty", () => {
+  it("should display the empty state when data is empty", () => {
     render(<TagTable {...defaultProps} />);
-    expect(screen.getByText("No tags found")).toBeInTheDocument();
+    expect(screen.getByText("No tags yet")).toBeInTheDocument();
   });
 
-  it("should display tag name", () => {
+  it("should display tag name and description", () => {
     render(<TagTable {...defaultProps} data={[mockTag]} />);
     expect(screen.getByText("test-tag")).toBeInTheDocument();
+    expect(screen.getByText("Test description")).toBeInTheDocument();
   });
 
-  it("should display tag description", () => {
+  it("should display model names from model_info", () => {
     render(<TagTable {...defaultProps} data={[mockTag]} />);
-    expect(screen.getByText("Test description")).toBeInTheDocument();
+    expect(screen.getByText("GPT-4")).toBeInTheDocument();
+    expect(screen.getByText("Claude-3")).toBeInTheDocument();
   });
 
   it("should display All Models badge when models array is empty", () => {
@@ -80,30 +83,71 @@ describe("TagTable", () => {
     expect(screen.getByText(formattedDate)).toBeInTheDocument();
   });
 
-  it("should call onSelectTag when tag name is clicked", () => {
+  it("should sort by created date descending by default", () => {
+    const olderTag: Tag = { ...mockTag, name: "older-tag", created_at: "2023-01-01T00:00:00Z" };
+    const newerTag: Tag = { ...mockTag, name: "newer-tag", created_at: "2025-01-01T00:00:00Z" };
+    render(<TagTable {...defaultProps} data={[olderTag, newerTag]} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("newer-tag")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("older-tag")).toBeInTheDocument();
+  });
+
+  it("should call onSelectTag when tag name is clicked", async () => {
+    const user = userEvent.setup();
     render(<TagTable {...defaultProps} data={[mockTag]} />);
-    fireEvent.click(screen.getByRole("button", { name: "test-tag" }));
+    await user.click(screen.getByRole("button", { name: "test-tag" }));
     expect(mockOnSelectTag).toHaveBeenCalledWith("test-tag");
   });
 
-  it("should render tag name as non-clickable for dynamic spend tags", () => {
+  it("should render tag name as non-clickable and muted for dynamic spend tags", () => {
     render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
     expect(screen.queryByRole("button", { name: "dynamic-spend-tag" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("dynamic-spend-tag"));
+    expect(screen.getByText("dynamic-spend-tag")).toHaveClass("text-muted-foreground");
     expect(mockOnSelectTag).not.toHaveBeenCalled();
   });
 
-  it("should disable edit icon for dynamic spend tags", () => {
-    render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
-    const editIcon = screen.getByLabelText("Edit tag (disabled)");
-    expect(editIcon).toBeInTheDocument();
-    expect(editIcon).toHaveClass("cursor-not-allowed");
+  it("should truncate long tag names and descriptions", () => {
+    const longTag: Tag = {
+      ...mockTag,
+      name: "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15) Firefox/152.0",
+      description: "A very long description that would otherwise stretch the column far beyond what users need to see",
+    };
+    render(<TagTable {...defaultProps} data={[longTag]} />);
+    expect(screen.getByText(longTag.name)).toHaveClass("truncate", "text-primary");
+    expect(screen.getByText(longTag.description as string)).toHaveClass("truncate", "max-w-72");
   });
 
-  it("should disable delete icon for dynamic spend tags", () => {
+  it("should edit a tag through the actions menu", async () => {
+    const user = userEvent.setup();
+    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    await user.click(screen.getByTestId("tag-actions-test-tag"));
+    await user.click(await screen.findByTestId("tag-action-edit"));
+    expect(mockOnEdit).toHaveBeenCalledWith(mockTag);
+  });
+
+  it("should delete a tag through the actions menu", async () => {
+    const user = userEvent.setup();
+    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    await user.click(screen.getByTestId("tag-actions-test-tag"));
+    await user.click(await screen.findByTestId("tag-action-delete"));
+    expect(mockOnDelete).toHaveBeenCalledWith("test-tag");
+  });
+
+  it("should disable edit and delete for dynamic spend tags", async () => {
+    const user = userEvent.setup();
     render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
-    const deleteIcon = screen.getByLabelText("Delete tag (disabled)");
-    expect(deleteIcon).toBeInTheDocument();
-    expect(deleteIcon).toHaveClass("cursor-not-allowed");
+    await user.click(screen.getByTestId("tag-actions-dynamic-spend-tag"));
+
+    const editItem = await screen.findByTestId("tag-action-edit");
+    const deleteItem = await screen.findByTestId("tag-action-delete");
+
+    expect(editItem).toHaveAttribute("data-disabled");
+    expect(deleteItem).toHaveAttribute("data-disabled");
+
+    await user.click(editItem);
+    await user.click(deleteItem);
+
+    expect(mockOnEdit).not.toHaveBeenCalled();
+    expect(mockOnDelete).not.toHaveBeenCalled();
   });
 });

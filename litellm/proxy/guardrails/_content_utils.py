@@ -34,6 +34,12 @@ def is_text_content_call_type(call_type: str) -> bool:
 
 TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"})
 
+# Responses-API item types whose ``output`` field carries user/tool text
+# that guardrails should inspect.  ``function_call_output`` is the
+# built-in shape; ``custom_tool_call_output`` is the custom-tool
+# counterpart (see ``ChatCompletionCustomToolCallOutput``).
+_OUTPUT_ITEM_TYPES: frozenset[str] = frozenset({"function_call_output", "custom_tool_call_output"})
+
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
@@ -72,7 +78,7 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
             elif "content" in item:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
-            elif item.get("type") == "function_call_output" and "output" in item:
+            elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                 messages.append({"role": item.get("role") or "tool", "content": item["output"]})
     return messages
 
@@ -157,7 +163,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                         input_value[idx] = {**item, "text": visit(item["text"])}
                 elif "content" in item:
                     item["content"] = _rewrite_content(item["content"])
-                elif item.get("type") == "function_call_output" and "output" in item:
+                elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                     item["output"] = _rewrite_content(item["output"])
         return visited
 

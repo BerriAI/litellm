@@ -103,6 +103,18 @@ class DualCache(BaseCache):
         if default_redis_ttl is not None:
             self.default_redis_ttl = default_redis_ttl
 
+    def _backfill_kwargs(self, kwargs: "dict[str, object]") -> "dict[str, object]":
+        """
+        Kwargs for writing a Redis read result into the in-memory tier.
+
+        Applies ``default_in_memory_ttl`` exactly like the write paths do;
+        without it, backfilled entries fall to ``InMemoryCache``'s own default
+        TTL and can outlive the TTL this cache was configured with.
+        """
+        if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
+            return {**kwargs, "ttl": self.default_in_memory_ttl}
+        return kwargs
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
@@ -160,7 +172,7 @@ class DualCache(BaseCache):
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
-                    self.in_memory_cache.set_cache(key, redis_result, **kwargs)
+                    self.in_memory_cache.set_cache(key, redis_result, **self._backfill_kwargs(kwargs))
 
                 result = redis_result
 
@@ -226,7 +238,7 @@ class DualCache(BaseCache):
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
-                    await self.in_memory_cache.async_set_cache(key, redis_result, **kwargs)
+                    await self.in_memory_cache.async_set_cache(key, redis_result, **self._backfill_kwargs(kwargs))
 
                 result = redis_result
 
@@ -318,7 +330,7 @@ class DualCache(BaseCache):
                         result[key_to_index[key]] = value
 
                         if value is not None and self.in_memory_cache is not None:
-                            await self.in_memory_cache.async_set_cache(key, value, **kwargs)
+                            await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
 
             return result
         except Exception:

@@ -141,7 +141,7 @@ def test_cold_counter_reseed_keeps_counter_equal_to_db_spend(
         "the spend counter never went cold; default_redis_ttl must be short enough for it "
         "to expire, otherwise the burst reads a warm counter and the reseed is never exercised"
     )
-    db_spend = client.gateway.key_info(key).spend or 0.0
+    db_spend = client.proxy.key_info(key).spend or 0.0
     assert db_spend > 0, f"no DB spend accumulated from real calls: {db_spend}"
 
     burst_results = []

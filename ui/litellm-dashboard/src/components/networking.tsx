@@ -28,6 +28,7 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -179,7 +180,7 @@ export interface PromptSpec {
 export interface PromptTemplateBase {
   litellm_prompt_id: string;
   content: string;
-  metadata?: Record<string, any> | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface PromptInfoResponse {
@@ -208,12 +209,7 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    vector_stores: string[];
-  };
+  object_permission?: ObjectPermission | null;
 }
 
 export interface CredentialItem {
@@ -372,7 +368,7 @@ export function getGlobalLitellmHeaderName(): string {
   return globalLitellmHeaderName;
 }
 
-const apiClient = createApiClient({
+export const apiClient = createApiClient({
   getBaseUrl: getProxyBaseUrl,
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
@@ -1175,35 +1171,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const organizationCreateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>, // Assuming formValues is an object
-) => {
-  try {
-    if (formValues.metadata) {
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        console.error("Failed to parse metadata:", error);
-        throw new Error("Failed to parse metadata: " + error);
-      }
-    }
-
-    const data = await apiClient.post(`/organization/new`, {
-      accessToken,
-      body: {
-        ...formValues, // Include formValues in the request body
-      },
-    });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -6227,6 +6194,7 @@ export const applyGuardrail = async (
   text: string,
   language?: string | null,
   entities?: string[] | null,
+  metadata?: Record<string, unknown> | null,
 ) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/apply_guardrail` : `/guardrails/apply_guardrail`;
@@ -6242,6 +6210,10 @@ export const applyGuardrail = async (
 
     if (entities && entities.length > 0) {
       requestBody.entities = entities;
+    }
+
+    if (metadata != null) {
+      requestBody.metadata = metadata;
     }
 
     const response = await fetch(url, {
@@ -6650,6 +6622,9 @@ export const testMCPToolsListRequest = async (
     };
     if (accessToken) {
       headers["x-litellm-api-key"] = accessToken;
+      if (globalLitellmHeaderName.toLowerCase() !== "authorization") {
+        headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
+      }
     }
     if (oauthAccessToken) {
       headers["Authorization"] = `Bearer ${oauthAccessToken}`;
@@ -6729,6 +6704,7 @@ interface RegisterMcpOAuthClientPayload {
   grant_types?: string[];
   response_types?: string[];
   token_endpoint_auth_method?: string;
+  redirect_uris?: string[];
 }
 
 export const registerMcpOAuthClient = async (
@@ -6844,7 +6820,11 @@ export const exchangeMcpOAuthToken = async ({
 
   const data = await response.json();
   if (!response.ok) {
-    const errorMessage = deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
+    const oauthErrorMessage =
+      typeof data?.error === "string" && typeof data?.error_description === "string"
+        ? `${data.error}: ${data.error_description}`
+        : undefined;
+    const errorMessage = oauthErrorMessage || deriveErrorMessage(data) || data?.detail || "OAuth token exchange failed";
     throw new Error(errorMessage);
   }
   return data;
@@ -7568,6 +7548,38 @@ export const fetchToolsList = async (accessToken: string): Promise<ToolRow[]> =>
   const data = await response.json();
   return data.tools ?? [];
 };
+
+export interface ToolSpendEntry {
+  tool_name: string;
+  spend: number;
+  call_count: number;
+  total_tokens: number;
+}
+
+export interface ToolSpendDailyEntry {
+  date: string;
+  tool_name: string;
+  spend: number;
+  call_count: number;
+}
+
+export interface ToolSpendResponse {
+  by_tool: ToolSpendEntry[];
+  daily: ToolSpendDailyEntry[];
+  total_spend: number;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+export const getToolSpend = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string,
+): Promise<ToolSpendResponse> =>
+  apiClient.get<ToolSpendResponse>(`/v1/tool/spend`, {
+    accessToken,
+    query: { start_date: startDate, end_date: endDate },
+  });
 
 export interface ToolPolicyOverrideRow {
   override_id: string;

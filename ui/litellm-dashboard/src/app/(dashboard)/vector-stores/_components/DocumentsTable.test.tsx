@@ -1,18 +1,10 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
-import DocumentsTable from "./DocumentsTable";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import { DocumentUpload } from "@/components/vector_store_management/types";
 
-// Mock antd message
-vi.mock("antd", async () => {
-  const actual = await vi.importActual("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-    },
-  };
-});
+import DocumentsTable from "./DocumentsTable";
 
 describe("DocumentsTable", () => {
   const mockDocuments: DocumentUpload[] = [
@@ -39,9 +31,12 @@ describe("DocumentsTable", () => {
     },
   ];
 
-  it("should render the table successfully", () => {
-    const onRemove = vi.fn();
-    render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should render every document row", () => {
+    render(<DocumentsTable documents={mockDocuments} onRemove={vi.fn()} />);
 
     expect(screen.getByText("test1.pdf")).toBeInTheDocument();
     expect(screen.getByText("test2.txt")).toBeInTheDocument();
@@ -49,8 +44,7 @@ describe("DocumentsTable", () => {
   });
 
   it("should display correct status badges", () => {
-    const onRemove = vi.fn();
-    render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
+    render(<DocumentsTable documents={mockDocuments} onRemove={vi.fn()} />);
 
     expect(screen.getByText("Ready")).toBeInTheDocument();
     expect(screen.getByText("Uploading")).toBeInTheDocument();
@@ -58,45 +52,46 @@ describe("DocumentsTable", () => {
   });
 
   it("should display file sizes", () => {
-    const onRemove = vi.fn();
-    render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
+    render(<DocumentsTable documents={mockDocuments} onRemove={vi.fn()} />);
 
     expect(screen.getByText(/1000.00 KB/)).toBeInTheDocument();
     expect(screen.getByText(/1.95 MB/)).toBeInTheDocument();
     expect(screen.getByText(/500.00 KB/)).toBeInTheDocument();
   });
 
-  it("should call onRemove when delete button is clicked", () => {
+  it("should call onRemove through the actions menu", async () => {
+    const user = userEvent.setup();
     const onRemove = vi.fn();
     render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
 
-    const deleteButtons = screen.getAllByLabelText(/delete/i);
-
-    act(() => {
-      fireEvent.click(deleteButtons[0]);
-    });
+    await user.click(screen.getByTestId("document-actions-1"));
+    await user.click(await screen.findByTestId("document-action-remove"));
 
     expect(onRemove).toHaveBeenCalledWith("1");
   });
 
-  it("should show empty state when no documents", () => {
-    const onRemove = vi.fn();
-    render(<DocumentsTable documents={[]} onRemove={onRemove} />);
+  it("should copy the document ID through the actions menu", async () => {
+    const user = userEvent.setup();
+    render(<DocumentsTable documents={mockDocuments} onRemove={vi.fn()} />);
 
-    expect(screen.getByText(/No documents uploaded yet/)).toBeInTheDocument();
+    await user.click(screen.getByTestId("document-actions-2"));
+    await user.click(await screen.findByTestId("document-action-copy"));
+
+    expect(await window.navigator.clipboard.readText()).toBe("2");
   });
 
-  it("should have action buttons for each document", () => {
-    const onRemove = vi.fn();
-    render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
+  it("should show the empty state when no documents", () => {
+    render(<DocumentsTable documents={[]} onRemove={vi.fn()} />);
 
-    // Each document should have 3 action buttons (view, copy, delete)
-    const viewButtons = screen.getAllByLabelText(/eye/i);
-    const copyButtons = screen.getAllByLabelText(/copy/i);
-    const deleteButtons = screen.getAllByLabelText(/delete/i);
+    expect(screen.getByText("No documents uploaded yet")).toBeInTheDocument();
+    expect(screen.getByText("Upload documents above to get started.")).toBeInTheDocument();
+  });
 
-    expect(viewButtons).toHaveLength(3);
-    expect(copyButtons).toHaveLength(3);
-    expect(deleteButtons).toHaveLength(3);
+  it("should render one actions menu per document", () => {
+    render(<DocumentsTable documents={mockDocuments} onRemove={vi.fn()} />);
+
+    for (const doc of mockDocuments) {
+      expect(screen.getByTestId(`document-actions-${doc.uid}`)).toBeInTheDocument();
+    }
   });
 });

@@ -117,6 +117,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const currentAuthType = Form.useWatch("auth_type", form);
   const currentStaticHeaders = Form.useWatch("static_headers", form);
   const currentCredentials = Form.useWatch("credentials", form);
+  const currentIssuer = Form.useWatch("issuer", form);
   const currentAuthorizationUrl = Form.useWatch("authorization_url", form);
   const currentTokenUrl = Form.useWatch("token_url", form);
   const currentRegistrationUrl = Form.useWatch("registration_url", form);
@@ -471,7 +472,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if ("credentials" in changedValues) {
       setAppMayNotMatchUpstream(false);
     } else {
-      const upstreamChanged = ["url", "spec_path", "authorization_url", "token_url", "registration_url"].some(
+      const upstreamChanged = ["url", "spec_path", "issuer", "authorization_url", "token_url", "registration_url"].some(
         (key) => key in changedValues,
       );
       const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
@@ -517,6 +518,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         transport: rawTransport === TRANSPORT.OPENAPI ? TRANSPORT.HTTP : rawTransport,
         auth_type: AUTH_TYPE.OAUTH2,
         oauth2_flow: MCP_OAUTH2_FLOW_INTERACTIVE,
+        issuer: values.issuer,
         authorization_url: values.authorization_url,
         token_url: values.token_url,
         registration_url: values.registration_url,
@@ -636,6 +638,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         spec_path: undefined,
         auth_type: undefined,
         credentials: undefined,
+        issuer: undefined,
         authorization_url: undefined,
         token_url: undefined,
         registration_url: undefined,
@@ -845,7 +848,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         stdio_config: undefined,
         env_json: undefined,
         ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
-          ? { authorization_url: null, token_url: null, registration_url: null }
+          ? { issuer: null, authorization_url: null, token_url: null, registration_url: null }
           : {}),
         ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
         restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
@@ -1304,6 +1307,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Issuer (optional)
+                      <Tooltip title="OAuth 2.0 authorization server issuer (RFC 8414). Auto-discovered on first connect; set it explicitly to pin the trust anchor so token and scope discovery is fetched from and validated against this issuer (RFC 8414 §3.3) instead of anything the resource advertises.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="issuer"
+                >
+                  <Input
+                    placeholder="https://issuer.example.com"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
                       Authorization URL Override (optional)
                       <Tooltip title="Optional override for the authorization endpoint.">
                         <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
@@ -1386,7 +1405,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       label={
                         <span className="text-sm font-medium text-gray-700 flex items-center">
                           Token Storage TTL (seconds, optional)
-                          <Tooltip title="How long to cache each user's OAuth access token in Redis before evicting it (regardless of the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.">
+                          <Tooltip title="How long to cache each user's OAuth access token in Redis before evicting it (never longer than the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.">
                             <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                           </Tooltip>
                         </span>
@@ -1588,6 +1607,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     oauthFlowTypeValue ?? oauth2FlowToFormValue(mcpServer.oauth2_flow) ?? OAUTH_FLOW.INTERACTIVE,
                   static_headers: currentStaticHeaders ?? mcpServer.static_headers,
                   credentials: currentCredentials,
+                  issuer: currentIssuer ?? mcpServer.issuer,
                   authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
                   token_url: currentTokenUrl ?? mcpServer.token_url,
                   registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
