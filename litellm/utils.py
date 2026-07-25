@@ -1708,7 +1708,10 @@ def client(original_function):
                         start_time=start_time,
                         end_time=end_time,
                     )
-                    return result
+                    return _llm_caching_handler.wrap_streaming_result_for_cache(
+                        result=result,
+                        call_type=call_type,
+                    )
             elif call_type == CallTypes.arealtime.value:
                 return result
             ### POST-CALL RULES ###

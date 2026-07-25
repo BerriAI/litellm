@@ -255,12 +255,16 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
             )
 
-            response_cost = litellm.completion_cost(
-                completion_response=litellm_model_response,
-                model=model_for_cost,
-                custom_llm_provider=custom_llm_provider,
-                custom_pricing=custom_pricing,
-                router_model_id=router_model_id,
+            response_cost = (
+                0.0
+                if logging_obj.model_call_details.get("cache_hit") is True
+                else litellm.completion_cost(
+                    completion_response=litellm_model_response,
+                    model=model_for_cost,
+                    custom_llm_provider=custom_llm_provider,
+                    custom_pricing=custom_pricing,
+                    router_model_id=router_model_id,
+                )
             )
 
             kwargs["response_cost"] = response_cost

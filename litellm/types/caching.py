@@ -30,7 +30,26 @@ CachingSupportedCallTypes = Literal[
     "rerank",
     "responses",
     "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
 ]
+
+DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
+    "completion",
+    "acompletion",
+    "embedding",
+    "aembedding",
+    "atranscription",
+    "transcription",
+    "atext_completion",
+    "text_completion",
+    "arerank",
+    "rerank",
+    "responses",
+    "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
+)
 
 
 class RedisPipelineIncrementOperation(TypedDict):
