@@ -23,6 +23,7 @@ from litellm.utils import ProviderConfigManager
 
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
@@ -376,7 +377,7 @@ async def _arealtime(
             api_base=api_base,
             api_key=api_key,
             api_version=api_version,
-            azure_ad_token=None,
+            azure_ad_token=(None if api_key else get_azure_ad_token(litellm_params)),
             client=None,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
@@ -536,12 +537,20 @@ async def _realtime_health_check(
     import websockets
 
     url: Optional[str] = None
+    auth_headers: dict[str, str | None] = {"api-key": api_key}
     if custom_llm_provider == "azure":
         url = azure_realtime._construct_url(
             api_base=api_base or "",
             model=model,
             api_version=api_version or "2024-10-01-preview",
             realtime_protocol=realtime_protocol,
+        )
+        azure_litellm_params = GenericLiteLLMParams(**(model_params or {}))
+        auth_headers = dict(
+            azure_realtime.get_auth_headers(
+                api_key=api_key,
+                azure_ad_token=(None if api_key else get_azure_ad_token(azure_litellm_params)),
+            )
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
@@ -584,9 +593,7 @@ async def _realtime_health_check(
     ssl_context = get_shared_realtime_ssl_context()
     async with websockets.connect(  # type: ignore
         url,
-        additional_headers={
-            "api-key": api_key,  # type: ignore
-        },
+        additional_headers=auth_headers,
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
         ssl=ssl_context,
     ):

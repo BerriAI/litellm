@@ -30,6 +30,21 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
 
 
 class AzureOpenAIRealtime(AzureChatCompletion):
+    @staticmethod
+    def get_auth_headers(api_key: str | None, azure_ad_token: str | None) -> dict[str, str]:
+        """
+        Build the websocket handshake auth headers, preferring a static api-key and falling back to
+        an Azure AD (Entra ID) bearer token. Never sends both.
+        """
+        if api_key:
+            return {"api-key": api_key}
+        if azure_ad_token:
+            return {"Authorization": f"Bearer {azure_ad_token}"}
+        raise ValueError(
+            "Missing Azure credentials for the realtime endpoint. Set an api_key, or configure Azure AD auth "
+            "(azure_ad_token, tenant_id/client_id/client_secret, or a managed identity)"
+        )
+
     def _construct_url(
         self,
         api_base: str,
@@ -117,13 +132,13 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_params=query_params,
         )
 
+        auth_headers = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
+
         try:
             ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
-                additional_headers={
-                    "api-key": api_key,  # type: ignore
-                },
+                additional_headers=auth_headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:
