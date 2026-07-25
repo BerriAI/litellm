@@ -2789,7 +2789,7 @@ export interface paths {
          *
          *     Reads spend logs rather than LiteLLM_EndUserTable because only spend logs carry
          *     the team attribution this scoping needs. The window is required and the inner
-         *     scan is capped at MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS rows, so the query
+         *     scan is capped at SPEND_LOGS_FILTER_SCAN_CAP rows, so the query
          *     cannot degrade into a full-table scan the way `/global/all_end_users` does.
          *
          *     Example curl:

@@ -20,7 +20,6 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -44,6 +43,11 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 )
 
 router = APIRouter()
+
+# Rows the end-user filter query may read out of LiteLLM_SpendLogs before DISTINCT.
+# Matches SPEND_LOGS_PAGINATION_COUNT_CAP, the equivalent bound ui_view_spend_logs
+# puts on its count query, so both reads of the same table stop at the same depth.
+SPEND_LOGS_FILTER_SCAN_CAP = 10000
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -870,7 +874,7 @@ async def list_customer_aliases(
 
     Reads spend logs rather than LiteLLM_EndUserTable because only spend logs carry
     the team attribution this scoping needs. The window is required and the inner
-    scan is capped at MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS rows, so the query
+    scan is capped at SPEND_LOGS_FILTER_SCAN_CAP rows, so the query
     cannot degrade into a full-table scan the way `/global/all_end_users` does.
 
     Example curl:
@@ -919,7 +923,7 @@ async def list_customer_aliases(
         # successive OFFSET pages agree on the set they are paging through; the
         # (startTime, request_id) index means the tiebreaker costs nothing.
         # size + 1: one row beyond the page reveals has_more without a COUNT(*).
-        params = query_params + [MAX_SPENDLOG_ROWS_TO_SCAN_FOR_FILTERS, size + 1, (page - 1) * size]
+        params = query_params + [SPEND_LOGS_FILTER_SCAN_CAP, size + 1, (page - 1) * size]
         scan_idx = len(params) - 2
         aliases_sql = (
             f"SELECT DISTINCT end_user FROM ("
