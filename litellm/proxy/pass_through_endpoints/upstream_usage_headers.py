@@ -18,6 +18,11 @@ from litellm.types.utils import Usage
 UPSTREAM_RESPONSE_COST_HEADER = "x-litellm-response-cost"
 UPSTREAM_TOTAL_TOKENS_HEADER = "x-litellm-total-tokens"
 
+# model_call_details key holding what the upstream reported, so later stages of
+# the success path can tell an upstream-reported cost apart from one LiteLLM
+# derived itself.
+UPSTREAM_REPORTED_USAGE_KEY = "_litellm_upstream_reported_usage"
+
 
 @dataclass(frozen=True, slots=True)
 class UpstreamReportedUsage:
@@ -113,8 +118,17 @@ def apply_upstream_reported_usage(
     reported = parse_upstream_reported_usage(headers)
     if reported is None:
         return None
+    logging_obj.model_call_details[UPSTREAM_REPORTED_USAGE_KEY] = reported
     if reported.response_cost is not None:
         logging_obj.model_call_details["response_cost"] = reported.response_cost
     if reported.total_tokens is not None:
         logging_obj.model_call_details["combined_usage_object"] = Usage(total_tokens=reported.total_tokens)
     return reported
+
+
+def upstream_reported_cost(logging_obj: LiteLLMLoggingObj) -> float | None:
+    """The cost the upstream reported for this request, if it reported one."""
+    reported = logging_obj.model_call_details.get(UPSTREAM_REPORTED_USAGE_KEY)
+    if not isinstance(reported, UpstreamReportedUsage):
+        return None
+    return reported.response_cost

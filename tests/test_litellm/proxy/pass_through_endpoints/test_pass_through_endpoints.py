@@ -4670,7 +4670,9 @@ def _enter_upstream_usage_mocks(stack, parsed_body):
     return mock_proxy_logging, enqueued
 
 
-async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200):
+async def _run_upstream_reporting_passthrough(
+    upstream_headers, status_code=200, cost_per_request=None
+):
     """Drive a generic pass-through against an upstream that reports its own
     cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
     from litellm.proxy._types import UserAPIKeyAuth
@@ -4694,6 +4696,7 @@ async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200)
                     user_api_key_dict=UserAPIKeyAuth(
                         api_key="sk-upstream-usage", team_id="team-fil"
                     ),
+                    cost_per_request=cost_per_request,
                 )
                 for coroutine in enqueued:
                     await coroutine
@@ -4829,3 +4832,31 @@ async def test_streaming_passthrough_records_cost_and_tokens_reported_by_upstrea
     assert len(recorder.payloads) == 1
     assert recorder.payloads[0]["response_cost"] == 0.00312
     assert recorder.payloads[0]["total_tokens"] == 4021
+
+
+@pytest.mark.asyncio
+async def test_upstream_reported_cost_survives_default_cost_per_request():
+    """
+    PassThroughGenericEndpoint.cost_per_request defaults to 0.0, so every
+    config-defined endpoint forwards a 0.0 flat cost even when the operator
+    never configured one. That flat estimate must not overwrite the real cost
+    the upstream reported for the request.
+    """
+    payloads, _ = await _run_upstream_reporting_passthrough(
+        {
+            "x-litellm-response-cost": "0.000415",
+            "x-litellm-total-tokens": "1874",
+        },
+        cost_per_request=0.0,
+    )
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.000415
+
+
+@pytest.mark.asyncio
+async def test_configured_cost_per_request_still_applies_without_usage_headers():
+    payloads, _ = await _run_upstream_reporting_passthrough({}, cost_per_request=0.25)
+
+    assert len(payloads) == 1
+    assert payloads[0]["response_cost"] == 0.25
