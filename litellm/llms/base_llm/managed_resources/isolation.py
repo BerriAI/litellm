@@ -9,6 +9,7 @@ identifying ids are denied so an empty user_id can never select an
 unscoped query.
 """
 
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional
 
 from litellm.proxy._types import (
@@ -17,15 +18,23 @@ from litellm.proxy._types import (
 )
 
 
+def _item_id(item: Any) -> str | None:
+    if isinstance(item, Mapping):
+        return item.get("id")
+    return getattr(item, "id", None)
+
+
 def build_list_page(items: List[Any], has_more: bool = False) -> Dict[str, Any]:
     """Build the OpenAI-style paginated list response shape used by managed
-    file/batch/vector-store listings. ``first_id`` and ``last_id`` are
-    sourced from each item's ``.id`` attribute."""
+    file/batch/vector-store listings. ``first_id`` and ``last_id`` are sourced
+    from each item's ``id``, which is an attribute on the pydantic objects the
+    file and batch listings build and a key on the plain dicts the vector-store
+    listing builds."""
     return {
         "object": "list",
         "data": items,
-        "first_id": items[0].id if items else None,
-        "last_id": items[-1].id if items else None,
+        "first_id": _item_id(items[0]) if items else None,
+        "last_id": _item_id(items[-1]) if items else None,
         "has_more": has_more,
     }
 
