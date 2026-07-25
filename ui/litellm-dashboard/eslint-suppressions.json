@@ -1061,7 +1061,17 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/layout.tsx": {
+  "src/app/(dashboard)/models-and-endpoints/page.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
