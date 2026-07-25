@@ -582,3 +582,86 @@ def test_reasoning_content_first_stream_opens_thinking_block_at_index_zero_sync(
         model="claude-x",
     )
     _assert_thinking_first_block_opens_at_index_zero(_drain_sync(wrapper))
+
+
+def _blank_lead_chunks() -> List[MagicMock]:
+    return [
+        _make_chunk(Delta(content=None)),
+        _thinking_chunk("Let me think"),
+        _thinking_chunk("about it."),
+        _make_chunk(Delta(content="42")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+
+
+def _role_only_reasoning_content_lead_chunks() -> List[MagicMock]:
+    return [
+        _make_chunk(Delta(role="assistant", content=None, tool_calls=[])),
+        _reasoning_content_chunk("Let me think"),
+        _reasoning_content_chunk("about it."),
+        _make_chunk(Delta(content="42")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+
+
+def test_contentless_lead_chunk_does_not_open_text_block_before_thinking_sync():
+    """OpenAI-compatible streaming backends open the response with a contentless
+    priming chunk (an empty delta, e.g. the {role: assistant} lead-in) before the
+    first real token. Such a lead chunk must NOT commit index 0 to an empty text
+    block; the following thinking chunk must still open thinking at index 0, or
+    strict Anthropic SDK clients reject the stream.
+    """
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_blank_lead_chunks()),
+        model="claude-x",
+    )
+    _assert_thinking_first_block_opens_at_index_zero(_drain_sync(wrapper))
+
+
+def test_role_only_lead_chunk_does_not_open_text_block_before_reasoning_content_sync():
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_role_only_reasoning_content_lead_chunks()),
+        model="claude-x",
+    )
+    _assert_thinking_first_block_opens_at_index_zero(_drain_sync(wrapper))
+
+
+@pytest.mark.asyncio
+async def test_contentless_lead_chunk_does_not_open_text_block_before_thinking_async():
+    """Async twin; the proxy serves the async iterator, so the contentless lead
+    chunk must be skipped on this path too.
+    """
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(_blank_lead_chunks()),
+        model="claude-x",
+    )
+    _assert_thinking_first_block_opens_at_index_zero(await _drain_async(wrapper))
+
+
+@pytest.mark.asyncio
+async def test_role_only_lead_chunk_does_not_open_text_block_before_reasoning_content_async():
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(_role_only_reasoning_content_lead_chunks()),
+        model="claude-x",
+    )
+    _assert_thinking_first_block_opens_at_index_zero(await _drain_async(wrapper))
+
+
+def test_finish_first_chunk_is_not_deferred_sync():
+    """A stream whose first upstream chunk is already the finish event must not
+    be skipped by the blank-delta deferral. ``_is_blank_delta`` returns False
+    for a finish chunk so the message_delta still flows (with an empty text
+    block opened and closed first); without that guard the deferral would drop
+    the terminal event entirely.
+    """
+    chunks = [_make_chunk(Delta(content=None), finish_reason="stop")]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    assert [e["type"] for e in events] == [
+        "message_start",
+        "content_block_start",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]

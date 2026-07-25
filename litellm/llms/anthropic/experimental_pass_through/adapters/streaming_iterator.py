@@ -399,6 +399,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 is_opening_first_block = self.sent_content_block_start is False
+                if is_opening_first_block and self._is_blank_delta(chunk):
+                    continue
                 if is_opening_first_block:
                     self.sent_content_block_start = True
                     self.sent_content_block_finish = False
@@ -620,6 +622,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 is_opening_first_block = self.sent_content_block_start is False
+                if is_opening_first_block and self._is_blank_delta(chunk):
+                    continue
                 if is_opening_first_block:
                     self.sent_content_block_start = True
                     self.sent_content_block_finish = False
@@ -871,6 +875,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if delta_type not in _STREAMING_DELTA_TYPES:
             return False
         return bool(delta.get(_delta_payload_field(delta_type)))
+
+    @staticmethod
+    def _is_blank_delta(chunk: "ModelResponseStream") -> bool:
+        choice = chunk.choices[0]
+        if choice.finish_reason is not None:
+            return False
+        delta = choice.delta
+        if getattr(delta, "tool_calls", None):
+            return False
+        if getattr(delta, "content", None):
+            return False
+        if getattr(delta, "reasoning_content", None):
+            return False
+        if getattr(delta, "thinking_blocks", None):
+            return False
+        return True
 
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
