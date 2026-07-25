@@ -13,12 +13,12 @@ from litellm.constants import (
     LITELLM_KEY_ROTATION_GRACE_PERIOD,
     LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS,
 )
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     GenerateKeyResponse,
     LiteLLM_VerificationToken,
     RegenerateKeyRequest,
 )
-from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _calculate_key_rotation_time,
     regenerate_key_fn,
@@ -30,6 +30,63 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+
+
+async def log_rotation_schedule_warnings(
+    prisma_client: PrismaClient,
+    *,
+    rotation_job_enabled: bool,
+    check_interval_seconds: int,
+) -> None:
+    """
+    Warn about auto-rotating keys the scheduler cannot honor.
+
+    Rotation only happens when the background job runs, so a key asking to
+    rotate every 60s never rotates while the job is off, and rotates at best
+    once per check interval (24h by default) while it is on.
+    """
+    try:
+        auto_rotate_keys = await VerificationTokenRepository(prisma_client).table.find_many(where={"auto_rotate": True})
+    except Exception as e:
+        verbose_proxy_logger.debug("Could not check for auto-rotating keys: %s", e)
+        return
+
+    if not auto_rotate_keys:
+        return
+
+    if not rotation_job_enabled:
+        verbose_proxy_logger.warning(
+            "%s key(s) have auto_rotate=true but the key rotation job is disabled; they will never rotate. "
+            "Set LITELLM_KEY_ROTATION_ENABLED=true to enable it.",
+            len(auto_rotate_keys),
+        )
+        return
+
+    shortest_interval = min(
+        (
+            interval
+            for interval in (_parse_rotation_interval(key.rotation_interval) for key in auto_rotate_keys)
+            if interval is not None
+        ),
+        default=None,
+    )
+    if shortest_interval is not None and shortest_interval < check_interval_seconds:
+        verbose_proxy_logger.warning(
+            "Shortest key rotation_interval is %ss but the rotation job only runs every %ss, "
+            "so rotations lag by up to that long. Lower LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS.",
+            shortest_interval,
+            check_interval_seconds,
+        )
+
+
+def _parse_rotation_interval(rotation_interval: "str | None") -> "int | None":
+    if not rotation_interval:
+        return None
+    try:
+        return duration_in_seconds(rotation_interval)
+    except ValueError:
+        verbose_proxy_logger.warning("Invalid rotation_interval: %s", rotation_interval)
+        return None
 
 
 class KeyRotationManager:
@@ -191,14 +248,4 @@ class KeyRotationManager:
                     "last_rotation_at": now,
                     "key_rotation_at": next_rotation_time,
                 },
-            )
-
-        # Call the existing rotation hook for notifications, audit logs, etc.
-        if isinstance(response, GenerateKeyResponse):
-            await KeyManagementEventHooks.async_key_rotated_hook(
-                data=regenerate_request,
-                existing_key_row=key,
-                response=response,
-                user_api_key_dict=system_user,
-                litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
             )

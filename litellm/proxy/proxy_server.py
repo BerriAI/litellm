@@ -544,6 +544,7 @@ from litellm.proxy.utils import (
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    register_email_logger_callback,
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
@@ -5168,6 +5169,13 @@ class ProxyConfig:
             if _alert == "slack":
                 # [OLD] v0 implementation - already handled by update_values above
                 pass
+            elif _alert == "email":
+                if not register_email_logger_callback(proxy_logging_obj.email_logging_instance):
+                    verbose_proxy_logger.warning(
+                        "Email alerting is enabled but no email transport is configured. "
+                        "Set SENDGRID_API_KEY, RESEND_API_KEY or SMTP_HOST so key created / "
+                        "rotated and user invite emails can be sent."
+                    )
             else:
                 # [NEW] v1 implementation - init as a custom logger
                 if _alert in litellm._known_custom_logger_compatible_callbacks:
@@ -8275,6 +8283,7 @@ class ProxyStartupEvent:
             try:
                 from litellm.proxy.common_utils.key_rotation_manager import (
                     KeyRotationManager,
+                    log_rotation_schedule_warnings,
                 )
 
                 # Get prisma_client and proxy_logging_obj from global scope
@@ -8294,12 +8303,27 @@ class ProxyStartupEvent:
                         seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
                         id="key_rotation_job",
                     )
+                    await log_rotation_schedule_warnings(
+                        prisma_client,
+                        rotation_job_enabled=True,
+                        check_interval_seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
+                    )
                 else:
                     verbose_proxy_logger.warning("Key rotation enabled but prisma_client not available")
             except Exception as e:
                 verbose_proxy_logger.warning(f"Failed to setup key rotation job: {e}")
         else:
             verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
+            if prisma_client is not None:
+                from litellm.proxy.common_utils.key_rotation_manager import (
+                    log_rotation_schedule_warnings,
+                )
+
+                await log_rotation_schedule_warnings(
+                    prisma_client,
+                    rotation_job_enabled=False,
+                    check_interval_seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
+                )
 
         await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)
 

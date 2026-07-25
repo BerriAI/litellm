@@ -1378,3 +1378,21 @@ async def test_budget_alert_release_failure_does_not_propagate(base_email_logger
             )
 
     mock_cache.async_delete_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lookup_user_email_from_db_without_user_id(base_email_logger):
+    """
+    Keys with no owner reach the lookup with user_id=None; prisma rejects that with
+    "`where.user_id`: A value is required but not set", which aborted the whole email.
+    """
+    mock_prisma_client = mock.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = mock.AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    ):
+        assert await base_email_logger._lookup_user_email_from_db(user_id=None) is None
+
+    mock_prisma_client.db.litellm_usertable.find_unique.assert_not_called()

@@ -79,7 +79,7 @@ class TestKeyRotationManagerPassesKeyAlias:
             side_effect=capture_regenerate_key_fn,
         ):
             with patch(
-                "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook",
+                "litellm.proxy.hooks.key_management_event_hooks.KeyManagementEventHooks.async_key_rotated_hook",
                 new_callable=AsyncMock,
             ):
                 rotation_manager = KeyRotationManager(mock_prisma)
@@ -132,7 +132,7 @@ class TestKeyRotationManagerPassesKeyAlias:
             side_effect=capture_regenerate_key_fn,
         ):
             with patch(
-                "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook",
+                "litellm.proxy.hooks.key_management_event_hooks.KeyManagementEventHooks.async_key_rotated_hook",
                 new_callable=AsyncMock,
             ):
                 rotation_manager = KeyRotationManager(mock_prisma)

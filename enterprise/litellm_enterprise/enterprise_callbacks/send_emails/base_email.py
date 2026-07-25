@@ -812,6 +812,10 @@ class BaseEmailLogger(CustomLogger):
             )
             return None
 
+        if user_id is None:
+            verbose_proxy_logger.debug("No user_id provided. Unable to lookup user email")
+            return None
+
         user_row = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": user_id}
         )

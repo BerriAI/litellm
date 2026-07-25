@@ -258,8 +258,8 @@ class TestKeyRotationErrorResilience:
     @pytest.mark.asyncio
     async def test_hook_failure_does_not_prevent_db_update(self):
         """
-        If the rotation hook (async_key_rotated_hook) fails, the database
-        update for rotation_count should still have succeeded (it runs before the hook).
+        The rotation hook is owned by regenerate_key_fn, so a failing hook must not
+        surface in the rotation job or block the rotation_count update.
         """
         mock_prisma = AsyncMock()
         manager = KeyRotationManager(mock_prisma)
@@ -282,15 +282,12 @@ class TestKeyRotationErrorResilience:
             return_value=mock_response,
         ):
             with patch(
-                "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook",
+                "litellm.proxy.hooks.key_management_event_hooks.KeyManagementEventHooks.async_key_rotated_hook",
                 new_callable=AsyncMock,
                 side_effect=Exception("Hook failed: secret manager down"),
             ):
-                # This will raise because the hook fails
-                with pytest.raises(Exception, match="Hook failed"):
-                    await manager._rotate_key(key)
+                await manager._rotate_key(key)
 
-        # The DB update should have been called BEFORE the hook
         mock_prisma.db.litellm_verificationtoken.update.assert_called_once()
         update_data = mock_prisma.db.litellm_verificationtoken.update.call_args[1][
             "data"
@@ -370,7 +367,7 @@ class TestKeyRotationFullFlow:
             return_value=mock_response,
         ):
             with patch(
-                "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook",
+                "litellm.proxy.hooks.key_management_event_hooks.KeyManagementEventHooks.async_key_rotated_hook",
                 new_callable=AsyncMock,
             ):
                 await manager.process_rotations()
@@ -428,7 +425,7 @@ class TestKeyRotationFullFlow:
                 return_value=mock_response,
             ):
                 with patch(
-                    "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook",
+                    "litellm.proxy.hooks.key_management_event_hooks.KeyManagementEventHooks.async_key_rotated_hook",
                     new_callable=AsyncMock,
                 ):
                     await manager._rotate_key(key)
@@ -493,7 +490,7 @@ class TestKeyRotationFullFlow:
             return_value=mock_response,
         ):
             with patch(
-                "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook",
+                "litellm.proxy.hooks.key_management_event_hooks.KeyManagementEventHooks.async_key_rotated_hook",
                 new_callable=AsyncMock,
             ):
                 await manager._rotate_key(key)

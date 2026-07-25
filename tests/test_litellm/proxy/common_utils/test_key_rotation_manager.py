@@ -2,6 +2,7 @@
 Test key rotation manager functionality
 """
 
+import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,10 @@ from litellm.proxy._types import (
     GenerateKeyResponse,
     LiteLLM_VerificationToken,
 )
-from litellm.proxy.common_utils.key_rotation_manager import KeyRotationManager
+from litellm.proxy.common_utils.key_rotation_manager import (
+    KeyRotationManager,
+    log_rotation_schedule_warnings,
+)
 
 
 class TestKeyRotationManager:
@@ -198,11 +202,8 @@ class TestKeyRotationManager:
             "litellm.proxy.common_utils.key_rotation_manager.regenerate_key_fn",
             return_value=mock_response,
         ):
-            with patch(
-                "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook"
-            ):
-                # Execute
-                await manager._rotate_key(key_to_rotate)
+            # Execute
+            await manager._rotate_key(key_to_rotate)
 
         # Verify database update was called with correct data
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
@@ -278,16 +279,114 @@ class TestKeyRotationManager:
         ) as mock_regenerate:
             mock_regenerate.return_value = mock_response
             with patch(
-                "litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook",
-                new_callable=AsyncMock,
+                "litellm.proxy.common_utils.key_rotation_manager.LITELLM_KEY_ROTATION_GRACE_PERIOD",
+                "48h",
             ):
-                with patch(
-                    "litellm.proxy.common_utils.key_rotation_manager.LITELLM_KEY_ROTATION_GRACE_PERIOD",
-                    "48h",
-                ):
-                    await manager._rotate_key(key_to_rotate)
+                await manager._rotate_key(key_to_rotate)
 
             mock_regenerate.assert_called_once()
             call_args = mock_regenerate.call_args
             regenerate_request = call_args[1]["data"]
             assert regenerate_request.grace_period == "48h"
+
+    @pytest.mark.asyncio
+    async def test_rotate_key_does_not_double_fire_rotation_hook(self):
+        """
+        regenerate_key_fn already fires async_key_rotated_hook, so the rotation job must not
+        fire it a second time; otherwise every automated rotation sends two emails and writes
+        two audit logs.
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client = AsyncMock()
+        manager = KeyRotationManager(mock_prisma_client)
+
+        key_to_rotate = LiteLLM_VerificationToken(
+            token="old-token",
+            auto_rotate=True,
+            rotation_interval="30s",
+            key_rotation_at=None,
+            rotation_count=0,
+        )
+
+        with patch(
+            "litellm.proxy.common_utils.key_rotation_manager.regenerate_key_fn",
+            new_callable=AsyncMock,
+            return_value=GenerateKeyResponse(
+                key="new-api-key", token_id="new-token-id", user_id="test-user"
+            ),
+        ):
+            with patch(
+                "litellm.proxy.hooks.key_management_event_hooks.KeyManagementEventHooks.async_key_rotated_hook",
+                new_callable=AsyncMock,
+            ) as mock_hook:
+                await manager._rotate_key(key_to_rotate)
+
+        mock_hook.assert_not_called()
+
+
+class TestRotationScheduleWarnings:
+    """Auto-rotating keys the background job cannot honor must be surfaced at startup."""
+
+    @pytest.mark.asyncio
+    async def test_warns_when_rotation_job_disabled(self, caplog):
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = [
+            LiteLLM_VerificationToken(token="t1", auto_rotate=True, rotation_interval="60s")
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            await log_rotation_schedule_warnings(
+                mock_prisma_client,
+                rotation_job_enabled=False,
+                check_interval_seconds=86400,
+            )
+
+        assert "LITELLM_KEY_ROTATION_ENABLED" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_warns_when_check_interval_coarser_than_rotation_interval(self, caplog):
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = [
+            LiteLLM_VerificationToken(token="t1", auto_rotate=True, rotation_interval="24h"),
+            LiteLLM_VerificationToken(token="t2", auto_rotate=True, rotation_interval="60s"),
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            await log_rotation_schedule_warnings(
+                mock_prisma_client,
+                rotation_job_enabled=True,
+                check_interval_seconds=86400,
+            )
+
+        assert "LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_silent_when_schedule_is_honored(self, caplog):
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = [
+            LiteLLM_VerificationToken(token="t1", auto_rotate=True, rotation_interval="60s")
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            await log_rotation_schedule_warnings(
+                mock_prisma_client,
+                rotation_job_enabled=True,
+                check_interval_seconds=15,
+            )
+
+        assert caplog.text == ""
+
+    @pytest.mark.asyncio
+    async def test_silent_when_no_auto_rotate_keys(self, caplog):
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_many.return_value = []
+
+        with caplog.at_level(logging.WARNING):
+            await log_rotation_schedule_warnings(
+                mock_prisma_client,
+                rotation_job_enabled=False,
+                check_interval_seconds=86400,
+            )
+
+        assert caplog.text == ""

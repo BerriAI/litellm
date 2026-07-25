@@ -226,6 +226,30 @@ def _get_email_logger_class():
     return BaseEmailLogger
 
 
+def register_email_logger_callback(email_logger: "object | None") -> bool:
+    """
+    Register the proxy's email logger as a litellm callback.
+
+    Key lifecycle emails (created / rotated) and user invites are dispatched by
+    looking up ``BaseEmailLogger`` instances in ``logging_callback_manager``.
+    Admins who configure email through ``general_settings.alerting: ["email"]``
+    (what the Admin UI writes) never register such a logger, so those emails are
+    silently dropped. Registering the already-built instance here closes that gap.
+
+    ``BaseEmailLogger`` itself has no transport, so only its subclasses register.
+
+    Returns True when a sending-capable logger was registered.
+    """
+    if BaseEmailLogger is None or email_logger is None:
+        return False
+
+    if type(email_logger) is BaseEmailLogger or not isinstance(email_logger, BaseEmailLogger):
+        return False
+
+    litellm.logging_callback_manager.add_litellm_callback(email_logger)
+    return True
+
+
 class InternalUsageCache:
     def __init__(self, dual_cache: DualCache):
         self.dual_cache: DualCache = dual_cache
