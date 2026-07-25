@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Collapse } from "antd";
+import { Info } from "lucide-react";
 
 import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
 import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -33,45 +34,24 @@ const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?
 const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
 const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
 
-const MethodologyNote = () => (
-  <Collapse
-    ghost
-    items={[
-      {
-        key: "methodology",
-        label: <span className="text-sm font-medium">How savings are calculated</span>,
-        children: (
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              Savings are computed for each request when it is logged, using the provider&apos;s reported usage and the
-              model&apos;s pricing, then summed into a daily rollup. Totals below are read from that rollup over the
-              selected date range, so the numbers never require a scan of raw request logs.
-            </p>
-            <p>
-              Compression savings are the tokens Headroom removed before the call, priced at the model&apos;s input
-              rate: <code>compression_saved_tokens * input_cost_per_token</code>
-            </p>
-            <p>
-              Prompt caching savings are the tokens the provider served from cache (Anthropic{" "}
-              <code>cache_read_input_tokens</code>, or OpenAI-style <code>prompt_tokens_details.cached_tokens</code>),
-              priced at the discount between the normal input rate and the cache-read rate:{" "}
-              <code>cache_read_input_tokens * max(input_cost_per_token - cache_read_input_token_cost, 0)</code>
-            </p>
-            <p>
-              Total saved is the sum of both drivers. Models without a separate cache-read price in the pricing map
-              contribute zero caching savings rather than erroring.
-            </p>
-          </div>
-        ),
-      },
-    ]}
-  />
-);
-
-const SummaryCard = ({ label, value, hint }: { label: string; value: string; hint?: string }) => (
+const SummaryCard = ({ label, value, hint, info }: { label: string; value: string; hint?: string; info?: string }) => (
   <Card>
-    <CardHeader>
+    <CardHeader className="flex flex-row items-center justify-between space-y-0">
       <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+      {info && (
+        <Popover>
+          <PopoverTrigger
+            aria-label={`How ${label.toLowerCase()} is calculated`}
+            data-testid={`summary-card-info-${label.toLowerCase().replace(/\s+/g, "-")}`}
+            className="cursor-pointer text-muted-foreground hover:text-foreground"
+          >
+            <Info className="size-3.5" />
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-64 text-sm text-muted-foreground">
+            {info}
+          </PopoverContent>
+        </Popover>
+      )}
     </CardHeader>
     <CardContent>
       <p className="text-2xl font-semibold text-foreground">{value}</p>
@@ -150,8 +130,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
 
   return (
     <div className="w-full space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <MethodologyNote />
+      <div className="flex flex-wrap items-center justify-end gap-4">
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
@@ -165,8 +144,14 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
           label="Compression savings"
           value={usd(compressionTotal)}
           hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
+          info="Tokens Headroom removed before the call, priced at the model's input rate."
         />
-        <SummaryCard label="Prompt caching savings" value={usd(cachingTotal)} hint="Cache read discount" />
+        <SummaryCard
+          label="Prompt caching savings"
+          value={usd(cachingTotal)}
+          hint="Cache read discount"
+          info="Tokens the provider served from cache, priced at the discount between the input and cache-read rates."
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
