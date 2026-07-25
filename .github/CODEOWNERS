@@ -1,3 +1,12 @@
-/ui/ @yuneng-jiang @ryan-crabbe-berri
-/litellm/proxy/_experimental/out/ @yuneng-jiang @ryan-crabbe-berri
+/ui/ @yuneng-berri @ryan-crabbe-berri
+/litellm/proxy/_experimental/out/ @yuneng-berri @ryan-crabbe-berri
 /ui/litellm-dashboard/src/lib/http/schema.d.ts
+
+/litellm/proxy/schema.prisma @yassin-berriai @krrish-berri-2
+/litellm-proxy-extras/litellm_proxy_extras/schema.prisma @yassin-berriai @krrish-berri-2
+/litellm-proxy-extras/litellm_proxy_extras/migrations/ @yassin-berriai @krrish-berri-2
+/litellm/proxy/db/ @yassin-berriai
+/litellm/repositories/ @yassin-berriai
+/litellm/proxy/spend_tracking/ @yassin-berriai
+/litellm/proxy/analytics_endpoints/ @yassin-berriai
+/litellm/proxy/auth/ @yuneng-berri
