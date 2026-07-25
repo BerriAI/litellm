@@ -29,7 +29,9 @@ from litellm.integrations.otel import (  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     reset_mcp_message_trace_carrier,
+    reset_mcp_message_transport_span_context,
     set_mcp_message_trace_carrier,
+    set_mcp_message_transport_span_context,
     set_request_root_span,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
@@ -56,9 +58,11 @@ def _reset_request_root_span():
 
     _otel_context._request_root_span.set(None)
     _otel_context._mcp_message_trace_carrier.set(None)
+    _otel_context._mcp_message_transport_span_context.set(None)
     yield
     _otel_context._request_root_span.set(None)
     _otel_context._mcp_message_trace_carrier.set(None)
+    _otel_context._mcp_message_transport_span_context.set(None)
 
 
 def _payload(**overrides):
@@ -528,15 +532,15 @@ _MCP_SPAN_CASES = [
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_roots_and_links_transport_without_propagated_context(
+def test_mcp_span_nests_under_transport_without_propagated_context(
     make_payload, span_name
 ):
-    """MCP and the HTTP transport are independent lifecycles (one streamable-HTTP
-    session multiplexes many messages), so per the MCP semconv the message span
-    must NOT nest under the session/transport span — that is what made it render
-    skewed at the session's start. With no propagated ``params._meta`` context it
-    starts its own root trace and records the transport span as a *link*, never
-    the parent."""
+    """Almost no MCP client implements SEP-414, so ``params._meta`` normally carries
+    no trace context. Rooting the span there split one tool call into two traces
+    joined only by a link, which is how it surfaced in APM: the ``POST`` transaction
+    and the ``tools/call`` span shared no ``trace_id``. With no remote parent to
+    honor the span nests under the transport span instead, and records no link since
+    the transport is now the real parent."""
     logger, exporter = _logger()
     transport = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -549,11 +553,75 @@ def test_mcp_span_roots_and_links_transport_without_propagated_context(
     )
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert span.context.trace_id == transport.get_span_context().trace_id
+    assert span.links == ()
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_nests_under_this_messages_transport_not_the_session_opener(
+    make_payload, span_name
+):
+    """A *stateful* streamable-HTTP session runs every message on the single task
+    spawned by that session's ``initialize`` POST, so the ``_request_root_span``
+    ContextVar the ASGI request task writes is frozen at ``initialize`` inside the
+    handler and never sees the later ``tools/call`` POST. Nesting on that anchor
+    would hang every tool call of the session off the first request's (already
+    ended) span, rendering skewed at the session's start. The gateway resolves the
+    current message's transport on the request task and publishes it, so the span
+    parents to the POST that actually carried this message."""
+    logger, exporter = _logger()
+    session_opener = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    this_message = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+
+    async def session_task():
+        token = set_mcp_message_transport_span_context(
+            this_message.get_span_context()
+        )
+        try:
+            await logger.async_log_success_event(
+                {"standard_logging_object": make_payload()}, None, None, None
+            )
+        finally:
+            reset_mcp_message_transport_span_context(token)
+
+    async def initialize_request():
+        # The anchor the session task inherits is the one ``initialize`` left behind;
+        # spawning here reproduces the SDK's session task, which outlives this request.
+        set_request_root_span(session_opener)
+        await asyncio.create_task(session_task())
+
+    asyncio.run(initialize_request())
+    session_opener.end()
+    this_message.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is not None
+    assert span.parent.span_id == this_message.get_span_context().span_id
+    assert span.context.trace_id == this_message.get_span_context().trace_id
+    assert span.parent.span_id != session_opener.get_span_context().span_id
+    assert span.context.trace_id != session_opener.get_span_context().trace_id
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_roots_without_transport_or_propagated_context(
+    make_payload, span_name
+):
+    """With neither a remote parent nor a transport span there is nothing to nest
+    under, so the span legitimately starts its own root trace with no links."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": make_payload()}, None, None, None
+        )
+    )
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
     assert span.parent is None
-    assert span.context.trace_id != transport.get_span_context().trace_id
-    assert [link.context.span_id for link in span.links] == [
-        transport.get_span_context().span_id
-    ]
+    assert span.links == ()
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
@@ -641,10 +709,11 @@ def test_mcp_span_carries_authenticated_identity(make_payload, span_name):
     assert span.attributes[LiteLLM.TEAM_ID] == "t1"
 
 
-def test_mcp_span_malformed_traceparent_starts_root():
+def test_mcp_span_malformed_traceparent_nests_under_transport():
     """A malformed traceparent in ``params._meta`` must not crash or parent to a
-    bogus span: the propagator ignores it, so the span starts its own root trace and
-    still links the transport span."""
+    bogus span: the propagator ignores it, leaving no remote parent, so the span
+    falls back to nesting under the transport span rather than starting a
+    disconnected root trace."""
     logger, exporter = _logger()
     transport = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -661,9 +730,44 @@ def test_mcp_span_malformed_traceparent_starts_root():
         reset_mcp_message_trace_carrier(token)
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
-    assert span.parent is None
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert span.links == ()
+
+
+def test_mcp_span_links_this_messages_transport_when_context_is_propagated():
+    """On the semconv path the transport is recorded as a link, and that link must
+    point at the POST carrying this message too. Reading the stale session anchor
+    would attribute the tool call to whichever request opened the session."""
+    logger, exporter = _logger()
+    session_opener = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    this_message = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(session_opener)
+    trace_token = set_mcp_message_trace_carrier(
+        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
+    )
+    transport_token = set_mcp_message_transport_span_context(
+        this_message.get_span_context()
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": _mcp_list_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_transport_span_context(transport_token)
+        reset_mcp_message_trace_carrier(trace_token)
+    session_opener.end()
+    this_message.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
+    assert span.parent is not None and span.parent.span_id == 0x2222222222222222
     assert [link.context.span_id for link in span.links] == [
-        transport.get_span_context().span_id
+        this_message.get_span_context().span_id
     ]
 
 

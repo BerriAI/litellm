@@ -22,9 +22,9 @@ import { fetchClient } from "@/lib/http/api";
 import { buildOrgPatch, orgToForm, type OrgPatchBody } from "./mapper";
 import { orgSettingsSchema } from "./schema";
 
-const NO_RESET = "never";
+export const NO_RESET = "never";
 
-const BUDGET_DURATION_OPTIONS = [
+export const BUDGET_DURATION_OPTIONS = [
   { value: NO_RESET, label: "No reset" },
   { value: "24h", label: "daily" },
   { value: "7d", label: "weekly" },
@@ -102,6 +102,7 @@ export const OrgSettingsForm = ({
         <FormField control={form.control} name="budget_duration" label="Reset Budget">
           {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
             <Select
+              items={BUDGET_DURATION_OPTIONS}
               value={value === "" ? NO_RESET : value}
               onValueChange={(selected) => onChange(selected === NO_RESET ? "" : selected)}
             >

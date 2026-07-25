@@ -28,6 +28,7 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -208,13 +209,7 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    mcp_toolsets?: string[];
-    vector_stores: string[];
-  };
+  object_permission?: ObjectPermission | null;
 }
 
 export interface CredentialItem {
@@ -1176,35 +1171,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const organizationCreateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>, // Assuming formValues is an object
-) => {
-  try {
-    if (formValues.metadata) {
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        console.error("Failed to parse metadata:", error);
-        throw new Error("Failed to parse metadata: " + error);
-      }
-    }
-
-    const data = await apiClient.post(`/organization/new`, {
-      accessToken,
-      body: {
-        ...formValues, // Include formValues in the request body
-      },
-    });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
