@@ -66,7 +66,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 }));
 
 const mockKey: KeyResponse = {
-  token: "sk-1234567890abcdef",
+  token: "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52",
   token_id: "key-1",
   key_name: "test-key",
   key_alias: "Test Key Alias",
@@ -115,7 +115,7 @@ const mockKey: KeyResponse = {
   end_user_rpm_limit: 10,
   end_user_max_budget: 10,
   last_refreshed_at: Date.now(),
-  api_key: "sk-1234567890abcdef",
+  api_key: "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52",
   user_role: "user",
   rpm_limit_per_model: {},
   tpm_limit_per_model: {},
