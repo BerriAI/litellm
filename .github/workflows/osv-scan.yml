@@ -36,9 +36,30 @@ jobs:
           echo "bc98e15319ed0d515e3f9235287ba53cdc5535d576d24fd573978ecfe9ab92dc  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/osv-scanner"
 
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      # Exit 1 means "something is affected" and is handed to the filter step; anything above
+      # 1 is a scanner failure and still fails the job.
       - name: Scan lockfiles
         run: |
+          set +e
           "$RUNNER_TEMP/osv-scanner" scan source \
             --config osv-scanner.toml \
+            --format json \
+            --output-file "$RUNNER_TEMP/osv-results.json" \
             -L uv.lock \
             -L ui/litellm-dashboard/package-lock.json
+          scan_status=$?
+          set -e
+          if [ "$scan_status" -gt 1 ]; then
+            echo "osv-scanner exited with status $scan_status"
+            exit "$scan_status"
+          fi
+
+      - name: Apply the dependency lockout window
+        run: |
+          python -m pip install --disable-pip-version-check "packaging==26.2"
+          python .github/scripts/osv_lockout_filter.py --results "$RUNNER_TEMP/osv-results.json"
