@@ -177,3 +177,35 @@ async def test_abandoned_stream_is_not_cached(local_cache, request_kwargs, monke
 
     assert len(fake_handler.calls) == 2
     assert replayed == STREAM_EVENTS
+
+@pytest.mark.asyncio
+async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        CachedAnthropicMessagesStreamIterator,
+    )
+    from litellm.proxy.pass_through_endpoints.streaming_handler import (
+        PassThroughStreamingHandler,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    iterator = CachedAnthropicMessagesStreamIterator(
+        events=[event.decode("utf-8") for event in STREAM_EVENTS],
+        litellm_logging_obj=logging_obj,
+        request_body={"model": "claude-sonnet-4-5"},
+    )
+
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        assert await _collect(iterator) == STREAM_EVENTS
+        for _ in range(2):
+            with pytest.raises(StopAsyncIteration):
+                await iterator.__anext__()
+        await asyncio.sleep(0)
+
+    mock_route.assert_called_once()
