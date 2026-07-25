@@ -38,6 +38,10 @@ from litellm._uuid import uuid
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -668,16 +672,13 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: Optional[d
     """
     if guardrail_data is None:
         return
-    source_metadata = guardrail_data.get("metadata")
-    if not isinstance(source_metadata, dict):
-        return
+    source_key = get_metadata_variable_name_from_kwargs(guardrail_data)
+    source_metadata = guardrail_data.get(source_key) or {}
     entries = source_metadata.get("standard_logging_guardrail_information")
     if not entries:
         return
 
-    metadata = request_data.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = request_data["metadata"] = {}
+    _, metadata = get_or_create_metadata_bucket(request_data)
     metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
