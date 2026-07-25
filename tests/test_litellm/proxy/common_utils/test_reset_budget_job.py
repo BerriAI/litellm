@@ -1376,7 +1376,6 @@ def test_reset_budget_for_proxy_budget_row_invalidates_global_spend_cache(
     against. Without the invalidation, the cached value survives the DB reset
     and the global cap keeps blocking requests for the whole next window."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
-    sys.modules["litellm.proxy.proxy_server"].litellm_proxy_admin_name = "default_user_id"
 
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["user"] = [
@@ -1404,7 +1403,6 @@ def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
     """The global-spend accumulator must only be dropped when the proxy
     budget aggregate row itself resets, not on every user reset."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
-    sys.modules["litellm.proxy.proxy_server"].litellm_proxy_admin_name = "default_user_id"
 
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["user"] = [

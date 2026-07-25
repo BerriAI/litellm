@@ -2738,9 +2738,7 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
         ),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill(
-            litellm_proxy_budget_name
-        )
+        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill()
 
     # Upsert ran with the configured budget
     mock_generate_key_helper.assert_called_once()

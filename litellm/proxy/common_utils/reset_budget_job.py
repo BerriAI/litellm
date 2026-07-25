@@ -6,7 +6,7 @@ from typing import Any, Callable, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import LITELLM_PROXY_BUDGET_NAME
+from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY, LITELLM_PROXY_BUDGET_NAME
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
@@ -105,13 +105,7 @@ class ResetBudgetJob:
         budget aggregate row is reset, so the next auth-time load reads the
         zeroed row instead of a stale (potentially never-expiring) counter.
         """
-        try:
-            from litellm.proxy.proxy_server import litellm_proxy_admin_name
-        except ImportError as e:
-            verbose_proxy_logger.warning("Failed to invalidate global proxy spend cache: %s", e)
-            return
-
-        await ResetBudgetJob._invalidate_user_api_key_cache_entry(f"{litellm_proxy_admin_name}:spend")
+        await ResetBudgetJob._invalidate_user_api_key_cache_entry(GLOBAL_PROXY_SPEND_CACHE_KEY)
 
     @staticmethod
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:
