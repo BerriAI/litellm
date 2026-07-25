@@ -2222,6 +2222,19 @@ class TestShouldRunGuardrailModelGroupGate:
             data={"model": "ai-gateway-other"}, event_type=GuardrailEventHooks.pre_call
         ) is False
 
+    def test_update_in_memory_does_not_null_out_omitted_fields(self):
+        """LitellmParams merges every guardrail subclass's fields into one flat model,
+        so a partial update that only intends to change one field still serializes
+        every other field as None. A None value must not overwrite an existing
+        attribute the update never mentioned - e.g. clearing a previously-set
+        run_in_parallel just because a later update omits it."""
+        g = self._guardrail(run_in_parallel=True)
+        assert g.run_in_parallel is True
+
+        g.update_in_memory_litellm_params({"guardrail": "test-guardrail", "mode": "pre_call", "run_in_parallel": None})
+
+        assert g.run_in_parallel is True
+
 
 class TestResolveMetadataModelGroups:
     def test_returns_both_containers_values(self):

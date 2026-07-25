@@ -1387,6 +1387,29 @@ def test_update_in_memory_accepts_raw_db_dict():
     assert guardrail.presidio_entities_deny_list == [PiiEntityType.CREDIT_CARD]
 
 
+def test_update_in_memory_preserves_deny_list_when_update_omits_it():
+    """A PUT update that only changes presidio_score_thresholds still serializes
+    presidio_entities_deny_list as None (LitellmParams merges every guardrail
+    subclass's fields into one flat model). That None must not wipe out an
+    already-configured deny list - filter_analyze_results_by_score iterates it
+    unconditionally whenever presidio_score_thresholds is non-empty, so a None
+    deny list would raise TypeError on the next request."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, presidio_entities_deny_list=[PiiEntityType.CREDIT_CARD]
+    )
+
+    guardrail.update_in_memory_litellm_params(
+        {
+            "guardrail": "presidio",
+            "mode": "pre_call",
+            "presidio_score_thresholds": {PiiEntityType.CREDIT_CARD: 0.9},
+            "presidio_entities_deny_list": None,
+        }
+    )
+
+    assert guardrail.presidio_entities_deny_list == [PiiEntityType.CREDIT_CARD]
+
+
 @pytest.mark.asyncio
 async def test_get_session_iterator_thread_safety(presidio_guardrail):
     """

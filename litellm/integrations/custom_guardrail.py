@@ -1183,9 +1183,20 @@ class CustomGuardrail(CustomLogger):
         ``litellm_params`` may arrive as a ``LitellmParams`` instance (config-driven
         updates) or as the raw DB dict (the PUT /guardrails immediate-sync path reads
         a Prisma JSON column and never converts it), so handle both shapes.
+
+        ``LitellmParams`` merges every guardrail subclass's config fields into one
+        flat model, so a partial update (a PUT payload that only intends to change
+        one field) still serializes every *other* field as ``None`` - either because
+        it's irrelevant to this guardrail type, or because the admin simply didn't
+        set it. Skip ``None`` values here rather than overwriting existing config with
+        them, so a partial update can't silently null out a field it never mentioned;
+        clearing a field to empty requires an explicit empty value (``[]``/``{}``/``""``),
+        not omission.
         """
         params = litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
         for key, value in params.items():
+            if value is None:
+                continue
             if key == "apply_guardrail_to_model_groups" and isinstance(value, list):
                 value = frozenset(str(v).strip().lower() for v in value if str(v).strip())
             setattr(self, key, value)
