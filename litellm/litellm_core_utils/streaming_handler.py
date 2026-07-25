@@ -72,13 +72,30 @@ class _LoggedLiteLLMParams(TypedDict, total=False):
 
 
 class _DumpedDeltaKwargs(TypedDict, total=False):
+    content: str | None
     role: str | None
-    finish_reason: str | None
+    function_call: Mapping[str, object] | None
     tool_calls: Sequence[Mapping[str, object]] | None
+    reasoning_content: str | None
+    provider_specific_fields: Mapping[str, object] | None
+    finish_reason: str | None
+    index: int | None
+
+
+class _DumpedStreamingChoiceKwargs(TypedDict, total=False):
+    finish_reason: str | None
+    index: int | None
+    logprobs: Mapping[str, object] | None
+    enhancements: object
 
 
 class _ModelResponseStreamInitKwargs(TypedDict, total=False):
+    id: str | None
+    created: int | None
     model: str | None
+    object: str | None
+    system_fingerprint: str | None
+    usage: Mapping[str, object] | None
 
 
 class _PredibaseStreamDetails(TypedDict):
@@ -986,7 +1003,7 @@ class CustomStreamWrapper:
                             try:
                                 if isinstance(choice, BaseModel):
                                     choice_json = cast(  # cast-ok: choice dump feeds StreamingChoices(**kwargs) which takes extras
-                                        _DumpedDeltaKwargs,
+                                        _DumpedStreamingChoiceKwargs,
                                         choice.model_dump(),
                                     )
                                     choice_json.pop(
