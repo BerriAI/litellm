@@ -126,6 +126,14 @@ class TestWavespeedModelInfo:
         assert info["supports_function_calling"] is True
         assert info["supports_prompt_caching"] is True
 
+    def test_gen_5_claude_entries_carry_upstream_thinking_flags(self):
+        for model in ("wavespeed/anthropic/claude-fable-5", "wavespeed/anthropic/claude-sonnet-5"):
+            entry = litellm.model_cost[model]
+
+            assert entry["supports_adaptive_thinking"] is True
+            assert entry["supports_sampling_params"] is False
+            assert entry["supports_vision"] is True
+
     def test_non_tool_model_does_not_advertise_function_calling(self):
         info = litellm.get_model_info("wavespeed/aion-labs/aion-2.0")
 
