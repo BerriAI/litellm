@@ -308,7 +308,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
         # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check:
+        if texts_to_check or structured_messages:
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check

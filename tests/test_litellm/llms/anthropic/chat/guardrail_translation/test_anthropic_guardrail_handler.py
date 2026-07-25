@@ -387,6 +387,75 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert "input_schema" in tools[1]
 
 
+class MockInputCapturingGuardrail(CustomGuardrail):
+    """Mock guardrail that records the inputs it was handed on the request path."""
+
+    def __init__(self, guardrail_name: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.called = False
+        self.inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.called = True
+        self.inputs = inputs
+        return inputs
+
+
+class TestAnthropicMessagesHandlerStructuredMessagesOnly:
+    """LIT-4795: compression-style guardrails that operate on structured_messages
+    must run on Anthropic /v1/messages traffic whose messages carry no top-level
+    text (only tool_use / tool_result blocks, with instructions in the top-level
+    ``system`` field). Gating apply_guardrail behind text extraction alone caused
+    Headroom to silently skip this heavy agentic Claude Code shape."""
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_runs_when_only_tool_blocks_present(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockInputCapturingGuardrail(guardrail_name="headroom")
+
+        data = {
+            "model": "claude-opus-4-6",
+            "system": [
+                {"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "a.py"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": [{"type": "text", "text": "file contents"}],
+                        }
+                    ],
+                },
+            ],
+            "tools": [
+                {"name": "Read", "description": "read", "input_schema": {"type": "object", "properties": {}}}
+            ],
+        }
+
+        await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
+        )
+
+        assert guardrail.called is True
+        assert guardrail.inputs is not None
+        assert guardrail.inputs.get("structured_messages")
+
+
 class ToolAppendingGuardrail(CustomGuardrail):
     """Guardrail that appends a new OpenAI-format function tool, mimicking a
     guardrail that injects a retrieval/recovery tool the model can later call."""
