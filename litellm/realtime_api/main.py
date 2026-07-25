@@ -371,13 +371,18 @@ async def _arealtime(
         if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
             realtime_protocol = "GA"
         realtime_protocol = realtime_protocol or "beta"
+        resolved_azure_ad_token = (
+            None
+            if api_key
+            else get_azure_ad_token(GenericLiteLLMParams(**{**kwargs, "azure_ad_token": azure_ad_token}))
+        )
         await azure_realtime.async_realtime(
             model=model,
             websocket=websocket,
             api_base=api_base,
             api_key=api_key,
             api_version=api_version,
-            azure_ad_token=(None if api_key else get_azure_ad_token(litellm_params)),
+            azure_ad_token=resolved_azure_ad_token,
             client=None,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
