@@ -22,7 +22,7 @@ import pytest
 from pydantic import BaseModel, RootModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap
+from e2e_http import NoBody, is_ok, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, OrgInfoParams, OrgNewBody, UserNewBody
@@ -53,9 +53,15 @@ class BudgetNewResponse(BaseModel):
     budget_id: str
 
 
+class ModelBudgetEntry(BaseModel):
+    budget_limit: float
+    time_period: str
+
+
 class BudgetUpdateBody(BaseModel):
     budget_id: str
-    max_budget: float
+    max_budget: float | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class BudgetInfoBody(BaseModel):
@@ -66,6 +72,7 @@ class BudgetRow(BaseModel):
     budget_id: str | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class BudgetInfoResponse(RootModel[list[BudgetRow]]):
@@ -147,6 +154,56 @@ class TestBudgetManagement:
             lambda: budget_id if budget_id in _budget_list_ids(client) else None,
             f"/budget/list never included the created budget {budget_id}",
         )
+
+    @pytest.mark.covers("mgmt.budget.update.accepts_model_max_budget")
+    def test_update_accepts_per_model_budgets_including_punctuated_names(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """Per-model caps must be settable on an existing budget.
+
+        `model_max_budget` is how a customer caps spend per model on a shared
+        budget, and model ids routinely carry dots and hyphens (`glm-5.2`). The
+        route has to accept both, and the plain name is included so a failure
+        says whether per-model budgets are broken outright or only for
+        punctuated ids.
+        """
+        for model_name in ("gpt4o", "glm-5.2"):
+            budget_id = _create_budget(
+                client, resources, BudgetNewBody(max_budget=_INITIAL_MAX_BUDGET)
+            )
+
+            result = client.proxy.transport.post(
+                "/budget/update",
+                headers=client.proxy.transport.master,
+                json=BudgetUpdateBody(
+                    budget_id=budget_id,
+                    model_max_budget={
+                        model_name: ModelBudgetEntry(budget_limit=5.0, time_period="1d")
+                    },
+                ),
+                response_type=NoBody,
+            )
+
+            assert is_ok(result), (
+                f"/budget/update rejected a per-model budget for {model_name!r}: {result}; "
+                f"a customer cannot cap spend per model on an existing budget"
+            )
+
+            def has_model_budget() -> BudgetRow | None:
+                row = next(
+                    (r for r in _budget_rows(client, budget_id) if r.budget_id == budget_id),
+                    None,
+                )
+                if row is None or not row.model_max_budget:
+                    return None
+                return row if model_name in row.model_max_budget else None
+
+            _ = _poll(
+                client,
+                has_model_budget,
+                f"/budget/info never reported a model_max_budget entry for {model_name!r} "
+                f"on budget {budget_id}",
+            )
 
     @pytest.mark.covers("mgmt.budget.update.persists")
     def test_update_max_budget_persists_to_budget_info(
