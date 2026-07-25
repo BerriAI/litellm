@@ -659,6 +659,49 @@ async def test_arealtime_resolves_and_forwards_azure_ad_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_arealtime_skips_ad_token_when_api_key_present(monkeypatch):
+    """
+    When an api-key is available, the AD token provider must not be invoked, so a
+    misconfigured/throwing provider cannot abort an otherwise-valid api-key request.
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(
+        realtime_main,
+        "azure_realtime",
+        MagicMock(async_realtime=mock_async_realtime),
+    )
+
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return (
+            "gpt-4o-realtime-preview",
+            "azure",
+            "test-key",
+            "https://my-endpoint.openai.azure.com",
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    def exploding_token(litellm_params):
+        raise AssertionError("get_azure_ad_token must not be called when api_key exists")
+
+    monkeypatch.setattr("litellm.llms.azure.common_utils.get_azure_ad_token", exploding_token)
+
+    await realtime_main._arealtime(
+        model="azure/gpt-4o-realtime-preview",
+        websocket=MagicMock(),
+        api_key="test-key",
+        api_version="2024-10-01-preview",
+        litellm_logging_obj=MagicMock(),
+    )
+
+    called_kwargs = mock_async_realtime.call_args.kwargs
+    assert called_kwargs["api_key"] == "test-key"
+    assert called_kwargs["azure_ad_token"] is None
+
+
+@pytest.mark.asyncio
 async def test_realtime_health_check_uses_bearer_token_for_azure(monkeypatch):
     """
     An Entra ID-only Azure deployment (no api-key) must pass the health check by

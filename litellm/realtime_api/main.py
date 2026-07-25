@@ -371,9 +371,12 @@ async def _arealtime(
             realtime_protocol = "GA"
         realtime_protocol = realtime_protocol or "beta"
 
-        from litellm.llms.azure.common_utils import get_azure_ad_token
+        # Only resolve an Azure AD token when no api-key is available. The handler
+        # gives api-key precedence, so resolving a token eagerly would let a token
+        # provider exception abort an otherwise-valid api-key request.
+        if azure_ad_token is None and not api_key:
+            from litellm.llms.azure.common_utils import get_azure_ad_token
 
-        if azure_ad_token is None:
             azure_ad_token = get_azure_ad_token(litellm_params)
         await azure_realtime.async_realtime(
             model=model,
