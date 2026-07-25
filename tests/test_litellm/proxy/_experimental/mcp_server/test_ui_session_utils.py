@@ -1,4 +1,3 @@
-import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -31,9 +30,7 @@ async def test_resolve_ui_session_team_ids_returns_unique_ids(monkeypatch):
         user_id="user-1",
     )
 
-    fake_user = SimpleNamespace(
-        teams=["team-a", "team-b", "team-a", "", None, "team-c"]
-    )
+    fake_user = SimpleNamespace(teams=["team-a", "team-b", "team-a", "", None, "team-c"])
 
     get_user_object = AsyncMock(return_value=fake_user)
     monkeypatch.setattr(
@@ -81,10 +78,7 @@ async def test_resolve_ui_session_team_ids_observes_next_call_revocation(monkeyp
     assert await resolve_ui_session_team_ids(user_auth) == ["team-a"]
     assert await resolve_ui_session_team_ids(user_auth) == []
     assert get_user_object.await_count == 2
-    assert all(
-        call.kwargs["check_db_only"] is True
-        for call in get_user_object.await_args_list
-    )
+    assert all(call.kwargs["check_db_only"] is True for call in get_user_object.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -97,62 +91,51 @@ async def test_resolve_ui_session_team_ids_short_circuits_when_not_ui_session():
 
 
 @pytest.mark.asyncio
-async def test_build_effective_auth_contexts_returns_cloned_contexts(monkeypatch):
+async def test_build_effective_auth_contexts_reloads_ui_session_as_admitted_user(
+    monkeypatch,
+):
     user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-42")
+    admitted = UserAPIKeyAuth(user_id="user-42")
+    admitted.mcp_admitted_user_subject = True
 
-    mock_resolve = AsyncMock(return_value=["team-one", "team-two"])
+    reload_user = AsyncMock(return_value=admitted)
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
-        mock_resolve,
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        reload_user,
     )
 
     contexts = await build_effective_auth_contexts(user_auth)
 
-    assert [ctx.team_id for ctx in contexts] == ["team-one", "team-two"]
-    assert all(ctx is not user_auth for ctx in contexts)
-    mock_resolve.assert_awaited_once_with(user_auth)
+    assert contexts == [admitted]
+    assert contexts[0].mcp_admitted_user_subject is True
+    reload_user.assert_awaited_once_with("user-42")
 
 
 @pytest.mark.asyncio
-async def test_build_effective_auth_contexts_returns_original_when_no_resolution(
+async def test_build_effective_auth_contexts_returns_non_ui_context_unchanged(
     monkeypatch,
 ):
     user_auth = UserAPIKeyAuth(team_id="existing-team", user_id="user-7")
 
-    mock_resolve = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
-        mock_resolve,
-    )
-
     contexts = await build_effective_auth_contexts(user_auth)
 
     assert contexts == [user_auth]
-    mock_resolve.assert_awaited_once_with(user_auth)
 
 
 @pytest.mark.asyncio
-async def test_build_effective_auth_contexts_handles_unpicklable_parent_span(
+async def test_build_effective_auth_contexts_propagates_reload_failure_closed(
     monkeypatch,
 ):
-    class DummySpan:
-        def __init__(self) -> None:
-            self._lock = threading.RLock()
-
-    parent_span = DummySpan()
     user_auth = UserAPIKeyAuth(
         team_id=UI_SESSION_TOKEN_TEAM_ID,
-        user_id="user-span",
-        parent_otel_span=parent_span,
+        user_id="offboarded-user",
     )
 
-    mock_resolve = AsyncMock(return_value=["team-span"])
+    reload_user = AsyncMock(side_effect=RuntimeError("live user unavailable"))
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
-        mock_resolve,
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        reload_user,
     )
 
-    contexts = await build_effective_auth_contexts(user_auth)
-
-    assert contexts[0].team_id == "team-span"
-    assert contexts[0].parent_otel_span is parent_span
+    with pytest.raises(RuntimeError, match="live user unavailable"):
+        await build_effective_auth_contexts(user_auth)

@@ -845,6 +845,10 @@ class MCPRequestHandler:
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
+                # Interactive MCP subjects must observe grants, revocations,
+                # and offboarding on the next request. Do not authorize from a
+                # cached pre-reconciliation user row.
+                check_db_only=True,
             )
             # Resolve the user's own MCP object permission (get_user_object does not load it) so the shared
             # get_allowed_mcp_servers can grant the user their litellm-granted servers. Reuses the same
@@ -2117,6 +2121,10 @@ class MCPRequestHandler:
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
+                # Team fan-out is part of the admitted subject's live
+                # authorization boundary, so stale membership must never
+                # preserve or delay access.
+                check_db_only=True,
                 parent_otel_span=user_api_key_auth.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
