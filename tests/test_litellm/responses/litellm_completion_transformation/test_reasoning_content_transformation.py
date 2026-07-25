@@ -184,6 +184,58 @@ class TestReasoningContentFinalResponse:
             == "Let me think step by step about this problem..."
         )
 
+    def test_reasoning_item_uses_responses_api_shape(self):
+        """Reasoning items must carry summary_text/reasoning_text parts, not output_text.
+
+        Clients key off ``summary[].text`` (and ``content[].reasoning_text``) to render
+        reasoning; emitting an ``output_text`` content part with no ``summary`` made every
+        reasoning block render as unavailable.
+        """
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Here is my answer",
+                        role="assistant",
+                        reasoning_content="Let me think step by step about this problem...",
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        )
+
+        serialized = responses_api_response.model_dump()
+        reasoning_items = [
+            item for item in serialized["output"] if item["type"] == "reasoning"
+        ]
+        assert len(reasoning_items) == 1
+
+        reasoning_item = reasoning_items[0]
+        assert reasoning_item["summary"] == [
+            {
+                "type": "summary_text",
+                "text": "Let me think step by step about this problem...",
+            }
+        ]
+        assert reasoning_item["content"] == [
+            {
+                "type": "reasoning_text",
+                "text": "Let me think step by step about this problem...",
+            }
+        ]
+        assert reasoning_item["status"] == "completed"
+
     def test_no_reasoning_content_in_response(self):
         """Test handling when no reasoning content in response"""
         # Setup

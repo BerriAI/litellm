@@ -54,6 +54,9 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputText,
+    ReasoningOutputItem,
+    ReasoningSummaryText,
+    ReasoningText,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -1649,6 +1652,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
     ) -> list[
         GenericResponseOutputItem
+        | ReasoningOutputItem
         | OutputCodeInterpreterCall
         | OutputFunctionToolCall
         | OutputImageGenerationCall
@@ -1657,6 +1661,7 @@ class LiteLLMCompletionResponsesConfig:
     ]:
         responses_output: list[
             GenericResponseOutputItem
+            | ReasoningOutputItem
             | OutputCodeInterpreterCall
             | OutputFunctionToolCall
             | OutputImageGenerationCall
@@ -1733,27 +1738,20 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
-    ) -> list[GenericResponseOutputItem]:
+    ) -> list[ReasoningOutputItem]:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
                 if hasattr(message, "reasoning_content") and message.reasoning_content:
                     # Only check the first choice for reasoning content
                     return [
-                        GenericResponseOutputItem(
-                            type="reasoning",
+                        ReasoningOutputItem(
                             id=f"rs_{hash(str(message.reasoning_content))}",
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
-                            role="assistant",
-                            content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=message.reasoning_content,
-                                    annotations=[],
-                                )
-                            ],
+                            summary=[ReasoningSummaryText(text=message.reasoning_content)],
+                            content=[ReasoningText(text=message.reasoning_content)],
                         )
                     ]
         return []
