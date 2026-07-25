@@ -46302,6 +46302,7 @@
         "supports_response_schema": false,
         "supports_reasoning": false,
         "supports_prompt_caching": true,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-fable-5": {
@@ -46320,6 +46321,10 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-haiku-4.5": {
@@ -46338,6 +46343,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-opus-4.5": {
@@ -46356,6 +46363,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-opus-4.6": {
@@ -46374,6 +46383,9 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-opus-4.7": {
@@ -46392,6 +46404,10 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-opus-4.8": {
@@ -46410,6 +46426,10 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-sonnet-4": {
@@ -46427,6 +46447,7 @@
         "supports_response_schema": false,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-sonnet-4.5": {
@@ -46445,6 +46466,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-sonnet-4.6": {
@@ -46463,6 +46486,9 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/anthropic/claude-sonnet-5": {
@@ -46481,6 +46507,10 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/bytedance/ui-tars-1.5-7b": {
@@ -46559,6 +46589,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/deepseek/deepseek-v4-pro": {
@@ -46575,6 +46606,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-2.5-flash": {
@@ -46592,6 +46624,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-2.5-flash-lite": {
@@ -46609,6 +46643,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-2.5-pro": {
@@ -46619,13 +46655,16 @@
         "max_tokens": 65536,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
-        "input_cost_per_token_above_200000_tokens": 2.5e-06,
-        "output_cost_per_token_above_200000_tokens": 1.5e-05,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": false,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-3-flash-preview": {
@@ -46644,6 +46683,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-3-pro-image-preview": {
@@ -46696,6 +46737,9 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-3.1-flash-lite-preview": {
@@ -46713,6 +46757,9 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-3.1-pro-preview": {
@@ -46725,13 +46772,16 @@
         "output_cost_per_token": 1.2e-05,
         "cache_read_input_token_cost": 2e-07,
         "cache_creation_input_token_cost": 3.75e-07,
-        "input_cost_per_token_above_200000_tokens": 4e-06,
-        "output_cost_per_token_above_200000_tokens": 1.8e-05,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-3.1-pro-preview-customtools": {
@@ -46744,13 +46794,16 @@
         "output_cost_per_token": 1.2e-05,
         "cache_read_input_token_cost": 2e-07,
         "cache_creation_input_token_cost": 3.75e-07,
-        "input_cost_per_token_above_200000_tokens": 4e-06,
-        "output_cost_per_token_above_200000_tokens": 1.8e-05,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemini-3.5-flash": {
@@ -46770,6 +46823,9 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_audio_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/google/gemma-3n-e4b-it": {
@@ -46845,6 +46901,7 @@
         "supports_response_schema": false,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/minimax/minimax-m2.5": {
@@ -46861,6 +46918,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/minimax/minimax-m2.7": {
@@ -46886,8 +46944,8 @@
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.4e-06,
         "cache_read_input_token_cost": 1.2e-07,
-        "input_cost_per_token_above_512000_tokens": 1.2e-06,
-        "output_cost_per_token_above_512000_tokens": 4.8e-06,
+        "input_cost_per_token_above_512k_tokens": 1.2e-06,
+        "output_cost_per_token_above_512k_tokens": 4.8e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
@@ -46970,6 +47028,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/moonshotai/kimi-k2.6": {
@@ -47017,6 +47076,8 @@
         "supports_response_schema": true,
         "supports_reasoning": false,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-4.1-mini": {
@@ -47033,6 +47094,8 @@
         "supports_response_schema": true,
         "supports_reasoning": false,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-4.1-nano": {
@@ -47049,6 +47112,8 @@
         "supports_response_schema": true,
         "supports_reasoning": false,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-4o": {
@@ -47065,6 +47130,8 @@
         "supports_reasoning": false,
         "supports_prompt_caching": false,
         "supports_web_search": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-4o-mini": {
@@ -47082,6 +47149,8 @@
         "supports_reasoning": false,
         "supports_prompt_caching": true,
         "supports_web_search": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5": {
@@ -47098,6 +47167,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5-chat": {
@@ -47114,6 +47185,8 @@
         "supports_response_schema": true,
         "supports_reasoning": false,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5-mini": {
@@ -47130,6 +47203,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5-nano": {
@@ -47146,6 +47221,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.1": {
@@ -47162,6 +47239,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.2": {
@@ -47178,6 +47257,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.2-chat": {
@@ -47194,6 +47275,7 @@
         "supports_response_schema": true,
         "supports_reasoning": false,
         "supports_prompt_caching": true,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.3-chat": {
@@ -47236,13 +47318,15 @@
         "max_tokens": 128000,
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1.5e-05,
-        "input_cost_per_token_above_272000_tokens": 5e-06,
-        "output_cost_per_token_above_272000_tokens": 2.25e-05,
+        "input_cost_per_token_above_272k_tokens": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 2.25e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": false,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.4-mini": {
@@ -47259,6 +47343,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.4-nano": {
@@ -47275,6 +47361,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.4-pro": {
@@ -47285,8 +47373,8 @@
         "max_tokens": 128000,
         "input_cost_per_token": 3e-05,
         "output_cost_per_token": 0.00018,
-        "input_cost_per_token_above_272000_tokens": 6e-05,
-        "output_cost_per_token_above_272000_tokens": 0.00027,
+        "input_cost_per_token_above_272k_tokens": 6e-05,
+        "output_cost_per_token_above_272k_tokens": 0.00027,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
@@ -47302,13 +47390,15 @@
         "max_tokens": 128000,
         "input_cost_per_token": 5e-06,
         "output_cost_per_token": 3e-05,
-        "input_cost_per_token_above_272000_tokens": 1e-05,
-        "output_cost_per_token_above_272000_tokens": 4.5e-05,
+        "input_cost_per_token_above_272k_tokens": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 4.5e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": false,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.5-pro": {
@@ -47319,8 +47409,8 @@
         "max_tokens": 128000,
         "input_cost_per_token": 3e-05,
         "output_cost_per_token": 0.00018,
-        "input_cost_per_token_above_272000_tokens": 6e-05,
-        "output_cost_per_token_above_272000_tokens": 0.00027,
+        "input_cost_per_token_above_272k_tokens": 6e-05,
+        "output_cost_per_token_above_272k_tokens": 0.00027,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
@@ -47343,6 +47433,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.6-sol": {
@@ -47360,6 +47452,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-5.6-terra": {
@@ -47377,6 +47471,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/openai/gpt-oss-120b": {
@@ -47407,6 +47503,8 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/qwen/qwen-plus": {
@@ -47559,6 +47657,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": false,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/qwen/qwen3.5-35b-a3b": {
@@ -47575,6 +47674,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/qwen/qwen3.5-397b-a17b": {
@@ -47591,6 +47691,7 @@
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/qwen/qwen3.6-flash": {
@@ -47603,8 +47704,8 @@
         "output_cost_per_token": 1.5e-06,
         "cache_read_input_token_cost": 2.5e-08,
         "cache_creation_input_token_cost": 3.125e-07,
-        "input_cost_per_token_above_256000_tokens": 1e-06,
-        "output_cost_per_token_above_256000_tokens": 4e-06,
+        "input_cost_per_token_above_256k_tokens": 1e-06,
+        "output_cost_per_token_above_256k_tokens": 4e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
@@ -47620,13 +47721,14 @@
         "max_tokens": 65536,
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 3e-06,
-        "input_cost_per_token_above_256000_tokens": 2e-06,
-        "output_cost_per_token_above_256000_tokens": 6e-06,
+        "input_cost_per_token_above_256k_tokens": 2e-06,
+        "output_cost_per_token_above_256k_tokens": 6e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": false,
+        "supports_vision": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/qwen/qwen3.7-max": {
@@ -47685,8 +47787,8 @@
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 2.5e-06,
         "cache_read_input_token_cost": 2e-07,
-        "input_cost_per_token_above_200000_tokens": 2.5e-06,
-        "output_cost_per_token_above_200000_tokens": 5e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "output_cost_per_token_above_200k_tokens": 5e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
@@ -47703,13 +47805,15 @@
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 2e-06,
         "cache_read_input_token_cost": 8e-08,
-        "input_cost_per_token_above_256000_tokens": 8e-07,
-        "output_cost_per_token_above_256000_tokens": 4e-06,
+        "input_cost_per_token_above_256k_tokens": 8e-07,
+        "output_cost_per_token_above_256k_tokens": 4e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": true,
+        "supports_audio_input": true,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/xiaomi/mimo-v2.5-pro": {
@@ -47721,13 +47825,14 @@
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3e-06,
         "cache_read_input_token_cost": 2e-07,
-        "input_cost_per_token_above_256000_tokens": 2e-06,
-        "output_cost_per_token_above_256000_tokens": 6e-06,
+        "input_cost_per_token_above_256k_tokens": 2e-06,
+        "output_cost_per_token_above_256k_tokens": 6e-06,
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_reasoning": true,
         "supports_prompt_caching": true,
+        "supports_vision": false,
         "source": "https://llm.wavespeed.ai/v1/models"
     },
     "wavespeed/z-ai/glm-5.1": {
