@@ -11,6 +11,8 @@ import click
 import rich
 
 # local imports
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
+
 from ... import Client
 
 
@@ -51,8 +53,7 @@ def format_iso_datetime_str(iso_datetime_str: Optional[str]) -> str:
     if not iso_datetime_str:
         return ""
     try:
-        # Parse ISO format datetime string
-        dt = datetime.fromisoformat(iso_datetime_str.replace("Z", "+00:00"))
+        dt = parse_utc_datetime(iso_datetime_str)
         return dt.strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError):
         return str(iso_datetime_str)

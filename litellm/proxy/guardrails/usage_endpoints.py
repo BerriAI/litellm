@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import (
@@ -425,15 +426,15 @@ def _build_usage_logs_where(
     if start_date or end_date:
         st_filter: Dict[str, Any] = {}
         if start_date:
-            sd = start_date.replace("Z", "+00:00").strip()
+            sd = start_date.strip()
             if "T" not in sd:
-                sd += "T00:00:00+00:00"
-            st_filter["gte"] = datetime.fromisoformat(sd)
+                sd += "T00:00:00"
+            st_filter["gte"] = parse_utc_datetime(sd)
         if end_date:
-            ed = end_date.replace("Z", "+00:00").strip()
+            ed = end_date.strip()
             if "T" not in ed:
-                ed += "T23:59:59+00:00"
-            st_filter["lte"] = datetime.fromisoformat(ed)
+                ed += "T23:59:59"
+            st_filter["lte"] = parse_utc_datetime(ed)
         where["start_time"] = st_filter
     return where
 

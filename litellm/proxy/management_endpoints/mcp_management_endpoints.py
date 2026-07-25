@@ -46,6 +46,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy._experimental.mcp_server.utils import (
     build_env_var_setup_url,
     collect_env_var_references,
@@ -2037,16 +2038,17 @@ if MCP_AVAILABLE:
         is_expired = False
         if expires_at:
             try:
-                exp = datetime.fromisoformat(expires_at)
+                exp = parse_utc_datetime(expires_at)
                 is_expired = exp < datetime.now(timezone.utc)
-            except Exception:
+            except (ValueError, TypeError):
                 pass
+        connected_at = cred.get("connected_at")
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=True,
-            expires_at=expires_at,
+            expires_at=expires_at if isinstance(expires_at, str) else None,
             is_expired=is_expired,
-            connected_at=cred.get("connected_at"),
+            connected_at=connected_at if isinstance(connected_at, str) else None,
         )
 
     @router.get(

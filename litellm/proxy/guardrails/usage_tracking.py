@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
@@ -48,9 +49,7 @@ def _parse_guardrail_info_from_payload(payload: Dict[str, Any]) -> List[Dict[str
 
 def _date_str(dt: datetime) -> str:
     """YYYY-MM-DD in UTC."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    return parse_utc_datetime(dt).astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
 async def process_spend_logs_guardrail_usage(
@@ -81,7 +80,7 @@ async def process_spend_logs_guardrail_usage(
             continue
         if isinstance(start_time, str):
             try:
-                start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                start_time = parse_utc_datetime(start_time)
             except (ValueError, TypeError):
                 continue
         date_key = _date_str(start_time)
@@ -120,7 +119,7 @@ async def process_spend_logs_guardrail_usage(
                 st = r["start_time"]
                 if isinstance(st, str):
                     try:
-                        st = datetime.fromisoformat(st.replace("Z", "+00:00"))
+                        st = parse_utc_datetime(st)
                     except (ValueError, TypeError):
                         continue
                 index_data.append(

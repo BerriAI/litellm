@@ -11,8 +11,8 @@ injected, so the DB/decoding plumbing stays testable and out of this seam.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
 
+from litellm.litellm_core_utils.datetime_utils import parse_utc_datetime
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
@@ -22,15 +22,9 @@ CredentialReader = Callable[[str, str], Awaitable["dict[str, object] | None"]]
 
 def _iso_to_epoch(expires_at: str) -> float | None:
     try:
-        dt = datetime.fromisoformat(expires_at)
+        return parse_utc_datetime(expires_at).timestamp()
     except ValueError:
         return None
-    # A timezone-naive expiry is stored as UTC (db.py writes ``datetime.now(timezone.utc)``),
-    # so anchor it to UTC before ``.timestamp()`` - otherwise a non-UTC host would read it as
-    # local time and skew the expiry, diverging from v1's ``_remaining_token_seconds``.
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.timestamp()
 
 
 def _to_scopes(raw: object) -> tuple[str, ...]:
