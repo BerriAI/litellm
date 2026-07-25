@@ -38,4 +38,6 @@ jobs:
           echo "Helm unittest plugin integrity verified: $ACTUAL_SHA"
 
       - name: Run unit tests
-        run: helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm
+        run: |
+          helm unittest -f 'tests/*.yaml' helm/litellm-helm
+          helm unittest -f 'tests/*.yaml' helm/litellm
