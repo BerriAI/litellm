@@ -1,27 +1,26 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Checkbox, Collapse, Empty, Input, Space, Spin, Switch, Tag, Tooltip, Typography } from "antd";
-// Empty is used in the skills panel below.
-import {
-  CheckCircleTwoTone,
-  InfoCircleOutlined,
-  LinkOutlined,
-  ReloadOutlined,
-  SearchOutlined,
-} from "@ant-design/icons";
+import { ChevronDown, CircleAlert, CircleCheck, Info, Link as LinkIcon, RotateCw, Search, X } from "lucide-react";
 
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { DiscoveredAgentCard, discoverAgentCardCall } from "@/components/networking";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import {
   ALLOWED_CAPABILITY_KEYS,
   selectionsFromSavedAgentCard,
   selectionsFromUpstreamCard,
   skillId,
 } from "./agent_discovery_utils";
-
-const { Text, Paragraph } = Typography;
-const { Panel } = Collapse;
 
 const DISCOVERY_DEBOUNCE_WAIT_MS = 400;
 
@@ -243,102 +242,115 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   const skillCount = card?.skills?.length ?? 0;
   const selectedSkillCount = selectedSkillIds.size;
 
+  const renderDiscoverIcon = () => {
+    if (loading) return <UiLoadingSpinner className="size-4" />;
+    if (card) return <RotateCw />;
+    return <Search />;
+  };
+  const discoverLabel = card ? "Re-discover" : "Discover";
+
   return (
-    <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 mb-4">
-      <div className="flex items-center gap-2 mb-2">
-        <LinkOutlined className="text-indigo-600" />
-        <Text strong>Discover from agent URL</Text>
-        <Tooltip title="LiteLLM will fetch /.well-known/agent-card.json from this URL and let you pick which skills and capabilities to expose through the proxy.">
-          <InfoCircleOutlined className="text-gray-400" />
-        </Tooltip>
+    <div className="mb-4 rounded-lg border border-border bg-muted/50 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <LinkIcon className="size-4 text-primary" />
+        <span className="text-sm font-medium text-foreground">Discover from agent URL</span>
+        <TooltipProvider delay={300}>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="inline-flex text-muted-foreground">
+                  <Info className="size-4" />
+                </span>
+              }
+            />
+            <TooltipContent>
+              LiteLLM will fetch /.well-known/agent-card.json from this URL and let you pick which skills and
+              capabilities to expose through the proxy.
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
       {isParentDriven ? (
         <>
-          <Paragraph className="text-xs text-gray-500 mb-2">
+          <p className="mb-2 text-xs text-muted-foreground">
             Using the connection details you entered above. We&apos;ll fetch:
-          </Paragraph>
-          <div className="bg-white border border-gray-200 rounded-sm px-3 py-2 mb-3 font-mono text-xs text-gray-700 break-all">
+          </p>
+          <div className="mb-3 rounded-sm border border-border bg-background px-3 py-2 font-mono text-xs break-all text-foreground">
             {discoveryRequest!.display_url || effectiveUrl || (
-              <span className="text-gray-400 italic">Fill in the fields above first</span>
+              <span className="text-muted-foreground italic">Fill in the fields above first</span>
             )}
           </div>
           <div className="flex justify-end">
-            <Button
-              type="primary"
-              icon={card ? <ReloadOutlined /> : <SearchOutlined />}
-              loading={loading}
-              onClick={handleDiscover}
-              disabled={!effectiveUrl.trim()}
-            >
-              {card ? "Re-discover" : "Discover"}
+            <Button onClick={handleDiscover} disabled={loading || !effectiveUrl.trim()}>
+              {renderDiscoverIcon()}
+              {discoverLabel}
             </Button>
           </div>
         </>
       ) : (
         <>
-          <Paragraph className="text-xs text-gray-500 mb-3">
+          <p className="mb-3 text-xs text-muted-foreground">
             Paste the upstream agent&apos;s base URL. We&apos;ll try <code>/.well-known/agent-card.json</code>,{" "}
             <code>/.well-known/agent.json</code>, and <code>/agent.json</code> in order.
-          </Paragraph>
+          </p>
 
-          <Space.Compact style={{ width: "100%" }}>
+          <div className="flex w-full items-center gap-2">
             <Input
               placeholder="https://upstream-agent.example.com"
               value={manualUrl}
               onChange={(e) => setManualUrl(e.target.value)}
-              onPressEnter={handleDiscover}
-              allowClear
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleDiscover();
+              }}
               disabled={loading}
             />
-            <Button
-              type="primary"
-              icon={card ? <ReloadOutlined /> : <SearchOutlined />}
-              loading={loading}
-              onClick={handleDiscover}
-            >
-              {card ? "Re-discover" : "Discover"}
+            <Button onClick={handleDiscover} disabled={loading}>
+              {renderDiscoverIcon()}
+              {discoverLabel}
             </Button>
-          </Space.Compact>
+          </div>
         </>
       )}
 
       {error && (
-        <Alert
-          className="mt-3"
-          type="error"
-          message="Discovery failed"
-          description={error}
-          showIcon
-          closable
-          onClose={() => setError(null)}
-        />
+        <Alert variant="destructive" className="mt-3">
+          <CircleAlert />
+          <AlertTitle>Discovery failed</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+          <AlertAction>
+            <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={() => setError(null)}>
+              <X />
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
 
       {loading && !card && (
         <div className="flex items-center justify-center py-8">
-          <Spin />
+          <UiLoadingSpinner className="size-6 text-muted-foreground" />
         </div>
       )}
 
       {card && (
-        <div className="mt-4 bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-3">
-            <Space>
-              <CheckCircleTwoTone twoToneColor="#52c41a" />
-              <Text strong>Upstream card loaded</Text>
-              {card.version && <Tag color="blue">v{card.version}</Tag>}
-              {card.provider?.organization && <Tag color="purple">{card.provider.organization}</Tag>}
-            </Space>
+        <div className="mt-4 rounded-lg border border-border bg-background p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <CircleCheck className="size-4 text-green-600" />
+            <span className="text-sm font-medium text-foreground">Upstream card loaded</span>
+            {card.version && <Badge variant="secondary">v{card.version}</Badge>}
+            {card.provider?.organization && <Badge variant="secondary">{card.provider.organization}</Badge>}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Name (shown to API clients)</label>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                Name (shown to API clients)
+              </label>
               <Input value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Agent name" />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">Description</label>
-              <Input.TextArea
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
+              <Textarea
+                className="field-sizing-fixed min-h-0"
                 value={editedDescription}
                 onChange={(e) => setEditedDescription(e.target.value)}
                 rows={2}
@@ -347,103 +359,114 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
             </div>
           </div>
 
-          <Collapse defaultActiveKey={["skills", "capabilities"]} ghost className="bg-transparent">
-            <Panel
-              key="skills"
-              header={
-                <Space>
-                  <Text strong>Skills</Text>
-                  <Tag>
-                    {selectedSkillCount} / {skillCount} selected
-                  </Tag>
-                </Space>
-              }
-            >
-              {skillCount === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Upstream card has no skills" />
-              ) : (
-                <div className="space-y-2">
-                  {(card.skills ?? []).map((skill, idx) => {
-                    const id = skillId(skill, idx);
-                    const checked = selectedSkillIds.has(id);
-                    return (
-                      <label
-                        key={id}
-                        className={`flex items-start gap-3 p-3 border rounded cursor-pointer transition-colors ${
-                          checked ? "border-indigo-300 bg-indigo-50" : "border-gray-200 bg-white hover:border-gray-300"
-                        }`}
-                      >
-                        <Checkbox checked={checked} onChange={(e) => toggleSkill(id, e.target.checked)} />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Text strong>{skill.name || id}</Text>
-                            {skill.id && <Tag style={{ marginLeft: 0 }}>{skill.id}</Tag>}
-                            {(skill.tags ?? []).map((t: string) => (
-                              <Tag key={t} color="geekblue">
-                                {t}
-                              </Tag>
-                            ))}
+          <div className="flex flex-col gap-4">
+            <Collapsible defaultOpen>
+              <div className="flex items-center gap-2">
+                <CollapsibleTrigger
+                  render={
+                    <button type="button" className="group flex items-center gap-2">
+                      <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
+                      <span className="text-sm font-medium text-foreground">Skills</span>
+                    </button>
+                  }
+                />
+                <Badge variant="secondary">
+                  {selectedSkillCount} / {skillCount} selected
+                </Badge>
+              </div>
+              <CollapsibleContent className="pt-2">
+                {skillCount === 0 ? (
+                  <div className="py-6 text-center text-sm text-muted-foreground">Upstream card has no skills</div>
+                ) : (
+                  <div className="space-y-2">
+                    {(card.skills ?? []).map((skill, idx) => {
+                      const id = skillId(skill, idx);
+                      const checked = selectedSkillIds.has(id);
+                      return (
+                        <label
+                          key={id}
+                          className={`flex cursor-pointer items-start gap-3 rounded border p-3 transition-colors ${
+                            checked ? "border-primary/40 bg-primary/5" : "border-border bg-background hover:border-ring"
+                          }`}
+                        >
+                          <Checkbox checked={checked} onCheckedChange={(next) => toggleSkill(id, next)} />
+                          <div className="flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-foreground">{skill.name || id}</span>
+                              {skill.id && <Badge variant="secondary">{skill.id}</Badge>}
+                              {(skill.tags ?? []).map((t: string) => (
+                                <Badge key={t} variant="outline">
+                                  {t}
+                                </Badge>
+                              ))}
+                            </div>
+                            {skill.description && (
+                              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{skill.description}</p>
+                            )}
                           </div>
-                          {skill.description && (
-                            <Paragraph
-                              className="text-xs text-gray-500 mt-1 mb-0"
-                              ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
-                            >
-                              {skill.description}
-                            </Paragraph>
-                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+
+            <Collapsible defaultOpen>
+              <div className="flex items-center gap-2">
+                <CollapsibleTrigger
+                  render={
+                    <button type="button" className="group flex items-center gap-2">
+                      <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
+                      <span className="text-sm font-medium text-foreground">Capabilities</span>
+                    </button>
+                  }
+                />
+                <TooltipProvider delay={300}>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span className="inline-flex text-muted-foreground">
+                          <Info className="size-4" />
+                        </span>
+                      }
+                    />
+                    <TooltipContent>
+                      Only capabilities LiteLLM can faithfully proxy today are listed. Others (push notifications,
+                      extensions) are coming soon.
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              <CollapsibleContent className="pt-2">
+                <div className="space-y-2">
+                  {ALLOWED_CAPABILITY_KEYS.map((key) => {
+                    const upstreamHas = Boolean(card.capabilities?.[key]);
+                    return (
+                      <div
+                        key={key}
+                        className="flex items-center justify-between rounded-sm border border-border bg-background p-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-foreground capitalize">{key}</span>
+                          {!upstreamHas && <Badge variant="outline">not advertised upstream</Badge>}
                         </div>
-                      </label>
+                        <Switch
+                          checked={Boolean(selectedCapabilities[key])}
+                          onCheckedChange={(checked) =>
+                            setSelectedCapabilities((prev) => ({
+                              ...prev,
+                              [key]: checked,
+                            }))
+                          }
+                        />
+                      </div>
                     );
                   })}
                 </div>
-              )}
-            </Panel>
-
-            <Panel
-              key="capabilities"
-              header={
-                <Space>
-                  <Text strong>Capabilities</Text>
-                  <Tooltip title="Only capabilities LiteLLM can faithfully proxy today are listed. Others (push notifications, extensions) are coming soon.">
-                    <InfoCircleOutlined className="text-gray-400" />
-                  </Tooltip>
-                </Space>
-              }
-            >
-              <div className="space-y-2">
-                {ALLOWED_CAPABILITY_KEYS.map((key) => {
-                  const upstreamHas = Boolean(card.capabilities?.[key]);
-                  return (
-                    <div
-                      key={key}
-                      className="flex items-center justify-between p-2 border border-gray-200 rounded-sm bg-white"
-                    >
-                      <div>
-                        <Text strong className="capitalize">
-                          {key}
-                        </Text>
-                        {!upstreamHas && (
-                          <Tag className="ml-2" color="default">
-                            not advertised upstream
-                          </Tag>
-                        )}
-                      </div>
-                      <Switch
-                        checked={Boolean(selectedCapabilities[key])}
-                        onChange={(checked) =>
-                          setSelectedCapabilities((prev) => ({
-                            ...prev,
-                            [key]: checked,
-                          }))
-                        }
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </Panel>
-          </Collapse>
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
         </div>
       )}
     </div>

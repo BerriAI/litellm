@@ -1,12 +1,14 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { Modal, Input, Typography } from "antd";
+import { Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cva.config";
 import { fetchDiscoverableMCPServers } from "@/components/networking";
 import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "@/components/mcp_tools/types";
 import { mcpLogoImg } from "./create_mcp_server";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-
-const { Search } = Input;
-const { Text } = Typography;
 
 interface MCPDiscoveryProps {
   isVisible: boolean;
@@ -16,12 +18,21 @@ interface MCPDiscoveryProps {
   accessToken: string | null;
 }
 
-const INITIAL_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#06B6D4", "#84CC16"];
+const INITIAL_COLORS = [
+  "bg-blue-500",
+  "bg-emerald-500",
+  "bg-amber-500",
+  "bg-red-500",
+  "bg-violet-500",
+  "bg-pink-500",
+  "bg-cyan-500",
+  "bg-lime-500",
+];
 
 function getInitialAvatar(name: string) {
   const initial = name.charAt(0).toUpperCase();
   const colorIndex = name.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % INITIAL_COLORS.length;
-  return { initial, backgroundColor: INITIAL_COLORS[colorIndex] };
+  return { initial, backgroundClass: INITIAL_COLORS[colorIndex] };
 }
 
 const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
@@ -91,214 +102,126 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
   }, [filteredServers]);
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center justify-between pb-4 border-b border-gray-100">
-          <div className="flex items-center space-x-3">
-            <img
-              src={resolveLogoSrc(mcpLogoImg)}
-              alt="MCP Logo"
-              className="w-8 h-8 object-contain"
-              style={{
-                height: "20px",
-                width: "20px",
-                marginRight: "8px",
-                objectFit: "contain",
-              }}
-            />
-            <h2 className="text-xl font-semibold text-gray-900">Add MCP Server</h2>
-          </div>
-          <button
-            onClick={onCustomServer}
-            className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none font-medium"
-          >
-            + Custom Server
-          </button>
-        </div>
-      }
-      open={isVisible}
-      onCancel={onClose}
-      footer={null}
-      width={1000}
-      className="top-8"
-      styles={{
-        body: { padding: "24px", maxHeight: "70vh", overflowY: "auto" },
-        header: { padding: "24px 24px 0 24px", border: "none" },
-      }}
-    >
-      {/* Filter pills */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-        {["All", ...categories].map((cat) => {
-          const isSelected = selectedCategory === cat;
-          return (
-            <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              style={{
-                padding: "4px 12px",
-                borderRadius: 4,
-                border: isSelected ? "1px solid #111827" : "1px solid #e5e7eb",
-                background: isSelected ? "#111827" : "#fff",
-                color: isSelected ? "#fff" : "#4b5563",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: isSelected ? 500 : 400,
-                lineHeight: "20px",
-              }}
-            >
-              {cat}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Search */}
-      <Search
-        placeholder="Search servers..."
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        style={{ marginBottom: 16 }}
-        allowClear
-      />
-
-      {/* Loading skeleton */}
-      {loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div
-              key={i}
-              style={{
-                height: 36,
-                borderRadius: 6,
-                background: "#f9fafb",
-              }}
-            />
-          ))}
-        </div>
-      )}
-
-      {error && (
-        <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
-          <Text>Failed to load servers: {error}</Text>
-        </div>
-      )}
-
-      {!loading && !error && filteredServers.length === 0 && (
-        <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
-          <Text>
-            No servers found.{" "}
-            <a onClick={onCustomServer} style={{ color: "#2563eb", cursor: "pointer" }}>
-              Add a custom server
-            </a>
-          </Text>
-        </div>
-      )}
-
-      {/* Server list grouped by category — 2 columns */}
-      {!loading &&
-        !error &&
-        Object.entries(groupedServers).map(([category, categoryServers]) => (
-          <div key={category} style={{ marginBottom: 16 }}>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 500,
-                color: "#9ca3af",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-                padding: "6px 0",
-                borderBottom: "1px solid #f3f4f6",
-                marginBottom: 4,
-              }}
-            >
-              {category}
+    <Dialog open={isVisible} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-[1000px]">
+        <DialogHeader>
+          <div className="flex items-center justify-between border-b border-border pb-4">
+            <div className="flex items-center space-x-3">
+              <img src={resolveLogoSrc(mcpLogoImg)} alt="MCP Logo" className="mr-2 size-5 object-contain" />
+              <DialogTitle className="text-xl font-semibold">Add MCP Server</DialogTitle>
             </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 16px",
-              }}
-            >
-              {categoryServers.map((server) => {
-                const avatar = getInitialAvatar(server.title || server.name);
-                return (
-                  <div
-                    key={server.name}
-                    onClick={() => onSelectServer(server)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: "8px 10px",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                      transition: "background 0.1s ease",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "#f9fafb";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "transparent";
-                    }}
-                  >
-                    {server.icon_url ? (
-                      <img
-                        src={resolveLogoSrc(server.icon_url)}
-                        alt={server.title}
-                        style={{
-                          width: 20,
-                          height: 20,
-                          objectFit: "contain",
-                          flexShrink: 0,
-                          marginRight: 12,
-                        }}
-                        onError={(e) => {
-                          const target = e.currentTarget;
-                          target.style.display = "none";
-                          const next = target.nextElementSibling as HTMLElement;
-                          if (next) next.style.display = "flex";
-                        }}
-                      />
-                    ) : null}
-                    <div
-                      style={{
-                        width: 20,
-                        height: 20,
-                        borderRadius: 4,
-                        backgroundColor: avatar.backgroundColor,
-                        color: "#fff",
-                        display: server.icon_url ? "none" : "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontWeight: 600,
-                        fontSize: 11,
-                        flexShrink: 0,
-                        marginRight: 12,
-                      }}
-                    >
-                      {avatar.initial}
-                    </div>
-                    <span
-                      style={{
-                        fontSize: 14,
-                        fontWeight: 400,
-                        color: "#111827",
-                        flex: 1,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {server.title || server.name}
-                    </span>
-                    <span style={{ color: "#d1d5db", fontSize: 14, flexShrink: 0, marginLeft: 8 }}>&#8250;</span>
-                  </div>
-                );
-              })}
-            </div>
+            <Button variant="link" size="sm" onClick={onCustomServer}>
+              + Custom Server
+            </Button>
           </div>
-        ))}
-    </Modal>
+        </DialogHeader>
+
+        <div className="max-h-[70vh] overflow-y-auto">
+          {/* Filter pills */}
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {["All", ...categories].map((cat) => {
+              const isSelected = selectedCategory === cat;
+              return (
+                <Button
+                  key={cat}
+                  size="sm"
+                  variant={isSelected ? "default" : "outline"}
+                  onClick={() => setSelectedCategory(cat)}
+                >
+                  {cat}
+                </Button>
+              );
+            })}
+          </div>
+
+          {/* Search */}
+          <InputGroup className="mb-4 w-full">
+            <InputGroupAddon>
+              <Search className="size-4 text-muted-foreground" />
+            </InputGroupAddon>
+            <InputGroupInput
+              placeholder="Search servers..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </InputGroup>
+
+          {/* Loading skeleton */}
+          {loading && (
+            <div className="flex flex-col gap-1">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} className="h-9 rounded-md" />
+              ))}
+            </div>
+          )}
+
+          {error && (
+            <div className="py-8 text-center text-muted-foreground">
+              <p className="text-sm">Failed to load servers: {error}</p>
+            </div>
+          )}
+
+          {!loading && !error && filteredServers.length === 0 && (
+            <div className="py-8 text-center text-muted-foreground">
+              <p className="text-sm">
+                No servers found.{" "}
+                <Button variant="link" size="sm" onClick={onCustomServer}>
+                  Add a custom server
+                </Button>
+              </p>
+            </div>
+          )}
+
+          {/* Server list grouped by category — 2 columns */}
+          {!loading &&
+            !error &&
+            Object.entries(groupedServers).map(([category, categoryServers]) => (
+              <div key={category} className="mb-4">
+                <div className="mb-1 border-b border-border py-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                  {category}
+                </div>
+                <div className="grid grid-cols-2 gap-x-4">
+                  {categoryServers.map((server) => {
+                    const avatar = getInitialAvatar(server.title || server.name);
+                    return (
+                      <div
+                        key={server.name}
+                        onClick={() => onSelectServer(server)}
+                        className="flex cursor-pointer items-center rounded-md px-2.5 py-2 transition-colors hover:bg-accent"
+                      >
+                        {server.icon_url ? (
+                          <img
+                            src={resolveLogoSrc(server.icon_url)}
+                            alt={server.title}
+                            className="mr-3 size-5 shrink-0 object-contain"
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              target.style.display = "none";
+                              const next = target.nextElementSibling as HTMLElement;
+                              if (next) next.style.display = "flex";
+                            }}
+                          />
+                        ) : null}
+                        <div
+                          className={cn(
+                            "mr-3 size-5 shrink-0 items-center justify-center rounded-sm text-[11px] font-semibold text-white",
+                            avatar.backgroundClass,
+                            server.icon_url ? "hidden" : "flex",
+                          )}
+                        >
+                          {avatar.initial}
+                        </div>
+                        <span className="flex-1 truncate text-sm">{server.title || server.name}</span>
+                        <span className="ml-2 shrink-0 text-sm text-muted-foreground">&#8250;</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

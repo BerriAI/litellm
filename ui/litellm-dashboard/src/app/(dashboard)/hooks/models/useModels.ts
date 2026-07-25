@@ -24,6 +24,7 @@ export interface PaginatedModelInfoResponse {
 
 const modelKeys = createQueryKeys("models");
 const modelHubKeys = createQueryKeys("modelHub");
+const autoRouterKeys = createQueryKeys("autoRouterModelGroups");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 const infiniteModelKeys = createQueryKeys("infiniteModels");
@@ -57,6 +58,65 @@ export const useModelsInfo = (
       await modelInfoCall(accessToken!, userId!, userRole!, page, size, search, modelId, teamId, sortBy, sortOrder),
     enabled: Boolean(accessToken && userId && userRole),
   });
+};
+
+const AUTO_ROUTER_MODEL_PREFIX = "auto_router/";
+const AUTO_ROUTER_LOOKUP_PAGE_SIZE = 1000;
+const NO_AUTO_ROUTERS: ReadonlySet<string> = new Set<string>();
+
+export interface AutoRouterCandidateDeployment {
+  model_name?: string | null;
+  litellm_params?: { model?: string | null } | null;
+}
+
+export const isAutoRouterDeployment = (deployment: AutoRouterCandidateDeployment): boolean =>
+  Boolean(deployment?.litellm_params?.model?.startsWith(AUTO_ROUTER_MODEL_PREFIX));
+
+export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> =>
+  new Set(
+    deployments
+      .filter(isAutoRouterDeployment)
+      .map((deployment) => deployment.model_name)
+      .filter((modelName): modelName is string => Boolean(modelName)),
+  );
+
+const fetchAllModelDeployments = async (
+  accessToken: string,
+  userId: string,
+  userRole: string,
+): Promise<AutoRouterCandidateDeployment[]> => {
+  const firstPage: PaginatedModelInfoResponse = await modelInfoCall(
+    accessToken,
+    userId,
+    userRole,
+    1,
+    AUTO_ROUTER_LOOKUP_PAGE_SIZE,
+  );
+  const totalPages = firstPage?.total_pages ?? 1;
+  const remainingPages = await Promise.all(
+    Array.from({ length: Math.max(0, totalPages - 1) }, (_unused, index) =>
+      modelInfoCall(accessToken, userId, userRole, index + 2, AUTO_ROUTER_LOOKUP_PAGE_SIZE),
+    ),
+  );
+  return [firstPage, ...remainingPages].flatMap(
+    (page: PaginatedModelInfoResponse) => page?.data ?? [],
+  ) as AutoRouterCandidateDeployment[];
+};
+
+export const useAutoRouterModelGroups = (): ReadonlySet<string> => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  const { data } = useQuery<AutoRouterCandidateDeployment[], Error, ReadonlySet<string>>({
+    queryKey: autoRouterKeys.list({
+      filters: {
+        ...(userId && { userId }),
+        ...(userRole && { userRole }),
+      },
+    }),
+    queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
+    enabled: Boolean(accessToken && userId && userRole),
+    select: selectAutoRouterModelGroups,
+  });
+  return data ?? NO_AUTO_ROUTERS;
 };
 
 export const useModelHub = () => {

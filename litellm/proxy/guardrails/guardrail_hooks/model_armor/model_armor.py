@@ -30,6 +30,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
@@ -432,7 +436,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         Override to store only the Model Armor API response, not the entire data dict.
         This prevents circular references in logging.
         """
-        metadata = request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
+        metadata = (
+            request_data.get(get_metadata_variable_name_from_kwargs(request_data)) or {}
+            if isinstance(request_data, dict)
+            else {}
+        )
         guardrail_response = metadata.get("_model_armor_response", {})
 
         # Determine status – default to "success" but prefer the explicit value if present.
@@ -471,7 +479,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         blocking, while fail_on_error still governs real Model Armor API errors.
         """
         from litellm.proxy.common_utils.callback_utils import (
-            _get_or_create_proxy_metadata_bucket,
             add_guardrail_to_applied_guardrails_header,
         )
 
@@ -491,7 +498,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         # Use the same metadata bucket the header helper writes to, so the logged Model Armor
         # payload and status land where _process_response reads them on every route.
-        _, metadata = _get_or_create_proxy_metadata_bucket(data)
+        _, metadata = get_or_create_metadata_bucket(data)
         fail_on_error = bool(self.optional_params.get("fail_on_error", True))
 
         if unscannable_references > 0:
@@ -607,7 +614,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             #   overwritten by another coroutine.
             blocked = self._should_block_content(armor_response, allow_sanitization=self.mask_request_content)
             if isinstance(data, dict):
-                metadata = data.setdefault("metadata", {})  # ensures metadata exists and is unique per request
+                _, metadata = get_or_create_metadata_bucket(data)  # ensures metadata exists and is unique per request
                 # Accumulate so a prior file scan on the same request is not overwritten by this text scan.
                 metadata["_model_armor_response"] = self._append_armor_response(
                     metadata.get("_model_armor_response"),
@@ -702,7 +709,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             blocked = self._should_block_content(armor_response, allow_sanitization=self.mask_request_content)
             # Store the armor response for logging
             if isinstance(data, dict):
-                metadata = data.setdefault("metadata", {})
+                _, metadata = get_or_create_metadata_bucket(data)
                 # Accumulate so a prior file scan on the same request is not overwritten by this text scan.
                 metadata["_model_armor_response"] = self._append_armor_response(
                     metadata.get("_model_armor_response"),
@@ -868,7 +875,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
                     # Attach Model Armor response & status to this request's metadata to avoid race conditions
                     if isinstance(request_data, dict):
-                        metadata = request_data.setdefault("metadata", {})
+                        _, metadata = get_or_create_metadata_bucket(request_data)
                         metadata["_model_armor_response"] = self._build_logging_response(armor_response)
                         metadata["_model_armor_status"] = (
                             "blocked" if self._should_block_content(armor_response) else "success"

@@ -2772,6 +2772,40 @@ export interface paths {
         patch: operations["cursor_proxy_route_cursor__endpoint__patch"];
         trace?: never;
     };
+    "/customer/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Customer Aliases
+         * @description List the end users seen in spend logs over a time window, for UI filter dropdowns.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     Reads spend logs rather than LiteLLM_EndUserTable because only spend logs carry
+         *     the team attribution this scoping needs. The window is required and the inner
+         *     scan is capped at SPEND_LOGS_FILTER_SCAN_CAP rows, so the query
+         *     cannot degrade into a full-table scan the way `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/customer/aliases?start_date=2026-07-23%2000:00:00&end_date=2026-07-24%2000:00:00&size=50&search=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_customer_aliases_customer_aliases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/block": {
         parameters: {
             query?: never;
@@ -12808,6 +12842,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sso/saml/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Saml Callback
+         * @description Assertion Consumer Service. Validates the IdP assertion and issues a UI session.
+         */
+        post: operations["saml_callback_sso_saml_callback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Login
+         * @description SP-initiated SAML login. Redirects the user to the configured IdP.
+         */
+        get: operations["saml_login_sso_saml_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sso/saml/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saml Metadata
+         * @description Service Provider metadata XML, for registering this proxy at the IdP.
+         */
+        get: operations["saml_metadata_sso_saml_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/daily/activity": {
         parameters: {
             query?: never;
@@ -13860,11 +13954,12 @@ export interface paths {
          * Patch Team
          * @description Partially update a team using RFC 7386 JSON Merge Patch semantics.
          *
-         *     `team_id` is taken from the path. `metadata` is merged with the team's stored
-         *     metadata rather than replacing it: an omitted key is preserved, `key: null`
-         *     deletes it, and any other value overwrites (recursing into nested objects).
-         *     Every other field behaves exactly like `POST /team/update` (omitted preserves,
-         *     a value overwrites). Returns the full updated team.
+         *     `team_id` is taken from the path; a `team_id` in the body is accepted only when it
+         *     matches. `metadata` is merged with the team's stored metadata rather than replacing
+         *     it: an omitted key is preserved, `key: null` deletes it, and any other value
+         *     overwrites (recursing into nested objects). Every other field behaves exactly like
+         *     `POST /team/update` (omitted preserves, a value overwrites). Returns the full
+         *     updated team.
          *
          *     ```
          *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data-raw '{
@@ -17899,6 +17994,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tool/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tool Spend
+         * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
+         *
+         *     Joins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to
+         *     ``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools
+         *     counts its full spend toward each of those tools, so per-tool numbers are
+         *     attributions. ``total_spend`` is the deduplicated spend of every request that
+         *     called at least one tool in the window, so it never double counts.
+         *
+         *     ``start_date`` is clamped to at most 30 days before ``end_date`` (serving up to
+         *     31 calendar dates inclusive, the same width as the endpoint's default window):
+         *     a wider requested range is clamped, and the response's ``start_date`` reflects
+         *     the effective window actually served.
+         */
+        get: operations["get_tool_spend_v1_tool_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tool/{tool_name}": {
         parameters: {
             query?: never;
@@ -18884,6 +19010,33 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v2/organization/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Organization V2
+         * @description Partial update of an organization (RESTful PATCH, RFC 7396 merge-patch semantics).
+         *
+         *     A sent field is written and an omitted one is left untouched (presence is read from
+         *     ``model_fields_set``). Clear tokens are per field: budget limits and ``metadata`` clear with
+         *     ``null``, ``models`` with ``[]``, and ``object_permission`` with ``null`` (it merges when sent,
+         *     so an empty ``{}`` is rejected). ``organization_alias`` is required and cannot be cleared.
+         *     Validation failures return 422; the object-permission upsert, budget-row write, and
+         *     org-row write are one transaction.
+         */
+        patch: operations["update_organization_v2_v2_organization__organization_id__patch"];
         trace?: never;
     };
     "/v2/rerank": {
@@ -23175,6 +23328,29 @@ export interface components {
             credential_values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * CustomerAliasesResponse
+         * @description Paginated, id-only customer listing used by UI filter dropdowns.
+         *
+         *     Deliberately excludes budget/object-permission relations so a proxy with a
+         *     large LiteLLM_EndUserTable can back a search-as-you-type control without
+         *     materializing every row (see /customer/list for the full objects).
+         *
+         *     Reports ``has_more`` rather than a total count on purpose: a total requires
+         *     COUNT(*) over the whole match set on every keystroke, which is the exact
+         *     cost this endpoint exists to avoid. Fetching one row beyond the page is
+         *     enough to drive an infinite-scroll dropdown.
+         */
+        CustomerAliasesResponse: {
+            /** Aliases */
+            aliases: string[];
+            /** Current Page */
+            current_page: number;
+            /** Has More */
+            has_more: boolean;
+            /** Size */
+            size: number;
         };
         /**
          * CustomerResponse
@@ -28642,6 +28818,41 @@ export interface components {
             organizations: string[];
         };
         /**
+         * OrganizationUpdateRequestV2
+         * @description Typed PATCH body for ``/v2/organization/{organization_id}`` (RFC 7396 merge-patch).
+         *
+         *     Presence is read from ``model_fields_set``, so a sent field is written and an omitted one is
+         *     left untouched. ``extra="forbid"`` makes an unknown key a 422 rather than a silent no-op, since
+         *     the contract hinges on which keys are present. See the endpoint for the per-field clear tokens.
+         */
+        OrganizationUpdateRequestV2: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Models */
+            models?: string[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Alias */
+            organization_alias?: string | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
+        /**
          * PaginatedAuditLogResponse
          * @description Response model for paginated audit logs
          */
@@ -28806,6 +29017,102 @@ export interface components {
         PatchPromptRequest: {
             litellm_params?: components["schemas"]["PromptLiteLLMParams"] | null;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /**
+         * PatchTeamRequest
+         * @description Body of PATCH /team/{team_id}.
+         *
+         *     Identical to UpdateTeamRequest except team_id is optional, because PATCH takes it
+         *     from the path. A team_id in the body is still accepted when it matches the path.
+         */
+        PatchTeamRequest: {
+            /** Access Group Ids */
+            access_group_ids?: string[] | null;
+            /** Allowed Passthrough Routes */
+            allowed_passthrough_routes?: unknown[] | null;
+            /** Allowed Vector Store Indexes */
+            allowed_vector_store_indexes?: components["schemas"]["AllowedVectorStoreIndexItem"][] | null;
+            /** Blocked */
+            blocked?: boolean | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Limits */
+            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            /** Default Team Member Models */
+            default_team_member_models?: string[] | null;
+            /** Disable Global Guardrails */
+            disable_global_guardrails?: boolean | null;
+            /** Enforced Batch Output Expires After */
+            enforced_batch_output_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enforced File Expires After */
+            enforced_file_expires_after?: {
+                [key: string]: unknown;
+            } | null;
+            /** Guardrails */
+            guardrails?: string[] | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Mcp Rpm Limit */
+            mcp_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Aliases */
+            model_aliases?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Models */
+            models?: unknown[] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
+            /** Organization Id */
+            organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
+            /** Prompts */
+            prompts?: string[] | null;
+            /** Router Settings */
+            router_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Secret Manager Settings */
+            secret_manager_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Tags */
+            tags?: unknown[] | null;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** Team Member Budget */
+            team_member_budget?: number | null;
+            /** Team Member Budget Duration */
+            team_member_budget_duration?: string | null;
+            /** Team Member Key Duration */
+            team_member_key_duration?: string | null;
+            /** Team Member Rpm Limit */
+            team_member_rpm_limit?: number | null;
+            /** Team Member Tpm Limit */
+            team_member_tpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
         };
         /**
          * PerTestingCriteriaResult
@@ -30687,6 +30994,11 @@ export interface components {
              */
             generic_client_secret?: string | null;
             /**
+             * Generic Scope
+             * @description Space-separated OAuth scopes requested from the generic provider, e.g. 'openid email profile'
+             */
+            generic_scope?: string | null;
+            /**
              * Generic Token Endpoint
              * @description Token endpoint URL for generic OAuth provider
              */
@@ -30728,6 +31040,26 @@ export interface components {
             proxy_base_url?: string | null;
             /** @description Configuration for mapping SSO groups to LiteLLM roles based on group claims in the SSO token */
             role_mappings?: components["schemas"]["RoleMappings"] | null;
+            /**
+             * Saml Allow Unsolicited
+             * @description 'true' to accept IdP-initiated (unsolicited) SAML responses, which cannot be browser-bound against login CSRF
+             */
+            saml_allow_unsolicited?: string | null;
+            /**
+             * Saml Idp Metadata Url
+             * @description URL of the SAML IdP metadata to fetch and parse for SSO authentication
+             */
+            saml_idp_metadata_url?: string | null;
+            /**
+             * Saml Idp Metadata Xml
+             * @description Inline SAML IdP metadata XML, used when a metadata URL is not available
+             */
+            saml_idp_metadata_xml?: string | null;
+            /**
+             * Saml Sp Entity Id
+             * @description SAML Service Provider entityID; defaults to the proxy's /sso/saml/metadata URL
+             */
+            saml_sp_entity_id?: string | null;
             /** @description Configuration for mapping SSO JWT fields to team IDs. Takes precedence over config file settings. */
             team_mappings?: components["schemas"]["TeamMappings"] | null;
             /**
@@ -30749,6 +31081,10 @@ export interface components {
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
+            };
+            /** Provenance */
+            provenance?: {
+                [key: string]: string;
             };
             /** Values */
             values: {
@@ -31809,6 +32145,67 @@ export interface components {
             tool_name: string;
             /** Updated */
             updated: boolean;
+        };
+        /**
+         * ToolSpendDailyEntry
+         * @description Spend attributed to one tool on one UTC day.
+         */
+        ToolSpendDailyEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /** Date */
+            date: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /**
+         * ToolSpendEntry
+         * @description Total spend attributed to one tool over the requested window.
+         */
+        ToolSpendEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /**
+             * Spend
+             * @description Attributed spend: a request that used several tools counts its full spend toward each of them
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** ToolSpendResponse */
+        ToolSpendResponse: {
+            /** By Tool */
+            by_tool?: components["schemas"]["ToolSpendEntry"][];
+            /** Daily */
+            daily?: components["schemas"]["ToolSpendDailyEntry"][];
+            /** End Date */
+            end_date?: string | null;
+            /** Start Date */
+            start_date?: string | null;
+            /**
+             * Total Spend
+             * @description Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist
+             * @default 0
+             */
+            total_spend: number;
         };
         /**
          * ToolUsageLogEntry
@@ -38047,6 +38444,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_customer_aliases_customer_aliases_get: {
+        parameters: {
+            query: {
+                /** @description Window start, 'YYYY-MM-DD HH:MM:SS' (UTC) */
+                start_date: string;
+                /** @description Window end, 'YYYY-MM-DD HH:MM:SS' (UTC) */
+                end_date: string;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                size?: number;
+                /** @description Case-insensitive partial match on the customer id */
+                search?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerAliasesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -49511,6 +49948,77 @@ export interface operations {
             };
         };
     };
+    saml_callback_sso_saml_callback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    saml_login_sso_saml_login_get: {
+        parameters: {
+            query?: {
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    saml_metadata_sso_saml_metadata_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_tag_daily_activity_tag_daily_activity_get: {
         parameters: {
             query?: {
@@ -50604,7 +51112,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchTeamRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -56004,6 +56516,40 @@ export interface operations {
             };
         };
     };
+    get_tool_spend_v1_tool_spend_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (defaults to 30 days ago) */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (defaults to today) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolSpendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_tool_v1_tool__tool_name__get: {
         parameters: {
             query?: never;
@@ -57521,6 +58067,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_organization_v2_v2_organization__organization_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpdateRequestV2"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_OrganizationTableWithMembers"];
                 };
             };
             /** @description Validation Error */

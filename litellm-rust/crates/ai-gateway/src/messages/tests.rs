@@ -6,7 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::common_utils::{
-    has_header, messages_provider_config, string_headers, truncate_error_body,
+    has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
 use super::{MessagesRequest, messages};
 
@@ -83,6 +83,34 @@ fn has_header_is_case_insensitive() {
     let headers = vec![("X-Api-Key".to_string(), "secret".to_string())];
     assert!(has_header(&headers, "x-api-key"));
     assert!(!has_header(&headers, "authorization"));
+}
+
+#[test]
+fn has_bearer_auth_requires_a_nonempty_bearer_token() {
+    assert!(has_bearer_auth(&[(
+        "Authorization".to_string(),
+        "Bearer tok".to_string()
+    )]));
+    assert!(has_bearer_auth(&[(
+        "authorization".to_string(),
+        "bearer tok".to_string()
+    )]));
+    assert!(!has_bearer_auth(&[(
+        "authorization".to_string(),
+        "Bearer ".to_string()
+    )]));
+    assert!(!has_bearer_auth(&[(
+        "authorization".to_string(),
+        String::new()
+    )]));
+    assert!(!has_bearer_auth(&[(
+        "authorization".to_string(),
+        "Basic abc".to_string()
+    )]));
+    assert!(!has_bearer_auth(&[(
+        "x-api-key".to_string(),
+        "sk".to_string()
+    )]));
 }
 
 #[tokio::test]
@@ -250,6 +278,112 @@ async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
         "{head}"
     );
     assert!(!head.contains("rust-fallback-key"), "{head}");
+}
+
+#[tokio::test]
+async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body =
+            r#"{"id":"msg_3","type":"message","role":"assistant","content":[],"model":"m"}"#;
+        socket
+            .write_all(write_response(response_body).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let mut headers = Map::new();
+    headers.insert(
+        "Authorization".to_string(),
+        Value::String("Bearer entra-token".to_string()),
+    );
+
+    messages(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        api_key: None,
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: Some(headers),
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("entra id request succeeds without api key");
+
+    let request = server.await.expect("server task completes");
+    let head = request
+        .split_once("\r\n\r\n")
+        .expect("has body")
+        .0
+        .to_ascii_lowercase();
+    assert!(head.contains("authorization: bearer entra-token"), "{head}");
+    assert!(!head.contains("x-api-key"), "{head}");
+}
+
+#[tokio::test]
+async fn messages_requires_auth_when_no_key_and_no_header() {
+    let err = messages(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        api_key: None,
+        api_base: Some("http://127.0.0.1:1"),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: None,
+        timeout: Some(Duration::from_millis(50)),
+    })
+    .await
+    .expect_err("missing auth errors");
+
+    assert!(matches!(err, CoreError::Auth(_)));
+}
+
+#[tokio::test]
+async fn messages_ignores_malformed_authorization_and_uses_api_key() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body =
+            r#"{"id":"msg_4","type":"message","role":"assistant","content":[],"model":"m"}"#;
+        socket
+            .write_all(write_response(response_body).as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let mut headers = Map::new();
+    headers.insert(
+        "Authorization".to_string(),
+        Value::String("Bearer ".to_string()),
+    );
+
+    messages(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        api_key: Some("sk-azure"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: Some(headers),
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("falls back to api key");
+
+    let request = server.await.expect("server task completes");
+    let head = request
+        .split_once("\r\n\r\n")
+        .expect("has body")
+        .0
+        .to_ascii_lowercase();
+    assert!(head.contains("x-api-key: sk-azure"), "{head}");
 }
 
 #[tokio::test]

@@ -23,9 +23,10 @@ from typing import Callable
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 
 from batch_client import (
+    UPLOAD_FILENAME,
     BatchClient,
     BatchCreateBody,
     BatchObject,
@@ -511,6 +512,72 @@ class TestBatchFileContent:
         )
 
 
+class TestOpenAIFiles:
+    """GET /v1/files (list) and GET /v1/files/{id} (retrieve) over the OpenAI route.
+
+    The proxy lists the OpenAI org's raw file ids, so the list case uploads a raw
+    (provider-routed) file whose id matches what list returns; retrieve re-encodes
+    the id it was called with, so the model-encoded upload round-trips unchanged.
+    """
+
+    @pytest.mark.covers(
+        "llm.files.openai.list.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_uploaded_file_appears_in_list(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = resources.key()
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(OPENAI_BATCH_MODEL),
+                form=FileUploadForm(purpose="batch"),
+                key=key,
+                provider="openai",
+            )
+        )
+        resources.defer(
+            quietly(lambda: client.delete_file(file.id, key=key, provider="openai"))
+        )
+
+        listed = unwrap(client.list_files(key=key))
+        assert listed.object is None or listed.object == "list", (
+            f"list envelope object={listed.object!r}"
+        )
+        match = next((entry for entry in listed.data if entry.id == file.id), None)
+        assert match is not None, f"uploaded file {file.id!r} absent from GET /v1/files"
+        assert match.purpose == "batch", (
+            f"listed file must round-trip the upload purpose, got {match.purpose!r}"
+        )
+
+    @pytest.mark.covers(
+        "llm.files.openai.retrieve.nonstream.works",
+        exercised_on=["files"],
+    )
+    def test_retrieve_round_trips_metadata(
+        self, client: BatchClient, resources: ResourceManager, batch_deployments: None
+    ) -> None:
+        key = resources.key()
+        file = unwrap(
+            client.upload_file(
+                content=render_jsonl(OPENAI_BATCH_MODEL),
+                form=FileUploadForm(purpose="batch"),
+                model=OPENAI_BATCH_MODEL,
+                key=key,
+            )
+        )
+        resources.defer(quietly(lambda: client.delete_file(file.id, key=key)))
+
+        fetched = unwrap(client.retrieve_file(file.id, key=key))
+        assert fetched.id == file.id, "retrieve must echo the uploaded file id"
+        assert fetched.purpose == "batch", (
+            f"retrieve must round-trip purpose, got {fetched.purpose!r}"
+        )
+        assert fetched.filename == UPLOAD_FILENAME, (
+            f"retrieve must round-trip filename, got {fetched.filename!r}"
+        )
+
+
 BATCH_RL_REQUEST_LINES = 3
 BATCH_RL_RPM_LIMIT = 2
 
@@ -635,14 +702,7 @@ class TestBedrockBatchAssumeRole:
     def test_unified_batch_create_with_assume_role(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
-        (role_arn,) = require_env("AWS_ROLE_NAME")
-        require_env(
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_REGION",
-            "AWS_BATCH_S3_BUCKET",
-            "AWS_BATCH_ROLE_ARN",
-        )
+        role_arn = os.environ["AWS_ROLE_NAME"]
         session_name = f"e2e-batch-sts-{unique_marker()}"[:64]
         model_name = batch_model_name("bedrock-sts-batch")
 
@@ -752,7 +812,7 @@ class TestHostedVllmBatch:
     def test_unified_file_and_batch_create(
         self, client: BatchClient, resources: ResourceManager
     ) -> None:
-        (api_base,) = require_env("HOSTED_VLLM_API_BASE")
+        api_base = os.environ["HOSTED_VLLM_API_BASE"]
         api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
         model_id = (
             os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"

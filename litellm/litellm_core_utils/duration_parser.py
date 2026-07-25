@@ -9,8 +9,21 @@ duration_in_seconds is used in diff parts of the code base, example
 import re
 import time as time_module
 from datetime import datetime, time, timedelta, timezone, tzinfo
-from typing import Optional, Tuple
+from typing import Final, Optional, Tuple
 from zoneinfo import ZoneInfo
+
+from litellm._logging import verbose_logger
+
+_BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
+    "hourly": "1h",
+    "daily": "24h",
+    "weekly": "7d",
+    "monthly": "30d",
+}
+
+
+def _normalize_duration(duration: str) -> str:
+    return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
 
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
@@ -48,7 +61,7 @@ def duration_in_seconds(duration: str) -> int:
 
     Returns time in seconds till when budget needs to be reset
     """
-    value, unit = _extract_from_regex(duration=duration)
+    value, unit = _extract_from_regex(duration=_normalize_duration(duration))
 
     if unit == "s":
         return value
@@ -124,9 +137,13 @@ def get_next_standardized_reset_time(
     current_time, _ = _setup_timezone(current_time, timezone_str)
 
     # Parse duration
-    value, unit = _parse_duration(duration)
+    value, unit = _parse_duration(_normalize_duration(duration))
     if value is None:
-        # Fall back to default if format is invalid
+        verbose_logger.warning(
+            "Unrecognized budget_duration %r; falling back to a next-midnight reset. "
+            "Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo').",
+            duration,
+        )
         return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
     # Midnight of the current day in the specified timezone

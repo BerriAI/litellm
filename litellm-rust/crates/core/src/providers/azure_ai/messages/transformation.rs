@@ -163,6 +163,10 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         self.anthropic.auth_strategy()
     }
 
+    fn accepts_bearer_auth(&self) -> bool {
+        true
+    }
+
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         self.anthropic.default_headers()
     }
@@ -292,6 +296,11 @@ mod tests {
                 .header_name(),
             "x-api-key"
         );
+    }
+
+    #[test]
+    fn accepts_bearer_auth_for_entra_id() {
+        assert!(AZURE_ANTHROPIC_MESSAGES_CONFIG.accepts_bearer_auth());
     }
 
     #[test]
