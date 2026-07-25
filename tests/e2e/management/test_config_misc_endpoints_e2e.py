@@ -135,11 +135,19 @@ CACHE_TRANSPORT_KEYS = frozenset({"ssl", "redis_startup_nodes", "sentinel_nodes"
 
 
 # The value union the route actually accepts, matching the field_type values in
-# litellm's CACHE_SETTINGS_FIELDS: String, Integer, Boolean, Float and List. Node
-# lists (redis_startup_nodes, sentinel_nodes) arrive as host/port mappings. bool
-# leads the scalar union so a Boolean field is never narrowed to int.
+# litellm's CACHE_SETTINGS_FIELDS: String, Integer, Boolean, Float and List.
+#
+# The two node lists are not shaped alike, and both have to parse or the initial
+# read fails before the round-trip can run: `redis_startup_nodes` holds host/port
+# mappings, while `sentinel_nodes` holds positional pairs
+# (CACHE_SETTINGS_FIELDS documents `[['localhost', 26379]]`). Allowing an element
+# to be a scalar, a list or a mapping covers both without special-casing either,
+# and tolerates a heterogeneous list rather than rejecting the whole response.
+#
+# bool leads the scalar union so a Boolean field is never narrowed to int.
 type CacheSettingScalar = bool | int | float | str | None
-type CacheSettingValue = CacheSettingScalar | list[CacheSettingScalar] | list[dict[str, CacheSettingScalar]]
+type CacheSettingListItem = CacheSettingScalar | list[CacheSettingScalar] | dict[str, CacheSettingScalar]
+type CacheSettingValue = CacheSettingScalar | list[CacheSettingListItem]
 
 
 class CacheSettingsValue(RootModel[dict[str, CacheSettingValue]]):
@@ -389,6 +397,53 @@ class TestComplianceRoutes:
         assert all(check.check_name and check.detail for check in result.checks), (
             "every compliance check must carry a name and a human-readable detail"
         )
+
+
+class TestCacheSettingsModel:
+    """Harness-level checks on the settings model. No `e2e` marker: these validate
+    parsing only and must run whether or not a proxy is up.
+
+    The round-trip test below reads GET /cache/settings before it writes anything,
+    so a shape this model cannot parse fails the test at the read and never reaches
+    the assertions. That makes the model's tolerance part of the contract."""
+
+    @pytest.mark.parametrize(
+        ("label", "payload"),
+        [
+            (
+                "cluster: startup nodes are host/port mappings",
+                {"type": "redis", "host": "h", "port": "6379", "ssl": True, "ttl": 16600,
+                 "redis_startup_nodes": [{"host": "h", "port": 6379}]},
+            ),
+            (
+                "sentinel: nodes are positional pairs",
+                {"type": "redis", "service_name": "mymaster",
+                 "sentinel_nodes": [["localhost", 26379], ["localhost", 26380]]},
+            ),
+            (
+                "node: no node list at all",
+                {"type": "redis", "host": "h", "port": "6379", "db": 1},
+            ),
+            (
+                "url mode with a null discrete field",
+                {"type": "redis", "url": "rediss://h:6379", "host": None},
+            ),
+        ],
+    )
+    def test_parses_every_backend_shape(self, label: str, payload: dict[str, CacheSettingValue]) -> None:
+        parsed = CacheSettingsValue.model_validate(payload)
+        assert parsed.root == payload, f"{label}: model must round-trip the payload unchanged"
+
+    def test_transport_selects_only_connection_shaping_keys(self) -> None:
+        parsed = CacheSettingsValue.model_validate(
+            {"type": "redis", "host": "h", "port": "6379", "ssl": True,
+             "namespace": "litellm.caching", "ttl": 16600,
+             "redis_startup_nodes": [{"host": "h", "port": 6379}]}
+        )
+        assert parsed.transport() == {
+            "host": "h", "port": "6379", "ssl": True,
+            "redis_startup_nodes": [{"host": "h", "port": 6379}],
+        }, "transport() must carry the keys whose loss breaks connectivity, and nothing else"
 
 
 class TestCacheSettings:
