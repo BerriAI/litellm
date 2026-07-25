@@ -901,6 +901,49 @@ async def test_get_credentials_returns_all_for_proxy_admin(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_credentials_admin_viewer_gets_full_list_fully_masked(monkeypatch):
+    """PROXY_ADMIN_VIEW_ONLY keeps read parity with PROXY_ADMIN on this endpoint:
+    the full credential list, including provider credentials, with every stored
+    value constant-masked so the read-only role receives no usable secret."""
+    raw_headers = "Authorization=Bearer collector-secret,x-api-key=api-secret"
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai",
+                credential_values={"api_key": "sk-secret"},
+                credential_info={"custom_llm_provider": "openai"},
+            ),
+            CredentialItem(
+                credential_name="generic-otel",
+                credential_values={"otel_headers": raw_headers},
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "generic",
+                },
+            ),
+        ],
+    )
+    response = await endpoints.get_credentials(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="k", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        ),
+    )
+    names = sorted(c["credential_name"] for c in response["credentials"])
+    assert names == ["generic-otel", "openai"]
+    assert all(
+        value == "********"
+        for c in response["credentials"]
+        for value in c["credential_values"].values()
+    )
+    assert "collector-secret" not in str(response)
+    assert "sk-secret" not in str(response)
+
+
+@pytest.mark.asyncio
 async def test_authorize_patch_malformed_stored_access_does_not_500(
     _patch_team_admin_lookup,
 ):

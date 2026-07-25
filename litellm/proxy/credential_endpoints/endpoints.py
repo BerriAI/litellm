@@ -307,7 +307,8 @@ async def get_credentials(
 
     try:
         is_proxy_admin = _is_proxy_admin(user_api_key_dict)
-        if is_proxy_admin:
+        is_admin_viewer = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+        if is_proxy_admin or is_admin_viewer:
             visible = list(litellm.credential_list)
         else:
             scope = await _caller_admin_scope(user_api_key_dict, prisma_client)
