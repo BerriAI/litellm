@@ -23,7 +23,7 @@ import pytest
 
 from e2e_http import Result, Success
 from lifecycle import ResourceManager
-from models import ChatResponse, SpendLogs, SpendLogsParams
+from models import ChatResponse, LiteLLMParamsBody, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -232,14 +232,12 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     rows = client.poll_logs_for_key(
         scoped_key, predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
     )
-    cache_rows = [r for r in rows if r.cache_hit == "True"]
-    if not cache_rows:
-        pytest.skip(
-            "no cache-hit row observed; caching may be disabled on this proxy. "
-            f"rows seen: {_summarize(rows)}"
-        )
-
-    cache_row = cache_rows[0]
+    cache_row = _require_row(
+        rows,
+        lambda r: r.cache_hit == "True",
+        "with cache_hit=True (caching is enabled on the e2e proxy, so an identical "
+        "repeat call must hit the cache)",
+    )
     assert (
         cache_row.spend or 0
     ) == 0.0, f"cache hit was charged (double-charge regression): {_summarize(rows)}"
@@ -504,22 +502,27 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
 def test_failure_call_writes_failure_status_row(
-    client: SpendClient, scoped_key: str
+    client: SpendClient, resources: ResourceManager, scoped_key: str
 ) -> None:
-    result = client.chat(scoped_key, "gemini-2.5-flash", "", max_tokens=1)
-    if is_ok(result):
-        pytest.skip("call unexpectedly succeeded; could not induce a failure row")
+    model = f"e2e-spend-failure-{unique_marker()}"
+    model_id = client.proxy.create_model(
+        model,
+        LiteLLMParamsBody(model="openai/gpt-5.5", api_key="sk-invalid-e2e-failure-row"),
+    )
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+
+    result = client.chat(scoped_key, model, f"trigger failure {unique_marker()}", max_tokens=1)
+    assert not is_ok(result), (
+        f"a call to a deployment with an invalid upstream key must fail, not succeed: {result}"
+    )
 
     rows = client.poll_logs_for_key(
         scoped_key, predicate=lambda rs: any(r.status == "failure" for r in rs)
     )
-    failure_rows = [r for r in rows if r.status == "failure"]
-    if not failure_rows:
-        pytest.skip(
-            "no failure-status row was logged for the rejected call; "
-            "failure logging is environment-specific"
-        )
-    assert (failure_rows[0].spend or 0) == 0.0, "failed call must not be charged"
+    failure_row = _require_row(
+        rows, lambda r: r.status == "failure", "with status=failure for the rejected call"
+    )
+    assert (failure_row.spend or 0) == 0.0, "failed call must not be charged"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")

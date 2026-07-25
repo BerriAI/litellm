@@ -283,6 +283,26 @@ def get[R: BaseModel](
     return _classify(resp, response_type)
 
 
+def get_external[R: BaseModel](
+    url: str,
+    *,
+    response_type: type[R],
+    timeout: float = 30.0,
+) -> Result[R]:
+    """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
+    Unlike the transport wrappers there is no proxy base url and no proxy auth; the
+    response still gets the same tagged-union classification as every other call."""
+    try:
+        resp = requests.get(
+            url,
+            headers={"Accept": "application/json"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
+
+
 def delete[R: BaseModel](
     url: URL,
     *,
@@ -460,14 +480,15 @@ def upload[R: BaseModel](
     filename: str,
     content: bytes,
     file_content_type: str = "application/jsonl",
+    file_field: str = "file",
     params: BaseModel | None = None,
     response_type: type[R],
     timeout: float = 60.0,
 ) -> Result[R]:
-    """Multipart POST for file-bearing routes (/v1/files, /v1/audio/transcriptions).
-    Form fields come from `form`, the file bytes are sent as the `file` part with
-    `file_content_type`, and `params` carries any query routing (e.g. ?model=).
-    requests sets the multipart Content-Type itself."""
+    """Multipart POST for file-bearing routes (/v1/files, /v1/audio/transcriptions,
+    /v1/images/edits). Form fields come from `form`, the file bytes are sent as the
+    `file_field` part with `file_content_type`, and `params` carries any query
+    routing (e.g. ?model=). requests sets the multipart Content-Type itself."""
     dumped: dict[str, object] = form.model_dump(by_alias=True, exclude_none=True)
     data = {key: str(value) for key, value in dumped.items()}
     try:
@@ -476,7 +497,7 @@ def upload[R: BaseModel](
             headers=_headers(headers),
             params=_params(params),
             data=data,
-            files={"file": (filename, content, file_content_type)},
+            files={file_field: (filename, content, file_content_type)},
             timeout=timeout,
         )
     except requests.RequestException as exc:
