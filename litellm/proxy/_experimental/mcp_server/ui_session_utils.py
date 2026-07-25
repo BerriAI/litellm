@@ -48,6 +48,11 @@ async def resolve_ui_session_team_ids(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
+            # UI-session authorization must observe grants, revocations, and
+            # offboarding on the next request. A cached user row can retain a
+            # pre-login or pre-reconciliation team list until its management
+            # TTL expires, which makes both grants and revocations stale.
+            check_db_only=True,
             parent_otel_span=user_api_key_auth.parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )

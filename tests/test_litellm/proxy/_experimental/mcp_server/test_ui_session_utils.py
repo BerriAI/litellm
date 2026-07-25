@@ -35,9 +35,10 @@ async def test_resolve_ui_session_team_ids_returns_unique_ids(monkeypatch):
         teams=["team-a", "team-b", "team-a", "", None, "team-c"]
     )
 
+    get_user_object = AsyncMock(return_value=fake_user)
     monkeypatch.setattr(
         "litellm.proxy.auth.auth_checks.get_user_object",
-        AsyncMock(return_value=fake_user),
+        get_user_object,
     )
 
     import litellm.proxy.proxy_server as proxy_server
@@ -49,6 +50,41 @@ async def test_resolve_ui_session_team_ids_returns_unique_ids(monkeypatch):
     team_ids = await resolve_ui_session_team_ids(user_auth)
 
     assert team_ids == ["team-a", "team-b", "team-c"]
+    get_user_object.assert_awaited_once()
+    assert get_user_object.await_args.kwargs["check_db_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_ui_session_team_ids_observes_next_call_revocation(monkeypatch):
+    user_auth = UserAPIKeyAuth(
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        user_id="user-revoked",
+    )
+
+    get_user_object = AsyncMock(
+        side_effect=[
+            SimpleNamespace(teams=["team-a"]),
+            SimpleNamespace(teams=[]),
+        ]
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        get_user_object,
+    )
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", None)
+
+    assert await resolve_ui_session_team_ids(user_auth) == ["team-a"]
+    assert await resolve_ui_session_team_ids(user_auth) == []
+    assert get_user_object.await_count == 2
+    assert all(
+        call.kwargs["check_db_only"] is True
+        for call in get_user_object.await_args_list
+    )
 
 
 @pytest.mark.asyncio
