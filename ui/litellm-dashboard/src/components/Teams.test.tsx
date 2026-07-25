@@ -8,6 +8,12 @@ import Teams from "./Teams";
 
 const mockTeamInfoView = vi.fn();
 const mockUseOrganizations = vi.fn();
+const mockUseTeam = vi.fn();
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
 
 // The teams grid is unit-tested in TeamsPage/TeamsTable.test.tsx. Here we stub it and drive its callbacks
 // directly so we can test the Teams shell wiring (delete modal, detail view) without the real DataTable.
@@ -31,6 +37,7 @@ vi.mock("./networking", () => ({
 // Teams invalidates teamsTableKeys on mutations; the selected team is passed up from the table.
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   teamsTableKeys: { all: ["teamsTable"] },
+  useTeam: (teamId?: string) => mockUseTeam(teamId),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -159,6 +166,8 @@ const renderWithQueryClient = (component: React.ReactElement) => {
 // Re-establish safe defaults before every test (clearAllMocks keeps return values, so restore them here).
 beforeEach(() => {
   mockTeamsTableProps = null;
+  window.history.pushState(null, "", "/");
+  mockUseTeam.mockReturnValue({ data: undefined });
 });
 
 describe("Teams - handleCreate organization handling", () => {
@@ -657,5 +666,58 @@ describe("Teams - LIT-2530 organization stays optional for proxy admin with a si
         expect.objectContaining({ team_alias: "No Org Team", organization_id: null }),
       );
     });
+  });
+});
+
+describe("Teams - ?team= deep link", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    mockUseOrganizations.mockReturnValue({ data: [] });
+  });
+
+  it("clicking a team writes ?team= to the URL", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    await waitFor(() => expect(mockTeamsTableProps).not.toBeNull());
+    act(() => mockTeamsTableProps.onSelectTeam(baseTableTeam));
+
+    expect(window.location.search).toContain(`team=${baseTableTeam.team_id}`);
+  });
+
+  it("renders TeamInfoView from a ?team= URL on load", async () => {
+    window.history.pushState(null, "", "/?team=team-deeplink");
+
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ teamId: "team-deeplink" }));
+  });
+
+  it("derives is_team_admin from the fetched /team/info envelope on deep link", async () => {
+    window.history.pushState(null, "", "/?team=team-deeplink");
+    mockUseTeam.mockReturnValue({
+      data: {
+        team_id: "team-deeplink",
+        team_info: { team_id: "team-deeplink", members_with_roles: [{ user_id: "user-123", role: "admin" }] },
+      },
+    });
+
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    expect(mockUseTeam).toHaveBeenCalledWith("team-deeplink");
+    expect(mockTeamInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ is_team_admin: true }));
+  });
+
+  it("closing the detail view clears ?team=", async () => {
+    window.history.pushState(null, "", "/?team=team-deeplink");
+
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    act(() => mockTeamInfoView.mock.calls.at(-1)?.[0].onClose());
+
+    expect(window.location.search).not.toContain("team=");
   });
 });

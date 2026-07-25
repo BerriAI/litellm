@@ -9,6 +9,11 @@ import ViewUserDashboard from "./view_users";
 
 const userListCall = vi.fn();
 
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
   userListCall: (...args: unknown[]) => userListCall(...args),
@@ -88,6 +93,7 @@ const renderDashboard = () =>
 describe("ViewUserDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.pushState(null, "", "/");
     userListCall.mockResolvedValue({
       users: [makeUser("user-1", "test@example.com")],
       total: 1,
@@ -129,7 +135,7 @@ describe("ViewUserDashboard", () => {
     expect(screen.getAllByText("user-1").length).toBeGreaterThan(0);
   });
 
-  it("should swap to the detail view when the identity cell is clicked", async () => {
+  it("clicking the identity cell deep-links via ?user=", async () => {
     const user = userEvent.setup();
     renderDashboard();
 
@@ -138,6 +144,14 @@ describe("ViewUserDashboard", () => {
     });
 
     await user.click(screen.getByRole("button", { name: /user-1/ }));
+
+    expect(window.location.search).toContain("user=user-1");
+  });
+
+  it("renders the detail view from a ?user= URL on load", async () => {
+    window.history.pushState(null, "", "/?user=user-1");
+
+    renderDashboard();
 
     expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:false");
     expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();

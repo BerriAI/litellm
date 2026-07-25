@@ -15,6 +15,7 @@ import {
 } from "@/components/networking";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
+import { useDetailParam } from "@/app/(dashboard)/hooks/useDetailParam";
 import { updateExistingKeys } from "@/utils/dataUtils";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
@@ -72,7 +73,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectionMode, setSelectionMode] = useState(false);
   const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
 
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const { id: selectedUserId, open: openUser, close: closeUser } = useDetailParam("user");
   const [openInEditMode, setOpenInEditMode] = useState(false);
 
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -139,15 +140,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setRowSelection({});
   }, []);
 
-  const handleUserClick = useCallback((userId: string, openInEdit: boolean = false) => {
-    setSelectedUserId(userId);
-    setOpenInEditMode(openInEdit);
-  }, []);
+  const handleUserClick = useCallback(
+    (userId: string, openInEdit: boolean = false) => {
+      openUser(userId);
+      setOpenInEditMode(openInEdit);
+    },
+    [openUser],
+  );
 
   const handleCloseUserInfo = useCallback(() => {
-    setSelectedUserId(null);
+    closeUser();
     setOpenInEditMode(false);
-  }, []);
+  }, [closeUser]);
 
   const handleDelete = useCallback((user: UserInfo) => {
     setUserToDelete(user);
