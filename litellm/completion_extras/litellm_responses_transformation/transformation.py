@@ -35,6 +35,7 @@ from litellm.responses.sse_output_recovery import (
     record_output_item_chunk,
     record_output_text_chunk,
 )
+from litellm.responses.utils import normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
@@ -320,6 +321,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["tool_choice"] = (  # type: ignore[assignment]
                     self._normalize_tool_choice_for_responses_api(value)
                 )
+            elif key == "stream_options":
+                stream_options = normalize_responses_api_stream_options(value)
+                if stream_options is not None:
+                    responses_api_request["stream_options"] = stream_options
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
             elif key == "previous_response_id":
@@ -360,8 +365,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 continue
             if key == "instructions" and instructions:
                 request_data["instructions"] = instructions
-            elif key == "stream_options" and isinstance(value, dict):
-                request_data["stream_options"] = value.get("include_obfuscation")
             elif key == "user" and isinstance(value, str):
                 # OpenAI API requires user param to be max 64 chars - truncate if longer
                 if len(value) <= 64:

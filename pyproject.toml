@@ -99,6 +99,10 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
+# SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
+# bundle the native libxmlsec1/libxml2 libraries, so no system packages are
+# required. Kept out of the base `proxy` extra so it stays optional.
+saml = ["python3-saml>=1.16.0,<2.0"]
 semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
