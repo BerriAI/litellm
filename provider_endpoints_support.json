@@ -2829,6 +2829,23 @@
         "responses": true
       }
     },
+    "machgen": {
+      "display_name": "MachGen (`machgen`)",
+      "url": "https://docs.litellm.ai/docs/providers/machgen",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "manus": {
       "display_name": "Manus (`manus`)",
       "url": "https://docs.litellm.ai/docs/providers/manus",

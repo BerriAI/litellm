@@ -646,6 +646,7 @@ inception_models: Set = set()
 hyperbolic_models: Set = set()
 black_forest_labs_models: Set = set()
 recraft_models: Set = set()
+machgen_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
@@ -907,6 +908,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             black_forest_labs_models.add(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.add(key)
+        elif value.get("litellm_provider") == "machgen":
+            machgen_models.add(key)
         elif value.get("litellm_provider") == "cometapi":
             cometapi_models.add(key)
         elif value.get("litellm_provider") == "oci":
@@ -1048,6 +1051,7 @@ model_list = list(
     | inception_models
     | black_forest_labs_models
     | recraft_models
+    | machgen_models
     | cometapi_models
     | oci_models
     | heroku_models
@@ -1155,6 +1159,7 @@ models_by_provider: dict = {
     "hyperbolic": hyperbolic_models,
     "black_forest_labs": black_forest_labs_models,
     "recraft": recraft_models,
+    "machgen": machgen_models,
     "cometapi": cometapi_models,
     "oci": oci_models,
     "volcengine": volcengine_models,

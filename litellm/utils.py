@@ -8589,6 +8589,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.MACHGEN == provider:
+            from litellm.llms.machgen.image_generation import (
+                MachGenImageGenerationConfig,
+            )
+
+            return MachGenImageGenerationConfig()
         elif LlmProviders.AIML == provider:
             from litellm.llms.aiml.image_generation import (
                 get_aiml_image_generation_config,
