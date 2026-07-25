@@ -314,7 +314,7 @@ async def add_new_user_to_default_team(
     tasks = []
     for team in teams:
         user_role: Literal["user", "admin"] = "user"
-        max_budget_in_team: Optional[float] = None
+        max_budget_in_team: float | None = None
         if isinstance(team, str):
             team_id = team
         elif isinstance(team, NewUserRequestTeam):
