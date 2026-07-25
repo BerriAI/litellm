@@ -4652,3 +4652,53 @@ async def test_streaming_mirror_matches_non_streaming_header_shape(monkeypatch):
         f" non_streaming={_rl_only(non_stream_headers)}"
     )
     assert "x-ratelimit-model_per_key-remaining-requests" in stream_slp_headers
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_passthrough_reported_tokens(monkeypatch):
+    """
+    Pass-through responses are not modelled as ModelResponse/EmbeddingResponse,
+    so their usage rides on ``combined_usage_object``. Without honoring it, a
+    pass-through request never charged the TPM window and a team could exceed
+    its shared token limit purely through pass-through traffic.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = hash_token("sk-passthrough")
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", lambda: "total"
+    )
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": _api_key, "user_api_key_team_id": "team-fil"}
+            },
+            "combined_usage_object": Usage(total_tokens=1874),
+        },
+        response_obj={"response": "upstream body was never parsed"},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    token_operations = [op for op in captured_operations if op["key"].endswith(":tokens")]
+    assert token_operations, "pass-through usage should charge the TPM counter"
+    assert all(op["increment_value"] == 1874 for op in token_operations)
+    assert any("team-fil" in op["key"] for op in token_operations), (
+        "team TPM window must be charged so pass-through shares the team's limit"
+    )

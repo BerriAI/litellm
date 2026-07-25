@@ -3086,8 +3086,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         model_group = get_model_group_from_litellm_kwargs(kwargs)
 
-        # Get total tokens from response
-        total_tokens = 0
+        # Get total tokens from response. Responses LiteLLM does not model
+        # (e.g. pass-through, whose usage is reported by the upstream rather
+        # than parsed out of the body) carry their usage in
+        # ``combined_usage_object`` instead, and would otherwise never charge
+        # the TPM window.
+        _usage: Union[Usage, dict, None] = None
         if isinstance(
             response_obj,
             (
@@ -3098,7 +3102,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ),
         ):
             _usage = getattr(response_obj, "usage", None)
-            total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
+        else:
+            _combined_usage = kwargs.get("combined_usage_object")
+            if isinstance(_combined_usage, Usage):
+                _usage = _combined_usage
+        total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
 
         reserved_tokens = self._get_reserved_tokens_from_kwargs(
             kwargs=kwargs,
