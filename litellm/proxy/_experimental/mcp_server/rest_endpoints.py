@@ -542,7 +542,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
             )
             if allowed_tools_for_server is not None:
-                tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server)]
+                tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server, server)]
 
         return _create_tool_response_objects(tools, server)
 
