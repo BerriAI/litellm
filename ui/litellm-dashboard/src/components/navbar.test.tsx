@@ -344,6 +344,11 @@ describe("Navbar", () => {
     const user = userEvent.setup();
     vi.mocked(window.location.replace).mockClear();
 
+    const cookieUtils = vi.mocked(await import("@/utils/cookieUtils"));
+    const returnUrlUtils = vi.mocked(await import("@/utils/returnUrlUtils"));
+    cookieUtils.clearTokenCookies.mockClear();
+    returnUrlUtils.clearStoredReturnUrl.mockClear();
+
     const proxyUtils = vi.mocked(await import("@/utils/proxyUtils"));
     let resolveSettings!: (value: { PROXY_BASE_URL: string; PROXY_LOGOUT_URL: string }) => void;
     proxyUtils.fetchProxySettings.mockImplementationOnce(
@@ -364,6 +369,8 @@ describe("Navbar", () => {
     await user.click(screen.getByText("Logout"));
 
     expect(window.location.replace).not.toHaveBeenCalled();
+    expect(cookieUtils.clearTokenCookies).toHaveBeenCalled();
+    expect(returnUrlUtils.clearStoredReturnUrl).toHaveBeenCalled();
 
     resolveSettings({ PROXY_BASE_URL: "", PROXY_LOGOUT_URL: "https://sso.example.com/logout" });
 

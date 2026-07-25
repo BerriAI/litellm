@@ -13,11 +13,11 @@ export function useLogout(accessToken: string | null): () => Promise<void> {
   useProxySettings(accessToken);
 
   return async () => {
-    const settings = await ensureProxySettings(queryClient, accessToken).catch(() => null);
     clearTokenCookies();
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
+    const settings = await ensureProxySettings(queryClient, accessToken).catch(() => null);
     window.location.replace(settings?.PROXY_LOGOUT_URL || getLoginUrl(getProxyBaseUrl()));
   };
 }
