@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Collapse } from "antd";
+import { ChevronRight } from "lucide-react";
 
 import { AreaChart, BarChart, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
 import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -35,38 +36,35 @@ const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ??
 const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
 
 const MethodologyNote = () => (
-  <Collapse
-    ghost
-    items={[
-      {
-        key: "methodology",
-        label: <span className="text-sm font-medium">How savings are calculated</span>,
-        children: (
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              Savings are computed for each request when it is logged, using the provider&apos;s reported usage and the
-              model&apos;s pricing, then summed into a daily rollup. Totals below are read from that rollup over the
-              selected date range, so the numbers never require a scan of raw request logs.
-            </p>
-            <p>
-              Compression savings are the tokens Headroom removed before the call, priced at the model&apos;s input
-              rate: <code>compression_saved_tokens * input_cost_per_token</code>
-            </p>
-            <p>
-              Prompt caching savings are the tokens the provider served from cache (Anthropic{" "}
-              <code>cache_read_input_tokens</code>, or OpenAI-style <code>prompt_tokens_details.cached_tokens</code>),
-              priced at the discount between the normal input rate and the cache-read rate:{" "}
-              <code>cache_read_input_tokens * max(input_cost_per_token - cache_read_input_token_cost, 0)</code>
-            </p>
-            <p>
-              Total saved is the sum of both drivers. Models without a separate cache-read price in the pricing map
-              contribute zero caching savings rather than erroring.
-            </p>
-          </div>
-        ),
-      },
-    ]}
-  />
+  <Collapsible>
+    <CollapsibleTrigger className="group flex items-center gap-1.5 rounded-md py-1 text-sm font-medium text-foreground hover:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
+      <ChevronRight className="size-4 shrink-0 transition-transform group-data-[panel-open]:rotate-90" />
+      How savings are calculated
+    </CollapsibleTrigger>
+    <CollapsibleContent>
+      <div className="space-y-3 pt-2 pl-[22px] text-sm text-muted-foreground">
+        <p>
+          Savings are computed for each request when it is logged, using the provider&apos;s reported usage and the
+          model&apos;s pricing, then summed into a daily rollup. Totals below are read from that rollup over the
+          selected date range, so the numbers never require a scan of raw request logs.
+        </p>
+        <p>
+          Compression savings are the tokens Headroom removed before the call, priced at the model&apos;s input rate:{" "}
+          <code>compression_saved_tokens * input_cost_per_token</code>
+        </p>
+        <p>
+          Prompt caching savings are the tokens the provider served from cache (Anthropic{" "}
+          <code>cache_read_input_tokens</code>, or OpenAI-style <code>prompt_tokens_details.cached_tokens</code>),
+          priced at the discount between the normal input rate and the cache-read rate:{" "}
+          <code>cache_read_input_tokens * max(input_cost_per_token - cache_read_input_token_cost, 0)</code>
+        </p>
+        <p>
+          Total saved is the sum of both drivers. Models without a separate cache-read price in the pricing map
+          contribute zero caching savings rather than erroring.
+        </p>
+      </div>
+    </CollapsibleContent>
+  </Collapsible>
 );
 
 const SummaryCard = ({ label, value, hint }: { label: string; value: string; hint?: string }) => (

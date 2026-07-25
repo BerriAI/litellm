@@ -215,17 +215,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-optimization/_components/CostOptimizationView.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-optimization/_components/PromptCompressionTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/cost-optimization/_components/UsageTab.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
