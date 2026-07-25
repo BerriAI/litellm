@@ -5,6 +5,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Mapping,
     Optional,
     Type,
     Union,
@@ -24,6 +25,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ResponsesAPIStreamOptions,
     ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
@@ -33,6 +35,17 @@ from litellm.types.utils import (
     SpecialEnums,
     Usage,
 )
+
+
+def normalize_responses_api_stream_options(
+    stream_options: object,
+) -> ResponsesAPIStreamOptions | None:
+    if not isinstance(stream_options, Mapping):
+        return None
+    include_obfuscation = stream_options.get("include_obfuscation")
+    if not isinstance(include_obfuscation, bool):
+        return None
+    return ResponsesAPIStreamOptions(include_obfuscation=include_obfuscation)
 
 
 class ResponsesAPIRequestUtils:
@@ -156,14 +169,18 @@ class ResponsesAPIRequestUtils:
             drop_params=should_drop_params,
         )
 
+        stream_options = normalize_responses_api_stream_options(mapped_params.get("stream_options"))
+        params_with_normalized_stream_options = {
+            **{key: value for key, value in mapped_params.items() if key != "stream_options"},
+            **({} if stream_options is None else {"stream_options": stream_options}),
+        }
+
         # add any allowed_openai_params to the mapped_params
-        mapped_params = _apply_openai_param_overrides(
-            optional_params=mapped_params,
+        return _apply_openai_param_overrides(
+            optional_params=params_with_normalized_stream_options,
             non_default_params=non_default_params,
             allowed_openai_params=allowed_openai_params or [],
         )
-
-        return mapped_params
 
     @staticmethod
     def get_requested_response_api_optional_param(

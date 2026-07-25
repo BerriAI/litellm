@@ -17,7 +17,11 @@ from typing import (
 )
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+    redact_nested_match_and_regex_keys,
+)
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.secret_managers.main import str_to_bool
@@ -106,6 +110,8 @@ def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[s
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
+
+    records_own_guardrail_information: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -954,17 +960,8 @@ class CustomGuardrail(CustomLogger):
                 # should not happen
                 container[key] = [existing, slg]
 
-        if "metadata" in request_data:
-            if request_data["metadata"] is None:
-                request_data["metadata"] = {}
-            _append_guardrail_info(request_data["metadata"])
-        elif "litellm_metadata" in request_data:
-            _append_guardrail_info(request_data["litellm_metadata"])
-        else:
-            # Ensure guardrail info is always logged (e.g. proxy may not have set
-            # metadata yet). Attach to "metadata" so spend log / standard logging see it.
-            request_data["metadata"] = {}
-            _append_guardrail_info(request_data["metadata"])
+        _, metadata_bucket = get_or_create_metadata_bucket(request_data)
+        _append_guardrail_info(metadata_bucket)
 
         _guardrail_self_recorded.set(True)
 
@@ -1223,7 +1220,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     """
     if logging_obj is None:
         return
-    meta_src = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    meta_src = request_data.get(get_metadata_variable_name_from_kwargs(request_data)) or {}
     slg_info = meta_src.get("standard_logging_guardrail_information")
     if not slg_info:
         return
@@ -1256,6 +1253,14 @@ def log_guardrail_information(func):
     so it stays correct when guardrails run concurrently (asyncio copies the
     context into each gathered task): counting shared entries would let one
     guardrail's append hide another guardrail's missing record.
+
+    A guardrail that only records an entry when it actually runs (e.g.
+    ``HeadroomGuardrail``, which returns the inputs untouched on an endpoint
+    whose payload it cannot act on) sets ``records_own_guardrail_information =
+    True`` so the auto-record is skipped even on the return paths where it
+    recorded nothing; otherwise a no-op early return would be logged as an
+    "allow"/"success" run even though the guardrail did nothing. The exception
+    branch below still records so a genuine failure is not lost.
     """
     import functools
     import inspect
@@ -1291,7 +1296,7 @@ def log_guardrail_information(func):
         self_recorded_token = _guardrail_self_recorded.set(False)
         try:
             response = await func(*args, **kwargs)
-            if _guardrail_self_recorded.get():
+            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
                 return response
             return self._process_response(
                 response=response,
@@ -1333,7 +1338,7 @@ def log_guardrail_information(func):
         self_recorded_token = _guardrail_self_recorded.set(False)
         try:
             response = func(*args, **kwargs)
-            if _guardrail_self_recorded.get():
+            if self.records_own_guardrail_information or _guardrail_self_recorded.get():
                 return response
             return self._process_response(
                 response=response,
