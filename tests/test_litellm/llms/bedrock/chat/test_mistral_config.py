@@ -1,6 +1,9 @@
+import pytest
+
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
     AmazonMistralConfig,
 )
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.utils import ModelResponse
 
 
@@ -30,3 +33,12 @@ def test_mistral_get_outputText():
 
     assert outputText == "Hi!"
     assert model_response.choices[0].finish_reason == "finish"
+
+
+def test_mistral_get_outputText_empty_choices():
+    model_response = ModelResponse()
+
+    with pytest.raises(BedrockError):
+        AmazonMistralConfig.get_outputText(
+            completion_response={"choices": []}, model_response=model_response
+        )
