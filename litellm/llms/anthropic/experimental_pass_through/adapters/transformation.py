@@ -331,6 +331,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "thinking",
             "output_format",
             "output_config",
+            "stop_sequences",
         ]
 
     def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
@@ -615,7 +616,7 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking_type = thinking.get("type", "disabled")
 
         if thinking_type == "disabled":
-            return None
+            return "none"
         elif thinking_type == "enabled":
             return reasoning_effort_from_thinking_budget(thinking.get("budget_tokens", 0))
         elif thinking_type == "adaptive":
@@ -919,6 +920,18 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
         )
 
+    def _translate_stop_sequences_to_openai(
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        new_kwargs: ChatCompletionRequest,
+    ) -> None:
+        if "stop_sequences" not in anthropic_message_request:
+            return
+        stop_sequences = anthropic_message_request["stop_sequences"]
+        if not stop_sequences:
+            return
+        new_kwargs["stop"] = stop_sequences
+
     def _translate_tools_to_openai(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
@@ -1095,6 +1108,11 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         ## CONVERT THINKING
         self._translate_thinking_to_openai(
+            anthropic_message_request=anthropic_message_request,
+            new_kwargs=new_kwargs,
+        )
+        ## CONVERT STOP_SEQUENCES
+        self._translate_stop_sequences_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
         )
