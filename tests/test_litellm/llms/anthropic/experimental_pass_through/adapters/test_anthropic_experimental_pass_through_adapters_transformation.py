@@ -1627,6 +1627,22 @@ def test_stop_sequences_translated_to_stop_for_non_claude_model():
     assert "stop_sequences" not in openai_request
 
 
+def test_empty_stop_sequences_does_not_set_stop():
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model=CACHE_CONTROL_NON_ANTHROPIC_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        stop_sequences=[],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert "stop" not in openai_request
+
+
 def test_cache_control_preserved_in_image_content_for_claude():
     """Cache control should be preserved in image content for Claude models."""
     anthropic_messages = [
