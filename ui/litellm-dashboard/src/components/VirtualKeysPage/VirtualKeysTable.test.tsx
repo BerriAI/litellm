@@ -4,8 +4,11 @@ import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search) }));
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -41,6 +44,10 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
   keyKeys: { lists: () => ["keys", "list"] },
+}));
+
+vi.mock("@/app/(dashboard)/hooks/keys/useKeyInfo", () => ({
+  useKeyInfo: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
@@ -139,6 +146,10 @@ const mockTeam: Team = {
 
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
 const mockUseTeams = useTeams as MockedFunction<typeof useTeams>;
+const mockUseKeyInfo = useKeyInfo as MockedFunction<typeof useKeyInfo>;
+
+const keyInfoResult = (data: KeyResponse | undefined, isError = false) =>
+  ({ data, isError }) as ReturnType<typeof useKeyInfo>;
 
 const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra: Record<string, unknown> = {}) =>
   ({
@@ -161,7 +172,10 @@ const openFilters = () => fireEvent.click(screen.getByRole("button", { name: "Fi
 beforeEach(() => {
   vi.clearAllMocks();
 
+  window.history.pushState(null, "", "/");
+
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
+  mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined));
 
   mockUseTeams.mockReturnValue({
     teams: [mockTeam],
@@ -344,22 +358,67 @@ it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / B
   });
 });
 
-it("should open KeyInfoView when clicking the key cell", async () => {
+it("clicking the key cell deep-links via ?key=", async () => {
   renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
   });
 
-  expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
-
   fireEvent.click(screen.getByText("Test Key Alias"));
+
+  expect(window.location.search).toContain(`key=${encodeURIComponent(mockKey.token)}`);
+});
+
+it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
+  window.history.pushState(null, "", `/?key=${encodeURIComponent(mockKey.token)}`);
+
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
   });
-
   expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
+  expect(mockUseKeyInfo).toHaveBeenLastCalledWith(mockKey.token, { enabled: false });
+
+  fireEvent.click(screen.getByText("Back to Keys"));
+
+  expect(window.location.search).not.toContain("key=");
+});
+
+it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
+  window.history.pushState(null, "", "/?key=other-key-hash");
+  mockUseKeyInfo.mockReturnValue(
+    keyInfoResult({ ...mockKey, token: "other-key-hash", key_alias: "Fetched Key Alias" }),
+  );
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+  });
+  expect(mockUseKeyInfo).toHaveBeenLastCalledWith("other-key-hash", { enabled: true });
+  expect(screen.getAllByText("Fetched Key Alias").length).toBeGreaterThan(0);
+});
+
+it("shows a loading state while a deep-linked key is being fetched", () => {
+  window.history.pushState(null, "", "/?key=other-key-hash");
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(screen.getByText("Loading key...")).toBeInTheDocument();
+  expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
+});
+
+it("shows 'Key not found' when the deep-linked key fails to load", async () => {
+  window.history.pushState(null, "", "/?key=missing-key-hash");
+  mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined, true));
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Key not found")).toBeInTheDocument();
+  });
 });
 
 it("should display 'Default Proxy Admin' for user_id when value is 'default_user_id'", async () => {
