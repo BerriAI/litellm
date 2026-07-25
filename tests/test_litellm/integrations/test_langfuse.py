@@ -1,5 +1,4 @@
 import datetime
-import os
 import sys
 import types
 import unittest
@@ -10,9 +9,6 @@ import pytest
 
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
-
-sys.path.insert(0, os.path.abspath("../.."))
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 # Import LangfuseUsageDetails directly from the module where it's defined
@@ -1024,7 +1020,7 @@ def test_max_langfuse_clients_limit():
         litellm.initialized_langfuse_clients = 0
 
         # First client should succeed
-        logger1 = LangFuseLogger(
+        LangFuseLogger(
             langfuse_public_key="test_key_1",
             langfuse_secret="test_secret_1",
             langfuse_host="https://test1.langfuse.com",
@@ -1032,7 +1028,7 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 1
 
         # Second client should succeed
-        logger2 = LangFuseLogger(
+        LangFuseLogger(
             langfuse_public_key="test_key_2",
             langfuse_secret="test_secret_2",
             langfuse_host="https://test2.langfuse.com",
@@ -1041,7 +1037,7 @@ def test_max_langfuse_clients_limit():
 
         # Third client should fail with exception
         with pytest.raises(Exception) as exc_info:
-            logger3 = LangFuseLogger(
+            LangFuseLogger(
                 langfuse_public_key="test_key_3",
                 langfuse_secret="test_secret_3",
                 langfuse_host="https://test3.langfuse.com",
