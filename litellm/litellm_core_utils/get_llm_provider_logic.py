@@ -346,6 +346,9 @@ def get_llm_provider(
                     elif endpoint == "https://pinstripes.io/v1":
                         custom_llm_provider = "pinstripes"
                         dynamic_api_key = get_secret_str("PINSTRIPES_API_KEY")
+                    elif endpoint == "https://api.openinfer.ai/v1":
+                        custom_llm_provider = "openinfer"
+                        dynamic_api_key = get_secret_str("OPENINFER_API_KEY")
                     elif endpoint == "https://api.meta.ai/v1":
                         custom_llm_provider = "meta"
                         dynamic_api_key = get_secret_str("META_API_KEY")

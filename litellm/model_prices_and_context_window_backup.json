@@ -46190,5 +46190,16 @@
                 }
             }
         ]
+    },
+    "openinfer/llama-3.1-8b-instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openinfer",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://api.openinfer.ai/v1/models"
     }
 }

@@ -728,6 +728,7 @@ openai_compatible_endpoints: List = [
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
+    "https://api.openinfer.ai/v1",
 ]
 
 
@@ -793,6 +794,7 @@ openai_compatible_providers: List = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "openinfer",  # OpenInfer - JSON-configured provider
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
