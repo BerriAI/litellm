@@ -300,6 +300,7 @@ lemonade_key: Optional[str] = None
 sap_service_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
 inception_key: Optional[str] = None
+commandcode_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -1924,6 +1925,11 @@ if TYPE_CHECKING:
     from .llms.cometapi.chat.transformation import CometAPIConfig as CometAPIConfig
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
+    )
+
+    from .llms.commandcode.chat.transformation import (
+    CommandCodeOpenAIConfig as CommandCodeOpenAIConfig,
+    CommandCodeAnthropicConfig as CommandCodeAnthropicConfig,
     )
     from .llms.azure.chat.gpt_5_transformation import (
         AzureOpenAIGPT5Config as AzureOpenAIGPT5Config,

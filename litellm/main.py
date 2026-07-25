@@ -215,6 +215,10 @@ from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
+from .llms.commandcode.chat.transformation import (
+    CommandCodeOpenAIConfig,
+    CommandCodeAnthropicConfig,
+)
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
@@ -336,6 +340,8 @@ heroku_transformation = HerokuChatConfig()
 oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
+commandcode_openai_config = CommandCodeOpenAIConfig()
+commandcode_anthropic_config = CommandCodeAnthropicConfig()
 
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
 ####### COMPLETION ENDPOINTS ################
@@ -1761,6 +1767,91 @@ def _complete_heroku(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
 
     return response
 
+
+def _complete_commandcode(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion = ctx.acompletion
+    api_base = ctx.api_base
+    api_key = ctx.api_key
+    client = ctx.client
+    custom_llm_provider = ctx.custom_llm_provider
+    headers = ctx.headers
+    litellm_params = ctx.litellm_params
+    logging = ctx.logging
+    messages = ctx.messages
+    model = ctx.model
+    model_response = ctx.model_response
+    optional_params = ctx.optional_params
+    shared_session = ctx.shared_session
+    stream = ctx.stream
+    timeout = ctx.timeout
+
+    # Resolve credentials
+    api_key = (
+        api_key
+        or litellm.commandcode_key
+        or get_secret_str("COMMANDCODE_API_KEY")
+        or get_secret_str("CMD_API_KEY")
+    )
+    api_base = (
+        api_base
+        or litellm.api_base
+        or get_secret_str("COMMANDCODE_API_BASE")
+        or "https://api.commandcode.ai"
+    )
+
+    # Claude models → Anthropic format
+    if "claude" in model.lower():
+        response = anthropic_chat_completions.completion(
+            model=model,
+            messages=messages,
+            api_base=api_base,
+            acompletion=acompletion,
+            custom_prompt_dict=litellm.custom_prompt_dict,
+            model_response=model_response,
+            print_verbose=ctx.print_verbose,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logger_fn=ctx.logger_fn,
+            encoding=_get_encoding(),
+            api_key=api_key,
+            logging_obj=logging,
+            headers=headers,
+            timeout=timeout,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+        )
+    else:
+        # All other models → OpenAI format
+        try:
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                timeout=timeout,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=_get_encoding(),
+                stream=stream,
+                provider_config=commandcode_openai_config,
+            )
+        except Exception as e:
+            logging.post_call(
+                input=messages,
+                api_key=api_key,
+                original_response=str(e),
+                additional_args={"headers": headers},
+            )
+            raise e
+
+    return response
 
 def _complete_ragflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
@@ -5502,7 +5593,8 @@ def completion(  # type: ignore
             response = _complete_fireworks_ai(_dispatch_ctx)
         elif custom_llm_provider == "heroku":
             response = _complete_heroku(_dispatch_ctx)
-
+        elif custom_llm_provider == "commandcode":
+            response = _complete_commandcode(_dispatch_ctx)
         elif custom_llm_provider == "ragflow":
             ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
             response = _complete_ragflow(_dispatch_ctx)
