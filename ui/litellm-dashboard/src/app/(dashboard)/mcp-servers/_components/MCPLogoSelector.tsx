@@ -1,6 +1,8 @@
 import React from "react";
-import { Input, Tooltip } from "antd";
-import { InfoCircleOutlined, LinkOutlined } from "@ant-design/icons";
+import { Info, Link as LinkIcon } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { cn } from "@/lib/cva.config";
 import { Logo } from "@/components/molecules/logo/Logo";
 import githubLogo from "../../../../../public/assets/logos/github.svg";
 import slackLogo from "../../../../../public/assets/logos/slack.svg";
@@ -61,72 +63,83 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
   };
 
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-sm font-medium text-gray-700">Logo</span>
-        <Tooltip title="Select a well-known logo or paste a URL to any image. The logo is shown on the admin and chat pages.">
-          <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
-        </Tooltip>
-      </div>
-
-      {/* Preview */}
-      {value && (
-        <div className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <Logo
-            src={selectedWellKnown?.src ?? value}
-            label="Selected"
-            className="w-10 h-10 object-contain rounded-sm"
-          />
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-gray-500 truncate">{value}</div>
-          </div>
-          <button
-            type="button"
-            onClick={() => onChange?.(undefined)}
-            className="text-xs text-gray-400 hover:text-red-500 cursor-pointer bg-transparent border-none"
-          >
-            ✕
-          </button>
+    <TooltipProvider>
+      <div>
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-sm font-medium">Logo</span>
+          <Tooltip>
+            <TooltipTrigger
+              render={<Info className="size-4 cursor-help text-muted-foreground" aria-label="About the logo" />}
+            />
+            <TooltipContent>
+              Select a well-known logo or paste a URL to any image. The logo is shown on the admin and chat pages.
+            </TooltipContent>
+          </Tooltip>
         </div>
-      )}
 
-      {/* Well-known logo grid */}
-      <div className="grid grid-cols-10 gap-1.5 mb-3">
-        {WELL_KNOWN_LOGOS.map((logo) => {
-          const isSelected = value === logo.url;
-          return (
-            <Tooltip key={logo.name} title={logo.name}>
-              <button
-                type="button"
-                onClick={() => handleSelect(logo.url)}
-                className={`flex items-center justify-center p-2 rounded-lg border transition-all cursor-pointer
-                  ${
-                    isSelected
-                      ? "border-blue-500 bg-blue-50 shadow-xs"
-                      : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
-                  }`}
-                style={{ width: 40, height: 40 }}
-              >
-                <img src={logo.src} alt={logo.name} className="w-5 h-5 object-contain" />
-              </button>
-            </Tooltip>
-          );
-        })}
+        {/* Preview */}
+        {value && (
+          <div className="mb-3 flex items-center gap-3 rounded-lg border border-border bg-muted p-3">
+            <Logo
+              src={selectedWellKnown?.src ?? value}
+              label="Selected"
+              className="h-10 w-10 rounded-sm object-contain"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs text-muted-foreground">{value}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onChange?.(undefined)}
+              className="cursor-pointer border-none bg-transparent text-xs text-muted-foreground hover:text-destructive"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* Well-known logo grid */}
+        <div className="mb-3 grid grid-cols-10 gap-1.5">
+          {WELL_KNOWN_LOGOS.map((logo) => {
+            const isSelected = value === logo.url;
+            return (
+              <Tooltip key={logo.name}>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={() => handleSelect(logo.url)}
+                      className={cn(
+                        "flex size-10 cursor-pointer items-center justify-center rounded-lg border p-2 transition-all",
+                        isSelected ? "border-primary bg-accent shadow-xs" : "border-border hover:bg-accent",
+                      )}
+                    >
+                      <img src={logo.src} alt={logo.name} className="h-5 w-5 object-contain" />
+                    </button>
+                  }
+                />
+                <TooltipContent>{logo.name}</TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
+
+        {/* Custom URL input */}
+        <InputGroup>
+          <InputGroupAddon>
+            <LinkIcon className="size-4 text-muted-foreground" />
+          </InputGroupAddon>
+          <InputGroupInput
+            placeholder="Or paste a custom logo URL..."
+            value={value && !selectedWellKnown ? value : ""}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              onChange?.(v || undefined);
+            }}
+          />
+        </InputGroup>
       </div>
-
-      {/* Custom URL input */}
-      <Input
-        prefix={<LinkOutlined className="text-gray-400" />}
-        placeholder="Or paste a custom logo URL..."
-        value={value && !selectedWellKnown ? value : ""}
-        onChange={(e) => {
-          const v = e.target.value.trim();
-          onChange?.(v || undefined);
-        }}
-        className="rounded-lg"
-        size="small"
-      />
-    </div>
+    </TooltipProvider>
   );
 };
 

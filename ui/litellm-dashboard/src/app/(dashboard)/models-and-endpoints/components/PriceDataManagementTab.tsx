@@ -1,4 +1,4 @@
-import { TabPanel, Text, Title } from "@tremor/react";
+import { Text, Title } from "@tremor/react";
 import PriceDataReload from "@/components/price_data_reload";
 import React from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -9,7 +9,7 @@ const PriceDataManagementTab = () => {
   const { refetch: refetchModelCostMap } = useModelCostMap();
 
   return (
-    <TabPanel>
+    <div>
       <div className="p-6">
         <div className="mb-6">
           <Title>Price Data Management</Title>
@@ -28,7 +28,7 @@ const PriceDataManagementTab = () => {
           className="w-full"
         />
       </div>
-    </TabPanel>
+    </div>
   );
 };
 

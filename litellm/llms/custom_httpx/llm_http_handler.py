@@ -2107,8 +2107,7 @@ class BaseLLMHTTPHandler:
         rust_messages_response = await self._maybe_rust_anthropic_messages(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            stream=stream or False,
-            rust_stream_eligible=bool(stream) and not self._has_agentic_completion_hook(logging_obj),
+            has_agentic_hook=self._has_agentic_completion_hook(logging_obj),
             model=model,
             api_key=api_key,
             api_base=api_base,
@@ -2266,8 +2265,7 @@ class BaseLLMHTTPHandler:
         *,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
-        stream: bool,
-        rust_stream_eligible: bool,
+        has_agentic_hook: bool,
         model: str,
         api_key: str | None,
         api_base: str | None,
@@ -2279,7 +2277,7 @@ class BaseLLMHTTPHandler:
             return None
         if litellm_params.get("rust") is not True and not BaseLLMHTTPHandler._rust_env_enabled():
             return None
-        if stream and not rust_stream_eligible:
+        if has_agentic_hook:
             return None
 
         from litellm.rust_bridge import messages as rust_messages_bridge
