@@ -9,4 +9,5 @@
 /litellm/repositories/ @yassin-berriai
 /litellm/proxy/spend_tracking/ @yassin-berriai
 /litellm/proxy/analytics_endpoints/ @yassin-berriai
-/litellm/proxy/auth/ @yuneng-berri
+/litellm/proxy/management_endpoints/ @yuneng-berri
+/litellm/proxy/auth/ @ryan-crabbe-berri
