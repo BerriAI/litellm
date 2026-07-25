@@ -692,16 +692,17 @@ async def test_mantle_anthropic_messages_streaming_sends_stream_and_passes_throu
 @pytest.fixture
 def local_cost_map(monkeypatch):
     import litellm
+    from litellm.utils import _invalidate_model_cost_lowercase_map
 
     original_model_cost = litellm.model_cost
     try:
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        litellm.get_model_info.cache_clear()
+        _invalidate_model_cost_lowercase_map()
         yield
     finally:
         litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
+        _invalidate_model_cost_lowercase_map()
 
 
 @pytest.mark.parametrize(
