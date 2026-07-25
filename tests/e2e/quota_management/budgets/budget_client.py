@@ -61,7 +61,8 @@ class UserDeleteBody(BaseModel):
 
 class CustomerNewBody(BaseModel):
     user_id: str
-    max_budget: float
+    max_budget: float | None = None
+    budget_id: str | None = None
 
 
 class OrgNewBody(BaseModel):
@@ -151,9 +152,10 @@ class TagDeleteBody(BaseModel):
 
 
 class BudgetNewBody(BaseModel):
-    max_budget: float
+    max_budget: float | None = None
     soft_budget: float | None = None
     budget_duration: str | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
 
 
 class BudgetNewResponse(BaseModel):
@@ -326,11 +328,19 @@ class BudgetClient:
 
     # ---- customer / end-user -------------------------------------------
 
-    def create_customer(self, customer_id: str, *, max_budget: float) -> str:
+    def create_customer(
+        self,
+        customer_id: str,
+        *,
+        max_budget: float | None = None,
+        budget_id: str | None = None,
+    ) -> str:
         resp = self.proxy.transport.send(
             "/customer/new",
             headers=self.proxy.transport.master,
-            json=CustomerNewBody(user_id=customer_id, max_budget=max_budget),
+            json=CustomerNewBody(
+                user_id=customer_id, max_budget=max_budget, budget_id=budget_id
+            ),
         )
         assert resp.ok, resp.body
         return customer_id
@@ -509,9 +519,10 @@ class BudgetClient:
     def create_budget(
         self,
         *,
-        max_budget: float,
+        max_budget: float | None = None,
         soft_budget: float | None = None,
         budget_duration: str | None = None,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
     ) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -521,6 +532,7 @@ class BudgetClient:
                     max_budget=max_budget,
                     soft_budget=soft_budget,
                     budget_duration=budget_duration,
+                    model_max_budget=model_max_budget,
                 ),
                 response_type=BudgetNewResponse,
             )

@@ -11,6 +11,7 @@ import time
 import pytest
 
 from budget_client import BudgetClient, is_budget_block, model_budget
+from models import ModelBudgetEntry
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
@@ -56,3 +57,49 @@ def test_model_max_budget_isolates_per_model(
         f"{FREE_MODEL} was blocked by {CAPPED_MODEL}'s budget; per-model caps not isolated"
     )
     require_successful_call(other)
+
+
+@pytest.mark.covers("quota_management.budget.end_user_model_max.blocks_over_limit")
+def test_end_user_model_max_budget_enforces_per_model_rpm(
+    client: BudgetClient, resources: ResourceManager
+) -> None:
+    """A per-model rpm_limit on an end user's budget has to actually throttle.
+
+    `model_max_budget` accepts an `rpm_limit` alongside the spend cap, and a
+    customer uses it to hold one end user to a slow rate on an expensive model
+    without limiting the shared key everyone else runs through. The budget is
+    attached to the end user rather than to the key, which is the case that
+    matters here: the same shape already works when the budget hangs off a key.
+    """
+    budget_id = client.create_budget(
+        model_max_budget={
+            FREE_MODEL: ModelBudgetEntry(
+                budget_limit=1000.0, time_period="1d", rpm_limit=1
+            )
+        }
+    )
+    resources.defer(lambda: client.delete_budget(budget_id))
+
+    customer = f"e2e-mmb-cust-{unique_marker()}"
+    _ = client.create_customer(customer, budget_id=budget_id)
+    resources.defer(lambda: client.delete_customers([customer]))
+
+    key = client.generate_key()
+    resources.defer(lambda: client.delete_key(key))
+
+    statuses = tuple(
+        client.chat(
+            key, FREE_MODEL, f"hi {unique_marker()}", max_tokens=8, user=customer
+        ).status_code
+        for _ in range(3)
+    )
+
+    assert statuses[0] == 200, (
+        f"the first call under an rpm_limit of 1 should succeed, got {statuses[0]}"
+    )
+    assert 429 in statuses[1:], (
+        f"an end-user budget with model_max_budget rpm_limit=1 did not throttle: "
+        f"three calls returned {statuses}. The limit is accepted and stored by "
+        f"/budget/new but never enforced for end-user budgets, so a customer "
+        f"cannot rate-limit an individual end user on a shared key"
+    )
