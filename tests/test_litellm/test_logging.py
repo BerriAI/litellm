@@ -328,3 +328,75 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+SECRET_VALUE = "sk-ant-test-DO-NOT-LEAK-12345"
+
+
+def _secret_payload():
+    return {
+        "model": "claude-3-5-sonnet-20241022",
+        "api_key": SECRET_VALUE,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+
+def test_utils_print_verbose_redacts_stdout_when_set_verbose(capsys, monkeypatch):
+    from litellm.utils import print_verbose as utils_print_verbose
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    utils_print_verbose(_secret_payload())
+    out = capsys.readouterr().out
+    assert SECRET_VALUE not in out
+    assert "REDACTED" in out
+
+
+def test_logging_print_verbose_redacts_stdout_when_set_verbose(capsys, monkeypatch):
+    import litellm._logging as _logging_mod
+
+    monkeypatch.setattr(_logging_mod, "set_verbose", True)
+    _logging_mod.print_verbose(_secret_payload())
+    out = capsys.readouterr().out
+    assert SECRET_VALUE not in out
+    assert "REDACTED" in out
+
+
+def test_utils_print_verbose_sanitizes_control_chars(capsys, monkeypatch):
+    from litellm.utils import print_verbose as utils_print_verbose
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    utils_print_verbose("line1\r\nINJECTED\x00\x1fend")
+    out = capsys.readouterr().out
+    assert "\\r\\n" in out
+    assert "\r\n" not in out.replace("\\r\\n", "")
+    assert "\x00" not in out and "\x1f" not in out
+
+
+def test_logging_print_verbose_sanitizes_control_chars(capsys, monkeypatch):
+    import litellm._logging as _logging_mod
+
+    monkeypatch.setattr(_logging_mod, "set_verbose", True)
+    _logging_mod.print_verbose("line1\r\nINJECTED\x00\x1fend")
+    out = capsys.readouterr().out
+    assert "\\r\\n" in out
+    assert "\r\n" not in out.replace("\\r\\n", "")
+    assert "\x00" not in out and "\x1f" not in out
+
+
+def test_print_verbose_redaction_opt_out_still_sanitizes(capsys, monkeypatch):
+    import litellm._logging as _logging_mod
+
+    monkeypatch.setattr(_logging_mod, "set_verbose", True)
+    monkeypatch.setattr(_logging_mod, "_ENABLE_SECRET_REDACTION", False)
+    _logging_mod.print_verbose(f"{SECRET_VALUE}\r\ntail")
+    out = capsys.readouterr().out
+    assert SECRET_VALUE in out
+    assert "\\r\\n" in out
+
+
+def test_utils_print_verbose_skips_stdout_when_not_verbose(capsys, monkeypatch):
+    from litellm.utils import print_verbose as utils_print_verbose
+
+    monkeypatch.setattr(litellm, "set_verbose", False)
+    utils_print_verbose(_secret_payload())
+    assert capsys.readouterr().out == ""

@@ -1,6 +1,7 @@
 import ast
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -410,10 +411,18 @@ def _enable_debugging():
     verbose_proxy_logger.disabled = False
 
 
+def _sanitize_log_message(message: str) -> str:
+    sanitized_message = message.replace("\r", "\\r").replace("\n", "\\n")
+    sanitized_message = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "?", sanitized_message)
+    return sanitized_message
+
+
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
+            print(  # noqa: T201
+                _sanitize_log_message(redact_secrets(str(print_statement)))
+            )
     except Exception:
         pass
 
