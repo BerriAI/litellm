@@ -617,7 +617,7 @@ class ChunkProcessor:
 
                 prompt_tokens_details = self._capture_prompt_tokens_details(
                     cast(
-                        Optional[PromptTokensDetailsWrapper],
+                        "PromptTokensDetailsWrapper | None",
                         usage_chunk_dict["prompt_tokens_details"],
                     ),
                     prompt_tokens_details,
@@ -654,9 +654,9 @@ class ChunkProcessor:
 
     @staticmethod
     def _capture_prompt_tokens_details(
-        incoming: Optional[PromptTokensDetailsWrapper],
-        current: Optional[PromptTokensDetailsWrapper],
-    ) -> Optional[PromptTokensDetailsWrapper]:
+        incoming: PromptTokensDetailsWrapper | None,
+        current: PromptTokensDetailsWrapper | None,
+    ) -> PromptTokensDetailsWrapper | None:
         if incoming is not None:
             return incoming
         return current
