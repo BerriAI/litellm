@@ -4101,3 +4101,131 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_get_standard_logging_metadata_raw_sk_key_in_hash_is_hashed():
+    """
+    SECURITY: a raw virtual key (`sk-...`) must never be persisted under
+    `user_api_key_hash`. It should be SHA-256 hashed before it can reach any
+    logging sink (e.g. the S3 request/llm logs).
+    """
+    import hashlib
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    raw_key = "sk-1234567890abcdefghijklmnop"
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": raw_key}
+    )
+    assert result["user_api_key_hash"] != raw_key
+    assert result["user_api_key_hash"] == hashlib.sha256(raw_key.encode()).hexdigest()
+    assert not str(result["user_api_key_hash"]).startswith("sk-")
+
+
+def test_get_standard_logging_metadata_raw_sk_key_via_user_api_key_is_hashed():
+    """A raw `sk-` value arriving under the `user_api_key` alias is also hashed."""
+    import hashlib
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    raw_key = "sk-abcdefghijklmnopqrstuvwxyz"
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": raw_key, "user_api_key": raw_key}
+    )
+    assert result["user_api_key_hash"] == hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def test_get_standard_logging_metadata_valid_hash_unchanged():
+    """An already-hashed value (valid sha256) is preserved verbatim."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    valid_hash = "a" * 64
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": valid_hash}
+    )
+    assert result["user_api_key_hash"] == valid_hash
+
+
+def test_get_standard_logging_metadata_non_sk_hash_value_unchanged():
+    """
+    Non-`sk-` opaque values in user_api_key_hash are left untouched (we scope the
+    rewrite narrowly to the raw-virtual-key shape to avoid mangling other ids).
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": "test_hash"}
+    )
+    assert result["user_api_key_hash"] == "test_hash"
+
+
+def test_get_standard_logging_metadata_bearer_prefixed_raw_key_is_hashed():
+    """
+    SECURITY: a raw key still wrapped in its `Bearer ` Authorization prefix must
+    also be hashed -- `Bearer sk-...` must not slip through as cleartext. The
+    stored hash must equal the canonical hash of the *bare* key so attribution
+    joins still work.
+    """
+    import hashlib
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    raw_key = "sk-1234567890abcdefghijklmnop"
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": f"Bearer {raw_key}"}
+    )
+    assert "sk-" not in str(result["user_api_key_hash"])
+    assert result["user_api_key_hash"] == hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def test_get_standard_logging_metadata_whitespace_padded_raw_key_is_hashed():
+    """
+    SECURITY: leading/trailing whitespace must not defeat the sanitizer. A
+    padded `" sk-..."` (or `"  Bearer sk-... "`) must still be hashed, not
+    returned verbatim.
+    """
+    import hashlib
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    raw_key = "sk-1234567890abcdefghijklmnop"
+    for padded in (f" {raw_key}", f"  Bearer {raw_key} "):
+        result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+            {"user_api_key_hash": padded}
+        )
+        assert "sk-" not in str(result["user_api_key_hash"])
+        assert result["user_api_key_hash"] == hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def test_get_standard_logging_metadata_raw_jwt_is_hashed():
+    """
+    SECURITY: a raw JWT placed in user_api_key_hash must not be persisted in
+    cleartext either. The sanitizer covers the JWT shape (hashed as
+    `hashed-jwt-<hash>`), not just `sk-` keys.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    raw_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJl"
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": raw_jwt}
+    )
+    assert result["user_api_key_hash"] != raw_jwt
+    assert str(result["user_api_key_hash"]).startswith("hashed-jwt-")
+
+
+def test_get_standard_logging_metadata_absent_hash_stays_none():
+    """No user_api_key_hash in input leaves the field as None (nothing to hash)."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata({})
+    assert result["user_api_key_hash"] is None
+
+
+def test_get_standard_logging_metadata_non_string_hash_unchanged():
+    """A non-string value in user_api_key_hash is passed through unchanged."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": 12345}
+    )
+    assert result["user_api_key_hash"] == 12345
