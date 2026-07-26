@@ -97,6 +97,38 @@ class _CombinedChunkSplitter:
         )
 
     @staticmethod
+    def _has_mixed_reasoning_and_text(chunk: Any) -> bool:
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            return False
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return False
+        return bool(getattr(delta, "content", None) and getattr(delta, "reasoning_content", None))
+
+    @staticmethod
+    def _clear_usage(chunk: Any) -> None:
+        if hasattr(chunk, "usage"):
+            chunk.usage = None
+        hidden_params = getattr(chunk, "_hidden_params", None)
+        if isinstance(hidden_params, dict) and "usage" in hidden_params:
+            chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
+
+    @staticmethod
+    def _split_mixed_reasoning_and_text(chunk: Any) -> List[Any]:
+        if not _CombinedChunkSplitter._has_mixed_reasoning_and_text(chunk):
+            return [chunk]
+
+        reasoning_chunk = copy.deepcopy(chunk)
+        reasoning_chunk.choices[0].finish_reason = None
+        reasoning_chunk.choices[0].delta.content = None
+        _CombinedChunkSplitter._clear_usage(reasoning_chunk)
+
+        text_chunk = copy.deepcopy(chunk)
+        text_chunk.choices[0].delta.reasoning_content = None
+        return [reasoning_chunk, text_chunk]
+
+    @staticmethod
     def _split(chunk: Any) -> List[Any]:
         """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
         if not _CombinedChunkSplitter._is_combined(chunk):
@@ -105,6 +137,7 @@ class _CombinedChunkSplitter:
         # Content chunk: keep the delta payload, clear the finish_reason.
         content_chunk = copy.deepcopy(chunk)
         content_chunk.choices[0].finish_reason = None
+        _CombinedChunkSplitter._clear_usage(content_chunk)
 
         # Finish chunk: keep finish_reason (and usage), clear the delta payload.
         finish_chunk = copy.deepcopy(chunk)
@@ -127,7 +160,11 @@ class _CombinedChunkSplitter:
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
         chunk = next(self._sync_iter)  # propagates StopIteration when exhausted
-        self._buffer.extend(self._split(chunk))
+        self._buffer.extend(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_mixed_reasoning_and_text(combined_chunk)
+        )
         return self._buffer.popleft()
 
     def __aiter__(self) -> "AsyncIterator[Any]":
@@ -139,7 +176,11 @@ class _CombinedChunkSplitter:
         if self._async_iter is None:
             self._async_iter = self._stream.__aiter__()
         chunk = await self._async_iter.__anext__()  # propagates StopAsyncIteration
-        self._buffer.extend(self._split(chunk))
+        self._buffer.extend(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_mixed_reasoning_and_text(combined_chunk)
+        )
         return self._buffer.popleft()
 
 
