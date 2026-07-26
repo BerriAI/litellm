@@ -45,7 +45,7 @@ vi.mock("@/components/shared/charts", () => ({
   CustomLegend: ({ categories }: { categories: readonly string[] }) => (
     <div data-testid="chart-legend">{categories.join(",")}</div>
   ),
-  DEFAULT_COLOR_CYCLE: ["emerald", "blue", "violet", "amber"],
+  SEQUENTIAL_COLOR_RAMP: ["indigo", "blue", "sky", "cyan"],
 }));
 
 import UsageTab from "./UsageTab";

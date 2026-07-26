@@ -19,7 +19,7 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: () => <div />,
   BarChart: () => <div />,
   CustomLegend: () => <div />,
-  DEFAULT_COLOR_CYCLE: ["emerald"],
+  SEQUENTIAL_COLOR_RAMP: ["indigo"],
 }));
 
 vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => ({

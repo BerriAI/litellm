@@ -50,6 +50,17 @@ export const DEFAULT_COLOR_CYCLE: readonly ChartColor[] = [
   "rose",
 ];
 
+export const SEQUENTIAL_COLOR_RAMP: readonly ChartColor[] = [
+  "indigo",
+  "blue",
+  "sky",
+  "cyan",
+  "teal",
+  "emerald",
+  "green",
+  "lime",
+];
+
 export const chartColorValue = (color: ChartColor): string => `var(--color-${color}-500, ${CHART_COLOR_HEX[color]})`;
 
 export const categoryFills = (count: number, colors?: readonly ChartColor[]): readonly string[] => {
