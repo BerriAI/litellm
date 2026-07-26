@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Sequence
 
-from litellm.proxy._types import DB_CONNECTION_ERROR_TYPES
+import httpx
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -37,7 +37,8 @@ class ToolUsageTransaction:
 def response_tool_call_names(completion_response: Any) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
-    API output items, Anthropic Messages tool_use blocks)."""
+    API output items, Anthropic Messages tool_use blocks). Reads every choice of
+    an ``n>1`` chat response: each choice cost money and its tool calls ran."""
     if completion_response is None or isinstance(completion_response, Exception):
         return ()
     from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -46,7 +47,7 @@ def response_tool_call_names(completion_response: Any) -> tuple[str, ...]:
 
     return tuple(
         stripped
-        for tool_call in get_tool_calls_from_response(completion_response)
+        for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
         if isinstance(name := tool_call.get("name"), str) and (stripped := name.strip())
     )
 
@@ -97,11 +98,13 @@ async def flush_tool_usage_transactions(
     n_retry_times: int = 3,
 ) -> None:
     """Write index rows and rollup upserts for a drained queue batch in one
-    transaction. Connection errors are retried with backoff, which cannot
-    double-count because a failed batch commits nothing; every other error
-    propagates so the caller drops the batch. Callers must not add their own
-    retry around this function: a batch that DID commit must never run again,
-    since the rollup update increments counters."""
+    transaction. Retries only ConnectError, the one failure that proves the
+    statements never reached the database. Post-send failures (Read timeouts
+    and errors) are ambiguous and are NOT retried: the engine can abandon the
+    transaction open on the pooled connection, so a retry's statements stack
+    into the same transaction and one commit applies both increment sets.
+    Ambiguous failures drop the batch; the caller logs it at error. Callers
+    must not add their own retry around this function."""
     if not transactions:
         return
 
@@ -141,7 +144,7 @@ async def flush_tool_usage_transactions(
                         },
                     )
             return
-        except DB_CONNECTION_ERROR_TYPES:
+        except httpx.ConnectError:
             if attempt >= n_retry_times:
                 raise
             await asyncio.sleep(2**attempt + random.uniform(0, 1))

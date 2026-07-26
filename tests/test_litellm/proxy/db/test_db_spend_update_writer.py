@@ -181,6 +181,24 @@ async def test_update_database_enqueues_realtime_tool_usage():
     assert prisma.tool_usage_transactions[0].tool_names == ("rt_tool",)
 
 
+def test_enqueue_tool_registry_upsert_reads_every_choice():
+    from types import SimpleNamespace as NS
+
+    db_writer = DBSpendUpdateWriter()
+    db_writer.tool_discovery_queue = MagicMock()
+    response = NS(
+        choices=[
+            NS(message=NS(tool_calls=[NS(function=NS(name="tool_alpha"))])),
+            NS(message=NS(tool_calls=[NS(function=NS(name="tool_beta"))])),
+        ]
+    )
+
+    db_writer._enqueue_tool_registry_upsert(kwargs={}, completion_response=response)
+
+    enqueued = [call.args[0]["tool_name"] for call in db_writer.tool_discovery_queue.add_update.call_args_list]
+    assert enqueued == ["tool_alpha", "tool_beta"]
+
+
 @pytest.mark.asyncio
 async def test_update_database_skips_tool_usage_when_spend_logs_disabled():
     db_writer = DBSpendUpdateWriter()
