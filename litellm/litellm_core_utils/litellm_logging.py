@@ -3,6 +3,7 @@
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 import copy
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -4513,8 +4514,13 @@ def is_valid_sha256_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
-def _sanitize_user_api_key_hash(value: Optional[Any]) -> Optional[str]:
-    """Hash a raw virtual key/JWT so it is never persisted to a log sink in cleartext."""
+def _sanitize_user_api_key_hash(value: "Any | None") -> "str | None":
+    """Hash a raw virtual key/JWT so it is never persisted to a log sink in cleartext.
+
+    Mirrors ``UserAPIKeyAuth._safe_hash_litellm_api_key`` (same sha256 of ``sk-``
+    keys and ``hashed-jwt-`` shape) so attribution joins match, but stays inline
+    to avoid importing the optional proxy package from this core logging path.
+    """
     if not value or not isinstance(value, str):
         return value
     if is_valid_sha256_hash(value):
@@ -4522,11 +4528,11 @@ def _sanitize_user_api_key_hash(value: Optional[Any]) -> Optional[str]:
     candidate = value.strip()
     if candidate[:7].lower() == "bearer ":
         candidate = candidate[7:].strip()
-
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    sanitized = UserAPIKeyAuth._safe_hash_litellm_api_key(candidate)
-    return sanitized if sanitized != candidate else value
+    if candidate.startswith("sk-"):
+        return hashlib.sha256(candidate.encode()).hexdigest()
+    if len(candidate.split(".")) == 3:
+        return f"hashed-jwt-{hashlib.sha256(candidate.encode()).hexdigest()}"
+    return value
 
 
 class StandardLoggingPayloadSetup:
