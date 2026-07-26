@@ -57,7 +57,11 @@ class AlertingHangingRequestCheck:
         if request_data is None:
             return
 
-        request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs=request_data)
+        request_metadata: Final = (
+            get_litellm_metadata_from_kwargs(kwargs=request_data)
+            or request_data.get("metadata", {})
+            or {}
+        )
         model: Final = request_data.get("model", "")
         api_base: str | None = None
 
