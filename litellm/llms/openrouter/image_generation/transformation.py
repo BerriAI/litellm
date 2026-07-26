@@ -200,11 +200,11 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         """
         usage_data = response_json.get("usage", {})
         if usage_data:
-            prompt_tokens = usage_data.get("prompt_tokens", 0)
-            total_tokens = usage_data.get("total_tokens", 0)
+            prompt_tokens = int(usage_data.get("prompt_tokens", 0))
+            total_tokens = int(usage_data.get("total_tokens", 0))
 
             completion_tokens_details = usage_data.get("completion_tokens_details", {})
-            image_tokens = completion_tokens_details.get("image_tokens", 0)
+            image_tokens = int(completion_tokens_details.get("image_tokens", 0))
 
             model_response.usage = ImageUsage(
                 input_tokens=prompt_tokens,

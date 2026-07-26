@@ -194,6 +194,34 @@ def test_is_chunk_non_empty_with_annotations(
     )
 
 
+def test_is_chunk_non_empty_gemini_thinking_in_original_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Gemini thinking chunks: model_response is a fresh empty object but
+    response_obj['original_chunk'] carries reasoning_content.  The chunk
+    must be considered non-empty so it reaches the caller."""
+    original_chunk = ModelResponseStream(
+        id="gemini-chunk-1",
+        choices=[
+            {
+                "index": 0,
+                "delta": {"content": None, "reasoning_content": "I need to add 2+2"},
+                "finish_reason": None,
+            }
+        ],
+    )
+    # model_response is a fresh empty object (as created by model_response_creator)
+    empty_model_response = ModelResponseStream(
+        id="gemini-chunk-1",
+        choices=[{"index": 0, "delta": {"content": None}, "finish_reason": None}],
+    )
+    assert initialized_custom_stream_wrapper.is_chunk_non_empty(
+        completion_obj={"content": ""},
+        model_response=empty_model_response,
+        response_obj={"original_chunk": original_chunk},
+    )
+
+
 def test_optional_combine_thinking_block_in_choices(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):

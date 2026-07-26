@@ -785,6 +785,16 @@ class CustomStreamWrapper:
                 "reasoning_content" in model_response.choices[0].delta
                 and model_response.choices[0].delta.reasoning_content is not None
             )
+            or (
+                response_obj.get("original_chunk") is not None
+                and len(getattr(response_obj["original_chunk"], "choices", [])) > 0
+                and getattr(
+                    response_obj["original_chunk"].choices[0].delta,
+                    "reasoning_content",
+                    None,
+                )
+                is not None
+            )
             or (model_response.choices[0].delta.provider_specific_fields is not None)
             or (
                 "provider_specific_fields" in model_response
