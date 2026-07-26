@@ -15,7 +15,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.vertex_ai import UsageMetadata
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
 
@@ -1522,6 +1522,36 @@ def test_vertex_ai_usage_metadata_missing_token_count():
     assert (
         result.completion_tokens_details.audio_tokens == 0
     )  # Default value for missing tokenCount
+
+
+@pytest.mark.parametrize(
+    "handler_name",
+    ["_handle_blocked_response", "_handle_content_policy_violation"],
+)
+def test_vertex_ai_content_filter_usage_includes_hidden_token_components(
+    handler_name: str,
+):
+    config = VertexGeminiConfig()
+    completion_response = GenerateContentResponseBody(
+        usageMetadata=UsageMetadata(
+            promptTokenCount=2457,
+            toolUsePromptTokenCount=11,
+            candidatesTokenCount=337,
+            thoughtsTokenCount=806,
+            totalTokenCount=3611,
+        )
+    )
+
+    result = getattr(config, handler_name)(
+        model_response=ModelResponse(),
+        completion_response=completion_response,
+    )
+
+    assert result.choices[0].finish_reason == "content_filter"
+    assert result.usage.prompt_tokens == 2468
+    assert result.usage.completion_tokens == 1143
+    assert result.usage.total_tokens == 3611
+    assert result.usage.prompt_tokens + result.usage.completion_tokens == 3611
 
 
 def test_vertex_ai_process_candidates_with_grounding_metadata():
