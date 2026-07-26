@@ -5,6 +5,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 GREENPT_BASE_URL = "https://api.greenpt.ai/v1"
 
@@ -69,3 +71,28 @@ def test_greenpt_provider_resolution():
     assert model == "gemma4"
     assert provider == "greenpt"
     assert api_base == GREENPT_BASE_URL
+
+
+def test_greenpt_rerank_config():
+    config = ProviderConfigManager.get_provider_rerank_config(
+        model="green-rerank",
+        provider=LlmProviders.GREENPT,
+        api_base=GREENPT_BASE_URL,
+        present_version_params=[],
+    )
+    assert config.get_complete_url(GREENPT_BASE_URL, "green-rerank") == (f"{GREENPT_BASE_URL}/rerank")
+    assert config.transform_rerank_request(
+        model="green-rerank",
+        optional_rerank_params={
+            "query": "low-carbon inference",
+            "documents": ["GreenPT", "Other provider"],
+            "return_documents": False,
+        },
+        headers={},
+    ) == {
+        "model": "green-rerank",
+        "query": "low-carbon inference",
+        "documents": ["GreenPT", "Other provider"],
+        "top_n": 2,
+        "return_documents": False,
+    }

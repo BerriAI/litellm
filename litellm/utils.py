@@ -8008,6 +8008,10 @@ class ProviderConfigManager:
             )
 
             return DashScopeRerankConfig()
+        elif litellm.LlmProviders.GREENPT == provider:
+            from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
+
+            return GreenPTRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod

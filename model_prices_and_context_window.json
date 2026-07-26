@@ -46295,6 +46295,14 @@
         "output_cost_per_token": 0,
         "source": "https://docs.greenpt.ai/pricing"
     },
+    "greenpt/green-rerank": {
+        "input_cost_per_token": 1.36524e-07,
+        "litellm_provider": "greenpt",
+        "max_input_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "rerank",
+        "source": "https://docs.greenpt.ai/pricing"
+    },
     "greenpt/green-l": {
         "input_cost_per_token": 2.84425e-07,
         "litellm_provider": "greenpt",
@@ -46370,6 +46378,19 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "greenpt/kimi-k2.7-code": {
+        "input_cost_per_token": 9.44291e-07,
+        "litellm_provider": "greenpt",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.380145e-06,
+        "source": "https://docs.greenpt.ai/pricing",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "greenpt/minimax-m2.5": {
         "input_cost_per_token": 1.93409e-07,
         "litellm_provider": "greenpt",
@@ -46382,6 +46403,16 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
+    },
+    "greenpt/qwen3-embedding-8b": {
+        "input_cost_per_token": 2.84425e-07,
+        "litellm_provider": "greenpt",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "max_tokens": 32768,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "source": "https://docs.greenpt.ai/pricing"
     },
     "fallback_generalizations": {
         "rules": [
