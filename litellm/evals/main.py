@@ -39,45 +39,38 @@ DEFAULT_OPENAI_API_BASE = "https://api.openai.com"
 
 # Internal LiteLLM metadata keys that the proxy attaches to `metadata` and that
 # must never be forwarded to the provider.
+#
+# The `user_api_key_` family is matched by prefix rather than by name, matching what
+# the proxy already does to user-supplied metadata in
+# `litellm/proxy/litellm_pre_call_utils.py` ("Strip spoofable auth metadata"). An
+# exact-name list drifts: it currently misses 13 of the 33 `user_api_key_*` keys in
+# the codebase, including `user_api_key_token`.
+INTERNAL_METADATA_KEY_PREFIXES = ("user_api_key_", "litellm_")
+
 INTERNAL_METADATA_KEYS = {
     "headers",
     "requester_metadata",
-    "user_api_key_hash",
-    "user_api_key_alias",
-    "user_api_key_spend",
-    "user_api_key_max_budget",
-    "user_api_key_team_id",
-    "user_api_key_user_id",
-    "user_api_key_org_id",
-    "user_api_key_team_alias",
-    "user_api_key_end_user_id",
-    "user_api_key_user_email",
-    "user_api_key_request_route",
-    "user_api_key_budget_reset_at",
-    "user_api_key_auth_metadata",
     "user_api_key",
     "user_api_end_user_max_budget",
-    "user_api_key_auth",
-    "litellm_api_version",
     "global_max_parallel_requests",
-    "user_api_key_team_max_budget",
-    "user_api_key_team_spend",
-    "user_api_key_model_max_budget",
-    "user_api_key_user_spend",
-    "user_api_key_user_max_budget",
-    "user_api_key_metadata",
     "endpoint",
-    "litellm_parent_otel_span",
     "requester_ip_address",
     "user_agent",
+    "spend_logs_metadata",
+    "proxy_server_request",
+    "standard_logging_object",
 }
+
+
+def _is_internal_metadata_key(key: str) -> bool:
+    return key in INTERNAL_METADATA_KEYS or key.startswith(INTERNAL_METADATA_KEY_PREFIXES)
 
 
 def _user_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Return only the caller's metadata keys, or None if nothing is left."""
     if metadata is None:
         return None
-    filtered = {k: v for k, v in metadata.items() if k not in INTERNAL_METADATA_KEYS}
+    filtered = {k: v for k, v in metadata.items() if not _is_internal_metadata_key(k)}
     return filtered or None
 
 
