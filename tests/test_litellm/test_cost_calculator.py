@@ -2135,6 +2135,116 @@ def test_cost_margin_with_discount():
     print(f"  - Expected: ${expected_cost:.6f}")
 
 
+def test_image_generation_cost_applies_discount_and_margin():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34731
+
+    Image generation cost must honor cost_discount_config and cost_margin_config
+    the same way chat completion cost does. The image branch previously returned
+    the raw provider cost before either adjustment ran.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm import completion_cost
+    from litellm.types.utils import ImageObject, ImageResponse
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    original_discount_config = litellm.cost_discount_config.copy()
+    original_margin_config = litellm.cost_margin_config.copy()
+
+    image_response = ImageResponse(
+        created=1234567890,
+        data=[ImageObject(b64_json=None, revised_prompt=None, url="https://example.com/image.png")],
+        quality="standard",
+        size="1024x1024",
+    )
+
+    completion_cost_kwargs = {
+        "completion_response": image_response,
+        "model": "dall-e-3",
+        "custom_llm_provider": "openai",
+        "call_type": "image_generation",
+        "size": "1024x1024",
+        "quality": "standard",
+        "n": 1,
+        "litellm_logging_obj": MagicMock(),
+    }
+
+    try:
+        litellm.cost_discount_config = {}
+        litellm.cost_margin_config = {}
+        raw_cost = completion_cost(**completion_cost_kwargs)
+
+        litellm.cost_discount_config = {"openai": 0.10}
+        litellm.cost_margin_config = {"openai": 0.20}
+        configured_cost = completion_cost(**completion_cost_kwargs)
+    finally:
+        litellm.cost_discount_config = original_discount_config
+        litellm.cost_margin_config = original_margin_config
+
+    assert raw_cost > 0
+    # discount is applied before margin: raw * (1 - 0.10) * (1 + 0.20)
+    expected_cost = raw_cost * 0.90 * 1.20
+    assert configured_cost == pytest.approx(expected_cost, rel=1e-9)
+    assert configured_cost != pytest.approx(raw_cost, rel=1e-9)
+
+
+def test_video_generation_cost_applies_discount_and_margin():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34731
+
+    Video generation cost must honor cost_discount_config and cost_margin_config.
+    The video branch previously returned the raw provider cost before either
+    adjustment ran.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.cost_calculator import completion_cost
+
+    original_discount_config = litellm.cost_discount_config.copy()
+    original_margin_config = litellm.cost_margin_config.copy()
+
+    mock_response = MagicMock()
+    mock_response.usage = MagicMock()
+    mock_response.usage.duration_seconds = 10.0
+    mock_response.usage.video_resolution = None
+    type(mock_response)._hidden_params = {}
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_params = {
+        "metadata": {"model_info": {"output_cost_per_video_per_second": 0.05}}
+    }
+
+    completion_cost_kwargs = {
+        "completion_response": mock_response,
+        "model": "openai/hunyuanvideo",
+        "call_type": "create_video",
+        "custom_llm_provider": "openai",
+        "custom_pricing": True,
+        "litellm_logging_obj": mock_logging_obj,
+    }
+
+    try:
+        litellm.cost_discount_config = {}
+        litellm.cost_margin_config = {}
+        raw_cost = completion_cost(**completion_cost_kwargs)
+
+        litellm.cost_discount_config = {"openai": 0.10}
+        litellm.cost_margin_config = {"openai": 0.20}
+        configured_cost = completion_cost(**completion_cost_kwargs)
+    finally:
+        litellm.cost_discount_config = original_discount_config
+        litellm.cost_margin_config = original_margin_config
+
+    assert raw_cost == pytest.approx(0.5, rel=1e-9)
+    # discount is applied before margin: raw * (1 - 0.10) * (1 + 0.20)
+    expected_cost = raw_cost * 0.90 * 1.20
+    assert configured_cost == pytest.approx(expected_cost, rel=1e-9)
+    assert configured_cost != pytest.approx(raw_cost, rel=1e-9)
+
+
 def test_azure_image_generation_cost_calculator():
     from unittest.mock import MagicMock
 

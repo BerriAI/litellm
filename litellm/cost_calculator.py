@@ -1105,6 +1105,57 @@ def _store_cost_breakdown_in_logging_obj(
         pass
 
 
+def _apply_discount_and_margin(
+    base_cost: float,
+    custom_llm_provider: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    prompt_tokens_cost_usd_dollar: float = 0.0,
+    completion_tokens_cost_usd_dollar: float = 0.0,
+    cost_for_built_in_tools_cost_usd_dollar: float = 0.0,
+) -> float:
+    """
+    Apply the configured provider discount and then margin to ``base_cost`` and
+    persist the resulting breakdown in the logging object.
+
+    Discount is applied before margin so the margin is taken on the discounted
+    contract price. Returns the adjusted cost.
+    """
+    original_cost = base_cost
+    (
+        discounted_cost,
+        discount_percent,
+        discount_amount,
+    ) = _apply_cost_discount(
+        base_cost=base_cost,
+        custom_llm_provider=custom_llm_provider,
+    )
+    (
+        final_cost,
+        margin_percent,
+        margin_fixed_amount,
+        margin_total_amount,
+    ) = _apply_cost_margin(
+        base_cost=discounted_cost,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+        completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+        cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
+        total_cost_usd_dollar=final_cost,
+        original_cost=original_cost,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        margin_percent=margin_percent,
+        margin_fixed_amount=margin_fixed_amount,
+        margin_total_amount=margin_total_amount,
+    )
+
+    return final_cost
+
+
 def completion_cost(
     completion_response=None,
     model: Optional[str] = None,
@@ -1335,7 +1386,7 @@ def completion_cost(
                     completion_response, ImageResponse
                 ):
                     ### IMAGE GENERATION COST CALCULATION ###
-                    return CostCalculatorUtils.route_image_generation_cost_calculator(
+                    image_generation_cost = CostCalculatorUtils.route_image_generation_cost_calculator(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
                         completion_response=completion_response,
@@ -1344,6 +1395,11 @@ def completion_cost(
                         size=size,
                         optional_params=optional_params,
                         call_type=call_type,
+                    )
+                    return _apply_discount_and_margin(
+                        base_cost=image_generation_cost,
+                        custom_llm_provider=custom_llm_provider,
+                        litellm_logging_obj=litellm_logging_obj,
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -1375,20 +1431,30 @@ def completion_cost(
                                 video_generation_cost,
                             )
 
-                            return video_generation_cost(
+                            video_cost = video_generation_cost(
                                 model=model,
                                 duration_seconds=duration_seconds,
                                 custom_llm_provider=custom_llm_provider,
                                 model_info=_video_model_info,
                                 video_resolution=video_resolution,
                             )
+                            return _apply_discount_and_margin(
+                                base_cost=video_cost,
+                                custom_llm_provider=custom_llm_provider,
+                                litellm_logging_obj=litellm_logging_obj,
+                            )
                     # Fallback to default video cost calculation if no duration available
-                    return default_video_cost_calculator(
+                    video_cost = default_video_cost_calculator(
                         model=model,
                         duration_seconds=0.0,  # Default to 0 if no duration available
                         custom_llm_provider=custom_llm_provider,
                         model_info=_video_model_info,
                         video_resolution=video_resolution,
+                    )
+                    return _apply_discount_and_margin(
+                        base_cost=video_cost,
+                        custom_llm_provider=custom_llm_provider,
+                        litellm_logging_obj=litellm_logging_obj,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
@@ -1446,46 +1512,13 @@ def completion_cost(
                     )
 
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
-                    _final_cost = prompt_cost + completion_cost_result
-
-                    # Apply discount
-                    original_cost = _final_cost
-                    (
-                        _final_cost,
-                        discount_percent,
-                        discount_amount,
-                    ) = _apply_cost_discount(
-                        base_cost=_final_cost,
+                    return _apply_discount_and_margin(
+                        base_cost=prompt_cost + completion_cost_result,
                         custom_llm_provider=custom_llm_provider,
-                    )
-
-                    # Apply margin from module-level config if configured
-                    (
-                        _final_cost,
-                        margin_percent,
-                        margin_fixed_amount,
-                        margin_total_amount,
-                    ) = _apply_cost_margin(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-
-                    # Store cost breakdown in logging object if available
-                    _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
                         prompt_tokens_cost_usd_dollar=prompt_cost,
                         completion_tokens_cost_usd_dollar=completion_cost_result,
-                        cost_for_built_in_tools_cost_usd_dollar=0.0,
-                        total_cost_usd_dollar=_final_cost,
-                        original_cost=original_cost,
-                        discount_percent=discount_percent,
-                        discount_amount=discount_amount,
-                        margin_percent=margin_percent,
-                        margin_fixed_amount=margin_fixed_amount,
-                        margin_total_amount=margin_total_amount,
                     )
-
-                    return _final_cost
                 elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
