@@ -10604,3 +10604,124 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_api_key_cache_max_size_applied(tmp_path):
+    """
+    general_settings.user_api_key_cache_max_size sizes the in-memory tier of
+    user_api_key_cache. Without it the cache inherits InMemoryCache's default of
+    200 entries, shared across key, team, user and org objects, so a deployment
+    with more than ~200 active virtual keys evicts on every insert.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig, user_api_key_cache
+
+    test_config = {
+        "model_list": [],
+        "general_settings": {"user_api_key_cache_max_size": 5000},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original = user_api_key_cache.in_memory_cache.max_size_in_memory
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert user_api_key_cache.in_memory_cache.max_size_in_memory == 5000
+    finally:
+        user_api_key_cache.in_memory_cache.max_size_in_memory = original
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_api_key_cache_max_size_absent_leaves_default(tmp_path):
+    """Omitting the setting must not change the inherited default."""
+    from litellm.proxy.proxy_server import ProxyConfig, user_api_key_cache
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"model_list": [], "general_settings": {}}))
+
+    original = user_api_key_cache.in_memory_cache.max_size_in_memory
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert user_api_key_cache.in_memory_cache.max_size_in_memory == original
+    finally:
+        user_api_key_cache.in_memory_cache.max_size_in_memory = original
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_api_key_cache_max_size_coerced_from_env(
+    tmp_path, monkeypatch
+):
+    """
+    Configured via os.environ the value resolves to a string; load_config must
+    coerce it to int so the cache bound stays comparable to len(cache_dict).
+    """
+    from litellm.proxy.proxy_server import ProxyConfig, user_api_key_cache
+
+    monkeypatch.setenv("KEY_CACHE_MAX_SIZE", "1500")
+    test_config = {
+        "model_list": [],
+        "general_settings": {
+            "user_api_key_cache_max_size": "os.environ/KEY_CACHE_MAX_SIZE"
+        },
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original = user_api_key_cache.in_memory_cache.max_size_in_memory
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(
+            router=MagicMock(), config_file_path=str(config_file)
+        )
+        assert user_api_key_cache.in_memory_cache.max_size_in_memory == 1500
+    finally:
+        user_api_key_cache.in_memory_cache.max_size_in_memory = original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0, -1])
+async def test_load_config_user_api_key_cache_max_size_rejects_non_positive(
+    tmp_path, bad_value
+):
+    """
+    A negative bound makes InMemoryCache.evict_cache() pop from an empty heap on the
+    next write, and 0 silently disables the in-memory tier. load_config must reject
+    both at startup rather than leave the cache in that state.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig, user_api_key_cache
+
+    test_config = {
+        "model_list": [],
+        "general_settings": {"user_api_key_cache_max_size": bad_value},
+    }
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump(test_config))
+
+    original = user_api_key_cache.in_memory_cache.max_size_in_memory
+    try:
+        proxy_config = ProxyConfig()
+        with pytest.raises(ValueError, match="user_api_key_cache_max_size must be >= 1"):
+            await proxy_config.load_config(
+                router=MagicMock(), config_file_path=str(config_file)
+            )
+        assert user_api_key_cache.in_memory_cache.max_size_in_memory == original
+    finally:
+        user_api_key_cache.in_memory_cache.max_size_in_memory = original
+
+
+def test_user_api_key_cache_max_size_is_a_known_general_setting():
+    """
+    The DB-backed config endpoints reject any field not declared on
+    ConfigGeneralSettings, so the setting must be listed there to be settable
+    through /config/field/update as well as via config.yaml.
+    """
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    assert "user_api_key_cache_max_size" in ConfigGeneralSettings.model_fields
+    ConfigGeneralSettings(user_api_key_cache_max_size=5000)

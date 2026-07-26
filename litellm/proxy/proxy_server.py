@@ -4751,6 +4751,20 @@ class ProxyConfig:
                     default_redis_ttl=ttl,
                 )
 
+            ### USER API KEY CACHE MAX SIZE (in-memory tier) ###
+            user_api_key_cache_max_size = general_settings.get("user_api_key_cache_max_size", None)
+            if user_api_key_cache_max_size is not None:
+                # The default 200 is shared across key, team, user and org entries, so
+                # deployments with many active virtual keys evict on every insert and
+                # fall through to Redis (or the DB) on each request.
+                max_size = int(user_api_key_cache_max_size)
+                if max_size < 1:
+                    # A negative bound makes evict_cache() pop from an empty heap on the
+                    # next write; 0 silently disables the in-memory tier. Neither is a
+                    # useful way to express "smaller cache", so fail at startup instead.
+                    raise ValueError(f"general_settings.user_api_key_cache_max_size must be >= 1, got {max_size}")
+                user_api_key_cache.in_memory_cache.max_size_in_memory = max_size
+
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).

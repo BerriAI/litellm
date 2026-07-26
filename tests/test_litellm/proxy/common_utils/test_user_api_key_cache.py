@@ -272,3 +272,22 @@ class TestManagementObjectTTL:
         )
 
         assert mem.last_ttl == 300
+
+
+class TestUserApiKeyCacheMaxSize:
+    """``general_settings.user_api_key_cache_max_size`` sizes the in-memory tier.
+
+    Without it the cache inherits ``InMemoryCache``'s default of 200 entries, shared
+    across key, team, user and org objects, so a deployment with more than ~200 active
+    virtual keys evicts on every insert.
+    """
+
+    def test_default_in_memory_size_is_inherited(self):
+        """The premise of the setting: nothing sizes this cache today, so it takes
+        ``InMemoryCache``'s general-purpose default rather than a value chosen for it."""
+        cache = UserApiKeyCache()
+        assert cache.in_memory_cache.max_size_in_memory == InMemoryCache().max_size_in_memory
+
+    def test_honors_an_explicitly_sized_in_memory_cache(self):
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(max_size_in_memory=5000))
+        assert cache.in_memory_cache.max_size_in_memory == 5000
