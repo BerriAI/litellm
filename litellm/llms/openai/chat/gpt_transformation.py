@@ -454,18 +454,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         repaired = []
         for m in messages:
             repaired.append(m)
-            if not (
-                isinstance(m, dict)
-                and m.get("role") == "assistant"
-                and m.get("tool_calls")
-            ):
+            if not (isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")):
                 continue
             for tc in m.get("tool_calls") or []:
-                tc_id = (
-                    tc.get("id")
-                    if isinstance(tc, dict)
-                    else getattr(tc, "id", None)
-                )
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                 if tc_id and tc_id not in answered:
                     repaired.append(
                         {
@@ -513,18 +505,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         repaired = []
         for m in transformed_messages:
             repaired.append(m)
-            if not (
-                isinstance(m, dict)
-                and m.get("role") == "assistant"
-                and m.get("tool_calls")
-            ):
+            if not (isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls")):
                 continue
             for tc in m.get("tool_calls") or []:
-                tc_id = (
-                    tc.get("id")
-                    if isinstance(tc, dict)
-                    else getattr(tc, "id", None)
-                )
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                 if tc_id and tc_id not in answered:
                     repaired.append(
                         {

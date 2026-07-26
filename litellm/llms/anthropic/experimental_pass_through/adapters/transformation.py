@@ -216,11 +216,7 @@ class AnthropicAdapter:
         repaired = []
         for m in messages:
             repaired.append(m)
-            if not (
-                isinstance(m, dict)
-                and m.get("role") == "assistant"
-                and isinstance(m.get("content"), list)
-            ):
+            if not (isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), list)):
                 continue
             for block in m["content"]:
                 if isinstance(block, dict) and block.get("type") in (
@@ -565,27 +561,19 @@ class LiteLLMAnthropicMessagesAdapter:
                             ws_content = content.get("content")
                             if isinstance(ws_content, list):
                                 text = "\n".join(
-                                    "{} {}".format(
-                                        p.get("title", ""), p.get("url", "")
-                                    ).strip()
+                                    "{} {}".format(p.get("title", ""), p.get("url", "")).strip()
                                     if isinstance(p, dict)
                                     else str(p)
                                     for p in ws_content
                                 )
                             else:
-                                text = (
-                                    str(ws_content)
-                                    if ws_content is not None
-                                    else ""
-                                )
+                                text = str(ws_content) if ws_content is not None else ""
                             tool_result = ChatCompletionToolMessage(
                                 role="tool",
                                 tool_call_id=content.get("tool_use_id", ""),
                                 content=text or "web search result",
                             )
-                            self._add_cache_control_if_applicable(
-                                content, tool_result, model
-                            )
+                            self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
 
             if len(tool_message_list) > 0:
