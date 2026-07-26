@@ -10,6 +10,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel
@@ -59,6 +60,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.utils import (
+    CallTypes,
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
 )
@@ -149,6 +151,35 @@ class _ExcludedLabelMetric:
 
 
 _MetricLike: TypeAlias = "NoOpMetric | _ExcludedLabelMetric | MetricWrapperBase"
+
+
+_ASYNC_CALL_TYPE_PREFIXES: Final = ("a_", "a")
+
+
+def _sync_twin(name: str, values_by_name: Mapping[str, str]) -> str | None:
+    return next(
+        (
+            values_by_name[name.removeprefix(prefix)]
+            for prefix in _ASYNC_CALL_TYPE_PREFIXES
+            if name.startswith(prefix) and name.removeprefix(prefix) in values_by_name
+        ),
+        None,
+    )
+
+
+def _build_async_call_type_aliases() -> Mapping[str, str]:
+    """Matches on ``CallTypes`` member names, not values: stripping "a" from values breaks ``add_message``."""
+    values_by_name: Final = MappingProxyType({member.name: str(member.value) for member in CallTypes})
+    return MappingProxyType(
+        {
+            value: twin
+            for name, value in values_by_name.items()
+            if (twin := _sync_twin(name, values_by_name)) is not None
+        }
+    )
+
+
+_ASYNC_CALL_TYPE_ALIASES: Final = _build_async_call_type_aliases()
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -1442,6 +1473,7 @@ class PrometheusLogger(CustomLogger):
             model_id=standard_logging_payload["model_id"],
             api_base=standard_logging_payload["api_base"],
             api_provider=standard_logging_payload["custom_llm_provider"],
+            call_type=self._normalize_call_type(standard_logging_payload.get("call_type")),
             exception_status=None,
             exception_class=None,
             custom_metadata_labels=get_custom_labels_from_metadata(metadata=combined_metadata),
@@ -2545,6 +2577,13 @@ class PrometheusLogger(CustomLogger):
         return False
 
     @staticmethod
+    def _normalize_call_type(call_type: str | None) -> str | None:
+        """Collapse async call types onto their sync twin so the proxy (async) and SDK (sync) share one series."""
+        if not call_type:
+            return None
+        return _ASYNC_CALL_TYPE_ALIASES.get(call_type, call_type)
+
+    @staticmethod
     def _extract_api_provider_from_request_data(request_data: dict) -> str | None:
         """
         Best-effort provider for the client-side failure path.
@@ -2639,6 +2678,9 @@ class PrometheusLogger(CustomLogger):
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
                 api_provider=api_provider,
+                call_type=self._normalize_call_type(
+                    (request_data.get("standard_logging_object") or {}).get("call_type")
+                ),
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
@@ -2867,6 +2909,7 @@ class PrometheusLogger(CustomLogger):
                 tags=standard_logging_payload.get("request_tags", []),
                 client_ip=client_ip,
                 user_agent=user_agent,
+                call_type=self._normalize_call_type(standard_logging_payload.get("call_type")),
             )
 
             """
