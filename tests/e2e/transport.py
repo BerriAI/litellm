@@ -89,6 +89,7 @@ class Transport(Protocol):
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]: ...
@@ -242,6 +243,7 @@ class HttpTransport:
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -252,6 +254,7 @@ class HttpTransport:
             filename=filename,
             content=content,
             file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
             timeout=self.request_timeout,
@@ -411,6 +414,7 @@ class SplitTransport:
         filename: str,
         content: bytes,
         file_content_type: str = "application/jsonl",
+        file_field: str = "file",
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
@@ -421,6 +425,7 @@ class SplitTransport:
             filename=filename,
             content=content,
             file_content_type=file_content_type,
+            file_field=file_field,
             params=params,
             response_type=response_type,
         )
