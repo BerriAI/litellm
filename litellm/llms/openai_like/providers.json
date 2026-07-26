@@ -22,6 +22,9 @@
   "xiaomi_mimo": {
     "base_url": "https://api.xiaomimimo.com/v1",
     "api_key_env": "XIAOMI_MIMO_API_KEY",
+    "unsupported_params": [
+      "output_config"
+    ],
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
