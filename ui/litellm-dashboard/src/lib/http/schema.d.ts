@@ -41045,6 +41045,8 @@ export interface operations {
                 team_id?: string | null;
                 /** @description View spend for a specific customer_id. Example customer_id='1234. Can be used in conjunction with team_id as well. */
                 customer_id?: string | null;
+                /** @description When True, exclude spend from team-owned (BYOK) model deployments. Spend from deployments that have since been deleted cannot be classified and remains included */
+                exclude_team_models?: boolean;
             };
             header?: never;
             path?: never;

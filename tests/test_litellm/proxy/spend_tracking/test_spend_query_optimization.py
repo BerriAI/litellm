@@ -502,3 +502,163 @@ async def test_global_spend_report_team_group_forwards_team_id(monkeypatch):
     params = mock_prisma.db.query_raw.call_args[0][1:]
     assert "team_x" in params, "team_id must be forwarded into the DB query params"
     assert "sl.team_id = $3" in sql, f"team query must filter on team_id. SQL was:\n{sql}"
+
+
+_OMITTED = object()
+
+_EXCLUSION_PREDICATE = (
+    '\n            AND NOT EXISTS (SELECT 1 FROM "LiteLLM_ProxyModelTable" pm '
+    "WHERE pm.model_id = sl.model_id AND pm.model_info ->> 'team_id' IS NOT NULL)"
+)
+
+_REPORT_BRANCHES = {
+    "api_key_filter": {"api_key": "sk-1234"},
+    "internal_user_id_filter": {"internal_user_id": "user-1"},
+    "team_and_customer_filter": {"team_id": "team-1", "customer_id": "cust-1"},
+    "group_by_team": {"group_by": "team"},
+    "group_by_customer": {"group_by": "customer"},
+    "group_by_api_key": {"group_by": "api_key"},
+}
+
+
+async def _capture_report_sql(monkeypatch, branch_kwargs, exclude_team_models):
+    """
+    Run GET /global/spend/report for one branch and return the SQL it executed.
+
+    group_by is always passed explicitly because the priority chain (api_key ->
+    internal_user_id -> team+customer -> group_by) reads the raw arguments; `_OMITTED`
+    calls the endpoint the way every caller predating the flag does, with no keyword.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        get_global_spend_report,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    await get_global_spend_report(
+        **{
+            "start_date": "2026-07-01",
+            "end_date": "2026-07-03",
+            "group_by": "team",
+            "api_key": None,
+            "internal_user_id": None,
+            "team_id": None,
+            "customer_id": None,
+            **branch_kwargs,
+            **({} if exclude_team_models is _OMITTED else {"exclude_team_models": exclude_team_models}),
+        }
+    )
+
+    assert mock_prisma.db.query_raw.called, "query_raw should have been called"
+    return mock_prisma.db.query_raw.call_args[0][0]
+
+
+@pytest.mark.parametrize("branch", sorted(_REPORT_BRANCHES))
+@pytest.mark.asyncio
+async def test_global_spend_report_excludes_team_models_when_opted_in(monkeypatch, branch):
+    """
+    Every branch must honor the flag, not just the default group_by=team one. Non-team rows
+    survive the anti-join either with no "LiteLLM_ProxyModelTable" match (config models log a
+    router-generated hash id) or with a match carrying no model_info.team_id.
+    `_EXCLUSION_PREDICATE` pins the clause's exact leading whitespace and is spelled out
+    rather than imported, so a mutated production clause fails here.
+    """
+    sql = await _capture_report_sql(monkeypatch, _REPORT_BRANCHES[branch], exclude_team_models=True)
+
+    assert _EXCLUSION_PREDICATE in sql, f"{branch} must exclude team deployments. SQL was:\n{sql}"
+    assert sql.index(_EXCLUSION_PREDICATE) < sql.index("GROUP BY"), (
+        f"the exclusion must sit in the WHERE clause of the SpendLogs CTE, before its GROUP BY. SQL was:\n{sql}"
+    )
+    assert "NOT EXISTS" in sql and "IN (SELECT" not in sql, (
+        f"an anti-join (NOT EXISTS) keeps rows with an empty model_id; a subquery IN would drop them. SQL was:\n{sql}"
+    )
+
+
+@pytest.mark.parametrize("branch", sorted(_REPORT_BRANCHES))
+@pytest.mark.parametrize("exclude_team_models", [False, _OMITTED], ids=["explicit_false", "omitted"])
+@pytest.mark.asyncio
+async def test_global_spend_report_keeps_team_models_by_default(monkeypatch, branch, exclude_team_models):
+    """
+    Opt-in only: with the flag off (or absent) the executed SQL must be exactly what it
+    was before the flag existed, so existing /global/spend/report consumers see no change.
+    """
+    sql = await _capture_report_sql(monkeypatch, _REPORT_BRANCHES[branch], exclude_team_models=exclude_team_models)
+
+    assert "LiteLLM_ProxyModelTable" not in sql, f"{branch} must not touch the model table by default. SQL was:\n{sql}"
+    assert "NOT EXISTS" not in sql, f"{branch} must not filter deployments by default. SQL was:\n{sql}"
+
+    opted_in = await _capture_report_sql(monkeypatch, _REPORT_BRANCHES[branch], exclude_team_models=True)
+    assert opted_in.replace(_EXCLUSION_PREDICATE, "") == sql, (
+        f"the flag must only add the exclusion predicate, nothing else. SQL was:\n{sql}"
+    )
+
+
+def test_global_spend_report_binds_exclude_team_models_from_query_string(monkeypatch):
+    """
+    Calling the endpoint function directly cannot catch a binding regression, so drive the
+    real route once: `?exclude_team_models=true` has to reach the query builder as a bool.
+    """
+    import litellm.proxy.proxy_server as ps
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin",
+    )
+    try:
+        client = TestClient(app)
+        params = {"start_date": "2026-07-01", "end_date": "2026-07-03", "group_by": "team"}
+
+        response = client.get("/global/spend/report", params={**params, "exclude_team_models": "true"})
+        assert response.status_code == 200, response.text
+        assert _EXCLUSION_PREDICATE in mock_prisma.db.query_raw.call_args[0][0]
+
+        response = client.get("/global/spend/report", params=params)
+        assert response.status_code == 200, response.text
+        assert _EXCLUSION_PREDICATE not in mock_prisma.db.query_raw.call_args[0][0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_by_team_helpers_default_to_including_team_models():
+    """
+    Both helpers are public and called positionally elsewhere; the new keyword must
+    default to off and only add the exclusion when a caller asks for it.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_query_raw = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = mock_query_raw
+
+    start_date = datetime.datetime(2024, 1, 1, tzinfo=timezone.utc)
+    end_date = datetime.datetime(2024, 1, 31, tzinfo=timezone.utc)
+
+    await get_spend_by_team(start_date, end_date, "team-1", mock_prisma)
+    assert "LiteLLM_ProxyModelTable" not in mock_query_raw.call_args[0][0]
+
+    await get_spend_by_team_and_customer(start_date, end_date, "team-1", "cust-1", mock_prisma)
+    assert "LiteLLM_ProxyModelTable" not in mock_query_raw.call_args[0][0]
+
+    await get_spend_by_team(start_date, end_date, "team-1", mock_prisma, exclude_team_models=True)
+    assert _EXCLUSION_PREDICATE in mock_query_raw.call_args[0][0]
+
+    await get_spend_by_team_and_customer(
+        start_date, end_date, "team-1", "cust-1", mock_prisma, exclude_team_models=True
+    )
+    assert _EXCLUSION_PREDICATE in mock_query_raw.call_args[0][0]

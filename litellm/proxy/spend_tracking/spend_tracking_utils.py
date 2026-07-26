@@ -510,13 +510,35 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
     return timestamp
 
 
+def team_model_exclusion_clause(exclude_team_models: bool) -> str:
+    """
+    SQL predicate that drops spend rows produced by team-owned (BYOK) deployments.
+
+    Ownership is `model_info.team_id` (what `Router._is_team_specific_model` reads), so the
+    exclusion survives a rename of the deployment's mangled `model_name`. `->>` yields NULL
+    on an absent key or a non-object `model_info`, which fails open to "included".
+
+    Only a literal True opts in, so every existing query stays byte-identical; in-process
+    callers that omit the argument leave FastAPI's `Query` default object in place, and that
+    object is truthy.
+    """
+    if exclude_team_models is not True:
+        return ""
+    return (
+        '\n            AND NOT EXISTS (SELECT 1 FROM "LiteLLM_ProxyModelTable" pm '
+        "WHERE pm.model_id = sl.model_id AND pm.model_info ->> 'team_id' IS NOT NULL)"
+    )
+
+
 async def get_spend_by_team(
     start_date: dt,
     end_date: dt,
     team_id: Optional[str],
     prisma_client: PrismaClient,
+    exclude_team_models: bool = False,
 ):
-    sql_query = """
+    exclusion_sql = team_model_exclusion_clause(exclude_team_models)
+    sql_query = f"""
     WITH SpendByModelApiKey AS (
         SELECT
             date_trunc('day', sl."startTime") AS group_by_day,
@@ -534,7 +556,7 @@ async def get_spend_by_team(
         WHERE
             sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
             AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-            AND ($3::text IS NULL OR sl.team_id = $3)
+            AND ($3::text IS NULL OR sl.team_id = $3){exclusion_sql}
         GROUP BY
             date_trunc('day', sl."startTime"),
             tt.team_alias,
@@ -584,8 +606,10 @@ async def get_spend_by_team_and_customer(
     team_id: str,
     customer_id: str,
     prisma_client: PrismaClient,
+    exclude_team_models: bool = False,
 ):
-    sql_query = """
+    exclusion_sql = team_model_exclusion_clause(exclude_team_models)
+    sql_query = f"""
     WITH SpendByModelApiKey AS (
         SELECT
             date_trunc('day', sl."startTime") AS group_by_day,
@@ -605,7 +629,7 @@ async def get_spend_by_team_and_customer(
             sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
             AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND sl.team_id = $3
-            AND sl.end_user = $4
+            AND sl.end_user = $4{exclusion_sql}
         GROUP BY
             date_trunc('day', sl."startTime"),
             tt.team_alias,
