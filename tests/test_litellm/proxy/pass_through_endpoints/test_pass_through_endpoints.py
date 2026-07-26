@@ -1134,6 +1134,65 @@ def test_create_pass_through_route_reregistering_same_adapter_reuses_id():
         litellm.adapters = original_adapters
 
 
+@pytest.mark.asyncio
+async def test_create_pass_through_route_adapter_dispatch_rejects_deregistered_route():
+    """
+    Regression test: an adapter-backed pass-through route must stop
+    dispatching once it's no longer registered (e.g. after
+    delete_pass_through_endpoints removes it from the registry), the same
+    way the URL-backed pass-through route already does. Without this check,
+    a deleted adapter route stays reachable indefinitely because FastAPI has
+    no built-in route removal and the adapter closure otherwise dispatches
+    unconditionally on its captured adapter_id.
+    """
+    original_adapters = litellm.adapters
+
+    class _DeregisteredAdapter(CustomLogger):
+        pass
+
+    from fastapi import HTTPException
+
+    adapter = _DeregisteredAdapter()
+    unique_path = "/test/path/unique/adapter_deregistered"
+
+    try:
+        litellm.adapters = []
+
+        endpoint_func = create_pass_through_route(
+            endpoint=unique_path,
+            target=adapter,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+            ) as mock_is_registered,
+            patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.chat_completion_pass_through_endpoint"
+            ) as mock_chat_completion,
+        ):
+            mock_is_registered.return_value = False
+
+            mock_request = MagicMock(spec=Request)
+            mock_request.scope = {"path": unique_path}
+            mock_request.url = MagicMock()
+            mock_request.url.path = unique_path
+            mock_user_api_key_dict = MagicMock()
+            mock_user_api_key_dict.api_key = "test-key"
+
+            with pytest.raises(HTTPException) as exc_info:
+                await endpoint_func(
+                    request=mock_request,
+                    user_api_key_dict=mock_user_api_key_dict,
+                    fastapi_response=MagicMock(),
+                )
+
+            assert exc_info.value.status_code == 404
+            mock_chat_completion.assert_not_called()
+    finally:
+        litellm.adapters = original_adapters
+
+
 def test_resolve_pass_through_request_timeout_precedence():
     assert resolve_pass_through_request_timeout(endpoint_timeout=900) == 900.0
 

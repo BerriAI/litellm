@@ -1679,6 +1679,20 @@ def create_pass_through_route(
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
+            from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415
+                InitPassThroughEndpointHelpers,
+            )
+
+            path = get_request_route(request)
+            if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=path):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Pass-through endpoint {endpoint} not found. This could have been deleted or not yet added to the proxy.",
+                )
+
             return await chat_completion_pass_through_endpoint(
                 fastapi_response=fastapi_response,
                 request=request,
