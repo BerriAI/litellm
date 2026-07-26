@@ -16,6 +16,7 @@ from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 class AgentRegistry:
     def __init__(self):
         self.agent_list: List[AgentResponse] = []
+        self.config_agents: Optional[List[AgentConfig]] = None
 
     def reset_agent_list(self):
         self.agent_list = []
@@ -44,6 +45,7 @@ class AgentRegistry:
         return hashlib.sha256(json.dumps(agent_config, sort_keys=True).encode()).hexdigest()
 
     def load_agents_from_config(self, agent_config: Optional[List[AgentConfig]] = None):
+        self.config_agents = agent_config
         if agent_config is None:
             return None
 
@@ -68,8 +70,10 @@ class AgentRegistry:
     ):
         self.reset_agent_list()
 
-        if agent_config:
-            for agent_config_item in agent_config:
+        resolved_config = agent_config if agent_config is not None else self.config_agents
+
+        if resolved_config:
+            for agent_config_item in resolved_config:
                 if not isinstance(agent_config_item, dict):
                     raise ValueError("agent_config must be a list of dictionaries")
 
