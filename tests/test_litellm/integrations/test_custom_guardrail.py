@@ -2248,6 +2248,21 @@ class TestShouldRunGuardrailModelGroupGate:
 
         assert g.should_run_guardrail(data={"model": "group-b"}, event_type=GuardrailEventHooks.pre_call) is True
 
+    def test_update_in_memory_syncs_event_hook_with_mode_change(self):
+        """Every guardrail initializer constructs the callback with event_hook=mode,
+        but should_run_guardrail gates on event_hook, not mode. A PUT that changes
+        mode must update event_hook too, or the callback keeps enforcing its old
+        hook (e.g. still pre_call after mode is changed to post_call) until restart."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        g = self._guardrail(event_hook="pre_call")
+        assert g.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is False
+
+        g.update_in_memory_litellm_params({"guardrail": "test-guardrail", "mode": "post_call"})
+
+        assert g.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+        assert g.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+
 
 class TestResolveMetadataModelGroups:
     def test_returns_both_containers_values(self):

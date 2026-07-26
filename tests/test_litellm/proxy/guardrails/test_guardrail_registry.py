@@ -95,7 +95,32 @@ def test_update_in_memory_guardrail():
         )
         is True
     )
-    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
+    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook == GuardrailEventHooks.pre_call
+
+
+def test_update_in_memory_guardrail_syncs_event_hook_on_mode_change():
+    """Every guardrail initializer constructs the callback with event_hook=mode, but
+    should_run_guardrail gates on event_hook, not mode. A PUT that changes mode from
+    pre_call to post_call must update event_hook too, or the live callback keeps
+    enforcing pre_call until the proxy restarts."""
+    handler = InMemoryGuardrailHandler()
+    handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+
+    handler.update_in_memory_guardrail(
+        "123",
+        Guardrail(
+            guardrail_name="test-guardrail",
+            litellm_params=LitellmParams(guardrail="test-guardrail", mode="post_call", default_on=True),
+        ),
+    )
+
+    guardrail = handler.guardrail_id_to_custom_guardrail["123"]
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
 
 
 def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:

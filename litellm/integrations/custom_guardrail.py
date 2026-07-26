@@ -1200,6 +1200,16 @@ class CustomGuardrail(CustomLogger):
                 value = frozenset(str(v).strip().lower() for v in value if str(v).strip())
             setattr(self, key, value)
 
+        # Every guardrail initializer constructs the callback with event_hook=mode
+        # (guardrail_initializers.py); should_run_guardrail gates on event_hook, not
+        # mode, so a mode-only update without this would leave the callback enforcing
+        # its old event_hook (e.g. still pre_call after a PUT changes mode to
+        # post_call) until the proxy restarts. mode is a required LitellmParams field,
+        # so it's always present on a valid update.
+        mode = params.get("mode")
+        if mode is not None:
+            self.event_hook = mode
+
     def get_guardrails_messages_for_call_type(
         self, call_type: CallTypes, data: Optional[dict] = None
     ) -> Optional[List[AllMessageValues]]:
