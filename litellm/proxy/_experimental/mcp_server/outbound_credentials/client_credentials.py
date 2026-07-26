@@ -292,6 +292,7 @@ def _prepare_grant(config: ClientCredentialsConfig) -> Result[_PreparedGrant, Cr
         **client_auth.body,
         **({"scope": " ".join(config.scopes)} if config.scopes else {}),
         **({"audience": config.audience} if config.audience else {}),
+        **({"resource": config.upstream_resource} if config.upstream_resource else {}),
     }
     return Ok(
         _PreparedGrant(
@@ -313,6 +314,7 @@ def _identity_key(config: ClientCredentialsConfig) -> str:
             config.token_endpoint_auth_method or "",
             " ".join(config.scopes),
             config.audience or "",
+            config.upstream_resource or "",
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
