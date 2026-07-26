@@ -3009,6 +3009,111 @@ class TestGetTotalTokensFromUsageCacheExclusion:
         assert result == 0, f"Expected 0 for None usage, got {result}"
 
 
+class TestResponsesAPITokenCounting:
+    """
+    Regression tests for issue #34728.
+
+    The TPM limiter undercounted /v1/responses in both phases: pre-call
+    estimation classified a Responses request (non-empty ``input``) like an
+    embedding, reserving zero output and ignoring ``max_output_tokens``; and
+    post-call reconciliation returned zero for a real ``ResponseAPIUsage``
+    object because it is neither a legacy ``Usage`` nor a dict. Together they
+    could fully refund an already too-small reservation, under-enforcing TPM
+    limits for Responses traffic.
+    """
+
+    @pytest.fixture
+    def handler(self):
+        local_cache = DualCache()
+        return _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(local_cache),
+        )
+
+    def test_estimate_responses_reserves_max_output_tokens(self, handler):
+        """input + max_output_tokens should be reserved, not treated as embeddings."""
+        data = {"model": "gpt-4.1", "input": "hello", "max_output_tokens": 4096}
+
+        estimate = handler._estimate_tokens_for_request(data=data, call_type="aresponses")
+
+        # input("hello") ~ 1 token + 4096 output budget
+        assert estimate == 4097, f"Expected 4097 (1 input + 4096 output), got {estimate}"
+
+    def test_estimate_responses_without_max_output_tokens_uses_output_floor(self, handler):
+        """A Responses request without an output budget still reserves an output floor."""
+        data = {"model": "gpt-4.1", "input": "hello"}
+
+        estimate = handler._estimate_tokens_for_request(data=data, call_type="responses")
+
+        # Unlike embeddings, Responses generates output, so the floor applies.
+        # input(1) + floor(DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION = 1024)
+        assert estimate == 1025, f"Expected 1025 (1 input + 1024 output floor), got {estimate}"
+
+    def test_estimate_embeddings_still_reserves_zero_output(self, handler):
+        """Embeddings carry ``input`` too but must keep a zero output budget."""
+        data = {"model": "text-embedding-3-small", "input": "hello"}
+
+        estimate = handler._estimate_tokens_for_request(data=data, call_type="aembedding")
+
+        assert estimate == 1, f"Expected 1 (input only, no output), got {estimate}"
+
+    def test_reconcile_response_api_usage_split(self, handler):
+        """A real ResponseAPIUsage object must reconcile input/output/total, not zero."""
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage(input_tokens=123, output_tokens=456, total_tokens=579)
+
+        assert handler._get_total_tokens_from_usage(usage, "input") == 123
+        assert handler._get_total_tokens_from_usage(usage, "output") == 456
+        assert handler._get_total_tokens_from_usage(usage, "total") == 579
+
+    def test_reconcile_response_api_usage_excludes_cached_tokens(self, handler):
+        """Cached input tokens are excluded from input/total but not output."""
+        from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage
+
+        usage = ResponseAPIUsage(
+            input_tokens=123,
+            output_tokens=456,
+            total_tokens=579,
+            input_tokens_details=InputTokensDetails(cached_tokens=23),
+        )
+
+        assert handler._get_total_tokens_from_usage(usage, "input") == 100
+        assert handler._get_total_tokens_from_usage(usage, "total") == 556
+        assert handler._get_total_tokens_from_usage(usage, "output") == 456
+
+    def test_aggregate_only_total_tokens_ignores_split_response_usage(self, handler):
+        """ResponseAPIUsage with an input/output split is not an aggregate-only source."""
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        usage = ResponseAPIUsage(input_tokens=123, output_tokens=456, total_tokens=579)
+
+        assert handler._aggregate_only_total_tokens(usage) == 0
+
+    def test_success_event_reconciles_responses_usage_nonzero(self, handler):
+        """End-to-end: a ResponsesAPIResponse must charge the TPM window nonzero."""
+        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+        response_obj = ResponsesAPIResponse(
+            id="resp_123",
+            created_at=0,
+            model="gpt-4.1",
+            object="response",
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=123, output_tokens=456, total_tokens=579),
+        )
+
+        ops = handler._build_success_event_pipeline_operations(
+            kwargs={},
+            response_obj=response_obj,
+            rate_limit_type="total",
+        )
+
+        # No descriptors configured, so no ops, but the token count that would
+        # be charged must be nonzero. Assert on the reconciliation directly.
+        assert handler._get_total_tokens_from_usage(response_obj.usage, "total") == 579
+        assert isinstance(ops, list)
+
+
 @pytest.mark.asyncio
 async def test_project_model_rate_limits_enforced_v3():
     """

@@ -44,7 +44,10 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ResponseAPIUsage,
+)
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -483,13 +486,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         data: dict,
         model: Optional[str] = None,
         min_configured_tpm_limit: Optional[int] = None,
+        call_type: str | None = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
         upfront (input + output budget):
         estimated = input_tokens + max_tokens.
 
-        Supports chat (messages), completions (prompt), and embeddings (input).
+        Supports chat (messages), completions (prompt), embeddings (input), and
+        the Responses API (input + ``max_output_tokens``). Embeddings and
+        Responses both carry their prompt in ``input``, so ``call_type`` is used
+        to tell them apart: embeddings generate no output tokens, whereas a
+        Responses request budgets output like a chat completion.
 
         ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
         the TPM-bearing descriptors this request will be charged against. When
@@ -499,7 +507,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         messages = data.get("messages")
         prompt = data.get("prompt")
-        input_text = data.get("input")  # embeddings
+        input_text = data.get("input")  # embeddings / responses
 
         match (messages, prompt, input_text):
             case (messages, _, _) if messages:
@@ -517,12 +525,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         estimated_input_tokens = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
 
-        explicit_max_tokens = data.get("max_tokens") or data.get("max_completion_tokens")
+        explicit_max_tokens = (
+            data.get("max_tokens") or data.get("max_completion_tokens") or data.get("max_output_tokens")
+        )
 
-        match (explicit_max_tokens, input_text):
+        is_embedding = call_type in (CallTypes.embedding.value, CallTypes.aembedding.value)
+
+        match (explicit_max_tokens, is_embedding):
             case (mt, _) if mt is not None:
                 max_tokens_estimate = int(mt)
-            case (_, embeddings_input) if embeddings_input:
+            case (_, True):
                 # Embeddings have no output tokens
                 max_tokens_estimate = 0
             case _ if total_chars == 0:
@@ -2483,19 +2495,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 min_configured_tpm_limit = min(configured_tpm_limits)
 
                 # When the configured TPM cap is small enough to constrain the
-                # no-max_tokens floor, also hard-cap the model output via
-                # data["max_tokens"] so concurrent unbounded generations can't
-                # spend past the limit before post-call reconciliation runs.
-                # Skip when the request already sets max_tokens or has no
+                # no-max_tokens floor, also hard-cap the model output so
+                # concurrent unbounded generations can't spend past the limit
+                # before post-call reconciliation runs. The Responses API caps
+                # output via max_output_tokens rather than max_tokens.
+                # Skip when the request already sets an output budget or has no
                 # generation budget at all (embeddings).
                 capped_floor = self._no_max_tokens_output_floor(min_configured_tpm_limit)
                 baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
                 has_explicit_max_tokens = (
-                    data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
+                    data.get("max_tokens") is not None
+                    or data.get("max_completion_tokens") is not None
+                    or data.get("max_output_tokens") is not None
                 )
-                is_embedding = data.get("input") is not None
+                is_responses = call_type in (CallTypes.responses.value, CallTypes.aresponses.value)
+                is_embedding = call_type in (CallTypes.embedding.value, CallTypes.aembedding.value)
                 if capped_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
-                    data["max_tokens"] = capped_floor
+                    data["max_output_tokens" if is_responses else "max_tokens"] = capped_floor
 
                 # Floor at 1 token so contentless requests (/responses,
                 # tool-call continuations, empty messages) still flow
@@ -2509,6 +2525,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         data=data,
                         model=requested_model,
                         min_configured_tpm_limit=min_configured_tpm_limit,
+                        call_type=call_type,
                     ),
                     1,
                 )
@@ -2623,6 +2640,35 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
+    @staticmethod
+    def _normalize_usage_counts(usage: Any) -> tuple[int, int, int, int]:
+        """Return ``(input, output, total, cached)`` for any supported usage shape.
+
+        Handles the legacy chat ``Usage`` object (prompt / completion split),
+        the Responses API ``ResponseAPIUsage`` (input / output split), and the
+        dict form the Responses API sometimes carries. Unknown shapes read as
+        all zeros. ``cached`` is the cached input-token count providers like AWS
+        Bedrock don't charge against input / total rate limits.
+        """
+        if isinstance(usage, Usage):
+            details = usage.prompt_tokens_details
+            cached = (getattr(details, "cached_tokens", 0) or 0) if details is not None else 0
+            return (usage.prompt_tokens or 0, usage.completion_tokens or 0, usage.total_tokens or 0, cached)
+        if isinstance(usage, ResponseAPIUsage):
+            details = usage.input_tokens_details
+            cached = (details.cached_tokens or 0) if details is not None else 0
+            return (usage.input_tokens or 0, usage.output_tokens or 0, usage.total_tokens or 0, cached)
+        if isinstance(usage, dict):
+            prompt_details = usage.get("prompt_tokens_details") or {}
+            cached = prompt_details.get("cached_tokens", 0) or 0 if isinstance(prompt_details, dict) else 0
+            return (
+                usage.get("prompt_tokens") or 0,
+                usage.get("completion_tokens") or 0,
+                usage.get("total_tokens") or 0,
+                cached,
+            )
+        return (0, 0, 0, 0)
+
     def _get_total_tokens_from_usage(
         self, usage: Optional[Any], rate_limit_type: Literal["output", "input", "total"]
     ) -> int:
@@ -2633,46 +2679,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         because providers like AWS Bedrock don't count cached tokens toward
         rate limits. This aligns LiteLLM's TPM calculation with provider behavior.
         """
-        total_tokens = 0
-        cached_tokens = 0
+        if not usage:
+            return 0
 
-        if usage:
-            if isinstance(usage, Usage):
-                if rate_limit_type == "output":
-                    total_tokens = usage.completion_tokens or 0
-                elif rate_limit_type == "input":
-                    total_tokens = usage.prompt_tokens or 0
-                elif rate_limit_type == "total":
-                    total_tokens = usage.total_tokens or 0
+        input_tokens, output_tokens, total_tokens, cached_tokens = self._normalize_usage_counts(usage)
+        selected = {"input": input_tokens, "output": output_tokens, "total": total_tokens}[rate_limit_type]
 
-                # Get cached tokens to exclude from input/total
-                if rate_limit_type in ("input", "total"):
-                    if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
-                        cached_tokens = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+        # Providers don't count cached tokens toward input / total rate limits.
+        if rate_limit_type in ("input", "total"):
+            return max(0, selected - cached_tokens)
+        return selected
 
-            elif isinstance(usage, dict):
-                # Responses API usage comes as a dict
-                if rate_limit_type == "output":
-                    total_tokens = usage.get("completion_tokens", 0) or 0
-                elif rate_limit_type == "input":
-                    total_tokens = usage.get("prompt_tokens", 0) or 0
-                elif rate_limit_type == "total":
-                    total_tokens = usage.get("total_tokens", 0) or 0
-
-                # Get cached tokens from dict
-                if rate_limit_type in ("input", "total"):
-                    prompt_details = usage.get("prompt_tokens_details") or {}
-                    if isinstance(prompt_details, dict):
-                        cached_tokens = prompt_details.get("cached_tokens", 0) or 0
-
-        # Subtract cached tokens for input/total (providers don't count them)
-        if cached_tokens > 0:
-            total_tokens = max(0, total_tokens - cached_tokens)
-
-        return total_tokens
-
-    @staticmethod
-    def _aggregate_only_total_tokens(usage: Union[Usage, dict, None]) -> int:
+    def _aggregate_only_total_tokens(self, usage: Union[Usage, ResponseAPIUsage, dict, None]) -> int:
         """Total for usage that carries no input/output split, else 0.
 
         A source that can only report one number for the whole request (a
@@ -2682,21 +2700,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         uncharged, which is how pass-through traffic slips past a TPM limit
         it is supposed to share.
         """
-        if isinstance(usage, Usage):
-            prompt_tokens, completion_tokens, total_tokens = (
-                usage.prompt_tokens or 0,
-                usage.completion_tokens or 0,
-                usage.total_tokens or 0,
-            )
-        elif isinstance(usage, dict):
-            prompt_tokens, completion_tokens, total_tokens = (
-                usage.get("prompt_tokens") or 0,
-                usage.get("completion_tokens") or 0,
-                usage.get("total_tokens") or 0,
-            )
-        else:
+        if not usage:
             return 0
-        if prompt_tokens or completion_tokens:
+        input_tokens, output_tokens, total_tokens, _ = self._normalize_usage_counts(usage)
+        if input_tokens or output_tokens:
             return 0
         return total_tokens
 
@@ -3120,7 +3127,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # than parsed out of the body) carry their usage in
         # ``combined_usage_object`` instead, and would otherwise never charge
         # the TPM window.
-        _usage: Union[Usage, dict, None] = None
+        _usage: Union[Usage, ResponseAPIUsage, dict, None] = None
         if isinstance(
             response_obj,
             (
