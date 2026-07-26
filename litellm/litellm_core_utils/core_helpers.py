@@ -234,6 +234,27 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
     return {}
 
 
+def get_request_metadata(request_data: dict) -> dict:
+    """
+    Resolve proxy-internal metadata from request data at any point in the request lifecycle.
+
+    Proxy pre-call hooks see metadata at the top level of the request body; `litellm_params`
+    only exists once the SDK completion call has built it, after which the same metadata is
+    nested under it. Readers that can run on either side of that boundary must check both.
+    """
+    nested_metadata = get_litellm_metadata_from_kwargs(kwargs=request_data)
+    if nested_metadata:
+        return nested_metadata
+
+    litellm_metadata = request_data.get("litellm_metadata")
+    metadata = request_data.get("metadata")
+    if isinstance(litellm_metadata, dict) and litellm_metadata:
+        if isinstance(metadata, dict) and metadata:
+            return add_missing_spend_metadata_to_litellm_metadata({**litellm_metadata}, metadata)
+        return litellm_metadata
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def reconstruct_model_name(
     model_name: str,
     custom_llm_provider: Optional[str],
