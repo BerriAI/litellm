@@ -115,7 +115,7 @@ class _CombinedChunkSplitter:
             chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
 
     @staticmethod
-    def _split_mixed_reasoning_and_text(chunk: Any) -> List[Any]:
+    def _split_mixed_reasoning_and_text(chunk: Any) -> list[Any]:
         if not _CombinedChunkSplitter._has_mixed_reasoning_and_text(chunk):
             return [chunk]
 
