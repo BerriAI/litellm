@@ -102,7 +102,7 @@ def test_opus_4_6_model_pricing_and_capabilities():
         "azure_ai/claude-opus-4-6": {
             "provider": "azure_ai",
             "has_long_context_pricing": False,
-            "max_input_tokens": 200000,
+            "max_input_tokens": 1000000,
         },
     }
 
