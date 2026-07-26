@@ -6392,6 +6392,10 @@ def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     tool_call_chunk = _chunk(tool_call_delta)
     assert _stream_chunks_have_generated_content([tool_call_chunk]) is True
 
+    thinking_delta = Delta(thinking_blocks=[{"type": "thinking", "thinking": "Let me think..."}])
+    thinking_chunk = _chunk(thinking_delta)
+    assert _stream_chunks_have_generated_content([thinking_chunk]) is True
+
 
 def test_get_configured_token_limits_reads_deployment_model_info():
     router = litellm.Router(

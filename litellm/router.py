@@ -337,6 +337,7 @@ def _stream_chunks_have_generated_content(chunks: List[ModelResponseStream]) -> 
             or delta.get("tool_calls")
             or delta.get("function_call")
             or delta.get("reasoning_content")
+            or delta.get("thinking_blocks")
         ):
             return True
     return False
