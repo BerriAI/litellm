@@ -1092,13 +1092,19 @@ def test_create_pass_through_route_registers_multiple_adapters():
         litellm.adapters = original_adapters
 
 
-def test_create_pass_through_route_reregistering_same_adapter_replaces_entry():
+def test_create_pass_through_route_reregistering_same_adapter_reuses_id():
     """
     Regression test: re-registering the same adapter object (e.g. on the
     periodic pass-through reload cycle, which re-runs create_pass_through_route
-    for already-registered routes) must replace its existing litellm.adapters
-    entry rather than appending a duplicate. Otherwise the list grows
-    unboundedly with orphaned entries every reload.
+    for already-registered routes) must reuse its existing litellm.adapters
+    entry rather than appending a duplicate or minting a new id.
+
+    A route whose FastAPI registration is skipped as a duplicate (see
+    SafeRouteAdder.add_api_route_if_not_exists) keeps serving requests with
+    the adapter_id captured on its first registration. Minting a fresh id on
+    every reload and swapping out the old entry would silently break that
+    still-live route: its captured id would no longer resolve in
+    litellm.adapters.
     """
     original_adapters = litellm.adapters
 
@@ -1123,7 +1129,7 @@ def test_create_pass_through_route_reregistering_same_adapter_replaces_entry():
 
         assert len(litellm.adapters) == 1
         assert litellm.adapters[0]["adapter"] is adapter
-        assert litellm.adapters[0]["id"] != first_id
+        assert litellm.adapters[0]["id"] == first_id
     finally:
         litellm.adapters = original_adapters
 
