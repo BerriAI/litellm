@@ -2185,7 +2185,6 @@ def test_image_generation_cost_applies_discount_and_margin():
         litellm.cost_margin_config = original_margin_config
 
     assert raw_cost > 0
-    # discount is applied before margin: raw * (1 - 0.10) * (1 + 0.20)
     expected_cost = raw_cost * 0.90 * 1.20
     assert configured_cost == pytest.approx(expected_cost, rel=1e-9)
     assert configured_cost != pytest.approx(raw_cost, rel=1e-9)
@@ -2239,7 +2238,6 @@ def test_video_generation_cost_applies_discount_and_margin():
         litellm.cost_margin_config = original_margin_config
 
     assert raw_cost == pytest.approx(0.5, rel=1e-9)
-    # discount is applied before margin: raw * (1 - 0.10) * (1 + 0.20)
     expected_cost = raw_cost * 0.90 * 1.20
     assert configured_cost == pytest.approx(expected_cost, rel=1e-9)
     assert configured_cost != pytest.approx(raw_cost, rel=1e-9)
