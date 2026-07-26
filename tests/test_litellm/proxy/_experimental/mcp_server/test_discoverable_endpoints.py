@@ -8822,3 +8822,303 @@ async def test_token_exchange_authenticates_with_the_sealed_clients_own_auth_met
         assert "Authorization" not in sent_headers
         assert sent_body["client_id"] == "minted-77"
         assert sent_body["client_secret"] == "mint-secret"
+
+
+
+
+# ---------------------------------------------------------------------------
+# LIT-4339: RFC 8707 resource indicators on the upstream OAuth legs
+# ---------------------------------------------------------------------------
+
+
+def _resource_server(**overrides) -> "MCPServer":
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    defaults = dict(
+        server_id="res-srv",
+        name="res-srv",
+        server_name="res-srv",
+        alias="res-srv",
+        url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="gateway-client",
+        client_secret="gateway-secret",
+        authorization_url="https://idp.example.com/oauth/authorize",
+        token_url="https://idp.example.com/oauth/token",
+    )
+    defaults.update(overrides)
+    return MCPServer(**defaults)
+
+
+@pytest.mark.parametrize(
+    "url, configured, expected",
+    [
+        ("https://mcp.example.com/mcp", None, None),
+        ("https://mcp.example.com/mcp", "", None),
+        ("https://mcp.example.com/mcp", "   ", None),
+        ("https://mcp.example.com/mcp", "auto", "https://mcp.example.com/mcp"),
+        ("https://mcp.example.com/mcp", "AUTO", "https://mcp.example.com/mcp"),
+        ("https://mcp.example.com/mcp/", "auto", "https://mcp.example.com/mcp"),
+        ("https://mcp.example.com/", "auto", "https://mcp.example.com"),
+        ("https://MCP.Example.COM/mcp", "auto", "https://mcp.example.com/mcp"),
+        ("HTTPS://mcp.example.com/mcp", "auto", "https://mcp.example.com/mcp"),
+        ("https://mcp.example.com/mcp#frag", "auto", "https://mcp.example.com/mcp"),
+        ("https://mcp.example.com:8443/server/mcp", "auto", "https://mcp.example.com:8443/server/mcp"),
+        # The scheme's default port is dropped, so :443/:80 never present as a different resource than
+        # the portless form against the strict authorization servers this feature targets.
+        ("https://mcp.example.com:443/mcp", "auto", "https://mcp.example.com/mcp"),
+        ("http://mcp.example.com:80/mcp", "auto", "http://mcp.example.com/mcp"),
+        # IPv6 authority keeps its brackets (a bare ::1:8080 would be a malformed authority).
+        ("https://[::1]:8080/mcp", "auto", "https://[::1]:8080/mcp"),
+        ("https://[::1]:443/mcp", "auto", "https://[::1]/mcp"),
+        ("https://mcp.example.com/Server/MCP", "auto", "https://mcp.example.com/Server/MCP"),
+        ("https://User:PaSs@MCP.Example.com/mcp", "auto", "https://mcp.example.com/mcp"),
+        ("https://token@MCP.Example.com/mcp", "auto", "https://mcp.example.com/mcp"),
+        ("https://mcp.example.com/mcp?api_key=s3cr3t", "auto", "https://mcp.example.com/mcp"),
+        ("https://u:p@MCP.Example.com:8443/mcp/?token=abc#frag", "auto", "https://mcp.example.com:8443/mcp"),
+        ("mcp.example.com/mcp", "auto", None),
+        (None, "auto", None),
+        ("https://mcp.example.com/mcp", "api://custom-audience", "api://custom-audience"),
+        ("https://mcp.example.com/mcp", "  https://Other.example.com/RS/  ", "https://Other.example.com/RS/"),
+    ],
+)
+def test_resolve_upstream_resource_tristate_and_canonicalization(url, configured, expected):
+    """The knob is a tri-state: unset/blank omits the parameter, ``auto`` derives the MCP spec's
+    canonical server URI from the server url, and anything else is sent verbatim.
+
+    Canonicalization follows the MCP authorization spec: lowercase scheme and host, drop the scheme's
+    default port, drop the fragment (RFC 8707 forbids one), drop the query and userinfo (credential
+    hygiene), and drop a trailing slash, while preserving a non-default port and the path case. An
+    explicit value is never canonicalized, because it has to match what the authorization server
+    expects byte for byte."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
+
+    assert resolve_upstream_resource(_resource_server(url=url, upstream_resource=configured)) == expected
+
+
+@pytest.mark.parametrize(
+    "configured, url, expected_resource",
+    [
+        (None, "https://mcp.example.com/mcp", None),
+        ("auto", "https://MCP.Example.com/mcp/", "https://mcp.example.com/mcp"),
+        ("api://audience", "https://mcp.example.com/mcp", "api://audience"),
+    ],
+)
+def test_build_upstream_oauth2_token_request_bundles_resource_with_client_auth(configured, url, expected_resource):
+    """Every plain-OAuth2 token leg (authorization_code, refresh_token, client_credentials) builds its
+    request body through this one helper, so the RFC 8707 resource is resolved in the same call as the
+    mandatory client authentication and no leg can authenticate without also naming the resource its
+    sibling legs named. A leg that reverted to hand-building its body would drop the resource and
+    diverge from the authorize leg, which a strict authorization server rejects as invalid_target."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+
+    req = build_upstream_oauth2_token_request(
+        _resource_server(url=url, upstream_resource=configured),
+        auth_method=None,
+        client_id="cid",
+        client_secret="sec",
+    )
+    assert req.body.get("resource") == expected_resource
+    assert req.body["client_id"] == "cid"
+    assert req.body["client_secret"] == "sec"
+
+
+def test_build_upstream_oauth2_token_request_client_secret_basic_keeps_secret_out_of_body():
+    """client_secret_basic authenticates through the Authorization header, so the secret must never
+    also appear in the body, while the RFC 8707 resource still rides in the body."""
+    import base64
+
+    from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+
+    req = build_upstream_oauth2_token_request(
+        _resource_server(upstream_resource="api://audience"),
+        auth_method="client_secret_basic",
+        client_id="cid",
+        client_secret="sec",
+    )
+    assert req.headers["Authorization"] == "Basic " + base64.b64encode(b"cid:sec").decode()
+    assert "client_secret" not in req.body
+    assert "client_id" not in req.body
+    assert req.body["resource"] == "api://audience"
+
+
+async def _authorize_query(server) -> dict:
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
+        mock_encrypt.return_value = "encrypted_state"
+        response = await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="caller-client",
+            redirect_uri="http://localhost:3000/callback",
+            state="client-state",
+            code_challenge="challenge",
+            code_challenge_method="S256",
+            response_type="code",
+            scope=None,
+        )
+    return parse_qs(urlparse(response.headers["location"]).query)
+
+
+async def _token_body(server, grant_type: str) -> dict:
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"access_token": "at", "token_type": "Bearer"}
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type=grant_type,
+            code="auth-code" if grant_type == "authorization_code" else None,
+            redirect_uri="https://litellm.example.com/callback",
+            client_id="caller-client",
+            client_secret=None,
+            code_verifier="verifier",
+            refresh_token="upstream-refresh" if grant_type == "refresh_token" else None,
+        )
+    return mock_async_client.post.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_upstream_resource_unset_sends_no_resource_on_any_leg():
+    """Default behavior is unchanged: with the knob unset the gateway sends no RFC 8707 resource
+    on the authorize leg or on either token grant, so every server working today keeps working
+    (notably the authorization servers that hard-reject the parameter)."""
+    server = _resource_server()
+
+    assert "resource" not in await _authorize_query(server)
+    assert "resource" not in await _token_body(server, "authorization_code")
+    assert "resource" not in await _token_body(server, "refresh_token")
+
+
+@pytest.mark.asyncio
+async def test_upstream_resource_auto_sends_same_canonical_uri_on_every_leg():
+    """The cross-leg invariant. RFC 8707 requires the token request to name a resource the
+    authorization request already asked for, so the authorize leg and both token grants must send
+    an identical value; they all resolve through one helper to make that structural. Deleting the
+    resolve call at any single leg fails this test."""
+    server = _resource_server(url="https://MCP.Example.com/mcp/", upstream_resource="auto")
+    canonical = "https://mcp.example.com/mcp"
+
+    assert (await _authorize_query(server))["resource"] == [canonical]
+    assert (await _token_body(server, "authorization_code"))["resource"] == canonical
+    assert (await _token_body(server, "refresh_token"))["resource"] == canonical
+
+
+@pytest.mark.asyncio
+async def test_upstream_resource_explicit_value_is_sent_verbatim_on_every_leg():
+    """An explicit identifier is never canonicalized or derived from the url; authorization servers
+    match the resource exactly, so an operator-supplied value goes out byte for byte."""
+    server = _resource_server(upstream_resource="api://7c9f-audience/.default")
+
+    assert (await _authorize_query(server))["resource"] == ["api://7c9f-audience/.default"]
+    assert (await _token_body(server, "authorization_code"))["resource"] == "api://7c9f-audience/.default"
+    assert (await _token_body(server, "refresh_token"))["resource"] == "api://7c9f-audience/.default"
+
+
+@pytest.mark.asyncio
+async def test_upstream_resource_auto_never_leaks_credentials_from_the_server_url():
+    """A resource indicator names the resource, never the credentials used to reach it. Transport
+    URLs routinely carry secrets in userinfo and in the query string, and this value is published
+    into the authorization redirect the browser follows and into token request bodies, so neither
+    component may survive into the derived resource."""
+    server = _resource_server(
+        url="https://svc-account:s3cr3t@MCP.Example.com/mcp?api_key=qu3ry-s3cr3t",
+        upstream_resource="auto",
+    )
+    leaks = ("s3cr3t", "svc-account", "qu3ry-s3cr3t", "api_key")
+
+    query = await _authorize_query(server)
+    assert query["resource"] == ["https://mcp.example.com/mcp"]
+    assert not any(leak in query["resource"][0] for leak in leaks)
+
+    body = await _token_body(server, "authorization_code")
+    assert not any(leak in body["resource"] for leak in leaks)
+
+
+def test_upstream_resource_auto_keeps_the_path_because_it_identifies_the_server():
+    """The path is load-bearing identity and must survive canonicalization, unlike userinfo and
+    query which are transport concerns.
+
+    The MCP authorization spec requires the most specific URI and lists
+    ``https://mcp.example.com/server/mcp`` as canonical "when path component is necessary to
+    identify individual MCP server". Two servers behind one host differ only by path, so dropping
+    it would collide them onto one resource identifier and bind each token to the wrong audience,
+    which is the exact confusion RFC 8707 exists to prevent. An operator whose path embeds a secret
+    sets ``upstream_resource`` explicitly instead of using ``auto``."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
+
+    first = resolve_upstream_resource(_resource_server(url="https://gw.example.com/team-a/mcp", upstream_resource="auto"))
+    second = resolve_upstream_resource(
+        _resource_server(url="https://gw.example.com/team-b/mcp", upstream_resource="auto")
+    )
+
+    assert first == "https://gw.example.com/team-a/mcp"
+    assert second == "https://gw.example.com/team-b/mcp"
+    assert first != second
+
+
+@pytest.mark.asyncio
+async def test_upstream_resource_auto_without_url_omits_the_parameter():
+    """A server with no url (OpenAPI spec or stdio) has nothing to derive a canonical URI from, so
+    ``auto`` omits the parameter rather than sending an empty or malformed resource."""
+    server = _resource_server(url=None, upstream_resource="auto")
+
+    assert "resource" not in await _authorize_query(server)
+    assert "resource" not in await _token_body(server, "authorization_code")
+
+
+@pytest.mark.asyncio
+async def test_upstream_resource_sent_on_dcr_bridge_relay_authorize():
+    """The DCR-bridge relay arm builds its own upstream authorize params, so it needs the resource
+    too. Without it the relayed authorize would omit the resource while the gateway's token leg
+    still sent one, which is itself an invalid_target."""
+    from litellm.types.mcp import MCPAuth
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _dcr_bridge_relays_client_registration,
+    )
+
+    server = _resource_server(
+        client_id=None,
+        client_secret=None,
+        auth_type=MCPAuth.oauth_delegate,
+        dcr_bridge=True,
+        registration_url="https://idp.example.com/register",
+        upstream_resource="auto",
+    )
+    assert _dcr_bridge_relays_client_registration(server), "test must exercise the relay arm"
+
+    query = await _authorize_query(server)
+    assert query["resource"] == ["https://mcp.example.com/mcp"]
+    assert query["client_id"] == ["caller-client"]
