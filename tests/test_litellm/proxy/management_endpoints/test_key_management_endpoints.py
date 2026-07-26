@@ -6314,19 +6314,16 @@ def test_build_key_filter_conditions_user_email_ids_narrow_visibility():
 @pytest.mark.asyncio
 async def test_list_keys_user_email_resolves_to_user_ids():
     """
-    list_keys must resolve the user_email filter to user IDs via a
-    case-insensitive substring lookup on the user table and pass them to
-    _list_key_helper. No email filter (including the Query default object
-    from direct calls) must skip the lookup entirely.
+    list_keys must resolve the user_email filter to user IDs via a raw
+    id-only case-insensitive substring lookup on the user table and pass
+    them to _list_key_helper. No email filter (including the Query default
+    object from direct calls) must skip the lookup entirely.
     """
-    from types import SimpleNamespace
     from unittest.mock import Mock
 
     mock_prisma_client = AsyncMock()
-    mock_find_many = AsyncMock(
-        return_value=[SimpleNamespace(user_id="user-1"), SimpleNamespace(user_id="user-2")]
-    )
-    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_query_raw = AsyncMock(return_value=[{"user_id": "user-1"}, {"user_id": "user-2"}])
+    mock_prisma_client.db.query_raw = mock_query_raw
     mock_list_key_helper = AsyncMock(
         return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
     )
@@ -6351,15 +6348,13 @@ async def test_list_keys_user_email_resolves_to_user_ids():
             include_created_by_keys=False,
             status=None,
         )
-        assert mock_find_many.call_args.kwargs["where"] == {
-            "user_email": {"contains": "alias@example.com", "mode": "insensitive"}
-        }
-        assert mock_find_many.call_args.kwargs["take"] == 1000, (
-            "user lookup must be bounded; a broad substring like '@' matches every user"
-        )
+        sql, pattern, limit = mock_query_raw.call_args.args
+        assert "ILIKE" in sql and 'FROM "LiteLLM_UserTable"' in sql
+        assert pattern == "%alias@example.com%"
+        assert limit == 50_001, "lookup must be bounded so an over-broad fragment cannot fetch the whole table"
         assert mock_list_key_helper.call_args.kwargs["user_ids_for_email"] == ["user-1", "user-2"]
 
-        mock_find_many.return_value = []
+        mock_query_raw.return_value = []
         await list_keys(
             request=Mock(),
             user_api_key_dict=admin,
@@ -6370,7 +6365,7 @@ async def test_list_keys_user_email_resolves_to_user_ids():
         )
         assert mock_list_key_helper.call_args.kwargs["user_ids_for_email"] == []
 
-        mock_find_many.reset_mock()
+        mock_query_raw.reset_mock()
         await list_keys(
             request=Mock(),
             user_api_key_dict=admin,
@@ -6378,8 +6373,35 @@ async def test_list_keys_user_email_resolves_to_user_ids():
             include_created_by_keys=False,
             status=None,
         )
-        mock_find_many.assert_not_called()
+        mock_query_raw.assert_not_called()
         assert mock_list_key_helper.call_args.kwargs["user_ids_for_email"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_ids_for_email_filter_escapes_wildcards_and_refuses_overflow():
+    """
+    LIKE wildcards typed by the user must match literally, and a fragment
+    matching more than the ceiling must 400 instead of silently truncating
+    the id list (truncation would make /key/list drop visible keys).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        USER_EMAIL_KEY_FILTER_MAX_USERS,
+        _resolve_user_ids_for_email_filter,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_query_raw = AsyncMock(return_value=[{"user_id": "user-1"}])
+    mock_prisma_client.db.query_raw = mock_query_raw
+
+    result = await _resolve_user_ids_for_email_filter(mock_prisma_client, "50%_off\\weird")
+    assert result == ["user-1"]
+    assert mock_query_raw.call_args.args[1] == "%50\\%\\_off\\\\weird%"
+
+    mock_query_raw.return_value = [{"user_id": f"user-{i}"} for i in range(USER_EMAIL_KEY_FILTER_MAX_USERS + 1)]
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_user_ids_for_email_filter(mock_prisma_client, "@")
+    assert exc_info.value.status_code == 400
+    assert "too many users" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

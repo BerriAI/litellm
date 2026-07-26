@@ -5176,7 +5176,31 @@ async def get_member_team_ids(
 
 
 VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
-USER_EMAIL_KEY_FILTER_MAX_USERS = 1000
+USER_EMAIL_KEY_FILTER_MAX_USERS = 50_000
+
+
+async def _resolve_user_ids_for_email_filter(prisma_client: PrismaClient, user_email: str) -> List[str]:
+    """Resolve a user_email fragment to the complete set of matching user IDs.
+
+    Raw SQL keeps this bounded: only the user_id column is fetched (find_many
+    materializes full rows), and LIKE wildcards in the fragment are escaped so
+    user input cannot widen the match. Matching more than
+    USER_EMAIL_KEY_FILTER_MAX_USERS users is refused rather than truncated:
+    a silently partial id list would make /key/list drop visible keys.
+    """
+    escaped = user_email.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rows = await prisma_client.db.query_raw(
+        'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_email ILIKE $1 LIMIT $2',
+        f"%{escaped}%",
+        USER_EMAIL_KEY_FILTER_MAX_USERS + 1,
+    )
+    user_ids = [row["user_id"] for row in rows]
+    if len(user_ids) > USER_EMAIL_KEY_FILTER_MAX_USERS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "user_email filter matched too many users; use a more specific email fragment"},
+        )
+    return user_ids
 
 
 @router.get(
@@ -5196,7 +5220,7 @@ async def list_keys(
     ),
     user_email: str | None = Query(
         None,
-        description="Filter keys by the owning user's email. Case-insensitive substring match against the user table, capped at the first 1000 matching users; only keys whose user_id belongs to a matching user are returned.",
+        description="Filter keys by the owning user's email. Case-insensitive substring match against the user table; only keys whose user_id belongs to a matching user are returned. Fragments matching more than 50,000 users are rejected with a 400.",
     ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(None, description="Filter keys by organization ID"),
@@ -5327,13 +5351,7 @@ async def list_keys(
             user_id = user_api_key_dict.user_id
 
         user_ids_for_email = (
-            [
-                user.user_id
-                for user in await UserRepository(prisma_client).table.find_many(
-                    where={"user_email": {"contains": user_email, "mode": "insensitive"}},
-                    take=USER_EMAIL_KEY_FILTER_MAX_USERS,
-                )
-            ]
+            await _resolve_user_ids_for_email_filter(prisma_client, user_email)
             if user_email and isinstance(user_email, str)
             else None
         )
