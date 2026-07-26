@@ -25,11 +25,11 @@ def _parse_date(value: str, param_name: str) -> datetime:
 @router.get(
     "/global/activity/cache_hits",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=CacheActivityResponse,
     include_in_schema=False,
 )
 async def get_global_activity(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: Annotated[str, fastapi.Query(description="Time from which to start viewing spend")],
     end_date: Annotated[str, fastapi.Query(description="Time till which to view spend")],
     key_aliases: Annotated[
@@ -52,10 +52,20 @@ async def get_global_activity(
             },
         )
 
+    user_id = None
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    ):
+        user_id = user_api_key_dict.user_id
+        if user_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "No user_id found"})
+
     return await get_cache_activity(
         prisma_client=prisma_client,
         start_date=_parse_date(start_date, "start_date"),
         end_date=_parse_date(end_date, "end_date"),
         key_aliases=key_aliases or [],
         models=models or [],
+        user_id=user_id,
     )
