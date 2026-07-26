@@ -46,6 +46,8 @@ EXCLUDED_TERMINAL_VARS = {
     "WT_SESSION",
     "GNOME_TERMINAL_SCREEN",
     "ALACRITTY_SOCKET",
+    "NO_COLOR",
+    "FORCE_COLOR",
 }
 
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source
