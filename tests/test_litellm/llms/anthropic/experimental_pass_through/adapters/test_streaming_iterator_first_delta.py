@@ -506,3 +506,118 @@ def test_empty_content_chunk_mid_text_block_is_suppressed_sync():
 
     assert _text_deltas(events) == ["Hi", " there"]
     _assert_deltas_match_their_block_type(events)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #34692.
+#
+# When a provider (e.g. ``ollama_chat``) streams a tool call and then a plain
+# ``stop`` finish_reason, the Anthropic ``/v1/messages`` framing was wrong in
+# two ways: the turn was prefixed with a spurious empty ``{"type": "text",
+# "text": ""}`` content block, and the final ``message_delta`` carried
+# ``stop_reason: "end_turn"`` instead of ``"tool_use"`` even though a tool_use
+# block was streamed. Anthropic tool-runners key off ``stop_reason ==
+# "tool_use"`` to decide whether to execute the tool, so the tool call was
+# silently dropped downstream.
+# ---------------------------------------------------------------------------
+
+
+def _content_block_starts(events: List[dict]) -> List[dict]:
+    return [e for e in events if e.get("type") == "content_block_start"]
+
+
+def _final_stop_reason(events: List[dict]) -> Optional[str]:
+    for event in events:
+        if event.get("type") == "message_delta":
+            return event["delta"].get("stop_reason")
+    return None
+
+
+def _ollama_style_tool_then_stop_chunks() -> List[MagicMock]:
+    """``ollama_chat`` streams the whole tool call in a chunk with no
+    finish_reason, then a terminating chunk whose finish_reason is a plain
+    ``stop`` (the tool_calls are not repeated on the terminating chunk).
+    """
+    return [
+        _tool_chunk("call_1", "get_weather", '{"city": "SF"}'),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+
+
+def test_tool_first_turn_has_no_leading_empty_text_block_sync():
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_ollama_style_tool_then_stop_chunks()), model="qwen3"
+    )
+    events = _drain_sync(wrapper)
+
+    starts = _content_block_starts(events)
+    assert [s["content_block"]["type"] for s in starts] == ["tool_use"]
+    assert starts[0]["index"] == 0
+    assert _input_json_deltas(events) == ['{"city": "SF"}']
+
+
+def test_stop_reason_is_tool_use_when_tool_streamed_before_plain_stop_sync():
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_ollama_style_tool_then_stop_chunks()), model="qwen3"
+    )
+    assert _final_stop_reason(_drain_sync(wrapper)) == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_tool_first_turn_has_no_leading_empty_text_block_async():
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_AsyncStream(_ollama_style_tool_then_stop_chunks()),
+        model="qwen3",
+    )
+    events = await _drain_async(wrapper)
+
+    starts = _content_block_starts(events)
+    assert [s["content_block"]["type"] for s in starts] == ["tool_use"]
+    assert _final_stop_reason(events) == "tool_use"
+
+
+def test_max_tokens_stop_reason_is_preserved_even_with_tool_use_sync():
+    """The override only rewrites ``end_turn`` -> ``tool_use``; a genuine
+    ``max_tokens`` truncation mid-tool-call must survive so clients can tell
+    the turn was cut short.
+    """
+    chunks = [
+        _tool_chunk("call_1", "get_weather", '{"city": "S'),
+        _make_chunk(Delta(content=None), finish_reason="length"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="qwen3")
+    assert _final_stop_reason(_drain_sync(wrapper)) == "max_tokens"
+
+
+def test_plain_text_turn_keeps_end_turn_and_leading_text_block_sync():
+    """A text-only turn must be unaffected: it opens a single text block and
+    ends with ``end_turn`` (no tool_use override, no dropped block).
+    """
+    chunks = [
+        _make_chunk(Delta(content="Hello")),
+        _make_chunk(Delta(content=" there")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="qwen3")
+    events = _drain_sync(wrapper)
+
+    starts = _content_block_starts(events)
+    assert [s["content_block"]["type"] for s in starts] == ["text"]
+    assert _text_deltas(events) == ["Hello", " there"]
+    assert _final_stop_reason(events) == "end_turn"
+
+
+def test_thinking_first_turn_has_no_leading_empty_text_block_sync():
+    """A reasoning-first turn must open a ``thinking`` block directly rather
+    than a spurious empty text block ahead of it.
+    """
+    chunks = [
+        _thinking_chunk("Let me think"),
+        _make_chunk(Delta(content="Answer")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="qwen3")
+    events = _drain_sync(wrapper)
+
+    starts = _content_block_starts(events)
+    assert [s["content_block"]["type"] for s in starts] == ["thinking", "text"]
