@@ -209,6 +209,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             type="text",
             text="",
         )
+        self._emitted_tool_use = False
+
+    def _override_stop_reason_for_tool_use(self, processed_chunk: Any) -> Any:
+        if (
+            self._emitted_tool_use
+            and isinstance(processed_chunk, dict)
+            and processed_chunk.get("type") == "message_delta"
+            and processed_chunk.get("delta", {}).get("stop_reason") == "end_turn"
+        ):
+            processed_chunk["delta"]["stop_reason"] = "tool_use"
+        return processed_chunk
 
     def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> Dict[str, Any]:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
@@ -424,10 +435,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
                 is_final_chunk = chunk.choices[0].finish_reason is not None
-                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                    response=chunk,
-                    current_content_block_index=self.current_content_block_index,
-                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                processed_chunk = self._override_stop_reason_for_tool_use(
+                    LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=chunk,
+                        current_content_block_index=self.current_content_block_index,
+                        applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                    )
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -647,10 +660,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None
                 )
                 is_final_chunk = chunk.choices[0].finish_reason is not None
-                processed_chunk = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                    response=chunk,
-                    current_content_block_index=self.current_content_block_index,
-                    applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                processed_chunk = self._override_stop_reason_for_tool_use(
+                    LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=chunk,
+                        current_content_block_index=self.current_content_block_index,
+                        applied_edits=(self.applied_edits if is_final_chunk and not will_merge_into_held else None),
+                    )
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
@@ -901,6 +916,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit
         if block_type == "tool_use":
+            self._emitted_tool_use = True
             # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
             from typing import cast
 
