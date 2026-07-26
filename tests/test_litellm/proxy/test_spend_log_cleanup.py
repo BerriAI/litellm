@@ -193,6 +193,12 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     tool_index_sql = mock_db.execute_raw.call_args_list[3][0][0]
     assert 'DELETE FROM "LiteLLM_SpendLogToolIndex"' in tool_index_sql
 
+    # The LiteLLM_DailyToolSpend rollup must outlive spend-log retention: it is
+    # the only copy of tool spend history once its per-request sources expire,
+    # so spend-log cleanup must never touch it.
+    for call in mock_db.execute_raw.call_args_list:
+        assert "LiteLLM_DailyToolSpend" not in call[0][0]
+
 
 @pytest.mark.asyncio
 async def test_cleanup_old_spend_logs_retention_period_cutoff():

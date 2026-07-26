@@ -6,6 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -5350,7 +5351,9 @@ def prompt_factory(
 def get_attribute_or_key(tool_or_function, attribute, default=None):
     if hasattr(tool_or_function, attribute):
         return getattr(tool_or_function, attribute)
-    return tool_or_function.get(attribute, default)
+    if isinstance(tool_or_function, Mapping):
+        return tool_or_function.get(attribute, default)
+    return default
 
 
 class NormalizedToolCall(TypedDict):

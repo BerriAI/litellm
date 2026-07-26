@@ -182,6 +182,12 @@ class DBSpendUpdateWriter:
                     payload=payload,
                     prisma_client=prisma_client,
                 )
+                await self._enqueue_tool_usage_transaction(
+                    payload=payload,
+                    completion_response=completion_response,
+                    prisma_client=prisma_client,
+                    kwargs=kwargs,
+                )
             else:
                 verbose_proxy_logger.debug(
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
@@ -222,6 +228,36 @@ class DBSpendUpdateWriter:
                 org_id,
                 end_user_id,
             )
+
+    async def _enqueue_tool_usage_transaction(
+        self,
+        payload: SpendLogsPayload,
+        completion_response: "litellm.ModelResponse | Any | Exception | None",
+        prisma_client: "PrismaClient | None",
+        kwargs: "dict | None" = None,
+    ) -> None:
+        try:
+            if prisma_client is None:
+                return
+            from litellm.proxy.db.spend_log_tool_index import (
+                build_tool_usage_transaction,
+            )
+
+            transaction = build_tool_usage_transaction(
+                request_id=payload["request_id"],
+                start_time_iso=str(payload["startTime"]),
+                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name"),
+                spend=payload["spend"],
+                total_tokens=payload["total_tokens"],
+                completion_response=completion_response,
+                realtime_tool_calls=(kwargs or {}).get("realtime_tool_calls"),
+            )
+            if transaction is None:
+                return
+            async with prisma_client._tool_usage_transactions_lock:
+                prisma_client.tool_usage_transactions.append(transaction)
+        except Exception as e:
+            verbose_proxy_logger.debug("_enqueue_tool_usage_transaction error (non-blocking): %s", e)
 
     def _enqueue_tool_registry_upsert(
         self,
@@ -299,21 +335,10 @@ class DBSpendUpdateWriter:
                     _enqueue(name)
 
             # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
-            if completion_response is not None and hasattr(completion_response, "choices"):
-                for choice in completion_response.choices or []:
-                    message = getattr(choice, "message", None)
-                    if message is None:
-                        continue
-                    tool_calls = getattr(message, "tool_calls", None)
-                    if not tool_calls:
-                        continue
-                    for tc in tool_calls:
-                        fn = getattr(tc, "function", None)
-                        if fn is None:
-                            continue
-                        tool_name = getattr(fn, "name", None)
-                        if tool_name:
-                            _enqueue(tool_name)
+            from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
+
+            for tool_name in response_tool_call_names(completion_response):
+                _enqueue(tool_name)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_registry_upsert error (non-blocking): %s", e)
 

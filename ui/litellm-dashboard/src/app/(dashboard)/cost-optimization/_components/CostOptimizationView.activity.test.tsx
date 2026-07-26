@@ -5,7 +5,7 @@ const mockUserDailyActivityCall = vi.fn();
 
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
-  getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], total_spend: 0, start_date: null, end_date: null }),
+  getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], start_date: null, end_date: null }),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
 }));
 

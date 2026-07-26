@@ -18005,16 +18005,16 @@ export interface paths {
          * Get Tool Spend
          * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
          *
-         *     Joins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to
-         *     ``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools
-         *     counts its full spend toward each of those tools, so per-tool numbers are
-         *     attributions. ``total_spend`` is the deduplicated spend of every request that
-         *     called at least one tool in the window, so it never double counts.
+         *     Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+         *     tools only (MCP tool calls and response tool_calls; declaring a tool without
+         *     invoking it does not count). A request that invoked multiple tools counts its
+         *     full spend toward each of them, so per-tool numbers are attributions and do not
+         *     sum to a deduplicated total.
          *
-         *     ``start_date`` is clamped to at most 30 days before ``end_date`` (serving up to
-         *     31 calendar dates inclusive, the same width as the endpoint's default window):
-         *     a wider requested range is clamped, and the response's ``start_date`` reflects
-         *     the effective window actually served.
+         *     ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+         *     SQL, and ``daily`` covers only those tools, so the response is bounded by
+         *     days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+         *     distinct tool names exist.
          */
         get: operations["get_tool_spend_v1_tool_spend_get"];
         put?: never;
@@ -18074,7 +18074,8 @@ export interface paths {
         };
         /**
          * Get Tool Usage Logs
-         * @description Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+         * @description Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+         *     Declaring a tool in a request body without the model invoking it does not create an entry.
          */
         get: operations["get_tool_usage_logs_v1_tool__tool_name__logs_get"];
         put?: never;
@@ -32200,12 +32201,6 @@ export interface components {
             end_date?: string | null;
             /** Start Date */
             start_date?: string | null;
-            /**
-             * Total Spend
-             * @description Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist
-             * @default 0
-             */
-            total_spend: number;
         };
         /**
          * ToolUsageLogEntry

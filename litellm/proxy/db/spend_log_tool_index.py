@@ -1,140 +1,147 @@
 """
-Track tool usage for the dashboard: insert into SpendLogToolIndex when spend logs
-are written, so "last N requests for tool X" and "how is this tool called in production"
-queries are fast.
+Tool usage tracking for the dashboard.
+
+At request time the spend writer builds one ToolUsageTransaction per request that
+invoked tools (MCP namespaced tool name plus response tool_calls; declared-but-not-
+invoked tools are excluded) and queues it on the prisma client. The spend-log flush
+job drains the queue into LiteLLM_SpendLogToolIndex (per-request drill-down) and
+LiteLLM_DailyToolSpend (the per-day rollup the Cost Optimization card reads) in a
+single transaction, so a failed flush never leaves a partial rollup increment.
 """
 
+from __future__ import annotations
+
+import asyncio
+import random
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Set
+from itertools import groupby
+from typing import TYPE_CHECKING, Any, Sequence
 
-from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import SpendLogToolIndexRepository
+from litellm.proxy._types import DB_CONNECTION_ERROR_TYPES
 
-
-def _add_tool_calls_to_set(tool_calls: Any, out: Set[str]) -> None:
-    """Extract tool names from OpenAI-style tool_calls list into out."""
-    if not isinstance(tool_calls, list):
-        return
-    for tc in tool_calls:
-        if not isinstance(tc, dict):
-            continue
-        fn = tc.get("function")
-        if isinstance(fn, dict):
-            name = fn.get("name")
-            if name and isinstance(name, str) and name.strip():
-                out.add(name.strip())
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 
-def _parse_tool_names_from_payload(payload: Dict[str, Any]) -> Set[str]:
-    """
-    Extract deduplicated tool names from a spend log payload.
-    Sources: mcp_namespaced_tool_name, response (tool_calls), proxy_server_request (tools).
-    """
-    tool_names: Set[str] = set()
-
-    # Top-level MCP tool name (single tool per request for that flow)
-    mcp_name = payload.get("mcp_namespaced_tool_name")
-    if mcp_name and isinstance(mcp_name, str) and mcp_name.strip():
-        tool_names.add(mcp_name.strip())
-
-    # Response: OpenAI-style tool_calls[].function.name or choices[0].message.tool_calls
-    response_raw = payload.get("response")
-    if response_raw:
-        response_obj = safe_json_loads(response_raw, default=None) if isinstance(response_raw, str) else response_raw
-        if isinstance(response_obj, dict):
-            _add_tool_calls_to_set(response_obj.get("tool_calls"), tool_names)
-            choices = response_obj.get("choices")
-            if isinstance(choices, list) and choices:
-                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
-                if isinstance(msg, dict):
-                    _add_tool_calls_to_set(msg.get("tool_calls"), tool_names)
-
-    # Request body: tools[].function.name
-    request_raw = payload.get("proxy_server_request")
-    if request_raw:
-        request_obj = safe_json_loads(request_raw, default=None) if isinstance(request_raw, str) else request_raw
-        if isinstance(request_obj, dict):
-            body = request_obj.get("body", request_obj)
-            if isinstance(body, dict):
-                request_obj = body
-        if isinstance(request_obj, dict):
-            tools = request_obj.get("tools")
-            if isinstance(tools, list):
-                for t in tools:
-                    if isinstance(t, dict):
-                        fn = t.get("function")
-                        if isinstance(fn, dict):
-                            name = fn.get("name")
-                            if name and isinstance(name, str) and name.strip():
-                                tool_names.add(name.strip())
-
-    return tool_names
+@dataclass(frozen=True, slots=True)
+class ToolUsageTransaction:
+    request_id: str
+    date: str
+    start_time: datetime
+    tool_names: tuple[str, ...]
+    spend: float
+    total_tokens: int
 
 
-async def process_spend_logs_tool_usage(
-    prisma_client: PrismaClient,
-    logs_to_process: List[Dict[str, Any]],
-) -> None:
-    """
-    After spend logs are written: insert SpendLogToolIndex rows from each payload.
-    Extracts tool names from mcp_namespaced_tool_name, response tool_calls, and
-    proxy_server_request tools.
-    """
-    if not logs_to_process:
-        return
+def response_tool_call_names(completion_response: Any) -> tuple[str, ...]:
+    """Tool names invoked in a completion response, in call order, for any response
+    surface get_tool_calls_from_response understands (chat completions, Responses
+    API output items, Anthropic Messages tool_use blocks)."""
+    if completion_response is None or isinstance(completion_response, Exception):
+        return ()
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
 
-    index_rows: List[Dict[str, Any]] = []
+    return tuple(
+        stripped
+        for tool_call in get_tool_calls_from_response(completion_response)
+        if isinstance(name := tool_call.get("name"), str) and (stripped := name.strip())
+    )
 
-    for payload in logs_to_process:
-        request_id = payload.get("request_id")
-        start_time = payload.get("startTime")
-        if not request_id or not start_time:
-            continue
-        if isinstance(start_time, str):
-            try:
-                start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                continue
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
 
-        tool_names = _parse_tool_names_from_payload(payload)
-        for tool_name in tool_names:
-            index_rows.append(
-                {
-                    "request_id": request_id,
-                    "tool_name": tool_name,
-                    "start_time": start_time,
-                }
-            )
-
-    if not index_rows:
-        return
-
+def build_tool_usage_transaction(
+    request_id: str,
+    start_time_iso: str,
+    mcp_namespaced_tool_name: str | None,
+    spend: float,
+    total_tokens: int,
+    completion_response: Any,
+    realtime_tool_calls: Any = None,
+) -> ToolUsageTransaction | None:
+    """None when the request invoked no tools. Realtime sessions carry invoked
+    tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
+    on a response object, so they are normalized through the same owner by
+    wrapping them in the chat-completion shape. Date derivation must match the
+    daily spend writer's ``startTime.split("T")[0]`` so rollup rows land in the
+    same UTC day bucket as LiteLLM_DailyUserSpend."""
+    mcp_names = (
+        (mcp_namespaced_tool_name.strip(),) if mcp_namespaced_tool_name and mcp_namespaced_tool_name.strip() else ()
+    )
+    realtime_names = (
+        response_tool_call_names({"choices": [{"message": {"tool_calls": realtime_tool_calls}}]})
+        if realtime_tool_calls
+        else ()
+    )
+    tool_names = tuple(dict.fromkeys(mcp_names + response_tool_call_names(completion_response) + realtime_names))
+    if not tool_names:
+        return None
     try:
-        index_data = []
-        for r in index_rows:
-            st = r["start_time"]
-            if isinstance(st, str):
-                try:
-                    st = datetime.fromisoformat(st.replace("Z", "+00:00"))
-                except (ValueError, TypeError):
-                    continue
-            if st.tzinfo is None:
-                st = st.replace(tzinfo=timezone.utc)
-            index_data.append(
-                {
-                    "request_id": r["request_id"],
-                    "tool_name": r["tool_name"],
-                    "start_time": st,
-                }
-            )
-        if index_data:
-            await SpendLogToolIndexRepository(prisma_client).table.create_many(
-                data=index_data,
-                skip_duplicates=True,
-            )
-    except Exception as e:
-        verbose_proxy_logger.warning("Tool usage tracking (SpendLogToolIndex) failed (non-fatal): %s", e)
+        start_time = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ToolUsageTransaction(
+        request_id=request_id,
+        date=start_time_iso.split("T")[0],
+        start_time=start_time if start_time.tzinfo else start_time.replace(tzinfo=timezone.utc),
+        tool_names=tool_names,
+        spend=spend,
+        total_tokens=total_tokens,
+    )
+
+
+async def flush_tool_usage_transactions(
+    prisma_client: PrismaClient,
+    transactions: Sequence[ToolUsageTransaction],
+    n_retry_times: int = 3,
+) -> None:
+    """Write index rows and rollup upserts for a drained queue batch in one
+    transaction. Connection errors are retried with backoff, which cannot
+    double-count because a failed batch commits nothing; every other error
+    propagates so the caller drops the batch. Callers must not add their own
+    retry around this function: a batch that DID commit must never run again,
+    since the rollup update increments counters."""
+    if not transactions:
+        return
+
+    index_rows = [
+        {"request_id": txn.request_id, "tool_name": tool_name, "start_time": txn.start_time}
+        for txn in transactions
+        for tool_name in txn.tool_names
+    ]
+    per_tool_day = sorted(
+        ((txn.date, tool_name, txn.spend, txn.total_tokens) for txn in transactions for tool_name in txn.tool_names),
+        key=lambda entry: (entry[0], entry[1]),
+    )
+
+    for attempt in range(n_retry_times + 1):
+        try:
+            async with prisma_client.db.batch_() as batcher:
+                batcher.litellm_spendlogtoolindex.create_many(data=index_rows, skip_duplicates=True)
+                for (date_key, tool_name), grouped in groupby(per_tool_day, key=lambda entry: (entry[0], entry[1])):
+                    entries = tuple(grouped)
+                    spend = sum(entry[2] for entry in entries)
+                    total_tokens = sum(entry[3] for entry in entries)
+                    batcher.litellm_dailytoolspend.upsert(
+                        where={"date_tool_name": {"date": date_key, "tool_name": tool_name}},
+                        data={
+                            "create": {
+                                "date": date_key,
+                                "tool_name": tool_name,
+                                "spend": spend,
+                                "total_tokens": total_tokens,
+                                "request_count": len(entries),
+                            },
+                            "update": {
+                                "spend": {"increment": spend},
+                                "total_tokens": {"increment": total_tokens},
+                                "request_count": {"increment": len(entries)},
+                            },
+                        },
+                    )
+            return
+        except DB_CONNECTION_ERROR_TYPES:
+            if attempt >= n_retry_times:
+                raise
+            await asyncio.sleep(2**attempt + random.uniform(0, 1))

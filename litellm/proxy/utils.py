@@ -175,6 +175,7 @@ if TYPE_CHECKING:
     from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
     Span = Union[_Span, Any]
 else:
@@ -2917,6 +2918,8 @@ async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> 
 class PrismaClient:
     spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
+    tool_usage_transactions: List["ToolUsageTransaction"] = []
+    _tool_usage_transactions_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -5473,12 +5476,15 @@ async def update_spend(
         queue_size = len(prisma_client.spend_log_transactions)
     verbose_proxy_logger.debug("Spend Logs transactions: {}".format(queue_size))
 
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_usage_queue_size = len(prisma_client.tool_usage_transactions)
+
     # Process spend log transactions when called directly.
     # This keeps backwards compatibility with the old behavior.
     # See update_spend_logs_job and _monitor_spend_logs_queue for the new behavior.
     # Safe to keep: under high concurrency this can take up to ~30s to run,
     # so it's unlikely to overlap with monitor_spend_logs_queue.
-    if queue_size > 0:
+    if queue_size > 0 or tool_usage_queue_size > 0:
         await update_spend_logs_job(
             prisma_client=prisma_client,
             db_writer_client=db_writer_client,
@@ -5545,10 +5551,14 @@ async def update_spend_logs_job(
     n_retry_times = 3
     MAX_LOGS_PER_INTERVAL = 10000
 
-    # Atomically pop batch from queue
+    # Atomically pop batch from queue. The tool usage queue counts toward the
+    # emptiness check: a spend-log write failure aborts a run before the tool
+    # drain below, and those entries must not strand once the spend queue drains.
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    if queue_size == 0:
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_queue_size = len(prisma_client.tool_usage_transactions)
+    if queue_size == 0 and tool_queue_size == 0:
         return
 
     async with prisma_client._spend_log_transactions_lock:
@@ -5579,17 +5589,23 @@ async def update_spend_logs_job(
             guardrail_tracking_err,
         )
 
-    # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
+    # Tool usage tracking: drain the request-time queue into the tool index and the
+    # LiteLLM_DailyToolSpend rollup. Never retried; a dropped batch is permanently
+    # absent from the rollup, so failures log at error.
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_usage_to_process = prisma_client.tool_usage_transactions[:MAX_LOGS_PER_INTERVAL]
+        prisma_client.tool_usage_transactions = prisma_client.tool_usage_transactions[len(tool_usage_to_process) :]
     try:
-        from litellm.proxy.db.spend_log_tool_index import process_spend_logs_tool_usage
+        from litellm.proxy.db.spend_log_tool_index import flush_tool_usage_transactions
 
-        await process_spend_logs_tool_usage(
+        await flush_tool_usage_transactions(
             prisma_client=prisma_client,
-            logs_to_process=logs_to_process,
+            transactions=tool_usage_to_process,
         )
     except Exception as tool_tracking_err:
-        verbose_proxy_logger.warning(
-            "Spend tracking - tool usage tracking failed (non-fatal): %s",
+        verbose_proxy_logger.error(
+            "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",
+            len(tool_usage_to_process),
             tool_tracking_err,
         )
 
@@ -5625,9 +5641,13 @@ async def _monitor_spend_logs_queue(
 
     while True:
         try:
-            # Check queue size with lock protection
+            # Check queue sizes with lock protection; the tool usage queue keeps
+            # the monitor firing when a prior failed run left it nonempty.
             async with prisma_client._spend_log_transactions_lock:
-                queue_size = len(prisma_client.spend_log_transactions)
+                spend_queue_size = len(prisma_client.spend_log_transactions)
+            async with prisma_client._tool_usage_transactions_lock:
+                tool_queue_size = len(prisma_client.tool_usage_transactions)
+            queue_size = spend_queue_size + tool_queue_size
 
             if queue_size > 0:
                 if queue_size >= threshold:

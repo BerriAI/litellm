@@ -1097,6 +1097,19 @@ model LiteLLM_SpendLogToolIndex {
   @@index([start_time])
 }
 
+// Daily tool spend rollup (one row per tool per day) – the Cost Optimization card reads this, never SpendLogs
+model LiteLLM_DailyToolSpend {
+  date          String
+  tool_name     String
+  spend         Float    @default(0.0)
+  total_tokens  BigInt   @default(0)
+  request_count BigInt   @default(0)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@id([date, tool_name])
+}
+
 // Prompt table for storing prompt configurations
 model LiteLLM_PromptTable {
   id String @id @default(uuid())
