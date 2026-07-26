@@ -224,6 +224,19 @@ def test_rejects_a_malformed_window_as_a_problem_document(mock_prisma_client, as
     assert "error" not in body
 
 
+def test_problem_type_is_an_identifier_not_a_dead_docs_link(mock_prisma_client, as_proxy_admin):
+    """RFC 9457 only asks that `type` identify the problem type. An https URI promises
+    human-readable documentation at that address, and https://docs.litellm.ai/errors/
+    is a 404, so emitting one would ship a broken link in every error body."""
+    _mock_rows(mock_prisma_client, [])
+
+    problem_type = _get("filter[startTime][gte]=yesterday&filter[startTime][lte]=2026-07-24T00:00:00Z").json()["type"]
+
+    assert problem_type.startswith("urn:")
+    assert "docs.litellm.ai" not in problem_type
+    assert not problem_type.startswith("http")
+
+
 def test_rejects_an_unknown_query_parameter(mock_prisma_client, as_proxy_admin):
     """A silently ignored filter over-returns data, which is worse than a rejected request."""
     query_raw = _mock_rows(mock_prisma_client, [])

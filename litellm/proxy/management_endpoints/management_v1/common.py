@@ -13,7 +13,10 @@ from litellm.types.proxy.management_endpoints.management_v1 import (
 
 MANAGEMENT_V1_PREFIX = "/management/v1"
 PROBLEM_CONTENT_TYPE = "application/problem+json"
-PROBLEM_TYPE_BASE = "https://docs.litellm.ai/errors/"
+# A URN, not an https URL: RFC 9457 only asks that `type` identify the problem
+# type, and an https URI promises documentation at that address. Switch to an
+# https base only when pages actually exist to serve.
+PROBLEM_TYPE_BASE = "urn:litellm:error:"
 
 
 class ManagementProblem(Exception):
