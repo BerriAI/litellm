@@ -5122,6 +5122,63 @@ class TestMCPServerManager:
         assert "Contact proxy admin to allow this tool" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
+    async def test_call_tool_refuses_a_resolved_server_outside_the_callers_scope(self):
+        """Dispatch is gated at the chokepoint, so a caller cannot hand over any server.
+
+        ``resolved_server`` exists so identity does not round-trip through the
+        non-unique ``server_name``, but a caller that resolved it scope-blind would
+        otherwise send an unreachable server's upstream credential.
+        """
+        manager = MCPServerManager()
+        zulu = MCPServer(server_id="id-zulu", name="echo_zulu", transport=MCPTransport.http)
+        manager.registry = {"id-zulu": zulu}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await manager.call_tool(
+                server_name="echo_zulu",
+                name="echo",
+                arguments={},
+                resolved_server=zulu,
+                allowed_server_ids=frozenset({"id-alpha"}),
+            )
+
+        assert excinfo.value.status_code == 403
+        assert excinfo.value.detail["error"] == "server_out_of_scope"
+
+    @pytest.mark.asyncio
+    async def test_call_tool_refuses_a_name_resolved_server_outside_the_callers_scope(self):
+        """The gate covers name resolution too, which walks the whole registry."""
+        manager = MCPServerManager()
+        zulu = MCPServer(server_id="id-zulu", name="echo_zulu", server_name="echo_zulu", transport=MCPTransport.http)
+        manager.registry = {"id-zulu": zulu}
+        manager._replace_server_tool_routes("id-zulu", {"echo", "echo_zulu-echo"})
+
+        with pytest.raises(HTTPException) as excinfo:
+            await manager.call_tool(
+                server_name="echo_zulu",
+                name="echo",
+                arguments={},
+                allowed_server_ids=frozenset({"id-alpha"}),
+            )
+
+        assert excinfo.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_call_tool_requires_the_scope_a_resolved_server_was_resolved_against(self):
+        """Caller-supplied identity must arrive with its provenance, or it is unverifiable."""
+        manager = MCPServerManager()
+        alpha = MCPServer(server_id="id-alpha", name="echo_alpha", transport=MCPTransport.http)
+        manager.registry = {"id-alpha": alpha}
+
+        with pytest.raises(ValueError, match="allowed_server_ids"):
+            await manager.call_tool(
+                server_name="echo_alpha",
+                name="echo",
+                arguments={},
+                resolved_server=alpha,
+            )
+
+    @pytest.mark.asyncio
     async def test_call_tool_without_broken_pipe_error(self):
         """
         Test that call_tool awaits the client call even without a persistent context manager.

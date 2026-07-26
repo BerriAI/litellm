@@ -4686,6 +4686,7 @@ class MCPServerManager:
         raw_headers: Optional[dict[str, str]] = None,
         host_progress_callback: Optional[Callable] = None,
         resolved_server: MCPServer | None = None,
+        allowed_server_ids: frozenset[str] | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -4702,17 +4703,38 @@ class MCPServerManager:
                 dispatched to verbatim, so identity never round-trips through the
                 non-unique ``server_name``. Callers without one fall back to
                 resolving by name.
+            allowed_server_ids: The reachable set ``resolved_server`` was resolved
+                against. Every dispatch is checked against it, both the caller's
+                server and one this resolves by name, because ``server_name`` is not
+                unique and resolving it walks the whole registry. Without it a caller
+                that resolved scope-blind, or a name collision between a reachable
+                server and an unreachable one, dispatches the wrong upstream
+                credential. Required whenever ``resolved_server`` is given, so
+                caller-supplied identity always arrives with its provenance.
 
 
         Returns:
             CallToolResult from the MCP server
         """
         start_time = datetime.datetime.now()
+        if resolved_server is not None and allowed_server_ids is None:
+            raise ValueError("call_tool requires allowed_server_ids alongside resolved_server")
         mcp_server = (
             resolved_server
             if resolved_server is not None
             else self._resolve_mcp_server_for_tool_call(server_name, name)
         )
+        if allowed_server_ids is not None and mcp_server.server_id not in allowed_server_ids:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "server_out_of_scope",
+                    "message": (
+                        f"Tool '{name}' resolved to MCP server '{mcp_server.name}', which is not among "
+                        f"the servers this caller may reach."
+                    ),
+                },
+            )
 
         # Resolved before any hook runs so a missing BYOK credential (401) never
         # leaves during-hook side effects (audit logging, rate-limit bookkeeping)

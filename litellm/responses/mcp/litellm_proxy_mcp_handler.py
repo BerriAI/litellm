@@ -192,7 +192,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
         Returns:
             List of MCP tools
-            List names of allowed MCP servers
+            List of server_ids for the MCP servers this caller may reach
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -282,21 +282,18 @@ class LiteLLM_Proxy_MCP_Handler:
             allowed_mcp_servers=allowed_mcp_servers,
         )
 
-        server_names: List[str] = []
-        for server in allowed_mcp_servers:
-            if server is None:
-                continue
-            server_name = (
-                getattr(server, "server_name", None) or getattr(server, "alias", None) or getattr(server, "name", None)
-            )
-            if isinstance(server_name, str):
-                server_names.append(server_name)
+        # Carry server_id, not a display name. Names are not unique, so a name handed
+        # to the dispatch site gets re-resolved against the whole registry and can
+        # land on a server this caller cannot reach.
+        server_ids: List[str] = [
+            server.server_id for server in allowed_mcp_servers if server is not None and server.server_id
+        ]
 
-        return tools, server_names
+        return tools, server_ids
 
     @staticmethod
     def _deduplicate_mcp_tools(
-        mcp_tools: List[MCPTool], allowed_mcp_servers: List[str]
+        mcp_tools: List[MCPTool], allowed_server_ids_list: List[str]
     ) -> tuple[List[MCPTool], dict[str, str]]:
         """
         Deduplicate MCP tools by name, keeping the first occurrence of each tool.
@@ -306,11 +303,16 @@ class LiteLLM_Proxy_MCP_Handler:
 
         Returns:
             List of deduplicated MCP tools
-            The returned dictionary maps each tool_name to the server_name
+            The returned dictionary maps each tool_name to the owning server_id
         """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
         seen_names = set()
         deduplicated_tools = []
         tool_server_map: dict[str, str] = {}
+        allowed_server_ids = frozenset(allowed_server_ids_list)
 
         for tool in mcp_tools:
             if isinstance(tool, dict):
@@ -321,10 +323,16 @@ class LiteLLM_Proxy_MCP_Handler:
             if tool_name and tool_name not in seen_names:
                 seen_names.add(tool_name)
                 deduplicated_tools.append(tool)
-                if len(allowed_mcp_servers) == 1:
-                    tool_server_map[tool_name] = allowed_mcp_servers[0]
-                else:
-                    _, tool_server_map[tool_name] = split_server_prefix_from_name(tool_name)
+                if len(allowed_server_ids_list) == 1:
+                    tool_server_map[tool_name] = allowed_server_ids_list[0]
+                    continue
+                # Same scoped resolver the MCP JSON-RPC surface uses, so a name two
+                # reachable servers share stays ambiguous here too instead of
+                # silently picking one. Unresolvable names are left out of the map
+                # and fail closed at dispatch.
+                route = global_mcp_server_manager.resolve_tool_route(tool_name, allowed_server_ids=allowed_server_ids)
+                if route.kind == "resolved":
+                    tool_server_map[tool_name] = route.server.server_id
 
         return deduplicated_tools, tool_server_map
 
@@ -658,11 +666,25 @@ class LiteLLM_Proxy_MCP_Handler:
                 # Import here to avoid circular import
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
-                server_name = tool_server_map[tool_name]
-
-                mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_name
-                ) or global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+                # tool_server_map carries the server_id resolved within this caller's
+                # reachable set at listing time, so look it up by identity. A name
+                # lookup here would walk the whole registry and could land on a
+                # same-named server the caller cannot reach.
+                server_id = tool_server_map.get(tool_name)
+                mcp_server = global_mcp_server_manager.get_mcp_server_by_id(server_id) if server_id else None
+                if mcp_server is None:
+                    # Fail closed, and report it the way every other failure in this
+                    # loop does so the model still sees a result for its tool call.
+                    verbose_logger.warning(f"No reachable MCP server owns tool {tool_name}")
+                    tool_results.append(
+                        {
+                            "tool_call_id": tool_call_id,
+                            "result": f"Tool call failed: no MCP server reachable by this caller serves '{tool_name}'.",
+                            "name": tool_name,
+                        }
+                    )
+                    continue
+                server_name = mcp_server.name
                 resolved_tool_name = (
                     _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
                 )
@@ -781,6 +803,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
                     resolved_server=mcp_server,
+                    allowed_server_ids=frozenset(tool_server_map.values()),
                 )
 
                 if litellm_logging_obj:

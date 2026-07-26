@@ -2841,6 +2841,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=litellm_logging_obj,
                 host_progress_callback=host_progress_callback,
                 resolved_server=mcp_server,
+                allowed_server_ids=frozenset(server.server_id for server in allowed_mcp_servers),
             )
 
         # Fall back to local tool registry with original name (legacy support)
@@ -3154,6 +3155,7 @@ if MCP_AVAILABLE:
         litellm_logging_obj: Optional[Any] = None,
         host_progress_callback: Optional[Callable] = None,
         resolved_server: MCPServer | None = None,
+        allowed_server_ids: frozenset[str] | None = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -3171,6 +3173,7 @@ if MCP_AVAILABLE:
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
             resolved_server=resolved_server,
+            allowed_server_ids=allowed_server_ids,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
