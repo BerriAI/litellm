@@ -100,14 +100,14 @@ class _SyncToAsyncQueueIterator:
                 if self._closed.is_set():
                     break
                 _put(item)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - forwarded to the async consumer, not swallowed
             if not self._closed.is_set():
                 _put(exc)
         finally:
             if self._closed.is_set() and hasattr(self._sync_iter, "close"):
                 try:
                     self._sync_iter.close()
-                except Exception:
+                except Exception:  # noqa: BLE001 - best-effort cleanup must not mask the real exhaustion signal
                     pass
             _put(_SYNC_ITER_EXHAUSTED)
             self._done.set()
@@ -141,7 +141,7 @@ class _SyncToAsyncQueueIterator:
             if hasattr(self._sync_iter, "close"):
                 try:
                     self._sync_iter.close()
-                except Exception:
+                except Exception:  # noqa: BLE001 - best-effort cleanup, aclose() must not raise
                     pass
             self._done.set()
 

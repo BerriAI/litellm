@@ -3541,6 +3541,7 @@ async def test_custom_stream_wrapper_aclose_closes_upgraded_sync_iterator(
 @pytest.mark.asyncio
 async def test_sync_to_async_queue_iterator_aclose_while_producer_blocked_in_next():
     close_calls = []
+    entered_next = threading.Event()
     release_producer = threading.Event()
 
     class SlowSyncIter:
@@ -3548,6 +3549,7 @@ async def test_sync_to_async_queue_iterator_aclose_while_producer_blocked_in_nex
             return self
 
         def __next__(self):
+            entered_next.set()
             release_producer.wait(timeout=2)
             return "chunk"
 
@@ -3555,6 +3557,11 @@ async def test_sync_to_async_queue_iterator_aclose_while_producer_blocked_in_nex
             close_calls.append(threading.current_thread())
 
     wrapper = _SyncToAsyncQueueIterator(SlowSyncIter())
+
+    # Wait for the producer to actually be inside next() before closing, so
+    # this test exercises "producer mid-next()" rather than racing against
+    # the executor not having started the task yet.
+    await asyncio.to_thread(entered_next.wait, 2)
 
     close_task = asyncio.create_task(wrapper.aclose())
     await asyncio.sleep(0.05)
