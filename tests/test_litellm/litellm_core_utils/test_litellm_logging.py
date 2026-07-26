@@ -4229,3 +4229,18 @@ def test_get_standard_logging_metadata_non_string_hash_unchanged():
         {"user_api_key_hash": 12345}
     )
     assert result["user_api_key_hash"] == 12345
+
+
+def test_module_level_get_standard_logging_metadata_raw_sk_key_is_hashed():
+    """
+    SECURITY: the module-level get_standard_logging_metadata builder must also
+    hash a raw sk- key under user_api_key_hash (second sanitizer call-site).
+    """
+    import hashlib
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_metadata
+
+    raw_key = "sk-1234567890abcdefghijklmnop"
+    result = get_standard_logging_metadata({"user_api_key_hash": raw_key})
+    assert result["user_api_key_hash"] == hashlib.sha256(raw_key.encode()).hexdigest()
+    assert not str(result["user_api_key_hash"]).startswith("sk-")
