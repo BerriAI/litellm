@@ -20,7 +20,7 @@ anthropic:
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -42,6 +42,30 @@ from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
 
 DEFAULT_REDIS_SYNC_INTERVAL = 1
+
+# KEYS[1] = budget start time key, KEYS[2] = spend key
+# ARGV[1] = current time, ARGV[2] = response cost, ARGV[3] = window length in seconds
+# Returns {window start time, "1" if this caller opened the window else "0"}
+BUDGET_WINDOW_CLAIM_SCRIPT = """
+local budget_start = redis.call('GET', KEYS[1])
+local current_time = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[3])
+
+if budget_start == false or (current_time - tonumber(budget_start)) > ttl then
+    redis.call('SET', KEYS[1], ARGV[1], 'EX', ttl)
+    redis.call('SET', KEYS[2], ARGV[2], 'EX', ttl)
+    return {ARGV[1], '1'}
+end
+
+redis.call('INCRBYFLOAT', KEYS[2], ARGV[2])
+return {budget_start, '0'}
+"""
+
+
+def _decode_redis_value(value: Union[bytes, str, int, float]) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
 
 
 class _LiteLLMParamsDictView:
@@ -100,6 +124,8 @@ class RouterBudgetLimiting(CustomLogger):
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
+        self._budget_window_lock = asyncio.Lock()
+        self._budget_window_claim_script: Callable[..., Awaitable[Any]] | None = None
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
         self.provider_budget_config: Optional[GenericBudgetConfigType] = provider_budget_config
         self.deployment_budget_config: Optional[GenericBudgetConfigType] = None
@@ -365,14 +391,81 @@ class RouterBudgetLimiting(CustomLogger):
         - The budget does not exist in cache, so we need to set it
         - The budget window has expired, so we need to reset everything
 
-        Does 2 things:
-        - stores key: `provider_spend:{provider}:1d`, value: response_cost
-        - stores key: `provider_budget_start_time:{provider}`, value: current_time.
-            This stores the start time of the new budget window
+        Concurrent requests crossing the same window boundary all reach this
+        path. Claiming the window is therefore atomic: exactly one caller resets
+        the spend counter to its own cost, and the callers that lose the race
+        increment on top of it instead of overwriting it.
+
+        Returns the start time of the window this cost was recorded against.
         """
-        await self.dual_cache.async_set_cache(key=spend_key, value=response_cost, ttl=ttl_seconds)
-        await self.dual_cache.async_set_cache(key=start_time_key, value=current_time, ttl=ttl_seconds)
-        return current_time
+        claimed_start = await self._claim_budget_window_in_redis(
+            spend_key=spend_key,
+            start_time_key=start_time_key,
+            current_time=current_time,
+            response_cost=response_cost,
+            ttl_seconds=ttl_seconds,
+        )
+        if claimed_start is not None:
+            return claimed_start
+
+        async with self._budget_window_lock:
+            budget_start = await self.dual_cache.async_get_cache(start_time_key)
+            if budget_start is not None and (current_time - float(budget_start)) <= ttl_seconds:
+                remaining_time = ttl_seconds - (current_time - float(budget_start))
+                await self._increment_spend_in_current_window(
+                    spend_key=spend_key,
+                    response_cost=response_cost,
+                    ttl=max(int(remaining_time), 1),
+                )
+                return float(budget_start)
+
+            await self.dual_cache.async_set_cache(key=spend_key, value=response_cost, ttl=ttl_seconds)
+            await self.dual_cache.async_set_cache(key=start_time_key, value=current_time, ttl=ttl_seconds)
+            return current_time
+
+    async def _claim_budget_window_in_redis(
+        self,
+        spend_key: str,
+        start_time_key: str,
+        current_time: float,
+        response_cost: float,
+        ttl_seconds: int,
+    ) -> float | None:
+        """
+        Claim the budget window through a Lua script so the reset is atomic
+        across proxy instances: only the caller that observes a missing or
+        expired start time resets the counter, everyone else racing across the
+        same boundary increments it.
+
+        Returns the window start time, or None when Redis is unavailable, so the
+        caller can fall back to the local path.
+        """
+        redis_cache = self.dual_cache.redis_cache
+        if redis_cache is None:
+            return None
+
+        try:
+            if self._budget_window_claim_script is None:
+                self._budget_window_claim_script = redis_cache.async_register_script(BUDGET_WINDOW_CLAIM_SCRIPT)
+            result: Sequence[Union[bytes, str]] = await self._budget_window_claim_script(
+                keys=[start_time_key, spend_key],
+                args=[str(current_time), str(response_cost), ttl_seconds],
+            )
+            budget_start = float(_decode_redis_value(result[0]))
+            window_claimed = _decode_redis_value(result[1]) == "1"
+        except Exception as e:
+            verbose_router_logger.error(f"Error claiming budget window for {spend_key} in Redis: {str(e)}")
+            return None
+
+        if window_claimed:
+            await self.dual_cache.in_memory_cache.async_set_cache(key=spend_key, value=response_cost, ttl=ttl_seconds)
+        else:
+            remaining_time = ttl_seconds - (current_time - budget_start)
+            await self.dual_cache.in_memory_cache.async_increment(
+                key=spend_key, value=response_cost, ttl=max(int(remaining_time), 1)
+            )
+        await self.dual_cache.in_memory_cache.async_set_cache(key=start_time_key, value=budget_start, ttl=ttl_seconds)
+        return budget_start
 
     async def _increment_spend_in_current_window(self, spend_key: str, response_cost: float, ttl: int):
         """
@@ -471,16 +564,7 @@ class RouterBudgetLimiting(CustomLogger):
             ttl_seconds=ttl_seconds,
         )
 
-        if budget_start is None:
-            # First spend for this provider
-            budget_start = await self._handle_new_budget_window(
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                current_time=current_time,
-                response_cost=response_cost,
-                ttl_seconds=ttl_seconds,
-            )
-        elif (current_time - budget_start) > ttl_seconds:
+        if (current_time - budget_start) > ttl_seconds:
             # Budget window expired - reset everything
             verbose_router_logger.debug("Budget window expired - resetting everything")
             budget_start = await self._handle_new_budget_window(
@@ -535,14 +619,15 @@ class RouterBudgetLimiting(CustomLogger):
                 "Pushing Redis Increment Pipeline for queue: %s",
                 self.redis_increment_operation_queue,
             )
-            if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
-                )
+            pending_increments = list(self.redis_increment_operation_queue)
+            if len(pending_increments) == 0:
+                return
 
-            self.redis_increment_operation_queue = []
+            await self.dual_cache.redis_cache.async_increment_pipeline(
+                increment_list=pending_increments,
+            )
+
+            self.redis_increment_operation_queue = self.redis_increment_operation_queue[len(pending_increments) :]
 
         except Exception as e:
             verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")
