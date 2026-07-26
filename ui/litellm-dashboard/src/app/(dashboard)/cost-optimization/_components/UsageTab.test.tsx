@@ -28,17 +28,20 @@ vi.mock("@/components/shared/charts", () => ({
     categories,
     colors,
     showLegend,
+    maxBarSize,
   }: {
     data: unknown;
     categories: string[];
     colors?: readonly string[];
     showLegend?: boolean;
+    maxBarSize?: number;
   }) => (
     <div
       data-testid="bar-chart"
       data-categories={categories.join(",")}
       data-colors={(colors ?? []).join(",")}
       data-show-legend={String(showLegend ?? true)}
+      data-max-bar-size={maxBarSize === undefined ? "" : String(maxBarSize)}
       data-series={JSON.stringify(data)}
     />
   ),
@@ -240,6 +243,9 @@ describe("UsageTab", () => {
     const bars = await findAllByTestId("bar-chart");
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
+    // The 64px bar cap is this card's opt-in; the shared BarChart must not cap
+    // by default (other consumers keep their pre-existing geometry).
+    expect(bars[0].getAttribute("data-max-bar-size")).toBe("64");
   });
 
   it("renders the tool legend once outside the charts, with both charts sharing the tool colors", async () => {

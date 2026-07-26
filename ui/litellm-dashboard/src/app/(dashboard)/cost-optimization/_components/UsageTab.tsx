@@ -282,6 +282,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   colorByDatum
                   layout="vertical"
                   yAxisWidth={140}
+                  maxBarSize={64}
                   showLegend={false}
                   valueFormatter={usd}
                 />
@@ -295,6 +296,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   categories={topToolNames}
                   colors={toolColors}
                   stack
+                  maxBarSize={64}
                   valueFormatter={usd}
                   showLegend={false}
                 />

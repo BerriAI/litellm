@@ -7,14 +7,13 @@ import { cn } from "@/lib/cva.config";
 import { ValueTooltip, type ChartTooltipComponent } from "./chart_tooltip";
 import { categoryFills, type ChartColor } from "./colors";
 
-const MAX_BAR_SIZE = 64;
-
 export type BarChartProps<TDatum extends Record<string, unknown>> = {
   data: readonly TDatum[];
   index: string;
   categories: readonly string[];
   colors?: readonly ChartColor[];
   colorByDatum?: boolean;
+  maxBarSize?: number;
   valueFormatter?: (value: number) => string;
   stack?: boolean;
   layout?: "horizontal" | "vertical";
@@ -36,6 +35,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   categories,
   colors,
   colorByDatum = false,
+  maxBarSize,
   valueFormatter,
   stack = false,
   layout = "horizontal",
@@ -119,7 +119,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
             fill={fills[i]}
             stackId={stack ? "stack" : undefined}
             isAnimationActive={false}
-            maxBarSize={MAX_BAR_SIZE}
+            maxBarSize={maxBarSize}
             onClick={
               onValueChange
                 ? (item: { payload?: TDatum }) => {

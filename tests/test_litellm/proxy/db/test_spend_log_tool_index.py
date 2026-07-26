@@ -134,6 +134,29 @@ class TestBuildToolUsageTransaction:
         assert transaction is not None
         assert transaction.tool_names == ("get_weather",)
 
+    def test_n_greater_than_one_tools_from_every_choice_reach_the_transaction(self):
+        # Regression: an n>1 request pays for every choice, and a tool invoked
+        # only in a later choice really ran; it must not be dropped because the
+        # extractor read choices[0] alone.
+        from types import SimpleNamespace as NS
+
+        response = NS(
+            choices=[
+                NS(message=NS(tool_calls=[NS(function=NS(name="tool_alpha"))])),
+                NS(message=NS(tool_calls=[NS(function=NS(name="tool_beta"))])),
+            ]
+        )
+        transaction = build_tool_usage_transaction(
+            request_id="r1",
+            start_time_iso="2026-07-25T10:00:00+00:00",
+            mcp_namespaced_tool_name=None,
+            spend=0.5,
+            total_tokens=100,
+            completion_response=response,
+        )
+        assert transaction is not None
+        assert transaction.tool_names == ("tool_alpha", "tool_beta")
+
     def test_unparseable_start_time_returns_none(self):
         assert (
             build_tool_usage_transaction(
@@ -305,5 +328,21 @@ class TestFlushToolUsageTransactions:
         prisma = MagicMock()
         prisma.db.batch_ = MagicMock(side_effect=ValueError("bad data"))
         with pytest.raises(ValueError):
+            await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
+        prisma.db.batch_.assert_called_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("ambiguous_error", ["ReadTimeout", "ReadError"])
+    async def test_post_send_ambiguous_errors_drop_without_retry(self, ambiguous_error):
+        # A ReadTimeout means the statements were sent and the outcome is
+        # unknown; the engine can leave the transaction open on the pooled
+        # connection, so a retry's statements would stack into it and one
+        # commit would apply both increment sets. These must never retry.
+        import httpx
+
+        error = getattr(httpx, ambiguous_error)("ambiguous")
+        prisma = MagicMock()
+        prisma.db.batch_ = MagicMock(side_effect=error)
+        with pytest.raises((httpx.ReadTimeout, httpx.ReadError)):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
