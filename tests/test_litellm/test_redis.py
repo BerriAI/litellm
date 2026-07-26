@@ -1,3 +1,4 @@
+import inspect
 import json
 from unittest.mock import MagicMock, patch
 
@@ -178,6 +179,50 @@ def test_reconnect_kwargs_in_cluster_kwargs():
     kwargs = _get_redis_cluster_kwargs()
     assert "health_check_interval" in kwargs
     assert "socket_keepalive" in kwargs
+
+
+@pytest.mark.parametrize(
+    "cluster_client", [redis.RedisCluster, async_redis.RedisCluster], ids=["sync", "async"]
+)
+def test_cluster_kwargs_exclude_variadic_parameters(cluster_client):
+    """*args / **kwargs are signature placeholders, not connection settings.
+    getfullargspec never reported them, but inspect.signature does, so they must be
+    filtered out or a bogus 'kwargs' entry lands in the allow-list."""
+    variadic = {
+        name
+        for name, param in inspect.signature(cluster_client).parameters.items()
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+    }
+
+    leaked = variadic & set(_get_redis_cluster_kwargs(cluster_client))
+    assert not leaked, f"variadic params leaked into the allow-list: {leaked}"
+
+
+def test_cluster_kwargs_follow_the_requested_client():
+    """The allow-list must be derived from the client actually being constructed.
+    async RedisCluster accepts connection params the sync class does not, so
+    introspecting the sync class silently drops them on the async path."""
+    async_only = set(inspect.signature(async_redis.RedisCluster).parameters) - set(
+        inspect.signature(redis.RedisCluster).parameters
+    )
+    async_args = _get_redis_cluster_kwargs(async_redis.RedisCluster)
+
+    assert async_only, "expected async RedisCluster to accept params the sync class does not"
+    assert async_only <= set(async_args) | {"retry", "connection_pool", "host", "port", "startup_nodes"}
+
+
+@patch("litellm._redis.async_redis.RedisCluster", autospec=True)
+def test_async_cluster_passes_async_only_kwargs(mock_cluster_cls):
+    """Regression: decode_responses is an async-cluster-only constructor arg. When
+    the allow-list came from the sync class it was filtered out and values came back
+    as bytes instead of str."""
+    get_redis_async_client(
+        startup_nodes=[{"host": "cluster-node", "port": 6379}],
+        decode_responses=True,
+    )
+
+    call_kwargs = mock_cluster_cls.call_args[1]
+    assert call_kwargs["decode_responses"] is True
 
 
 @patch("litellm._redis.async_redis.RedisCluster")
