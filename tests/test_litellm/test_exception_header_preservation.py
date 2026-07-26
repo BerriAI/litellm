@@ -254,6 +254,27 @@ class TestExceptionAttributes:
         assert midstream_fallback.response.status_code == 503
         assert str(midstream_fallback.response.request.url) == "https://openai.com/v1/"
 
+    def test_midstream_fallback_error_non_integer_status_code(self):
+        """
+        MidStreamFallbackError must not crash when original_exception.status_code
+        is a non-integer string (e.g. 'litellm_error'). Before the fix, int()
+        raised ValueError and the error handler returned HTTP 500 instead of
+        engaging the fallback chain.
+        """
+
+        class _FakeException(Exception):
+            status_code = "litellm_error"
+
+        midstream_error = MidStreamFallbackError(
+            message="stream broke",
+            model="gpt-4o-mini",
+            llm_provider="openai",
+            original_exception=_FakeException("boom"),
+        )
+
+        assert midstream_error.status_code == 503
+        assert midstream_error.response.status_code == 503
+
 
 class TestProxyHeaderExtraction:
     """Test that proxy correctly extracts headers from exceptions."""
