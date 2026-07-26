@@ -404,14 +404,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         ### GET AVAILABLE DEPLOYMENTS ### filter out any deployments > tpm/rpm limits
 
         potential_deployments = []
+        healthy_deployment_map = {d["model_info"]["id"]: d for d in healthy_deployments}
         for item, item_map in all_deployments.items():
-            ## get the item from model list
-            _deployment = None
-            for m in healthy_deployments:
-                if item == m["model_info"]["id"]:
-                    _deployment = m
-
-            if _deployment is None:
+            if (_deployment := healthy_deployment_map.get(item)) is None:
                 continue  # skip to next one
 
             _deployment_tpm = (
