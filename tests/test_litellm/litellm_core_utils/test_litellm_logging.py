@@ -4101,3 +4101,106 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+class _MutateOnCompareKey(str):
+    """
+    A dict key whose ``!= "original_response"`` comparison inserts a new key into
+    ``target``.
+
+    The sync ``success_handler`` / ``failure_handler`` build their callback
+    kwargs with ``for k, v in self.model_call_details.items(): if k !=
+    "original_response"``. This key lets a unit test deterministically stand in
+    for the real race where the async handler (running on the event loop) inserts
+    a key into the same ``model_call_details`` while the sync handler (running on
+    a worker thread) is mid-iteration: the comparison in the loop body runs our
+    ``__ne__``, which mutates the dict exactly like the concurrent async insert
+    would. Iterating the live dict then raises ``RuntimeError: dictionary changed
+    size during iteration``; snapshotting with ``list(...)`` first does not.
+    """
+
+    def __new__(cls, value, target):
+        return super().__new__(cls, value)
+
+    def __init__(self, value, target):
+        self._target = target
+        self._fired = False
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+    def __eq__(self, other):
+        return str(self) == other
+
+    def __ne__(self, other):
+        if other == "original_response" and not self._fired:
+            self._fired = True
+            self._target["_async_injected_key_"] = "injected-during-iteration"
+        return str(self) != other
+
+
+def _make_logging_obj(litellm_call_id):
+    return LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id=litellm_call_id,
+        function_id=litellm_call_id,
+    )
+
+
+def test_success_handler_snapshots_model_call_details_before_iterating():
+    """
+    Regression for #34719: success_handler must snapshot model_call_details
+    before iterating it to build sync-callback kwargs, otherwise a concurrent
+    insert from the async success path raises "dictionary changed size during
+    iteration", which the per-callback try/except swallows and silently drops the
+    log. The poison key mutates the dict mid-iteration; on the buggy code the
+    logfire callback never runs.
+    """
+    logging_obj = _make_logging_obj("race-success-1")
+    poison = _MutateOnCompareKey("poison", logging_obj.model_call_details)
+    logging_obj.model_call_details[poison] = "value"
+
+    mock_logfire = MagicMock()
+    litellm.success_callback = ["logfire"]
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.logfireLogger", mock_logfire
+    ):
+        logging_obj.success_handler(
+            result=ModelResponse(),
+            standard_logging_object={"call_id": "race-success-1"},
+        )
+
+    assert "_async_injected_key_" in logging_obj.model_call_details
+    mock_logfire.log_event.assert_called_once()
+
+
+def test_failure_handler_snapshots_model_call_details_before_iterating():
+    """
+    Regression for #34719: failure_handler must snapshot model_call_details
+    before iterating it to build sync-callback kwargs. router.py pairs
+    asyncio.create_task(async_failure_handler) with a threading.Thread running
+    failure_handler on the same logging object, so the async path can insert keys
+    (log_event_type, exception, ...) while the sync loop iterates. The poison key
+    mutates the dict mid-iteration; on the buggy code the logfire callback never
+    runs.
+    """
+    logging_obj = _make_logging_obj("race-failure-1")
+    poison = _MutateOnCompareKey("poison", logging_obj.model_call_details)
+    logging_obj.model_call_details[poison] = "value"
+
+    mock_logfire = MagicMock()
+    litellm.failure_callback = ["logfire"]
+    with patch(
+        "litellm.litellm_core_utils.litellm_logging.logfireLogger", mock_logfire
+    ):
+        logging_obj.failure_handler(
+            exception=ValueError("boom"),
+            traceback_exception="Traceback (most recent call last): ValueError: boom",
+        )
+
+    assert "_async_injected_key_" in logging_obj.model_call_details
+    mock_logfire.log_event.assert_called_once()
