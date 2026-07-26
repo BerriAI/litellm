@@ -59,8 +59,11 @@ def test_syncs_from_metadata_key():
     assert result == [entry]
 
 
-def test_metadata_wins_over_litellm_metadata():
-    """metadata key takes precedence over litellm_metadata when both are present."""
+def test_litellm_metadata_wins_over_caller_metadata():
+    """When both keys are present the helper must read the bucket the writer used,
+    which get_or_create_metadata_bucket resolves to litellm_metadata. Reading the
+    caller's metadata instead is how a guardrail entry went missing from spend logs
+    on the routes that seed litellm_metadata."""
     entry_meta = _make_slg_entry("from-metadata")
     entry_lm = _make_slg_entry("from-litellm_metadata")
     request_data = {
@@ -74,7 +77,25 @@ def test_metadata_wins_over_litellm_metadata():
     result = logging_obj.litellm_params["metadata"].get(
         "standard_logging_guardrail_information"
     )
-    assert result == [entry_meta]
+    assert result == [entry_lm]
+
+
+def test_syncs_when_caller_sends_its_own_metadata():
+    """The Claude Code shape: caller metadata present, guardrail entry in the seeded
+    litellm_metadata bucket. The entry must still reach the spend-log payload."""
+    entry = _make_slg_entry()
+    request_data = {
+        "metadata": {"user_id": "device-account-session"},
+        "litellm_metadata": {"standard_logging_guardrail_information": [entry]},
+    }
+    logging_obj = _FakeLogging()
+
+    _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+
+    result = logging_obj.litellm_params["metadata"].get(
+        "standard_logging_guardrail_information"
+    )
+    assert result == [entry]
 
 
 def test_noop_when_no_guardrail_info():

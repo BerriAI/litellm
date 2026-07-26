@@ -15,7 +15,6 @@ import types
 import uuid
 from datetime import datetime
 from typing import (
-    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -107,9 +106,9 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # prevents an authenticated client from forcing the proxy to buffer an
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
-
-if TYPE_CHECKING:
-    from opentelemetry.trace import SpanContext
+# ASGI scope key holding the tracing span of the request carrying an MCP
+# message, written on the request task and read back by the message handler.
+_MCP_TRANSPORT_SPAN_SCOPE_KEY = "litellm_otel_transport_span"
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -294,52 +293,78 @@ def _otel_reset_mcp_trace_carrier(token: object) -> None:
         return
 
 
-def _otel_request_transport_span_context() -> Optional["SpanContext"]:
-    """The tracing span of the HTTP request being handled, as a portable value.
+def _otel_publish_transport_span_on_scope(scope: Scope) -> None:
+    """Record this request's tracing span on its own ASGI scope.
 
     Resolved on the ASGI request task, where the proxy's server span is anchored,
-    and carried to the MCP message handler on the authenticated-user object. A
-    stateful streamable-HTTP session handles every message on the task spawned by
-    its ``initialize`` POST, so the handler's own task cannot see later requests'
-    spans; this is the same reason per-request auth is carried across rather than
-    read from a ContextVar. Lazily imported so opentelemetry stays an optional
-    dependency; returns ``None`` when otel_v2 is unavailable or no request span is
+    and read back by the MCP message handler through ``req_ctx.request`` — the
+    ``Request`` the transport attaches to each message. A stateful streamable-HTTP
+    session handles every message on the task spawned by its ``initialize`` POST, so
+    the handler's own task cannot see later requests' spans.
+
+    The scope, not the shared session auth context: a JSON-RPC *response* POST
+    deliberately skips the per-session lock (it can arrive while the tool call that
+    awaits it is still in flight), so a field on that shared object would be
+    overwritten mid-call and the tool call would attribute itself to the response's
+    request. A scope belongs to exactly one request and dies with it, which also
+    keeps a finished span from being retained by an idle session.
+
+    The live span, not just its context: a failed tool call stamps ``error.*`` on it,
+    which needs a span still open for writes. Lazily imported so opentelemetry stays
+    an optional dependency; a no-op when otel_v2 is unavailable or no request span is
     anchored."""
     try:
         from litellm.integrations.otel.plumbing.context import (
-            request_root_span_context,
+            request_root_span,
         )
 
-        return request_root_span_context()
+        span = request_root_span()
     except ImportError:
+        return
+    if span is not None:
+        scope[_MCP_TRANSPORT_SPAN_SCOPE_KEY] = span
+
+
+def _otel_transport_span_from_message(req_ctx: object) -> object:
+    """The tracing span of the HTTP request that carried this MCP message.
+
+    Read off that request's ASGI scope, reached through the ``Request`` the
+    streamable-HTTP transport attaches to each message, so it is this message's
+    transport and not whichever request happens to have touched the session last.
+    Returns whatever the scope holds; the otel plumbing validates it."""
+    request = getattr(req_ctx, "request", None)
+    scope = getattr(request, "scope", None)
+    if not isinstance(scope, Mapping):
         return None
+    return scope.get(_MCP_TRANSPORT_SPAN_SCOPE_KEY)
 
 
-def _otel_set_mcp_transport_span_context(span_context: Optional["SpanContext"]) -> object:
-    """Publish the current message's transport span for the otel_v2 MCP span and
-    return a reset token, or ``None`` when otel_v2 is unavailable."""
-    if span_context is None:
+def _otel_set_mcp_transport_span(span: object) -> object:
+    """Publish the current message's transport span, which the otel_v2 MCP span
+    attaches to and a failed tool call stamps its error on. Returns a reset token,
+    or ``None`` when otel_v2 is unavailable."""
+    if span is None:
         return None
     try:
         from litellm.integrations.otel.plumbing.context import (
-            set_mcp_message_transport_span_context,
+            set_mcp_message_transport_span,
         )
 
-        return set_mcp_message_transport_span_context(span_context)
+        return set_mcp_message_transport_span(span)
     except ImportError:
         return None
 
 
-def _otel_reset_mcp_transport_span_context(token: object) -> None:
-    """Paired with ``_otel_set_mcp_transport_span_context``."""
+def _otel_reset_mcp_transport_span(token: object) -> None:
+    """Paired with ``_otel_set_mcp_transport_span``."""
     if token is None:
         return
     try:
         from litellm.integrations.otel.plumbing.context import (
-            reset_mcp_message_transport_span_context,
+            reset_mcp_message_transport_span,
         )
 
-        reset_mcp_message_transport_span_context(token)
+        reset_mcp_message_transport_span(token)
     except ImportError:
         return
 
@@ -710,18 +735,6 @@ if MCP_AVAILABLE:
     ############### MCP Server Routes #######################
     ########################################################
 
-    def _current_transport_span_context() -> Optional["SpanContext"]:
-        """The transport span of the HTTP request carrying the message being handled.
-
-        Published by the ASGI request task onto the authenticated-user object, because
-        a stateful session's message handler runs on the task spawned by that session's
-        ``initialize`` POST and so cannot read later requests' spans from its own task.
-        """
-        auth_user = auth_context_var.get()
-        if not isinstance(auth_user, MCPAuthenticatedUser):
-            auth_user = _recover_auth_from_session()
-        return auth_user.transport_span_context if auth_user is not None else None
-
     @server.list_tools()
     async def handle_list_tools() -> "ListToolsResult | List[Tool]":
         """
@@ -742,7 +755,7 @@ if MCP_AVAILABLE:
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
-            _transport_token = _otel_set_mcp_transport_span_context(_current_transport_span_context())
+            _transport_token = _otel_set_mcp_transport_span(_otel_transport_span_from_message(req_ctx))
             # Get user authentication from context variable
             (
                 user_api_key_auth,
@@ -798,7 +811,7 @@ if MCP_AVAILABLE:
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
         finally:
-            _otel_reset_mcp_transport_span_context(_transport_token)
+            _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -976,7 +989,7 @@ if MCP_AVAILABLE:
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
-            _transport_token = _otel_set_mcp_transport_span_context(_current_transport_span_context())
+            _transport_token = _otel_set_mcp_transport_span(_otel_transport_span_from_message(req_ctx))
             # Validate arguments
             (
                 user_api_key_auth,
@@ -1115,7 +1128,7 @@ if MCP_AVAILABLE:
 
             return response
         finally:
-            _otel_reset_mcp_transport_span_context(_transport_token)
+            _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -2717,7 +2730,7 @@ if MCP_AVAILABLE:
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+                    detail="User not allowed to call this tool.",
                 )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = _get_standard_logging_mcp_tool_call(
@@ -4282,6 +4295,7 @@ if MCP_AVAILABLE:
                 _increment_active_request_session(initialized_session_id)
 
             async def _dispatch() -> None:
+                _otel_publish_transport_span_on_scope(scope)
                 auth_user = _set_or_update_auth_context(
                     user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,
@@ -4293,7 +4307,6 @@ if MCP_AVAILABLE:
                     session_id=session_id if use_stateful else None,
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
                     copy_existing_session_auth_context=is_initialize,
-                    transport_span_context=_otel_request_transport_span_context(),
                 )
                 local_send = send
                 if use_stateful and is_initialize:
@@ -4519,7 +4532,6 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
-        transport_span_context: Optional["SpanContext"] = None,
     ) -> None:
         auth_user.user_api_key_auth = user_api_key_auth
         auth_user.mcp_auth_header = mcp_auth_header
@@ -4528,7 +4540,6 @@ if MCP_AVAILABLE:
         auth_user.oauth2_headers = oauth2_headers
         auth_user.raw_headers = raw_headers
         auth_user.client_ip = client_ip
-        auth_user.transport_span_context = transport_span_context
 
     def set_auth_context(
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -4538,7 +4549,6 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
-        transport_span_context: Optional["SpanContext"] = None,
     ) -> MCPAuthenticatedUser:
         """
         Set the UserAPIKeyAuth in the auth context variable.
@@ -4549,7 +4559,6 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names and access groups to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
             client_ip: Client IP address for MCP access control
-            transport_span_context: Tracing span of the HTTP request carrying this message
         """
         auth_user = MCPAuthenticatedUser(
             user_api_key_auth=user_api_key_auth,
@@ -4559,7 +4568,6 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
-            transport_span_context=transport_span_context,
         )
         auth_context_var.set(auth_user)
         return auth_user
@@ -4575,7 +4583,6 @@ if MCP_AVAILABLE:
         session_id: Optional[str] = None,
         touch_last_seen: bool = True,
         copy_existing_session_auth_context: bool = False,
-        transport_span_context: Optional["SpanContext"] = None,
     ) -> MCPAuthenticatedUser:
         auth_user = _stateful_session_auth_contexts.get(session_id) if session_id else None
         if auth_user is not None and session_id is not None:
@@ -4590,7 +4597,6 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     client_ip=client_ip,
-                    transport_span_context=transport_span_context,
                 )
             _update_auth_context(
                 auth_user=auth_user,
@@ -4601,7 +4607,6 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
-                transport_span_context=transport_span_context,
             )
             auth_context_var.set(auth_user)
             return auth_user
@@ -4613,7 +4618,6 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
-            transport_span_context=transport_span_context,
         )
 
     def _wrap_send_with_stateful_session_auth_context(

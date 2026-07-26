@@ -199,6 +199,7 @@ class ClientCredentialsConfig(BaseModel):
     token_url: str | None = None
     scopes: tuple[str, ...] = ()
     audience: str | None = None
+    upstream_resource: str | None = None
     token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 

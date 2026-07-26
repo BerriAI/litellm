@@ -2772,6 +2772,40 @@ export interface paths {
         patch: operations["cursor_proxy_route_cursor__endpoint__patch"];
         trace?: never;
     };
+    "/customer/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Customer Aliases
+         * @description List the end users seen in spend logs over a time window, for UI filter dropdowns.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     Reads spend logs rather than LiteLLM_EndUserTable because only spend logs carry
+         *     the team attribution this scoping needs. The window is required and the inner
+         *     scan is capped at SPEND_LOGS_FILTER_SCAN_CAP rows, so the query
+         *     cannot degrade into a full-table scan the way `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/customer/aliases?start_date=2026-07-23%2000:00:00&end_date=2026-07-24%2000:00:00&size=50&search=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_customer_aliases_customer_aliases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/block": {
         parameters: {
             query?: never;
@@ -17976,6 +18010,11 @@ export interface paths {
          *     counts its full spend toward each of those tools, so per-tool numbers are
          *     attributions. ``total_spend`` is the deduplicated spend of every request that
          *     called at least one tool in the window, so it never double counts.
+         *
+         *     ``start_date`` is clamped to at most 30 days before ``end_date`` (serving up to
+         *     31 calendar dates inclusive, the same width as the endpoint's default window):
+         *     a wider requested range is clamped, and the response's ``start_date`` reflects
+         *     the effective window actually served.
          */
         get: operations["get_tool_spend_v1_tool_spend_get"];
         put?: never;
@@ -23289,6 +23328,29 @@ export interface components {
             credential_values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * CustomerAliasesResponse
+         * @description Paginated, id-only customer listing used by UI filter dropdowns.
+         *
+         *     Deliberately excludes budget/object-permission relations so a proxy with a
+         *     large LiteLLM_EndUserTable can back a search-as-you-type control without
+         *     materializing every row (see /customer/list for the full objects).
+         *
+         *     Reports ``has_more`` rather than a total count on purpose: a total requires
+         *     COUNT(*) over the whole match set on every keystroke, which is the exact
+         *     cost this endpoint exists to avoid. Fetching one row beyond the page is
+         *     enough to drive an infinite-scroll dropdown.
+         */
+        CustomerAliasesResponse: {
+            /** Aliases */
+            aliases: string[];
+            /** Current Page */
+            current_page: number;
+            /** Has More */
+            has_more: boolean;
+            /** Size */
+            size: number;
         };
         /**
          * CustomerResponse
@@ -38382,6 +38444,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_customer_aliases_customer_aliases_get: {
+        parameters: {
+            query: {
+                /** @description Window start, 'YYYY-MM-DD HH:MM:SS' (UTC) */
+                start_date: string;
+                /** @description Window end, 'YYYY-MM-DD HH:MM:SS' (UTC) */
+                end_date: string;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                size?: number;
+                /** @description Case-insensitive partial match on the customer id */
+                search?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerAliasesResponse"];
                 };
             };
             /** @description Validation Error */

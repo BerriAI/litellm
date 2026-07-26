@@ -219,6 +219,27 @@ async def test_auth_type_switch_clears_stale_flow_scoped_fields():
 
 
 @pytest.mark.asyncio
+async def test_explicit_null_clears_upstream_resource_and_keeps_the_rest_of_the_blob():
+    """The knob's own guidance tells an operator to unset it when the authorization server rejects
+    resource indicators, so the edit form sends an explicit null for it rather than omitting it. The
+    credential merge must drop that key while every omitted key still means keep-existing."""
+    mock_prisma = _mock_prisma()
+    existing = MagicMock()
+    existing.auth_type = "oauth2"
+    existing.url = "https://up.example.com/mcp"
+    existing.credentials = json.dumps({"client_secret": "csec", "upstream_resource": "api://audience"})
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing)
+
+    data = UpdateMCPServerRequest(server_id="my-test-server", credentials={"upstream_resource": None})
+    await update_mcp_server(mock_prisma, data, "test-user")
+    data_dict = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+
+    merged = json.loads(data_dict["credentials"])
+    assert merged["upstream_resource"] is None
+    assert merged["client_secret"] == "csec"
+
+
+@pytest.mark.asyncio
 async def test_url_change_clears_stale_discovered_oauth_fields():
     """Re-pointing the server url at a potentially different upstream must clear the discovered or
     trust-on-first-use OAuth issuer and endpoints, so the new upstream re-discovers instead of

@@ -6,10 +6,13 @@ import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LOGS_SORTING,
+  formatLogsWindow,
   getFilterValue,
   getLiveTailRefetchInterval,
+  getLogsWindowEndBound,
   LIVE_TAIL_INTERVAL_MS,
   LOG_FILTER_IDS,
+  LOGS_WINDOW_TICK_MS,
   useLogFilterLogic,
   type PaginatedResponse,
 } from "./log_filter_logic";
@@ -231,5 +234,63 @@ describe("getLiveTailRefetchInterval", () => {
 
   it("does not poll past the first page, even with live tail on", () => {
     expect(getLiveTailRefetchInterval(true, 1)).toBe(false);
+  });
+});
+
+describe("formatLogsWindow", () => {
+  it("pins the end bound for a custom range", () => {
+    const w = formatLogsWindow("2026-07-23T00:00", "2026-07-24T06:00", true);
+
+    expect(w.start_date).toBe(moment("2026-07-23T00:00").utc().format("YYYY-MM-DD HH:mm:ss"));
+    expect(w.end_date).toBe(moment("2026-07-24T06:00").utc().format("YYYY-MM-DD HH:mm:ss"));
+  });
+
+  it("ends a preset range at now, not at the stored end time", () => {
+    const w = formatLogsWindow("2026-07-23T00:00", "1999-01-01T00:00", false);
+
+    expect(w.end_date > "2020-01-01 00:00:00").toBe(true);
+  });
+});
+
+describe("getLogsWindowEndBound", () => {
+  const BUCKET_START = 16666 * LOGS_WINDOW_TICK_MS;
+
+  it("holds steady inside a bucket so a memoized window does not refetch per render", () => {
+    expect(getLogsWindowEndBound(BUCKET_START)).toBe(getLogsWindowEndBound(BUCKET_START + LOGS_WINDOW_TICK_MS - 1));
+  });
+
+  it("advances once the bucket rolls over so a preset window follows the table", () => {
+    expect(getLogsWindowEndBound(BUCKET_START + LOGS_WINDOW_TICK_MS)).toBe(
+      getLogsWindowEndBound(BUCKET_START) + LOGS_WINDOW_TICK_MS,
+    );
+  });
+
+  it("never trails the fetch it was derived from", () => {
+    // Trailing is the live-tail bug: the table shows rows the filter window excludes.
+    for (const offset of [0, 1, LOGS_WINDOW_TICK_MS - 1]) {
+      expect(getLogsWindowEndBound(BUCKET_START + offset)).toBeGreaterThan(BUCKET_START + offset);
+    }
+  });
+
+  it("advances at least once per live-tail refetch interval", () => {
+    expect(LOGS_WINDOW_TICK_MS).toBeLessThanOrEqual(4 * LIVE_TAIL_INTERVAL_MS);
+  });
+});
+
+describe("formatLogsWindow preset end bound", () => {
+  it("uses the supplied bound for a preset range so callers can memoize it", () => {
+    const bound = Date.UTC(2026, 6, 24, 12, 0, 0);
+
+    expect(formatLogsWindow("2026-07-23T00:00", "1999-01-01T00:00", false, bound).end_date).toBe(
+      moment(bound).utc().format("YYYY-MM-DD HH:mm:ss"),
+    );
+  });
+
+  it("ignores the supplied bound for a custom range", () => {
+    const bound = Date.UTC(2026, 6, 24, 12, 0, 0);
+
+    expect(formatLogsWindow("2026-07-23T00:00", "2026-07-24T06:00", true, bound).end_date).toBe(
+      moment("2026-07-24T06:00").utc().format("YYYY-MM-DD HH:mm:ss"),
+    );
   });
 });

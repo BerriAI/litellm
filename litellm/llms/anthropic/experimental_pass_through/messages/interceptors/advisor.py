@@ -21,6 +21,7 @@ import litellm
 import litellm.constants as _c
 from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
+from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -124,30 +125,36 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
             iteration += 1
             if iteration > max_uses:
-                raise AdvisorMaxIterationsError(
+                max_iterations_error = AdvisorMaxIterationsError(
                     f"Advisor orchestration loop exceeded max_uses={max_uses}. "
                     "Increase max_uses in the advisor tool definition or cap the request."
                 )
+                mark_advisor_orchestration_failure(max_iterations_error)
+                raise max_iterations_error
 
             # --- Build advisor context ---
             advisor_messages = _build_advisor_context(current_messages, executor_response, advisor_use_block)
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
-            advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
-                model=advisor_model,
-                messages=advisor_messages,
-                tools=None,
-                stream=False,
-                max_tokens=max_tokens,
-                custom_llm_provider=None,  # let litellm resolve from model name
-                metadata={
-                    **metadata_base,
-                    "advisor_sub_call": True,
-                    "parent_request_id": parent_request_id,
-                },
-                api_key=advisor_api_key,
-                api_base=advisor_api_base,
-            )
+            try:
+                advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
+                    model=advisor_model,
+                    messages=advisor_messages,
+                    tools=None,
+                    stream=False,
+                    max_tokens=max_tokens,
+                    custom_llm_provider=None,  # let litellm resolve from model name
+                    metadata={
+                        **metadata_base,
+                        "advisor_sub_call": True,
+                        "parent_request_id": parent_request_id,
+                    },
+                    api_key=advisor_api_key,
+                    api_base=advisor_api_base,
+                )
+            except Exception as advisor_sub_call_exception:
+                mark_advisor_orchestration_failure(advisor_sub_call_exception)
+                raise
 
             advisor_text = _extract_response_text(advisor_response)
 
