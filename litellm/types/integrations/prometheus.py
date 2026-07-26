@@ -68,7 +68,9 @@ def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
             append(ch)
     return "".join(parts)
 
+
 PROMETHEUS_METRICS_WILDCARD = "*"
+
 
 @dataclass
 class MetricValidationError:
@@ -842,6 +844,7 @@ _USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Dict[str, str] = {
     # Some tests / call sites use ``api_key_hash``; Prometheus field is ``hashed_api_key``.
     "api_key_hash": "hashed_api_key",
 }
+
 
 @dataclass(frozen=True, init=False)
 class UserAPIKeyLabelValues:

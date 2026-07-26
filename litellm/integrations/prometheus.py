@@ -681,9 +681,7 @@ class PrometheusLogger(CustomLogger):
 
         if validation_results.has_errors:
             self._pretty_print_validation_errors(validation_results)
-            error_message = "Configuration validation failed:\n" + "\n".join(
-                validation_results.all_error_messages
-            )
+            error_message = "Configuration validation failed:\n" + "\n".join(validation_results.all_error_messages)
             raise ValueError(error_message)
 
         # Build label filters from valid configurations
@@ -717,11 +715,7 @@ class PrometheusLogger(CustomLogger):
                         for metric_name in get_args(DEFINED_PROMETHEUS_METRICS)
                         for label in PrometheusMetricLabels.get_labels(metric_name)
                     }
-                    unknown_labels = [
-                        label
-                        for label in config.include_labels
-                        if label not in all_valid_labels
-                    ]
+                    unknown_labels = [label for label in config.include_labels if label not in all_valid_labels]
                     if unknown_labels:
                         label_errors.append(
                             LabelValidationError(
@@ -739,9 +733,7 @@ class PrometheusLogger(CustomLogger):
                     continue
 
                 if config.include_labels:
-                    label_error = self._validate_single_metric_labels(
-                        metric_name, config.include_labels
-                    )
+                    label_error = self._validate_single_metric_labels(metric_name, config.include_labels)
                     if label_error:
                         label_errors.append(label_error)
 
@@ -782,12 +774,8 @@ class PrometheusLogger(CustomLogger):
 
         label_filters: Dict[str, List[str]] = {}
 
-        wildcard_configs = [
-            c for c in parsed_configs if c.metrics == [PROMETHEUS_METRICS_WILDCARD]
-        ]
-        named_configs = [
-            c for c in parsed_configs if c.metrics != [PROMETHEUS_METRICS_WILDCARD]
-        ]
+        wildcard_configs = [c for c in parsed_configs if c.metrics == [PROMETHEUS_METRICS_WILDCARD]]
+        named_configs = [c for c in parsed_configs if c.metrics != [PROMETHEUS_METRICS_WILDCARD]]
 
         for config in wildcard_configs:
             if not config.include_labels:
