@@ -10,12 +10,11 @@ All /customer management endpoints
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
-from collections.abc import MutableSequence
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, List, Optional
+from datetime import datetime, timedelta
+from typing import List, Optional
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import litellm
@@ -28,7 +27,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     handle_update_object_permission_common,
 )
-from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -36,18 +35,12 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.customer_endpoints import (
     BlockUsersResponse,
-    CustomerAliasesResponse,
     CustomerResponse,
     DeleteCustomersResponse,
     UnblockUsersResponse,
 )
 
 router = APIRouter()
-
-# Rows the end-user filter query may read out of LiteLLM_SpendLogs before DISTINCT.
-# Matches SPEND_LOGS_PAGINATION_COUNT_CAP, the equivalent bound ui_view_spend_logs
-# puts on its count query, so both reads of the same table stop at the same depth.
-SPEND_LOGS_FILTER_SCAN_CAP = 10000
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -788,168 +781,6 @@ async def list_end_user(
             "litellm.proxy.management_endpoints.customer_endpoints.list_end_user(): Exception occured - {}".format(
                 str(e)
             )
-        )
-        raise handle_exception_on_proxy(e)
-
-
-def _parse_spend_log_window_bound(value: str, param: str) -> datetime:
-    try:
-        return datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"Invalid {param}: {value}. Expected 'YYYY-MM-DD HH:MM:SS'"},
-        )
-
-
-async def _build_end_user_scope_condition(
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-    query_params: MutableSequence[Any],
-) -> str | None:
-    """SQL predicate restricting end users to the logs this caller may read.
-
-    Returns None when the caller is a proxy admin (no restriction). Mirrors the
-    scoping ``/spend/logs/ui`` applies, so the dropdown can never offer an
-    end user whose rows the caller could not open.
-    """
-    from litellm.proxy.spend_tracking.spend_management_endpoints import (
-        _get_permitted_team_ids_for_spend_logs,
-        _is_admin_view_safe,
-    )
-
-    if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
-        return None
-
-    try:
-        permitted_team_ids = await _get_permitted_team_ids_for_spend_logs(
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-        )
-    except Exception:
-        permitted_team_ids = []
-
-    caller_user_id = user_api_key_dict.user_id
-    user_clause: tuple[str, ...] = ()
-    if caller_user_id is not None:
-        query_params.append(caller_user_id)
-        user_clause = (f'"user" = ${len(query_params)}',)
-
-    team_clause: tuple[str, ...] = ()
-    if permitted_team_ids:
-        # = ANY(::text[]) rather than an expanded IN list, matching the clause
-        # ui_view_spend_logs builds: one parameter whatever the team count.
-        query_params.append(permitted_team_ids)
-        team_clause = (f"team_id = ANY(${len(query_params)}::text[])",)
-
-    scope_parts = user_clause + team_clause
-    if not scope_parts:
-        return "FALSE"
-    return f"({' OR '.join(scope_parts)})"
-
-
-@router.get(
-    "/customer/aliases",
-    tags=["Customer Management"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=CustomerAliasesResponse,
-)
-async def list_customer_aliases(
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    start_date: Annotated[str, Query(description="Window start, 'YYYY-MM-DD HH:MM:SS' (UTC)")],
-    end_date: Annotated[str, Query(description="Window end, 'YYYY-MM-DD HH:MM:SS' (UTC)")],
-    page: Annotated[int, Query(ge=1, description="Page number")] = 1,
-    size: Annotated[int, Query(ge=1, le=100, description="Page size")] = 50,
-    search: Annotated[
-        str | None,
-        Query(description="Case-insensitive partial match on the customer id"),
-    ] = None,
-) -> CustomerAliasesResponse:
-    """
-    List the end users seen in spend logs over a time window, for UI filter dropdowns.
-
-    Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
-    anyone else sees only end users from their own requests or from teams they
-    administer (or hold the `/spend/logs` permission on).
-
-    Reads spend logs rather than LiteLLM_EndUserTable because only spend logs carry
-    the team attribution this scoping needs. The window is required and the inner
-    scan is capped at SPEND_LOGS_FILTER_SCAN_CAP rows, so the query
-    cannot degrade into a full-table scan the way `/global/all_end_users` does.
-
-    Example curl:
-    ```
-    curl --location 'http://0.0.0.0:4000/customer/aliases?start_date=2026-07-23%2000:00:00&end_date=2026-07-24%2000:00:00&size=50&search=acme' \
-        --header 'Authorization: Bearer sk-1234'
-    ```
-    """
-    try:
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": CommonProxyErrors.db_not_connected_error.value},
-            )
-
-        start_dt = _parse_spend_log_window_bound(start_date, "start_date")
-        end_dt = _parse_spend_log_window_bound(end_date, "end_date")
-
-        query_params: List[Any] = [start_dt, end_dt]
-        where_parts = [
-            "\"startTime\" >= ($1::timestamptz AT TIME ZONE 'UTC')",
-            "\"startTime\" <= ($2::timestamptz AT TIME ZONE 'UTC')",
-            "end_user IS NOT NULL",
-            "end_user != ''",
-        ]
-
-        if search:
-            # Escape LIKE metacharacters so a literal '_' or '%' matches itself.
-            escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            query_params.append(f"%{escaped}%")
-            where_parts.append(f"end_user ILIKE ${len(query_params)} ESCAPE '\\'")
-
-        scope_condition = await _build_end_user_scope_condition(
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            query_params=query_params,
-        )
-        if scope_condition is not None:
-            where_parts.append(scope_condition)
-
-        # The inner LIMIT is the safety bound: it walks the startTime index newest
-        # first and stops, so DISTINCT never runs over an unbounded row set.
-        # request_id breaks startTime ties so the cut-off row is deterministic and
-        # successive OFFSET pages agree on the set they are paging through; the
-        # (startTime, request_id) index means the tiebreaker costs nothing.
-        # size + 1: one row beyond the page reveals has_more without a COUNT(*).
-        params = query_params + [SPEND_LOGS_FILTER_SCAN_CAP, size + 1, (page - 1) * size]
-        scan_idx = len(params) - 2
-        aliases_sql = (
-            f"SELECT DISTINCT end_user FROM ("
-            f" SELECT end_user"
-            f' FROM "LiteLLM_SpendLogs"'
-            f" WHERE {' AND '.join(where_parts)}"
-            f' ORDER BY "startTime" DESC, request_id DESC'
-            f" LIMIT ${scan_idx}"
-            f") recent"
-            f" ORDER BY end_user ASC"
-            f" LIMIT ${scan_idx + 1} OFFSET ${scan_idx + 2}"
-        )
-        rows = await prisma_client.db.query_raw(aliases_sql, *params)
-        aliases: List[str] = [row["end_user"] for row in rows if row.get("end_user")]
-
-        return CustomerAliasesResponse(
-            aliases=aliases[:size],
-            current_page=page,
-            size=size,
-            has_more=len(aliases) > size,
-        )
-
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.customer_endpoints.list_customer_aliases(): "
-            "Exception occured - {}".format(str(e))
         )
         raise handle_exception_on_proxy(e)
 
