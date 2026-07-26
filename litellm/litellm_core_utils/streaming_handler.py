@@ -135,8 +135,14 @@ class _SyncToAsyncQueueIterator:
         self._closed.set()
 
         if self._producer_future.cancel():
-            # The producer was still queued behind other work on the shared
-            # executor and never started, so it will never set _done itself.
+            # The producer task never ran, so it never touched the sync
+            # iterator - safe to close it directly here, no other thread
+            # is executing it.
+            if hasattr(self._sync_iter, "close"):
+                try:
+                    self._sync_iter.close()
+                except Exception:
+                    pass
             self._done.set()
 
         async def _drain_until_done() -> None:
