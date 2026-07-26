@@ -420,6 +420,35 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_denies_when_row_missing():
+    """
+    If the spend-log row is absent (expired, never written, or unknown id) we
+    cannot establish ownership. Returning silently would let the handler fall
+    through to custom loggers (S3, GCS, langsmith, …) by request_id, leaking
+    another user's messages/response. Must deny instead.
+    """
+
+    class MockSpendLogs:
+        async def find_unique(self, where, include=None):
+            return None
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = MockSpendLogs()
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(
+            MockPrisma(), auth, "req-missing"
+        )
+    assert exc_info.value.status_code == 403
+
+
 def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypatch):
     """
     Without prisma, non-admins cannot be authorized to read request/response
