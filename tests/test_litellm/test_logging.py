@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 from typing import List
 
@@ -15,8 +16,10 @@ import sys
 import litellm
 from litellm._logging import (
     ALL_LOGGERS,
+    ECSFormatter,
     JsonFormatter,
     _initialize_loggers_with_handler,
+    _turn_on_ecs,
     _turn_on_json,
     verbose_logger,
     verbose_proxy_logger,
@@ -328,3 +331,151 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+# ---------------------------------------------------------------------------
+# ECS formatter tests
+# ---------------------------------------------------------------------------
+
+
+def test_ecs_formatter_required_fields():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.INFO,
+        pathname="proxy_server.py",
+        lineno=42,
+        msg="test message",
+        args=(),
+        exc_info=None,
+    )
+    obj = json.loads(formatter.format(record))
+
+    assert obj["message"] == "test message"
+    assert "@timestamp" in obj
+    assert obj["log"]["level"] == "info"
+    assert obj["log"]["logger"] == "LiteLLM"
+    assert obj["log"]["origin"]["file"]["name"] == "proxy_server.py"
+    assert obj["log"]["origin"]["file"]["line"] == 42
+    assert obj["service"]["name"] == "litellm"
+    assert obj["ecs"]["version"] == "8.11.0"
+
+
+def test_ecs_formatter_timestamp_is_utc_iso8601_with_ms():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.DEBUG,
+        pathname="",
+        lineno=0,
+        msg="ts test",
+        args=(),
+        exc_info=None,
+    )
+    obj = json.loads(formatter.format(record))
+    assert re.match(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$", obj["@timestamp"]
+    ), f"Non-ECS timestamp: {obj['@timestamp']!r}"
+
+
+def test_ecs_formatter_log_level_is_lowercase():
+    formatter = ECSFormatter()
+    for level, expected in [
+        (logging.DEBUG, "debug"),
+        (logging.INFO, "info"),
+        (logging.WARNING, "warning"),
+        (logging.ERROR, "error"),
+        (logging.CRITICAL, "critical"),
+    ]:
+        record = logging.LogRecord(
+            name="LiteLLM",
+            level=level,
+            pathname="",
+            lineno=0,
+            msg="test",
+            args=(),
+            exc_info=None,
+        )
+        obj = json.loads(formatter.format(record))
+        assert obj["log"]["level"] == expected
+
+
+def test_ecs_formatter_error_fields_on_exception():
+    formatter = ECSFormatter()
+    try:
+        raise ValueError("something broke")
+    except ValueError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.ERROR,
+        pathname="",
+        lineno=0,
+        msg="error occurred",
+        args=(),
+        exc_info=exc_info,
+    )
+    record.exc_text = formatter.formatException(exc_info)
+    obj = json.loads(formatter.format(record))
+
+    assert "error" in obj
+    assert obj["error"]["type"] == "ValueError"
+    assert obj["error"]["message"] == "something broke"
+    assert "stack_trace" in obj["error"]
+    assert "ValueError" in obj["error"]["stack_trace"]
+
+
+def test_ecs_formatter_extra_fields_passthrough():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.DEBUG,
+        pathname="",
+        lineno=0,
+        msg="request received",
+        args=(),
+        exc_info=None,
+    )
+    record.api_base = "https://api.openai.com"
+    record.model = "gpt-4"
+    obj = json.loads(formatter.format(record))
+
+    assert obj["api_base"] == "https://api.openai.com"
+    assert obj["model"] == "gpt-4"
+
+
+def test_ecs_formatter_no_ecs_reserved_key_collision():
+    formatter = ECSFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="test",
+        args=(),
+        exc_info=None,
+    )
+    # Attempt to inject via extra - should not overwrite ECS structure
+    record.message = "injected"
+    obj = json.loads(formatter.format(record))
+    assert obj["message"] == "test"
+
+
+def test_ecs_mode_emits_ecs_fields(capfd):
+    _turn_on_ecs()
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+        lg.setLevel(logging.INFO)
+
+    verbose_logger.info("ecs integration test")
+
+    _, err = capfd.readouterr()
+    lines = [line for line in err.splitlines() if line.strip()]
+    assert lines, "Expected at least one log line"
+
+    obj = json.loads(lines[-1])
+    assert "@timestamp" in obj
+    assert obj["log"]["level"] == "info"
+    assert obj["message"] == "ecs integration test"
+    assert obj["ecs"]["version"] == "8.11.0"
+    assert obj["service"]["name"] == "litellm"
