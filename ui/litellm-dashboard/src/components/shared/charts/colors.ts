@@ -23,7 +23,7 @@ export const CHART_COLOR_HEX = {
   rose: "#f43f5e",
 } as const;
 
-export type ChartColor = keyof typeof CHART_COLOR_HEX;
+export type ChartColor = keyof typeof CHART_COLOR_HEX | `#${string}`;
 
 export const DEFAULT_COLOR_CYCLE: readonly ChartColor[] = [
   "blue",
@@ -51,17 +51,20 @@ export const DEFAULT_COLOR_CYCLE: readonly ChartColor[] = [
 ];
 
 export const SEQUENTIAL_COLOR_RAMP: readonly ChartColor[] = [
-  "indigo",
-  "blue",
-  "sky",
-  "cyan",
-  "teal",
-  "emerald",
-  "green",
-  "lime",
+  "#1e3a8a",
+  "#1d4ed8",
+  "#2563eb",
+  "#3b82f6",
+  "#60a5fa",
+  "#93c5fd",
+  "#bfdbfe",
+  "#dbeafe",
 ];
 
-export const chartColorValue = (color: ChartColor): string => `var(--color-${color}-500, ${CHART_COLOR_HEX[color]})`;
+const NAMED_COLOR_HEX: Readonly<Record<string, string>> = CHART_COLOR_HEX;
+
+export const chartColorValue = (color: ChartColor): string =>
+  color in NAMED_COLOR_HEX ? `var(--color-${color}-500, ${NAMED_COLOR_HEX[color]})` : color;
 
 export const categoryFills = (count: number, colors?: readonly ChartColor[]): readonly string[] => {
   const cycle = colors && colors.length > 0 ? colors : DEFAULT_COLOR_CYCLE;
