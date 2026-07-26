@@ -66,7 +66,7 @@ def _is_internal_metadata_key(key: str) -> bool:
     return key in INTERNAL_METADATA_KEYS or key.startswith(INTERNAL_METADATA_KEY_PREFIXES)
 
 
-def _user_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _user_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return only the caller's metadata keys, or None if nothing is left."""
     if metadata is None:
         return None
