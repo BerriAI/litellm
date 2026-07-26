@@ -63,18 +63,21 @@ def _classify_oauth_error_code(
 ) -> UpstreamOAuthFault:
     """Blame assignment for a contract-conformant OAuth error code, shared by the token and DCR
     classifiers. Codes by which the upstream blames itself keep that blame; ``invalid_target`` is a
-    gateway capability gap (RFC 8707 resource indicators, LIT-4339) no matter whose credentials were
-    presented; credential-indicting codes follow the credential source; everything else, including
-    codes we do not recognize, is the caller's to act on. The upstream's HTTP status is deliberately
-    never consulted: status derives from this classification at render time, which is what keeps
-    status and code from contradicting each other."""
+    gateway configuration gap (the RFC 8707 resource indicator this server sends, or fails to send)
+    no matter whose credentials were presented; credential-indicting codes follow the credential
+    source; everything else, including codes we do not recognize, is the caller's to act on. The
+    upstream's HTTP status is deliberately never consulted: status derives from this classification
+    at render time, which is what keeps status and code from contradicting each other."""
     if code == "server_error" or code == "temporarily_unavailable":
         return UpstreamReportedFault(code=code)
     if code in GATEWAY_CAPABILITY_CODES:
         verbose_logger.warning(
             "MCP server %s: the upstream authorization server rejected the request with "
-            "invalid_target; it may require RFC 8707 resource indicators, which the gateway "
-            "does not send yet (tracked as LIT-4339)",
+            "invalid_target, meaning it did not accept the RFC 8707 resource indicator for this "
+            "request. Set upstream_resource on this server to the exact resource identifier the "
+            "authorization server expects (or to 'auto' to send the server's own canonical url); "
+            "if it is already set and the authorization server does not support resource "
+            "indicators, unset it and express the target audience through scopes instead",
             log_context,
         )
         return GatewayRejected(code=code)

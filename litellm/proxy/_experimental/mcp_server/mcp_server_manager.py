@@ -71,6 +71,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    canonicalize_url_identity,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
@@ -121,7 +122,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     parse_admin_env_vars,
     split_server_prefix_from_name,
-    strip_known_server_prefix,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
@@ -262,19 +262,11 @@ def _endpoints_yield_to_issuer(
 
 
 def _normalized_authorize_endpoint(url: str) -> str:
-    """Compare authorize endpoints on scheme, host, and path only. The default port is elided and
-    the host is lowercased so ``https://IDP.example.com:443/authorize/`` and
-    ``https://idp.example.com/authorize`` are the same identity; query and trailing slash are not."""
-    parsed = urlparse(url)
-    scheme = parsed.scheme.lower()
-    host = (parsed.hostname or "").lower()
-    default_port = {"https": 443, "http": 80}.get(scheme)
-    try:
-        port = parsed.port
-    except ValueError:
-        port = None
-    authority = host if port is None or port == default_port else f"{host}:{port}"
-    return f"{scheme}://{authority}{parsed.path.rstrip('/')}"
+    """Compare authorize endpoints / issuers on scheme, host, and path only, through the shared URL
+    canonicalizer: the default port is elided and the host is lowercased so
+    ``https://IDP.example.com:443/authorize/`` and ``https://idp.example.com/authorize`` are the same
+    identity, while query, fragment and a trailing slash are dropped."""
+    return canonicalize_url_identity(url)
 
 
 def _issuer_matches(claimed_issuer: object, configured_issuer: str) -> bool:
@@ -1518,6 +1510,7 @@ class MCPServerManager:
                     "subject_token_type",
                     DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
+                upstream_resource=server_config.get("upstream_resource", None),
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
@@ -2017,6 +2010,7 @@ class MCPServerManager:
             subject_token_type=mcp_server.subject_token_type
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
+            upstream_resource=(credentials_dict.get("upstream_resource") if credentials_dict else None),
             # ID-JAG fields — read from credentials JSON blob
             id_jag_resource_token_endpoint=(
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
@@ -2492,6 +2486,13 @@ class MCPServerManager:
         the given toolsets.  Results are cached via ``user_api_key_cache`` (a
         Redis-backed ``DualCache`` in production) so that cache entries are
         shared across workers and cold-cache DB hits are minimised.
+
+        A row names a tool on the server identified by ``server_id``, so the
+        stored name is the tool's own name and is used as written.  It is never
+        reduced by the server's wire prefix: that prefix is added on the way out
+        and is not part of any tool's identity, so treating a leading segment as
+        one silently renames the tool when a native name happens to begin with
+        it (``greyhound_internal_events`` on a server prefixed ``greyhound``).
         """
         from litellm.proxy._experimental.mcp_server.toolset_db import list_mcp_toolsets
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
@@ -2509,12 +2510,9 @@ class MCPServerManager:
             tool_permissions: dict[str, list[str]] = {}
             for toolset in toolsets:
                 for tool in toolset.tools:
-                    raw_name = tool["tool_name"]
-                    server = self.get_mcp_server_by_id(tool["server_id"])
-                    unprefixed = strip_known_server_prefix(raw_name, server)
-                    tool_permissions.setdefault(tool["server_id"], [])
-                    if unprefixed not in tool_permissions[tool["server_id"]]:
-                        tool_permissions[tool["server_id"]].append(unprefixed)
+                    allowed_names = tool_permissions.setdefault(tool["server_id"], [])
+                    if tool["tool_name"] not in allowed_names:
+                        allowed_names.append(tool["tool_name"])
             await user_api_key_cache.async_set_cache(
                 key=cache_key,
                 value=tool_permissions,

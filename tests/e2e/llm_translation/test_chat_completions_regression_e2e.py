@@ -343,10 +343,14 @@ class TestHostedVllmChat:
     def test_hosted_vllm_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        api_base = os.environ["HOSTED_VLLM_API_BASE"]
-        api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
+        api_base = os.environ.get("HOSTED_VLLM_API_BASE")
+        if api_base is None:
+            pytest.skip(
+                "set HOSTED_VLLM_API_BASE (the live vLLM server this deployment targets)"
+            )
         backend = (
-            os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"
+            os.environ.get("HOSTED_VLLM_MODEL")
+            or "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M"
         ).strip()
         model = f"e2e-vllm-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
@@ -354,7 +358,6 @@ class TestHostedVllmChat:
             LiteLLMParamsBody(
                 model=f"hosted_vllm/{backend}",
                 api_base=api_base,
-                api_key=api_key,
             ),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
@@ -473,6 +476,7 @@ class TestOpenAIChatCompletions:
                     tools=[_WEATHER_TOOL],
                     tool_choice="required",
                     max_tokens=128,
+                    reasoning_effort="none",
                 ),
             )
         )
@@ -531,13 +535,25 @@ class TestOpenAIChatCompletions:
                 ChatBody(
                     model=model,
                     messages=[
+                        # The prompt and effort have to make the model actually think,
+                        # otherwise this asserts something the model is free not to do:
+                        # at reasoning_effort="low" a one-step arithmetic question comes
+                        # back with reasoning_tokens=0, which is correct behavior and not
+                        # a reporting bug. Verified against the live model:
+                        # low + "60 miles in 1.5 hours" -> reasoning_tokens=0,
+                        # high + the prompt below       -> reasoning_tokens=90.
+                        # What is under test is that litellm surfaces the field, so the
+                        # request has to be one where the field is populated.
                         ChatMessage(
                             role="user",
-                            content="A train travels 60 miles in 1.5 hours. What is its average speed in mph?",
+                            content=(
+                                "Prove that the sum of two odd integers is even, then find the "
+                                "smallest prime p greater than 100 such that p+2 is also prime."
+                            ),
                         )
                     ],
-                    reasoning_effort="low",
-                    max_tokens=2048,
+                    reasoning_effort="high",
+                    max_tokens=3000,
                 ),
             )
         )
@@ -620,6 +636,7 @@ class TestOpenAIChatCompletions:
                 tools=[_WEATHER_TOOL],
                 tool_choice="required",
                 max_tokens=128,
+                reasoning_effort="none",
                 stream=True,
             ),
         )

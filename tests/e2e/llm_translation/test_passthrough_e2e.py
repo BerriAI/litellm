@@ -160,6 +160,18 @@ def test_anthropic_passthrough_tool_call_logs_cost(
     assert row.custom_llm_provider == "anthropic"
 
 
+@pytest.mark.covers("llm.chat_completions.openai.passthrough.nonstream.cost_logged")
+def test_openai_passthrough_nonstreaming_logs_cost(
+    client: PassthroughClient, scoped_key: str
+) -> None:
+    result = client.openai_chat(scoped_key, "gpt-5.4-mini", "Say hello in one word")
+    require_successful_call(result)
+
+    row = _fetch_cost_breakdown(client, result)
+    assert row.custom_llm_provider == "openai"
+    assert "gpt-5" in (row.model or "")
+
+
 class TestPassthroughModelAllowlist:
     """A passthrough route must honor the calling key's model allow-list.
 
