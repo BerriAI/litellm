@@ -529,13 +529,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data.get("max_tokens") or data.get("max_completion_tokens") or data.get("max_output_tokens")
         )
 
-        is_embedding = call_type in (CallTypes.embedding.value, CallTypes.aembedding.value)
+        match call_type:
+            case CallTypes.embedding.value | CallTypes.aembedding.value:
+                has_output_budget = False
+            case CallTypes.responses.value | CallTypes.aresponses.value:
+                has_output_budget = True
+            case _:
+                # Unknown call type: fall back to the legacy shape heuristic —
+                # a bare ``input`` (no messages/prompt) is embeddings-style with
+                # no output budget. Responses traffic always arrives with
+                # call_type set, so it never lands here.
+                has_output_budget = not (input_text is not None and not messages and not prompt)
 
-        match (explicit_max_tokens, is_embedding):
+        match (explicit_max_tokens, has_output_budget):
             case (mt, _) if mt is not None:
                 max_tokens_estimate = int(mt)
-            case (_, True):
-                # Embeddings have no output tokens
+            case (_, False):
+                # No output tokens (embeddings, or an embeddings-shaped request)
                 max_tokens_estimate = 0
             case _ if total_chars == 0:
                 # Fully contentless request (no messages, prompt, or input).
