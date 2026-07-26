@@ -27,6 +27,9 @@ from litellm.integrations.opentelemetry import (
     OTELSemconvCategory,
     _normalize_team_metadata_keys,
 )
+from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
+    cast_as_primitive_value_type,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 
@@ -5852,3 +5855,50 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                         exporter="console", attributes=attributes
                     )
                 )
+
+
+class TestOpenTelemetryPrimitiveCast(unittest.TestCase):
+    """`cast_as_primitive_value_type` must JSON-serialize dict/list span
+    attributes rather than str()-ing them into a non-parseable Python repr.
+
+    Regression: `metadata.*` span attributes that are dict/list (e.g.
+    requester_metadata, applied_guardrails) were emitted as single-quoted
+    Python repr, which is not valid JSON, breaking downstream consumers that
+    parse span attributes. The shared cast backs the OTEL, Arize, Weave and
+    Langfuse paths, so the fix is verified on the shared function and on the
+    OpenTelemetry delegate that forwards to it.
+    """
+
+    def test_dict_and_list_cast_as_json(self):
+        nested_dict = {"requester_metadata": {"tags": ["a", "b"]}, "count": 1}
+        cast_dict = cast_as_primitive_value_type(nested_dict)
+        self.assertIsInstance(cast_dict, str)
+        # valid JSON that round-trips; a Python repr would raise here
+        self.assertEqual(json.loads(cast_dict), nested_dict)
+        self.assertEqual(cast_dict, safe_dumps(nested_dict))
+
+        list_value = ["bedrock-guardrail-tag-router", "other-guardrail"]
+        cast_list = cast_as_primitive_value_type(list_value)
+        self.assertIsInstance(cast_list, str)
+        self.assertEqual(json.loads(cast_list), list_value)
+
+    def test_primitives_pass_through_unchanged(self):
+        self.assertEqual(cast_as_primitive_value_type("s"), "s")
+        self.assertEqual(cast_as_primitive_value_type(3), 3)
+        self.assertIs(cast_as_primitive_value_type(True), True)
+        self.assertEqual(cast_as_primitive_value_type(None), "")
+
+    def test_opentelemetry_delegate_matches_shared_cast(self):
+        otel = OpenTelemetry()
+        for value in (
+            {"requester_metadata": {"tags": ["a", "b"]}},
+            ["a", "b"],
+            "s",
+            3,
+            True,
+            None,
+        ):
+            self.assertEqual(
+                otel.cast_as_primitive_value_type(value),
+                cast_as_primitive_value_type(value),
+            )
