@@ -143,6 +143,10 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
                 merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
                 merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
 
+    if updated_patch.litellm_params and "litellm_credential_name" in updated_patch.litellm_params.model_fields_set:
+        if updated_patch.litellm_params.litellm_credential_name is None:
+            merged_deployment_dict["litellm_params"].pop("litellm_credential_name", None)  # type: ignore
+
     # convert to prisma compatible format
 
     prisma_compatible_model_dict = PrismaCompatibleUpdateDBModel()
@@ -1773,3 +1777,5 @@ async def clear_cache():
         )
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to clear cache and reload models. Due to error - {str(e)}")
+
+
