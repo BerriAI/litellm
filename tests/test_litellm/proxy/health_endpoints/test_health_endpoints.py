@@ -450,20 +450,83 @@ async def test_test_model_connection_loads_config_from_router():
         model_params = ahealth_check_call_args.kwargs.get("model_params", {})
 
         # Verify that config params were loaded and merged
-        # Note: request params override config params, so model from request is used
         assert model_params.get("api_key") == "resolved-api-key-from-env"
         assert (
             model_params.get("api_base")
             == "https://resolved-endpoint.openai.azure.com/"
         )
         assert model_params.get("api_version") == "2024-10-21"
-        assert (
-            model_params.get("model") == "gpt-4o"
-        )  # Request param overrides config param
+        assert model_params.get("model") == "azure/gpt-4o"
 
         # Verify result
         assert result["status"] == "success"
         assert "result" in result
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_preserves_configured_provider_model():
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = Deployment(
+        model_name="claude-haiku-4.5",
+        litellm_params=LiteLLM_Params(
+            model="bedrock/converse/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            aws_region_name="eu-central-1",
+            drop_params=True,
+            additional_drop_params=["extra_headers"],
+        ),
+        model_info={"id": "bedrock-deployment-id", "mode": "chat"},
+    )
+
+    mock_ahealth_check = AsyncMock(return_value={"status": "healthy"})
+    mock_run_with_timeout = AsyncMock(return_value={"status": "healthy"})
+
+    def mock_update_params(model_info, litellm_params):
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "test"}]
+        return params
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            mock_run_with_timeout,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            mock_update_params,
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+            lambda params: None,
+        ),
+    ):
+        result = await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "claude-haiku-4.5"},
+            model_info={"id": "bedrock-deployment-id", "mode": "chat"},
+            user_api_key_dict=MagicMock(),
+        )
+
+    assert result["status"] == "success"
+    model_params = mock_ahealth_check.call_args.kwargs["model_params"]
+    assert (
+        model_params["model"]
+        == "bedrock/converse/eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+    assert model_params["aws_region_name"] == "eu-central-1"
 
 
 @pytest.mark.asyncio
