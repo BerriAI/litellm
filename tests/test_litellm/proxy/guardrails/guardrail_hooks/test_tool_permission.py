@@ -974,7 +974,12 @@ class TestToolPermissionGuardrailInMemoryUpdate:
         assert "deny-bash" in guardrail._compiled_rule_targets
         assert guardrail._get_permission_for_tool_call(self._bash("echo x"))[0] is False
 
-    def test_update_in_memory_preserves_rules_when_rules_absent(self):
+    def test_update_in_memory_clears_rules_when_rules_absent(self):
+        """PUT /guardrails replaces the whole config rather than merging a partial
+        patch, so a LitellmParams update that doesn't carry `rules` (None) is the
+        caller's real signal to clear them, not evidence they were merely omitted -
+        matching how every other optional field behaves under this same PUT
+        contract (see CustomGuardrail.update_in_memory_litellm_params)."""
         guardrail = ToolPermissionGuardrail(
             guardrail_name="tp",
             rules=[
@@ -990,8 +995,6 @@ class TestToolPermissionGuardrailInMemoryUpdate:
         )
         assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
 
-        # A partial update that does not carry `rules` must NOT wipe the existing
-        # ruleset / compiled maps.
         guardrail.update_in_memory_litellm_params(
             LitellmParams(
                 guardrail="tool_permission",
@@ -1001,12 +1004,30 @@ class TestToolPermissionGuardrailInMemoryUpdate:
             )
         )
 
-        assert len(guardrail.rules) == 1
-        assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
+        assert guardrail.rules == []
+        assert guardrail._compiled_rule_patterns == {}
+        # No rules left to match, so the call falls through to default_action="deny".
         assert (
             guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
             is False
         )
+
+    def test_update_in_memory_clears_rules_on_explicit_null(self):
+        """A PUT replacing the guardrail with rules: null (the raw DB dict shape)
+        must clear the live ruleset, not restore the previous one - PUT /guardrails
+        replaces the whole config, so explicit null is a real clear signal."""
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tp",
+            rules=[{"id": "native-bash", "tool_name": r"^Bash$", "decision": "deny"}],
+            default_action="allow",
+        )
+
+        guardrail.update_in_memory_litellm_params(
+            {"guardrail": "tool_permission", "mode": "post_call", "rules": None}
+        )
+
+        assert guardrail.rules == []
+        assert guardrail._compiled_rule_targets == {}
 
     def test_update_in_memory_rejects_invalid_regex_and_keeps_previous_rules(self):
         """Regression: a live update whose rules contain an invalid regex must be

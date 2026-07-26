@@ -138,24 +138,20 @@ class ToolPermissionGuardrail(CustomGuardrail):
         super().update_in_memory_litellm_params(litellm_params)
         params = litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
 
-        # The generic update above sets ``self.rules`` from the incoming value
-        # (None on a partial update that omits rules), but never rebuilds the
-        # compiled maps. Rebuild them when rules are provided; otherwise restore
-        # the previous ruleset so a partial update doesn't silently wipe it. An
-        # explicit empty list still clears the rules.
+        # The generic update above sets ``self.rules`` from the incoming value but
+        # never rebuilds the compiled maps. PUT /guardrails replaces the whole
+        # config rather than merging a partial patch, so an explicit ``None`` is
+        # the caller's real signal to clear the rules (``_load_rules`` already
+        # treats ``None`` the same as ``[]``), not evidence the update omitted them.
         rules = params.get("rules")
-        if rules is not None:
-            try:
-                self._load_rules(rules)
-            except Exception:
-                # The generic update above may have overwritten self.rules with
-                # the raw payload; restore the prior consistent ruleset so a
-                # rejected update can't leave the live guardrail enforcing a
-                # broken policy.
-                self.rules = previous_rules
-                raise
-        else:
+        try:
+            self._load_rules(rules)
+        except Exception:
+            # The generic update above may have overwritten self.rules with the
+            # raw payload; restore the prior consistent ruleset so a rejected
+            # update can't leave the live guardrail enforcing a broken policy.
             self.rules = previous_rules
+            raise
         default_action = params.get("default_action")
         if isinstance(default_action, str):
             self.default_action = default_action.lower()
