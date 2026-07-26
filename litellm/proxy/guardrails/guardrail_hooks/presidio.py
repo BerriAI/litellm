@@ -30,7 +30,7 @@ import aiohttp
 
 import litellm
 from litellm import get_secret
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_and_sanitize, verbose_proxy_logger
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -1320,7 +1320,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa: T201
+                print(redact_and_sanitize(print_statement))  # noqa: T201
         except Exception:
             pass
 

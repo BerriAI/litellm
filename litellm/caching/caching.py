@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from pydantic import BaseModel
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import redact_and_sanitize, verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
@@ -41,7 +41,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+            print(redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 

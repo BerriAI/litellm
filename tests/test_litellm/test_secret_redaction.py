@@ -1,3 +1,5 @@
+import functools
+import importlib
 import logging
 import sys
 from io import StringIO
@@ -5,10 +7,13 @@ from unittest.mock import patch
 
 import pytest
 
+import litellm
 from litellm._logging import (
     JsonFormatter,
     _redact_string,
     _secret_filter,
+    redact_and_sanitize,
+    sanitize_control_characters,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -381,3 +386,70 @@ def test_non_pem_private_key_value_redacted():
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
     assert redact_string(msg) == msg
+
+
+# ── set_verbose stdout paths (print_verbose) ──
+
+
+def test_sanitize_control_characters_escapes_injection_vectors():
+    raw = "line1\r\n2026-01-01 INFO forged\x1b[31mred\x1b[0m\u2028\u2029\x00 tab\there"
+    result = sanitize_control_characters(raw)
+    assert "\n" not in result
+    assert "\r" not in result
+    assert "\x1b" not in result
+    assert "\u2028" not in result
+    assert "\u2029" not in result
+    assert "\x00" not in result
+    assert "\\r\\n" in result
+    assert "\\x1b[31mred" in result
+    assert "\\u2028\\u2029\\x00" in result
+    assert "tab\there" in result
+
+
+def test_redact_and_sanitize_masks_secrets_and_control_chars():
+    result = redact_and_sanitize({"api_key": SECRET, "model": "gpt-5", "note": "a\nb"})
+    assert SECRET not in result
+    assert "REDACTED" in result
+    assert "\n" not in result
+    assert "gpt-5" in result
+
+
+_STDOUT_PRINT_VERBOSE_TARGETS = [
+    ("litellm.utils", "print_verbose"),
+    ("litellm.main", "print_verbose"),
+    ("litellm.caching.caching", "print_verbose"),
+    ("litellm.litellm_core_utils.streaming_handler", "print_verbose"),
+    ("litellm.proxy.utils", "print_verbose"),
+    ("litellm.proxy.hooks.prompt_injection_detection", "_OPTIONAL_PromptInjectionDetection.print_verbose"),
+    ("litellm.proxy.hooks.batch_redis_get", "_PROXY_BatchRedisRequests.print_verbose"),
+    ("litellm.proxy.hooks.parallel_request_limiter", "_PROXY_MaxParallelRequestsHandler.print_verbose"),
+    ("litellm.proxy.guardrails.guardrail_hooks.presidio", "_OPTIONAL_PresidioPIIMasking.print_verbose"),
+]
+
+
+@pytest.mark.parametrize("module_path,attribute_path", _STDOUT_PRINT_VERBOSE_TARGETS)
+def test_print_verbose_stdout_is_redacted_and_sanitized(module_path, attribute_path, capsys):
+    """Every set_verbose stdout path must mask secrets and escape control characters.
+
+    The stdout branch bypasses the logging handlers, so SecretRedactionFilter
+    never sees it; an unpatched copy of print_verbose leaks the raw api_key and
+    lets model-controlled content forge log lines.
+    """
+    module = importlib.import_module(module_path)
+    attribute_names = attribute_path.split(".")
+    print_verbose = functools.reduce(getattr, attribute_names, module)
+    payload = f"api_key={SECRET} chunk=gpt-5\r\n2026-01-01 INFO forged line \x1b[31mred\x1b[0m"
+    arguments = (None, payload) if len(attribute_names) > 1 else (payload,)
+
+    with patch.object(litellm, "set_verbose", True):
+        print_verbose(*arguments)
+
+    out = capsys.readouterr().out
+    assert out.strip(), f"{module_path} printed nothing with set_verbose=True"
+    assert SECRET not in out
+    assert "REDACTED" in out
+    assert "\r" not in out
+    assert "\x1b" not in out
+    assert out.count("\n") == 1
+    assert "\\r\\n" in out
+    assert "\\x1b[31mred" in out

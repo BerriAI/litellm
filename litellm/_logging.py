@@ -1,6 +1,7 @@
 import ast
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -41,6 +42,37 @@ def redact_secrets(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return _redact_string(value)
+
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029]")
+_CONTROL_CHAR_NAMES = {"\n": "\\n", "\r": "\\r", "\x0b": "\\v", "\x0c": "\\f", "\x08": "\\b", "\x07": "\\a"}
+
+
+def _escape_control_character(match: "re.Match[str]") -> str:
+    char = match.group()
+    named = _CONTROL_CHAR_NAMES.get(char)
+    if named is not None:
+        return named
+    codepoint = ord(char)
+    return f"\\x{codepoint:02x}" if codepoint < 0x100 else f"\\u{codepoint:04x}"
+
+
+def sanitize_control_characters(value: str) -> str:
+    """Escape characters that let untrusted content forge log lines or drive the terminal.
+
+    Covers C0/C1 controls (CR, LF, ESC, ...) and the Unicode line/paragraph
+    separators; tab is left alone since it cannot start a new log record.
+    """
+    return _CONTROL_CHAR_RE.sub(_escape_control_character, value)
+
+
+def redact_and_sanitize(print_statement: object) -> str:
+    """Render an arbitrary value for a stdout/print sink: secrets masked, control characters escaped.
+
+    Use this for the `litellm.set_verbose` print paths, which bypass the
+    logging handlers and therefore SecretRedactionFilter.
+    """
+    return sanitize_control_characters(redact_secrets(str(print_statement)))
 
 
 class SecretRedactionFilter(logging.Filter):
@@ -413,7 +445,7 @@ def _enable_debugging():
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
+            print(redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 

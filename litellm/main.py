@@ -41,7 +41,7 @@ from typing import (
     get_args,
 )
 
-from litellm._logging import _redact_string
+from litellm._logging import _redact_string, redact_and_sanitize
 from litellm._uuid import uuid
 
 if TYPE_CHECKING:
@@ -8381,7 +8381,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+            print(redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 
