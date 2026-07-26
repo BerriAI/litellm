@@ -5,6 +5,7 @@ import pytest
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     get_or_create_metadata_bucket,
+    get_request_metadata,
     map_finish_reason,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
@@ -49,6 +50,53 @@ class TestGetOrCreateMetadataBucket:
         assert key == "litellm_metadata"
         assert isinstance(request_data["litellm_metadata"], dict)
         assert bucket is request_data["litellm_metadata"]
+
+
+class TestGetRequestMetadata:
+    """Proxy pre-call hooks see metadata at the top level; only after the SDK builds
+    `litellm_params` does the same metadata live nested under it."""
+
+    def test_reads_nested_litellm_params_metadata(self):
+        request_data = {"litellm_params": {"metadata": {"user_api_key_alias": "nested"}}}
+
+        assert get_request_metadata(request_data) == {"user_api_key_alias": "nested"}
+
+    def test_nested_metadata_wins_over_top_level(self):
+        request_data = {
+            "metadata": {"user_api_key_alias": "stale"},
+            "litellm_params": {"metadata": {"user_api_key_alias": "nested"}},
+        }
+
+        assert get_request_metadata(request_data)["user_api_key_alias"] == "nested"
+
+    def test_falls_back_to_top_level_metadata(self):
+        request_data = {"metadata": {"user_api_key_alias": "pre_call"}}
+
+        assert get_request_metadata(request_data) == {"user_api_key_alias": "pre_call"}
+
+    def test_falls_back_to_top_level_litellm_metadata(self):
+        request_data = {"litellm_metadata": {"user_api_key_alias": "batch"}}
+
+        assert get_request_metadata(request_data) == {"user_api_key_alias": "batch"}
+
+    def test_merges_spend_keys_from_both_top_level_buckets_without_mutating(self):
+        litellm_metadata = {"user_api_key_team_alias": "team"}
+        request_data = {
+            "litellm_metadata": litellm_metadata,
+            "metadata": {"user_api_key_alias": "key", "user_id": "caller"},
+        }
+
+        resolved = get_request_metadata(request_data)
+
+        assert resolved["user_api_key_team_alias"] == "team"
+        assert resolved["user_api_key_alias"] == "key"
+        assert "user_id" not in resolved
+        assert litellm_metadata == {"user_api_key_team_alias": "team"}
+
+    def test_ignores_non_dict_and_missing_buckets(self):
+        assert get_request_metadata({}) == {}
+        assert get_request_metadata({"metadata": None}) == {}
+        assert get_request_metadata({"litellm_metadata": "nope", "metadata": None}) == {}
 
 
 def test_reconstruct_model_name_prefers_deployment_value():
