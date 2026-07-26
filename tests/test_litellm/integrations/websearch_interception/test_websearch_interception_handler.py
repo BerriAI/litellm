@@ -153,6 +153,61 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_model"),
+    [
+        (
+            "qwen/qwen3.5-397b-a17b",
+            "nvidia_nim",
+            "nvidia_nim/qwen/qwen3.5-397b-a17b",
+        ),
+        (
+            "nvidia_nim/qwen/qwen3.5-397b-a17b",
+            "nvidia_nim",
+            "nvidia_nim/qwen/qwen3.5-397b-a17b",
+        ),
+        (
+            "nvidia_nim/qwen/qwen3.5-397b-a17b",
+            "nvidia",
+            "nvidia/nvidia_nim/qwen/qwen3.5-397b-a17b",
+        ),
+    ],
+)
+async def test_chat_completion_followup_preserves_provider_for_slashed_models(
+    model, custom_llm_provider, expected_model
+):
+    """Follow-up chat completions must not drop providers for namespaced models."""
+    logger = WebSearchInterceptionLogger(enabled_providers=[custom_llm_provider])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value=("Title: LiteLLM\nURL: docs\nSnippet: test", None)
+    )
+
+    request_patch = await logger._build_chat_completion_request_patch(
+        model=model,
+        messages=[{"role": "user", "content": "search LiteLLM"}],
+        tool_calls=[
+            {
+                "id": "call_123",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            }
+        ],
+        optional_params={"tools": [{"name": "litellm_web_search"}]},
+        kwargs={
+            "custom_llm_provider": custom_llm_provider,
+            "temperature": 0.2,
+        },
+        response_format="openai",
+    )
+
+    assert request_patch.model == expected_model
+    assert request_patch.messages is not None
+    assert len(request_patch.messages) == 3
+    assert request_patch.kwargs["temperature"] == 0.2
+    assert "custom_llm_provider" not in request_patch.kwargs
+
+
+@pytest.mark.asyncio
 async def test_internal_flags_filtered_from_followup_kwargs():
     """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
 
