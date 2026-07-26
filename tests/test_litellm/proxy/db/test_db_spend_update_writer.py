@@ -76,6 +76,144 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         assert call_args["payload"]["custom_llm_provider"] == "openai"
 
 
+def _tool_call_response(*names: str) -> object:
+    from types import SimpleNamespace
+
+    tool_calls = [SimpleNamespace(function=SimpleNamespace(name=name)) for name in names]
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=tool_calls))])
+
+
+def _tool_usage_prisma() -> MagicMock:
+    prisma = MagicMock()
+    prisma.tool_usage_transactions = []
+    prisma._tool_usage_transactions_lock = asyncio.Lock()
+    prisma.spend_log_transactions = []
+    prisma._spend_log_transactions_lock = asyncio.Lock()
+    return prisma
+
+
+def _minimal_spend_payload() -> dict:
+    return {
+        "request_id": "req-tool-1",
+        "startTime": datetime(2026, 7, 25, 10, 0, tzinfo=timezone.utc),
+        "endTime": datetime(2026, 7, 25, 10, 0, 1, tzinfo=timezone.utc),
+        "spend": 0.0,
+        "total_tokens": 42,
+        "mcp_namespaced_tool_name": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_database_enqueues_tool_usage_for_invoked_tools():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=_minimal_spend_payload(),
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "gpt-4"},
+            completion_response=_tool_call_response("get_weather"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.1,
+        )
+        await asyncio.sleep(0)
+
+    assert len(prisma.tool_usage_transactions) == 1
+    transaction = prisma.tool_usage_transactions[0]
+    assert transaction.request_id == "req-tool-1"
+    assert transaction.tool_names == ("get_weather",)
+    assert transaction.spend == 0.1
+    assert transaction.total_tokens == 42
+    assert transaction.date == "2026-07-25"
+
+
+@pytest.mark.asyncio
+async def test_update_database_enqueues_realtime_tool_usage():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=_minimal_spend_payload(),
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={
+                "model": "gpt-realtime",
+                "realtime_tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "rt_tool", "arguments": "{}"}}
+                ],
+            },
+            completion_response=None,
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.2,
+        )
+        await asyncio.sleep(0)
+
+    assert len(prisma.tool_usage_transactions) == 1
+    assert prisma.tool_usage_transactions[0].tool_names == ("rt_tool",)
+
+
+@pytest.mark.asyncio
+async def test_update_database_skips_tool_usage_when_spend_logs_disabled():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=_minimal_spend_payload(),
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "gpt-4"},
+            completion_response=_tool_call_response("get_weather"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.1,
+        )
+        await asyncio.sleep(0)
+
+    assert prisma.tool_usage_transactions == []
+
+
 @pytest.mark.asyncio
 async def test_update_daily_spend_with_null_entity_id():
     """
