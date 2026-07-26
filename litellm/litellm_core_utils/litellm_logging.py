@@ -4513,6 +4513,22 @@ def is_valid_sha256_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
+def _sanitize_user_api_key_hash(value: Optional[Any]) -> Optional[str]:
+    """Hash a raw virtual key/JWT so it is never persisted to a log sink in cleartext."""
+    if not value or not isinstance(value, str):
+        return value
+    if is_valid_sha256_hash(value):
+        return value
+    candidate = value.strip()
+    if candidate[:7].lower() == "bearer ":
+        candidate = candidate[7:].strip()
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    sanitized = UserAPIKeyAuth._safe_hash_litellm_api_key(candidate)
+    return sanitized if sanitized != candidate else value
+
+
 class StandardLoggingPayloadSetup:
     @staticmethod
     def cleanup_timestamps(
@@ -4694,6 +4710,8 @@ class StandardLoggingPayloadSetup:
             user_api_key = metadata.get("user_api_key")
             if user_api_key and isinstance(user_api_key, str) and is_valid_sha256_hash(user_api_key):
                 clean_metadata["user_api_key_hash"] = user_api_key
+
+            clean_metadata["user_api_key_hash"] = _sanitize_user_api_key_hash(clean_metadata.get("user_api_key_hash"))
             _potential_requester_metadata = metadata.get(
                 "metadata", None
             )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields
@@ -5536,6 +5554,8 @@ def get_standard_logging_metadata(
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
                 clean_metadata["user_api_key_hash"] = metadata.get("user_api_key")  # this is the hash
+
+        clean_metadata["user_api_key_hash"] = _sanitize_user_api_key_hash(clean_metadata.get("user_api_key_hash"))
     return clean_metadata
 
 
