@@ -4139,7 +4139,7 @@ class _MutateOnCompareKey(str):
         return str(self) != other
 
 
-def _make_logging_obj(litellm_call_id):
+def _make_logging_obj_for_race(litellm_call_id):
     return LitellmLogging(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "Hey"}],
@@ -4160,7 +4160,7 @@ def test_success_handler_snapshots_model_call_details_before_iterating():
     log. The poison key mutates the dict mid-iteration; on the buggy code the
     logfire callback never runs.
     """
-    logging_obj = _make_logging_obj("race-success-1")
+    logging_obj = _make_logging_obj_for_race("race-success-1")
     poison = _MutateOnCompareKey("poison", logging_obj.model_call_details)
     logging_obj.model_call_details[poison] = "value"
 
@@ -4188,7 +4188,7 @@ def test_failure_handler_snapshots_model_call_details_before_iterating():
     mutates the dict mid-iteration; on the buggy code the logfire callback never
     runs.
     """
-    logging_obj = _make_logging_obj("race-failure-1")
+    logging_obj = _make_logging_obj_for_race("race-failure-1")
     poison = _MutateOnCompareKey("poison", logging_obj.model_call_details)
     logging_obj.model_call_details[poison] = "value"
 
