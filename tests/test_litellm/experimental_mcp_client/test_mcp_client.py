@@ -14,7 +14,34 @@ from litellm.experimental_mcp_client.client import (
     MCPClient,
     _first_non_cancelled_cause,
 )
+from mcp.types import (
+    ListPromptsRequest,
+    ListResourceTemplatesRequest,
+    ListResourcesRequest,
+    ListToolsRequest,
+)
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
+
+
+class _MissingListResultSession:
+    def __init__(self):
+        self.requests = []
+
+    async def send_request(self, request, result_type):
+        self.requests.append((request, result_type))
+        return result_type.model_validate({})
+
+    async def list_tools(self):
+        raise AssertionError("strict list_tools should not be used")
+
+    async def list_prompts(self):
+        raise AssertionError("strict list_prompts should not be used")
+
+    async def list_resources(self):
+        raise AssertionError("strict list_resources should not be used")
+
+    async def list_resource_templates(self):
+        raise AssertionError("strict list_resource_templates should not be used")
 
 
 class _FakeExceptionGroup(Exception):
@@ -44,6 +71,33 @@ class TestMCPClient:
         assert client.stdio_config is not None
         assert client.stdio_config.get("command") == "python"
         assert client.stdio_config.get("args") == ["-m", "my_mcp_server"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("client_method", "request_type"),
+        [
+            ("list_tools", ListToolsRequest),
+            ("list_prompts", ListPromptsRequest),
+            ("list_resources", ListResourcesRequest),
+            ("list_resource_templates", ListResourceTemplatesRequest),
+        ],
+    )
+    async def test_list_methods_tolerate_missing_result_collections(
+        self, client_method, request_type
+    ):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        session = _MissingListResultSession()
+
+        async def _run_operation(operation):
+            return await operation(session)
+
+        client.run_with_session = AsyncMock(side_effect=_run_operation)
+
+        result = await getattr(client, client_method)()
+
+        assert result == []
+        assert len(session.requests) == 1
+        assert isinstance(session.requests[0][0].root, request_type)
 
     @pytest.mark.asyncio
     async def test_mcp_client_stdio_connect_error(self):

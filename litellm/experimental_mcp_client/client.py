@@ -32,14 +32,23 @@ except ImportError:
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
+    ClientRequest,
     GetPromptRequestParams,
     GetPromptResult,
+    ListPromptsRequest,
+    ListPromptsResult,
+    ListResourceTemplatesRequest,
+    ListResourceTemplatesResult,
+    ListResourcesRequest,
+    ListResourcesResult,
+    ListToolsRequest,
+    ListToolsResult,
     Prompt,
     ResourceTemplate,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl
+from pydantic import AnyUrl, Field
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
@@ -78,6 +87,22 @@ def _first_non_cancelled_cause(exc: BaseException) -> Optional[BaseException]:
 
 
 TSessionResult = TypeVar("TSessionResult")
+
+
+class _LenientListToolsResult(ListToolsResult):
+    tools: List[MCPTool] = Field(default_factory=list)
+
+
+class _LenientListPromptsResult(ListPromptsResult):
+    prompts: List[Prompt] = Field(default_factory=list)
+
+
+class _LenientListResourcesResult(ListResourcesResult):
+    resources: List[Resource] = Field(default_factory=list)
+
+
+class _LenientListResourceTemplatesResult(ListResourceTemplatesResult):
+    resourceTemplates: List[ResourceTemplate] = Field(default_factory=list)
 
 
 class MCPSigV4Auth(httpx.Auth):
@@ -498,7 +523,10 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
         async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
+            return await session.send_request(
+                ClientRequest(ListToolsRequest()),
+                _LenientListToolsResult,
+            )
 
         try:
             result = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
@@ -627,7 +655,10 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
 
         async def _list_prompts_operation(session: ClientSession):
-            return await session.list_prompts()
+            return await session.send_request(
+                ClientRequest(ListPromptsRequest()),
+                _LenientListPromptsResult,
+            )
 
         try:
             result = await self.run_with_session(_list_prompts_operation)
@@ -704,7 +735,10 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing resources from {self.server_url or 'stdio'}")
 
         async def _list_resources_operation(session: ClientSession):
-            return await session.list_resources()
+            return await session.send_request(
+                ClientRequest(ListResourcesRequest()),
+                _LenientListResourcesResult,
+            )
 
         try:
             result = await self.run_with_session(_list_resources_operation)
@@ -740,7 +774,10 @@ class MCPClient:
         verbose_logger.debug(f"MCP client listing resource templates from {self.server_url or 'stdio'}")
 
         async def _list_resource_templates_operation(session: ClientSession):
-            return await session.list_resource_templates()
+            return await session.send_request(
+                ClientRequest(ListResourceTemplatesRequest()),
+                _LenientListResourceTemplatesResult,
+            )
 
         try:
             result = await self.run_with_session(_list_resource_templates_operation)
