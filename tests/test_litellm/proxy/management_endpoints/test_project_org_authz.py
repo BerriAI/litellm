@@ -7,7 +7,7 @@ Unit tests for the VERIA-55 fixes:
   member of.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -193,3 +193,53 @@ async def test_assign_key_org_blocks_caller_with_no_memberships():
             prisma_client=prisma,
         )
     assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# /project/update — object_permission upsert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_project_upserts_object_permission_as_dict():
+    """jsonify_object serializes the nested object_permission dict into a JSON
+    string; passing that string straight to the Prisma table raised
+    FieldNotFoundError. The shared helper must receive it and upsert a dict."""
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        UpdateProjectRequest,
+    )
+    from litellm.proxy.utils import PrismaClient
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        update_project,
+    )
+
+    prisma = MagicMock()
+    prisma.jsonify_object = lambda data: PrismaClient.jsonify_object(prisma, data)
+    prisma.db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=MagicMock(team_id=None, budget_id=None, object_permission_id=None)
+    )
+    prisma.db.litellm_projecttable.update = AsyncMock(return_value=MagicMock())
+    perm_table = prisma.db.litellm_objectpermissiontable
+    perm_table.find_unique = AsyncMock(return_value=None)
+    perm_table.upsert = AsyncMock(return_value=MagicMock(object_permission_id="op-1"))
+
+    admin = UserAPIKeyAuth(user_id="root", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    data = UpdateProjectRequest(
+        project_id="proj-1",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_servers=["server-1"]),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
+        await update_project(
+            data=data, http_request=MagicMock(), user_api_key_dict=admin
+        )
+
+    perm_table.upsert.assert_awaited_once()
+    upsert_data = perm_table.upsert.await_args.kwargs["data"]
+    assert upsert_data["create"] == {"mcp_servers": ["server-1"]}
+    project_update = prisma.db.litellm_projecttable.update.await_args.kwargs["data"]
+    assert project_update["object_permission_id"] == "op-1"
+    assert "object_permission" not in project_update
