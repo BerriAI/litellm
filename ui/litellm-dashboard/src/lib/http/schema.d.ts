@@ -1397,6 +1397,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chatgpt/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Chatgpt Proxy Route
+         * @description Passthrough for Codex clients signed in with ChatGPT (SIWC).
+         *
+         *     The LiteLLM virtual key arrives in the `x-litellm-api-key` header or the
+         *     `litellm_api_key` cookie and is stripped before forwarding. The
+         *     `Authorization` header carries the ChatGPT bearer, which is forwarded
+         *     unchanged (along with `ChatGPT-Account-ID`) to
+         *     https://chatgpt.com/backend-api/codex.
+         */
+        get: operations["chatgpt_proxy_route_chatgpt__endpoint__get"];
+        /**
+         * Chatgpt Proxy Route
+         * @description Passthrough for Codex clients signed in with ChatGPT (SIWC).
+         *
+         *     The LiteLLM virtual key arrives in the `x-litellm-api-key` header or the
+         *     `litellm_api_key` cookie and is stripped before forwarding. The
+         *     `Authorization` header carries the ChatGPT bearer, which is forwarded
+         *     unchanged (along with `ChatGPT-Account-ID`) to
+         *     https://chatgpt.com/backend-api/codex.
+         */
+        put: operations["chatgpt_proxy_route_chatgpt__endpoint__put"];
+        /**
+         * Chatgpt Proxy Route
+         * @description Passthrough for Codex clients signed in with ChatGPT (SIWC).
+         *
+         *     The LiteLLM virtual key arrives in the `x-litellm-api-key` header or the
+         *     `litellm_api_key` cookie and is stripped before forwarding. The
+         *     `Authorization` header carries the ChatGPT bearer, which is forwarded
+         *     unchanged (along with `ChatGPT-Account-ID`) to
+         *     https://chatgpt.com/backend-api/codex.
+         */
+        post: operations["chatgpt_proxy_route_chatgpt__endpoint__post"];
+        /**
+         * Chatgpt Proxy Route
+         * @description Passthrough for Codex clients signed in with ChatGPT (SIWC).
+         *
+         *     The LiteLLM virtual key arrives in the `x-litellm-api-key` header or the
+         *     `litellm_api_key` cookie and is stripped before forwarding. The
+         *     `Authorization` header carries the ChatGPT bearer, which is forwarded
+         *     unchanged (along with `ChatGPT-Account-ID`) to
+         *     https://chatgpt.com/backend-api/codex.
+         */
+        delete: operations["chatgpt_proxy_route_chatgpt__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Chatgpt Proxy Route
+         * @description Passthrough for Codex clients signed in with ChatGPT (SIWC).
+         *
+         *     The LiteLLM virtual key arrives in the `x-litellm-api-key` header or the
+         *     `litellm_api_key` cookie and is stripped before forwarding. The
+         *     `Authorization` header carries the ChatGPT bearer, which is forwarded
+         *     unchanged (along with `ChatGPT-Account-ID`) to
+         *     https://chatgpt.com/backend-api/codex.
+         */
+        patch: operations["chatgpt_proxy_route_chatgpt__endpoint__patch"];
+        trace?: never;
+    };
     "/claude-code/marketplace.json": {
         parameters: {
             query?: never;
@@ -36412,6 +36478,161 @@ export interface operations {
                 };
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chatgpt_proxy_route_chatgpt__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chatgpt_proxy_route_chatgpt__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chatgpt_proxy_route_chatgpt__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chatgpt_proxy_route_chatgpt__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chatgpt_proxy_route_chatgpt__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

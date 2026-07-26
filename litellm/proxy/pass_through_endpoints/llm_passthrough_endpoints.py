@@ -24,6 +24,7 @@ from litellm.constants import (
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -2021,6 +2022,83 @@ class BaseOpenAIPassThroughHandler:
             joined_path_str = joined_path_str.replace("api.openai.com/", "api.openai.com/v1/")
 
         return joined_path_str
+
+
+CHATGPT_CREDENTIAL_COOKIE = "litellm_api_key"
+CHATGPT_STRIPPED_REQUEST_HEADERS = frozenset({"cookie", "x-litellm-api-key", "content-length", "host"})
+
+
+def get_chatgpt_gateway_credential(request: Request) -> str | None:
+    header_credential = request.headers.get("x-litellm-api-key")
+    if header_credential:
+        return header_credential
+    return request.cookies.get(CHATGPT_CREDENTIAL_COOKIE)
+
+
+def build_chatgpt_forward_headers(request: Request) -> dict[str, str]:
+    return {
+        header_name: header_value
+        for header_name, header_value in _safe_get_request_headers(request).items()
+        if header_name.lower() not in CHATGPT_STRIPPED_REQUEST_HEADERS
+    }
+
+
+@router.api_route(
+    "/chatgpt/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["ChatGPT Pass-through", "pass-through"],
+)
+async def chatgpt_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+):
+    """
+    Passthrough for Codex clients signed in with ChatGPT (SIWC).
+
+    The LiteLLM virtual key arrives in the `x-litellm-api-key` header or the
+    `litellm_api_key` cookie and is stripped before forwarding. The
+    `Authorization` header carries the ChatGPT bearer, which is forwarded
+    unchanged (along with `ChatGPT-Account-ID`) to
+    https://chatgpt.com/backend-api/codex.
+    """
+    gateway_credential = get_chatgpt_gateway_credential(request)
+    if gateway_credential is None:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "LiteLLM virtual key not found. Send it in the 'x-litellm-api-key' header or the "
+                f"'{CHATGPT_CREDENTIAL_COOKIE}' cookie. The 'Authorization' header is reserved for the "
+                "ChatGPT bearer token and is forwarded upstream unchanged."
+            ),
+        )
+
+    user_api_key_dict = await user_api_key_auth(request=request, api_key=f"Bearer {gateway_credential}")
+
+    base_target_url = os.getenv("CHATGPT_API_BASE") or CHATGPT_API_BASE
+    encoded_endpoint = httpx.URL(endpoint).path
+    if not encoded_endpoint.startswith("/"):
+        encoded_endpoint = "/" + encoded_endpoint
+
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
+    )
+
+    is_streaming_request = await is_streaming_request_fn(request)
+
+    endpoint_func = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers=build_chatgpt_forward_headers(request),
+        custom_llm_provider=LlmProviders.CHATGPT.value,
+        is_streaming_request=is_streaming_request,
+    )
+    return await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
 
 
 @router.api_route(

@@ -3022,3 +3022,158 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestChatGPTProxyRoute:
+    """
+    Tests for the Codex Sign-in-with-ChatGPT (SIWC) passthrough (/chatgpt)
+    """
+
+    def _build_request(self, headers: dict, cookies: dict, body: dict) -> MagicMock:
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = headers
+        mock_request.cookies = cookies
+        mock_request.query_params = {}
+        return mock_request
+
+    def _codex_headers(self, extra: dict) -> dict:
+        return {
+            "content-type": "application/json",
+            "authorization": "Bearer chatgpt-oauth-access-token",
+            "chatgpt-account-id": "acct-uuid-123",
+            "originator": "codex_cli_rs",
+            "session_id": "sess-uuid-456",
+            "host": "localhost:4000",
+            "content-length": "100",
+            **extra,
+        }
+
+    async def _call_route(self, mock_request: MagicMock, body: dict):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            chatgpt_proxy_route,
+        )
+
+        mock_response = MagicMock(spec=Response)
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=UserAPIKeyAuth(api_key="hashed"),
+            ) as mock_auth,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body",
+                new_callable=AsyncMock,
+                return_value=body,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_endpoint_func = AsyncMock(return_value={"id": "resp_1"})
+            mock_create_route.return_value = mock_endpoint_func
+            result = await chatgpt_proxy_route(
+                endpoint="responses",
+                request=mock_request,
+                fastapi_response=mock_response,
+            )
+        return result, mock_auth, mock_create_route
+
+    @pytest.mark.asyncio
+    async def test_auth_from_x_litellm_api_key_header_and_forwarding(self):
+        body = {"model": "gpt-5.3-codex", "stream": True}
+        mock_request = self._build_request(
+            headers=self._codex_headers({"x-litellm-api-key": "sk-litellm-virtual-key"}),
+            cookies={},
+            body=body,
+        )
+
+        result, mock_auth, mock_create_route = await self._call_route(mock_request, body)
+
+        mock_auth.assert_called_once()
+        assert mock_auth.call_args.kwargs["api_key"] == "Bearer sk-litellm-virtual-key"
+
+        call_args = mock_create_route.call_args[1]
+        assert call_args["target"] == "https://chatgpt.com/backend-api/codex/responses"
+        assert call_args["custom_llm_provider"] == "chatgpt"
+        assert call_args["is_streaming_request"] is True
+
+        forwarded = call_args["custom_headers"]
+        assert forwarded["authorization"] == "Bearer chatgpt-oauth-access-token"
+        assert forwarded["chatgpt-account-id"] == "acct-uuid-123"
+        assert forwarded["originator"] == "codex_cli_rs"
+        assert forwarded["session_id"] == "sess-uuid-456"
+        assert "x-litellm-api-key" not in forwarded
+        assert "cookie" not in forwarded
+        assert "host" not in forwarded
+        assert "content-length" not in forwarded
+        assert result == {"id": "resp_1"}
+
+    @pytest.mark.asyncio
+    async def test_auth_from_cookie(self):
+        body = {"model": "gpt-5.3-codex", "stream": True}
+        mock_request = self._build_request(
+            headers=self._codex_headers({"cookie": "litellm_api_key=sk-cookie-key"}),
+            cookies={"litellm_api_key": "sk-cookie-key"},
+            body=body,
+        )
+
+        _, mock_auth, mock_create_route = await self._call_route(mock_request, body)
+
+        assert mock_auth.call_args.kwargs["api_key"] == "Bearer sk-cookie-key"
+        forwarded = mock_create_route.call_args[1]["custom_headers"]
+        assert "cookie" not in forwarded
+        assert forwarded["authorization"] == "Bearer chatgpt-oauth-access-token"
+
+    @pytest.mark.asyncio
+    async def test_header_takes_precedence_over_cookie(self):
+        body = {"stream": False}
+        mock_request = self._build_request(
+            headers=self._codex_headers(
+                {
+                    "x-litellm-api-key": "sk-header-key",
+                    "cookie": "litellm_api_key=sk-cookie-key",
+                }
+            ),
+            cookies={"litellm_api_key": "sk-cookie-key"},
+            body=body,
+        )
+
+        _, mock_auth, mock_create_route = await self._call_route(mock_request, body)
+
+        assert mock_auth.call_args.kwargs["api_key"] == "Bearer sk-header-key"
+        assert mock_create_route.call_args[1]["is_streaming_request"] is False
+
+    @pytest.mark.asyncio
+    async def test_missing_litellm_credential_returns_401_without_using_siwc_bearer(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            chatgpt_proxy_route,
+        )
+
+        mock_request = self._build_request(
+            headers=self._codex_headers({}),
+            cookies={},
+            body={"stream": True},
+        )
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await chatgpt_proxy_route(
+                endpoint="responses",
+                request=mock_request,
+                fastapi_response=MagicMock(spec=Response),
+            )
+
+        assert exc_info.value.status_code == 401
+        mock_auth.assert_not_called()
+
+    def test_chatgpt_is_a_mapped_pass_through_route(self):
+        from litellm.proxy._types import LiteLLMRoutes
+
+        assert "/chatgpt" in LiteLLMRoutes.mapped_pass_through_routes.value
