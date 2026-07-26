@@ -44,16 +44,18 @@ def redact_secrets(value: str) -> str:
     return _redact_string(value)
 
 
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029]")
+_SGR_COLOR_OR_CONTROL_CHAR_RE = re.compile(r"(\x1b\[[0-9;]{0,16}m)|([\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029])")
 _CONTROL_CHAR_NAMES = {"\n": "\\n", "\r": "\\r", "\x0b": "\\v", "\x0c": "\\f", "\x08": "\\b", "\x07": "\\a"}
 
 
 def _escape_control_character(match: "re.Match[str]") -> str:
-    char = match.group()
-    named = _CONTROL_CHAR_NAMES.get(char)
+    sgr_color_sequence, control_char = match.groups()
+    if sgr_color_sequence is not None:
+        return sgr_color_sequence
+    named = _CONTROL_CHAR_NAMES.get(control_char)
     if named is not None:
         return named
-    codepoint = ord(char)
+    codepoint = ord(control_char)
     return f"\\x{codepoint:02x}" if codepoint < 0x100 else f"\\u{codepoint:04x}"
 
 
@@ -61,9 +63,10 @@ def sanitize_control_characters(value: str) -> str:
     """Escape characters that let untrusted content forge log lines or drive the terminal.
 
     Covers C0/C1 controls (CR, LF, ESC, ...) and the Unicode line/paragraph
-    separators; tab is left alone since it cannot start a new log record.
+    separators. Tab survives since it cannot start a new log record, and so do
+    SGR colour sequences, which litellm itself emits to colourise verbose output.
     """
-    return _CONTROL_CHAR_RE.sub(_escape_control_character, value)
+    return _SGR_COLOR_OR_CONTROL_CHAR_RE.sub(_escape_control_character, value)
 
 
 def redact_and_sanitize(print_statement: object) -> str:

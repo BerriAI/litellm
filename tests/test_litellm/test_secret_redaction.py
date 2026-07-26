@@ -392,18 +392,25 @@ def test_normal_vertex_log_not_redacted():
 
 
 def test_sanitize_control_characters_escapes_injection_vectors():
-    raw = "line1\r\n2026-01-01 INFO forged\x1b[31mred\x1b[0m\u2028\u2029\x00 tab\there"
+    raw = "line1\r\n2026-01-01 INFO forged\x1b]0;window title\x07\x1b[2J\u2028\u2029\x00 tab\there"
     result = sanitize_control_characters(raw)
     assert "\n" not in result
     assert "\r" not in result
     assert "\x1b" not in result
+    assert "\x07" not in result
     assert "\u2028" not in result
     assert "\u2029" not in result
     assert "\x00" not in result
     assert "\\r\\n" in result
-    assert "\\x1b[31mred" in result
+    assert "\\x1b]0;window title\\a\\x1b[2J" in result
     assert "\\u2028\\u2029\\x00" in result
     assert "tab\there" in result
+
+
+def test_sanitize_control_characters_keeps_litellm_colour_codes():
+    """litellm colourises its own verbose prints; SGR sequences stay intact."""
+    coloured = "\x1b[92mRequest to litellm:\x1b[0m"
+    assert sanitize_control_characters(coloured) == coloured
 
 
 def test_redact_and_sanitize_masks_secrets_and_control_chars():
@@ -438,7 +445,7 @@ def test_print_verbose_stdout_is_redacted_and_sanitized(module_path, attribute_p
     module = importlib.import_module(module_path)
     attribute_names = attribute_path.split(".")
     print_verbose = functools.reduce(getattr, attribute_names, module)
-    payload = f"api_key={SECRET} chunk=gpt-5\r\n2026-01-01 INFO forged line \x1b[31mred\x1b[0m"
+    payload = f"api_key={SECRET} chunk=gpt-5\r\n2026-01-01 INFO forged line \x1b]0;pwned\x07"
     arguments = (None, payload) if len(attribute_names) > 1 else (payload,)
 
     with patch.object(litellm, "set_verbose", True):
@@ -452,4 +459,4 @@ def test_print_verbose_stdout_is_redacted_and_sanitized(module_path, attribute_p
     assert "\x1b" not in out
     assert out.count("\n") == 1
     assert "\\r\\n" in out
-    assert "\\x1b[31mred" in out
+    assert "\\x1b]0;pwned\\a" in out
