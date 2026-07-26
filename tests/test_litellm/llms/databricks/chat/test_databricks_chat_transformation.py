@@ -423,3 +423,49 @@ def test_databricks_config_probes_capabilities_under_databricks_namespace():
     without this override they probed the ``anthropic`` cost-map namespace and
     ignored the exact ``databricks/databricks-claude-*`` entries."""
     assert DatabricksConfig().custom_llm_provider == "databricks"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "databricks/databricks-claude-3-7-sonnet",
+        "databricks/databricks-claude-opus-4-7",
+    ],
+)
+def test_reasoning_effort_accepts_dict_shape(model):
+    """Regression for #28196 (companion to bedrock + direct Anthropic fixes).
+
+    OpenAI Responses callers send
+    ``reasoning_effort={'effort': 'low', 'summary': 'concise'}``;
+    the Databricks Claude adapter must coerce the dict to ``low`` and
+    forward thinking + (for adaptive Claude 4.6 / 4.7) output_config,
+    instead of silently dropping it.
+    """
+    config = DatabricksConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "low", "summary": "concise"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+        replace_max_completion_tokens_with_max_tokens=False,
+    )
+
+    assert "thinking" in optional_params, f"reasoning_effort dict was dropped on {model}: {optional_params!r}"
+
+
+def test_reasoning_effort_bare_string_still_works():
+    """Regression guard for the pre-existing string shape."""
+    config = DatabricksConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="databricks/databricks-claude-3-7-sonnet",
+        drop_params=False,
+        replace_max_completion_tokens_with_max_tokens=False,
+    )
+
+    assert "thinking" in optional_params
