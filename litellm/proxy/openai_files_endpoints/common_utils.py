@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.file_id_utils import (
     get_original_file_id,
     is_model_embedded_id,  # noqa: F401  # preserve the proxy-module import path
 )
+from litellm.proxy.common_utils.http_parsing_utils import _extract_model_param, _read_request_body
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -617,8 +618,6 @@ async def extract_file_creation_params(
     Returns:
         FileCreationParams: Structured parameters extracted from the request
     """
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-
     if request_body is None:
         request_body = await _read_request_body(request=request) or {}
 
@@ -740,18 +739,6 @@ def validate_managed_files_requirement(
                 "target_model_names instead of the model parameter."
             ),
         )
-
-
-def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:
-    """
-    Extract model parameter from request.
-
-    Priority:
-    1. request_body.model
-    2. Query parameter (?model=)
-    3. Header (x-litellm-model)
-    """
-    return request_body.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
 
 
 # ============================================================================

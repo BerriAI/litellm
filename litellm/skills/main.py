@@ -39,7 +39,13 @@ _litellm_skills_handler = None
 
 
 def _get_skill_model(kwargs: dict[str, Any]) -> str | None:
-    model = kwargs.get("_litellm_skill_model") or kwargs.get("model")
+    model = None
+    for metadata_key in ("litellm_metadata", "metadata"):
+        metadata = kwargs.get(metadata_key)
+        if isinstance(metadata, dict) and isinstance(metadata.get("model_group"), str):
+            model = metadata["model_group"]
+            break
+    model = model or kwargs.get("model")
     return model if isinstance(model, str) and model else None
 
 
