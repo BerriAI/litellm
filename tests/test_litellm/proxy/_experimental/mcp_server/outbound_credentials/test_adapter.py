@@ -163,6 +163,26 @@ def test_client_credentials_omits_audience_when_unset():
     assert spec is not None
     assert isinstance(spec.config, ClientCredentialsConfig)
     assert spec.config.audience is None
+    assert spec.config.upstream_resource is None
+
+
+def test_client_credentials_resolves_upstream_resource_onto_the_config():
+    """The adapter is the one MCPServer -> config chokepoint, so it resolves the RFC 8707 send value
+    (auto here derives the canonical server URI) and every M2M token request inherits it."""
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            upstream_resource="auto",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.upstream_resource == "https://up.example.com/mcp"
 
 
 def test_client_credentials_with_incomplete_grant_fields_is_owned_for_fail_closed():
