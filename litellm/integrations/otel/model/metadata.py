@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Mapping, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.semconv import resolve_operation
-from litellm.integrations.otel.model.utils import as_str
+from litellm.integrations.otel.model.utils import as_str, to_seconds
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -201,6 +201,7 @@ class LLMCallEvent:
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
+    time_to_first_chunk_seconds: float | None
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> "LLMCallEvent":
@@ -214,7 +215,23 @@ class LLMCallEvent:
             dynamic_params=kwargs.get("standard_callback_dynamic_params"),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             provisional_span_name=f"{operation.value} {model}".strip(),
+            time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
         )
+
+
+def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
+    """Seconds from the upstream request being issued (``api_call_start_time``)
+    to the first streamed chunk (``completion_start_time``); ``None`` for
+    non-streaming calls, where ``completion_start_time`` is backfilled with the
+    end time and would not measure first-chunk latency."""
+    optional_params = cast(Mapping[str, Any], kwargs.get("optional_params") or {})
+    if not optional_params.get("stream"):
+        return None
+    api_call_start = to_seconds(kwargs.get("api_call_start_time"))
+    completion_start = to_seconds(kwargs.get("completion_start_time"))
+    if api_call_start is None or completion_start is None:
+        return None
+    return completion_start - api_call_start
 
 
 def _call_id(payload: "StandardLoggingPayload | None", kwargs: Mapping[str, Any]) -> str | None:

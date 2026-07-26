@@ -11,7 +11,7 @@ import {
 } from "@ant-design/icons";
 import { Button, Input, Modal, Select, Spin, Tabs } from "antd";
 import React, { useCallback, useEffect, useState } from "react";
-import CodeBlock from "@/app/(dashboard)/api-reference/components/CodeBlock";
+import CodeBlock from "@/components/CodeBlock";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import {
   keyCreateCall,

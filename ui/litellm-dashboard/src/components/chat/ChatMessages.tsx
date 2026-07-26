@@ -150,21 +150,23 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
     >
       <div className="flex items-end gap-1.5 max-w-[72%]">
         {hovered && !isStreaming && onEdit && (
-          <TooltipProvider delayDuration={300}>
+          <TooltipProvider delay={300}>
             <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => {
-                    setEditValue(message.content);
-                    setEditing(true);
-                  }}
-                  className="text-muted-foreground hover:text-foreground shrink-0"
-                >
-                  <Pencil className="size-3.5" />
-                </Button>
-              </TooltipTrigger>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => {
+                      setEditValue(message.content);
+                      setEditing(true);
+                    }}
+                    className="text-muted-foreground hover:text-foreground shrink-0"
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                }
+              />
               <TooltipContent>
                 <p>Edit message</p>
               </TooltipContent>
@@ -265,18 +267,20 @@ function CopyButton({ text }: { text: string }) {
 
   return (
     <div className="flex items-center gap-1 mt-1.5">
-      <TooltipProvider delayDuration={300}>
+      <TooltipProvider delay={300}>
         <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={handleCopy}
-              className={copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"}
-            >
-              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-            </Button>
-          </TooltipTrigger>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={handleCopy}
+                className={copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"}
+              >
+                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+              </Button>
+            }
+          />
           <TooltipContent>
             <p>{copied ? "Copied!" : "Copy"}</p>
           </TooltipContent>

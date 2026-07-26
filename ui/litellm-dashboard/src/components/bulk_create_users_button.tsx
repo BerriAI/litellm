@@ -361,7 +361,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             if (!uiSettings?.SSO_ENABLED) {
               // Regular invitation flow
               const invitationData = await invitationCreateCall(accessToken, user_id);
-              const invitationUrl = new URL(`/ui?invitation_id=${invitationData.id}`, baseUrl).toString();
+              const invitationUrl = new URL(`/ui/onboarding?invitation_id=${invitationData.id}`, baseUrl).toString();
 
               setParsedData((current) =>
                 current.map((u, i) =>

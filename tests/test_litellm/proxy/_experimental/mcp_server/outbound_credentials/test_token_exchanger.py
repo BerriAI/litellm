@@ -1,6 +1,6 @@
 """Tests for the pure RFC 8693 token exchanger: the OBO swap, caching, and single-flight.
 
-Drives `Rfc8693TokenExchanger` through an injected fake HTTP post and clock, so the exchange, the
+Drives `OboTokenExchanger` through an injected fake HTTP post and clock, so the exchange, the
 form it sends, the per-caller-token cache, and the failure mapping are pinned without a live IdP.
 """
 
@@ -15,7 +15,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     ServerSpec,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
-    Rfc8693TokenExchanger,
+    OboTokenExchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     TokenExchangeConfig,
@@ -31,6 +31,18 @@ _CONFIG = TokenExchangeConfig(
     scopes=("s1", "s2"),
 )
 _SERVER = ServerSpec(server_id="srv", resource="https://up.example.com", config=_CONFIG)
+
+_JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+# audience + a non-default subject_token_type are set deliberately: the entra_obo form must drop both.
+_ENTRA_CONFIG = TokenExchangeConfig(
+    profile="entra_obo",
+    token_exchange_endpoint="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+    audience="ignored-in-entra-obo",
+    subject_token_type="urn:ietf:params:oauth:token-type:jwt",
+    client_id="cid",
+    client_secret=SecretStr("csec"),
+    scopes=("api://target-api/.default",),
+)
 
 
 class _Clock:
@@ -60,7 +72,7 @@ def _spec(config: TokenExchangeConfig) -> ServerSpec:
 @pytest.mark.asyncio
 async def test_exchange_emits_token_and_sends_rfc8693_form():
     post = _RecordingPost({"access_token": "exchanged", "expires_in": 3600})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("caller-jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("caller-jwt", _SERVER, _CONFIG)
     assert isinstance(result, Ok)
     assert result.ok.access_token == "exchanged"
     url, form = post.calls[0]
@@ -89,7 +101,7 @@ async def test_client_secret_basic_sends_authorization_header_and_omits_body_cre
         token_endpoint_auth_method="client_secret_basic",
     )
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
     assert isinstance(result, Ok)
     _, form = post.calls[0]
     assert "client_id" not in form and "client_secret" not in form
@@ -105,7 +117,7 @@ async def test_client_secret_post_keeps_creds_in_body_with_no_auth_header():
         token_endpoint_auth_method="client_secret_post",
     )
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
     _, form = post.calls[0]
     assert form["client_id"] == "cid" and form["client_secret"] == "csec"
     assert "Authorization" not in post.headers[0]
@@ -122,7 +134,7 @@ async def test_exchange_maps_idp_rejection_to_unauthorized():
     async def _rejecting_post(url, form, headers):
         raise SubjectTokenRejected("IdP rejected the token exchange (HTTP 400)")
 
-    result = await Rfc8693TokenExchanger(_rejecting_post, clock=_Clock()).exchange("bad-jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(_rejecting_post, clock=_Clock()).exchange("bad-jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
 
@@ -139,7 +151,7 @@ async def test_exchange_maps_gateway_fault_to_misconfigured():
     async def _client_error_post(url, form, headers):
         raise TokenExchangeClientError("invalid_client")
 
-    result = await Rfc8693TokenExchanger(_client_error_post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(_client_error_post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"
 
@@ -147,7 +159,7 @@ async def test_exchange_maps_gateway_fault_to_misconfigured():
 @pytest.mark.asyncio
 async def test_exchange_maps_transport_failure_to_upstream_unavailable():
     """A post returning None (5xx / network / timeout / malformed body) stays retryable: 503."""
-    result = await Rfc8693TokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
 
@@ -155,7 +167,7 @@ async def test_exchange_maps_transport_failure_to_upstream_unavailable():
 @pytest.mark.asyncio
 async def test_exchange_caches_per_caller_token():
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     second = await exchanger.exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(second, Ok) and second.ok.access_token == "x"
@@ -165,7 +177,7 @@ async def test_exchange_caches_per_caller_token():
 @pytest.mark.asyncio
 async def test_rotated_caller_token_re_exchanges():
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     await exchanger.exchange("jwt-1", _SERVER, _CONFIG)
     await exchanger.exchange("jwt-2", _SERVER, _CONFIG)
     assert len(post.calls) == 2
@@ -176,7 +188,7 @@ async def test_same_token_different_tenant_does_not_share_cache():
     # Two tenants presenting the same opaque token (e.g. a shared/service token) must not collide on
     # one cache entry: tenant_id is part of the key, so each tenant gets its own exchange.
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
     await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
     assert len(post.calls) == 2
@@ -188,7 +200,7 @@ async def test_same_token_different_tenant_does_not_share_cache():
 @pytest.mark.asyncio
 async def test_invalidate_forces_re_exchange():
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
     await exchanger.invalidate("jwt", _SERVER, _CONFIG, tenant_id="acme")
     await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
@@ -198,7 +210,7 @@ async def test_invalidate_forces_re_exchange():
 @pytest.mark.asyncio
 async def test_invalidate_targets_only_the_matching_tenant():
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
     await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
     await exchanger.invalidate("jwt", _SERVER, _CONFIG, tenant_id="acme")
@@ -213,7 +225,7 @@ async def test_rotated_config_re_exchanges_before_ttl():
     # Same caller token + server, but the operator rotated the audience/scope: the cached token was
     # minted for the old config, so it must re-exchange (not serve the stale token) before TTL.
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     rotated = _CONFIG.model_copy(update={"audience": "https://new.example.com", "scopes": ("s3",)})
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     await exchanger.exchange("jwt", _SERVER, rotated)
@@ -226,7 +238,7 @@ async def test_rotated_config_re_exchanges_before_ttl():
 @pytest.mark.asyncio
 async def test_rotated_token_endpoint_auth_method_re_exchanges_before_ttl():
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     rotated = _CONFIG.model_copy(update={"token_endpoint_auth_method": "client_secret_basic"})
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     await exchanger.exchange("jwt", _SERVER, rotated)
@@ -251,7 +263,7 @@ async def test_concurrent_callers_single_flight_one_exchange():
             return {"access_token": "x", "expires_in": 3600}
 
     post = _Blocking()
-    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    exchanger = OboTokenExchanger(post, clock=_Clock())
     first = asyncio.create_task(exchanger.exchange("jwt", _SERVER, _CONFIG))
     second = asyncio.create_task(exchanger.exchange("jwt", _SERVER, _CONFIG))
     await asyncio.sleep(0.02)
@@ -263,7 +275,7 @@ async def test_concurrent_callers_single_flight_one_exchange():
 
 @pytest.mark.asyncio
 async def test_idp_failure_is_upstream_unavailable():
-    result = await Rfc8693TokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
 
@@ -271,7 +283,7 @@ async def test_idp_failure_is_upstream_unavailable():
 @pytest.mark.asyncio
 async def test_missing_access_token_is_upstream_unavailable():
     post = _RecordingPost({"token_type": "Bearer"})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
 
@@ -282,7 +294,7 @@ async def test_non_bearer_token_type_is_refused(token_type):
     # RFC 8693 2.2.1: the resolver forwards the exchanged token as `Bearer`. A non-Bearer token_type
     # (e.g. N_A = not a standalone access token) must fail closed, not be minted as a bogus Bearer.
     post = _RecordingPost({"access_token": "x", "token_type": token_type, "expires_in": 3600})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
 
@@ -295,7 +307,7 @@ async def test_non_bearer_token_type_is_logged():
     with patch(
         "litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger.verbose_logger"
     ) as mock_logger:
-        await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+        await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert mock_logger.warning.called
     assert "N_A" in repr(mock_logger.warning.call_args)
 
@@ -304,7 +316,7 @@ async def test_non_bearer_token_type_is_logged():
 @pytest.mark.parametrize("token_type", ["Bearer", "bearer", "BEARER"])
 async def test_bearer_token_type_is_accepted_case_insensitively(token_type):
     post = _RecordingPost({"access_token": "x", "token_type": token_type, "expires_in": 3600})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Ok) and result.ok.access_token == "x"
 
 
@@ -312,7 +324,7 @@ async def test_bearer_token_type_is_accepted_case_insensitively(token_type):
 async def test_absent_token_type_defaults_to_bearer():
     # Many IdPs omit token_type; absence must not fail the exchange (RFC 6750 default is Bearer).
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Ok) and result.ok.access_token == "x"
 
 
@@ -331,7 +343,7 @@ async def test_non_access_issued_token_type_is_refused_even_when_bearer(issued_t
     post = _RecordingPost(
         {"access_token": "x", "token_type": "Bearer", "issued_token_type": issued_token_type, "expires_in": 3600}
     )
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
 
@@ -347,7 +359,7 @@ async def test_access_or_unknown_issued_token_type_is_accepted(issued_token_type
     body: dict[str, object] = {"access_token": "x", "token_type": "Bearer", "expires_in": 3600}
     if issued_token_type is not None:
         body["issued_token_type"] = issued_token_type
-    result = await Rfc8693TokenExchanger(_RecordingPost(body), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    result = await OboTokenExchanger(_RecordingPost(body), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Ok) and result.ok.access_token == "x"
 
 
@@ -361,7 +373,7 @@ async def test_access_or_unknown_issued_token_type_is_accepted(issued_token_type
 )
 async def test_incomplete_config_is_misconfigured_without_hitting_idp(config):
     post = _RecordingPost({"access_token": "x"})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"
     assert post.calls == []
@@ -373,7 +385,7 @@ async def test_missing_endpoint_is_precondition_required_without_hitting_idp():
     # rather than guessing an IdP or falling back. The subject token is never POSTed anywhere.
     config = TokenExchangeConfig(client_id="c", client_secret=SecretStr("s"))
     post = _RecordingPost({"access_token": "x"})
-    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
     assert post.calls == []
@@ -384,7 +396,7 @@ async def test_cached_token_expires_after_its_ttl():
     clock = _Clock(1000.0)
     # expires_in=120, buffer=60 -> ttl 60 -> cached until t=1060.
     post = _RecordingPost({"access_token": "x", "expires_in": 120})
-    exchanger = Rfc8693TokenExchanger(post, clock=clock)
+    exchanger = OboTokenExchanger(post, clock=clock)
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     clock.now = 1059.0
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
@@ -402,7 +414,7 @@ async def test_audience_and_scope_omitted_when_unset():
         client_secret=SecretStr("csec"),
     )
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
     _, form = post.calls[0]
     assert "audience" not in form
     assert "scope" not in form
@@ -414,7 +426,7 @@ async def test_numeric_expires_in_is_honored(expires_in):
     # A JSON int/float/numeric-string expires_in must drive the TTL, not fall back to the default.
     clock = _Clock(1000.0)
     post = _RecordingPost({"access_token": "x", "expires_in": expires_in})
-    exchanger = Rfc8693TokenExchanger(post, clock=clock)  # ttl = max(120-60, 10) = 60 -> until 1060
+    exchanger = OboTokenExchanger(post, clock=clock)  # ttl = max(120-60, 10) = 60 -> until 1060
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     clock.now = 1061.0
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
@@ -426,7 +438,7 @@ async def test_short_lived_token_is_not_cached_past_its_expiry():
     # expires_in (5s) below the buffer/min floor must NOT be served stale: cache only until expiry.
     clock = _Clock(1000.0)
     post = _RecordingPost({"access_token": "x", "expires_in": 5})
-    exchanger = Rfc8693TokenExchanger(post, clock=clock)
+    exchanger = OboTokenExchanger(post, clock=clock)
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     clock.now = 1004.0  # within the 5s lifetime -> still cached
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
@@ -449,11 +461,70 @@ async def test_short_lived_token_is_not_cached_past_its_expiry():
 async def test_unusable_expires_in_falls_back_to_default_ttl(body):
     clock = _Clock(1000.0)
     post = _RecordingPost(body)
-    exchanger = Rfc8693TokenExchanger(post, clock=clock, default_ttl_seconds=300.0)
+    exchanger = OboTokenExchanger(post, clock=clock, default_ttl_seconds=300.0)
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     clock.now = 1299.0
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     assert len(post.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_entra_obo_emits_rfc7523_jwt_bearer_form():
+    # Microsoft Entra OBO is the RFC 7523 jwt-bearer grant, not RFC 8693: the inbound token is the
+    # `assertion`, the target rides in `scope`, and `requested_token_use=on_behalf_of` is required.
+    # subject_token / subject_token_type / audience must NOT appear even though the config carries them.
+    post = _RecordingPost({"access_token": "minted", "expires_in": 3600})
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange(
+        "caller-entra-jwt", _spec(_ENTRA_CONFIG), _ENTRA_CONFIG
+    )
+    assert isinstance(result, Ok)
+    assert result.ok.access_token == "minted"
+    url, form = post.calls[0]
+    assert url == "https://login.microsoftonline.com/tid/oauth2/v2.0/token"
+    assert form == {
+        "grant_type": _JWT_BEARER_GRANT,
+        "assertion": "caller-entra-jwt",
+        "client_id": "cid",
+        "client_secret": "csec",
+        "scope": "api://target-api/.default",
+        "requested_token_use": "on_behalf_of",
+    }
+
+
+@pytest.mark.asyncio
+async def test_entra_obo_without_scope_is_misconfigured_without_hitting_idp():
+    # Entra carries the target resource in `scope`; with none, fail closed as misconfigured and never
+    # POST to the IdP (no fall-through to a weaker source).
+    config = TokenExchangeConfig(
+        profile="entra_obo",
+        token_exchange_endpoint="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+        client_id="cid",
+        client_secret=SecretStr("csec"),
+    )
+    post = _RecordingPost({"access_token": "x"})
+    result = await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+    assert post.calls == []
+
+
+@pytest.mark.asyncio
+async def test_profile_is_part_of_the_cache_key():
+    # Same caller token, tenant, endpoint, creds, and scopes; only the profile differs. The two dialects
+    # mint different upstream tokens, so they must not collide on one cache entry.
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = OboTokenExchanger(post, clock=_Clock())
+    shared = dict(
+        token_exchange_endpoint="https://idp/token",
+        client_id="cid",
+        client_secret=SecretStr("csec"),
+        scopes=("api://target/.default",),
+    )
+    rfc8693 = TokenExchangeConfig(profile="rfc8693", **shared)
+    entra = TokenExchangeConfig(profile="entra_obo", **shared)
+    await exchanger.exchange("jwt", _spec(rfc8693), rfc8693)
+    await exchanger.exchange("jwt", _spec(entra), entra)
+    assert len(post.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -470,7 +541,24 @@ async def test_distributed_coordinator_refresh_and_reread_use_the_cache():
             return via_reread
 
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
-    exchanger = Rfc8693TokenExchanger(post, coordinator=_ReplayCoordinator(), clock=_Clock())
+    exchanger = OboTokenExchanger(post, coordinator=_ReplayCoordinator(), clock=_Clock())
     result = await exchanger.exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Ok) and result.ok.access_token == "x"
     assert len(post.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_step_up_rejection_threads_claims_into_unauthorized():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+        SubjectTokenRejected,
+    )
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+
+    async def _step_up_post(url, form, headers):
+        raise SubjectTokenRejected("IdP rejected the subject token (HTTP 400)", claims=claims)
+
+    result = await OboTokenExchanger(_step_up_post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+    assert result.error.unauthorized.claims == claims

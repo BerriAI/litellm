@@ -771,7 +771,7 @@ async def get_file_content(
                     version=version,
                 )
 
-            if should_route:
+            if should_route and credentials is not None:
                 # Use model-based routing with credentials from config
                 prepare_data_with_credentials(
                     data=data,
@@ -1129,7 +1129,7 @@ async def delete_file(
             check_file_id_encoding=True,
         )
 
-        if should_route:
+        if should_route and credentials is not None:
             # Use model-based routing with credentials from config
             prepare_data_with_credentials(
                 data=data,
@@ -1308,7 +1308,7 @@ async def list_files(
             check_file_id_encoding=False,
         )
 
-        if should_route:
+        if should_route and credentials is not None:
             # Use model-based routing with credentials from config
             data.update(credentials)  # type: ignore
             response = await litellm.afile_list(

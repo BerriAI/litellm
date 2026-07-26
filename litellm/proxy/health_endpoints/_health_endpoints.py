@@ -6,7 +6,7 @@ import secrets
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
+from typing import Any, Dict, Iterable, Literal, Optional, TypedDict, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -1271,7 +1271,12 @@ async def health_license_endpoint(
     }
 
 
-db_health_cache = {"status": "unknown", "last_updated": datetime.now()}
+class DBHealthCache(TypedDict):
+    status: str
+    last_updated: datetime
+
+
+db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.now()}
 
 
 async def _db_health_readiness_check():

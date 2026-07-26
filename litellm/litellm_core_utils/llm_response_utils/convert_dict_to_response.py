@@ -656,7 +656,7 @@ def convert_to_model_response_object(
 
                 message: Optional[Message] = None
                 finish_reason: Optional[str] = None
-                if _should_convert_tool_call_to_json_mode(
+                if tool_calls is not None and _should_convert_tool_call_to_json_mode(
                     tool_calls=tool_calls,
                     convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
                 ):

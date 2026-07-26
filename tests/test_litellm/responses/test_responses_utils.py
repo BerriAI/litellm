@@ -69,6 +69,44 @@ class TestResponsesAPIRequestUtils:
         assert "unsupported_param" in str(excinfo.value)
         assert model in str(excinfo.value)
 
+    def test_get_optional_params_responses_api_request_level_drop_params(self, monkeypatch):
+        """Request-level drop_params must reach both _check_valid_arg and map_openai_params"""
+        monkeypatch.setattr(litellm, "drop_params", False)
+        config = MagicMock(spec=OpenAIResponsesAPIConfig)
+        config.get_supported_openai_params.return_value = ["temperature"]
+        config.custom_llm_provider = "openai"
+        config.map_openai_params.return_value = {"temperature": 0.7}
+
+        result = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=config,
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "service_tier": "priority"}
+            ),
+            drop_params=True,
+        )
+
+        assert config.map_openai_params.call_args.kwargs["drop_params"] is True
+        assert result == {"temperature": 0.7}
+
+    @pytest.mark.parametrize("request_drop_params", [None, False])
+    def test_get_optional_params_responses_api_still_raises_without_drop(
+        self, monkeypatch, request_drop_params
+    ):
+        """Absent or False request-level drop_params must not suppress the unsupported-param error"""
+        monkeypatch.setattr(litellm, "drop_params", False)
+        config = OpenAIResponsesAPIConfig()
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            ResponsesAPIRequestUtils.get_optional_params_responses_api(
+                model="gpt-4o",
+                responses_api_provider_config=config,
+                response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                    {"temperature": 0.7, "unsupported_param": "value"}
+                ),
+                drop_params=request_drop_params,
+            )
+
     def test_get_requested_response_api_optional_param(self):
         """Test filtering parameters to only include those in ResponsesAPIOptionalRequestParams"""
         # Setup
@@ -141,6 +179,26 @@ class TestResponsesAPIRequestUtils:
         assert decoded.get("response_id") == "resp_abc123"
         assert decoded.get("model_id") == "gpt-4o"
         assert decoded.get("custom_llm_provider") == "openai"
+
+
+    def test_update_responses_api_response_id_with_model_id_is_idempotent_for_litellm_ids(self):
+        raw = "resp_" + "a" * 48
+        litellm_metadata = {"model_info": {"id": "model-123"}}
+
+        once = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            {"id": raw},
+            custom_llm_provider="openai",
+            litellm_metadata=litellm_metadata,
+        )
+        twice = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            {"id": once["id"]},
+            custom_llm_provider="openai",
+            litellm_metadata=litellm_metadata,
+        )
+
+        assert twice == once
+        assert ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(twice["id"]) == raw
+        assert ResponsesAPIRequestUtils._decode_responses_api_response_id(once["id"]).get("response_id") == raw
 
     def test_build_decode_container_id_omits_none_model_id(self):
         """model_id=None must not round-trip as the truthy string 'None'."""
@@ -310,6 +368,32 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.image_tokens == 272
         assert result.completion_tokens_details.text_tokens == 100
+
+    def test_transform_response_api_usage_maps_cache_write_tokens(self):
+        """Responses API (/v1/responses) cache-write tokens must survive the usage transform.
+
+        gpt-5.6 returns usage.input_tokens_details.cache_write_tokens (an extra field
+        not typed on InputTokensDetails). Before the fix the transform rebuilt the token
+        details and dropped it, leaving the cache-creation metric empty (LIT-4633).
+        """
+        usage = {
+            "input_tokens": 10062,
+            "output_tokens": 16,
+            "total_tokens": 10078,
+            "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 10059,
+            },
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cache_write_tokens == 10059
+        assert result.prompt_tokens_details.cache_creation_tokens == 10059
+        assert result.prompt_tokens_details.cached_tokens == 0
 
     def test_transform_response_api_usage_mixed_details(self):
         """Test transformation handles mixed token details (cached + image + audio)."""

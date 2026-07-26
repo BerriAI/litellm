@@ -23,7 +23,7 @@ LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehens
         str]`) are exempt. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
-LIT004  type/pyright/mypy ignore without bracketed codes or without a reason.
+LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok`
         suppression without a reason.
@@ -38,6 +38,10 @@ LIT008  `**kwargs` parameter. The keyword contract is erased and everything it c
         is effectively Any. ruff can force it to be typed (ANN003) but can't ban the
         syntax. Declare explicit keyword params, or accept one frozen payload. `*args`,
         by contrast, is fine when typed (it's just a tuple). Suppress: `# kwargs-ok: <reason>`.
+LIT009  `# type: ignore` in any shape (bare, with codes, with a reason).
+        pyrightconfig.json sets enableTypeIgnoreComments to false, so basedpyright
+        never honors it: the comment is inert dead syntax that suppresses nothing.
+        Use `# pyright: ignore[ruleName]  # <reason>` instead.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -95,8 +99,9 @@ NOQA_RE = re.compile(
     r"(?P<rest>.*)",
     re.IGNORECASE,
 )
+TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore\b")
 IGNORE_RE = re.compile(
-    r"#\s*(?:type|pyright|mypy):\s*ignore(?P<codes>\[[^\]]*\])?(?P<rest>.*)"
+    r"#\s*(?:pyright|mypy):\s*ignore(?P<codes>\[[^\]]*\])?(?P<rest>.*)"
 )
 MUTABLE_OK_RE = re.compile(r"#\s*mutable-ok(?::\s*(?P<reason>.*))?")
 CAST_OK_RE = re.compile(r"#\s*cast-ok(?::\s*(?P<reason>.*))?")
@@ -161,6 +166,11 @@ def _comment_violations(path: Path, line_no: int, text: str) -> Iterator[Violati
         elif len(_reason_of(m.group("rest"))) < MIN_REASON_LEN:
             yield Violation(path, line_no, "LIT003", "noqa requires a reason: `# noqa: XXX123  # <reason>`")
  
+    if TYPE_IGNORE_RE.search(text):
+        yield Violation(path, line_no, "LIT009",
+                        "`# type: ignore` is inert (enableTypeIgnoreComments is false, so "
+                        "basedpyright never honors it); use `# pyright: ignore[ruleName]  # <reason>`")
+
     m = IGNORE_RE.search(text)
     if m:
         codes = m.group("codes")

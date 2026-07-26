@@ -3085,3 +3085,84 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+def _collect_cache_points(blocks):
+    return [
+        block["cachePoint"]
+        for message in blocks
+        for block in message["content"]
+        if "cachePoint" in block
+    ]
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "conversation history",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+        ],
+        [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "assistant reply",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+            },
+        ],
+    ],
+)
+def test_bedrock_converse_message_level_cache_point_preserves_ttl(messages):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/32154: message-level
+    cache_control ttl was silently dropped because the message-level
+    _get_cache_point_block call sites never passed model=, so multi-turn prefixes
+    fell back to the 5m default while the system prompt kept 1h, churning the
+    cache every turn on models like Opus 4.8.
+    """
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="eu.anthropic.claude-opus-4-8",
+        llm_provider="bedrock",
+    )
+
+    cache_points = _collect_cache_points(result)
+    assert cache_points == [{"type": "default", "ttl": "1h"}]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_message_level_cache_point_preserves_ttl_async():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "conversation history",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+            ],
+        },
+    ]
+
+    result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="eu.anthropic.claude-opus-4-8",
+        llm_provider="bedrock",
+    )
+
+    assert _collect_cache_points(result) == [{"type": "default", "ttl": "1h"}]

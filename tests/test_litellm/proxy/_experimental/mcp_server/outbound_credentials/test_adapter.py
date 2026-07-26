@@ -21,8 +21,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
+    ClientCredentialsConfig,
+    ClientSecretAuth,
     CredError,
+    IdJagConfig,
     NoneConfig,
+    PassthroughConfig,
+    PrivateKeyJwtAuth,
     SharedKey,
     TokenExchangeConfig,
 )
@@ -32,6 +37,21 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 def _server(**kwargs) -> MCPServer:
     return MCPServer(server_id="s", name="n", transport=MCPTransport.http, **kwargs)
+
+
+def _id_jag_server(**overrides) -> MCPServer:
+    defaults = dict(
+        auth_type=MCPAuth.oauth2_id_jag,
+        url="https://mcp.example.com/mcp",
+        client_id="litellm-client-id",
+        client_secret="litellm-client-secret",
+        token_exchange_endpoint="https://idp.example.com/token",
+        id_jag_resource_token_endpoint="https://mcp-as.example.com/token",
+        audience="api://mcp-server",
+        scopes=["mcp.read", "mcp.write"],
+    )
+    defaults.update(overrides)
+    return _server(**defaults)
 
 
 def test_none_maps_to_none_config():
@@ -88,7 +108,6 @@ def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
     [
         _server(auth_type=MCPAuth.api_key),  # no token configured
         _server(auth_type=MCPAuth.bearer_token),  # no token configured
-        _server(auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials"),  # M2M -> v1
         _server(auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True),  # delegated upstream OAuth -> v1
         _server(auth_type=MCPAuth.oauth2_token_exchange),  # no endpoint/client creds -> incomplete -> v1
         _server(
@@ -103,6 +122,94 @@ def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
 def test_unmigrated_modes_defer_to_v1(server):
     # A None spec is the defer signal; the caller falls back to v1.
     assert to_server_spec(server) is None
+
+
+def test_client_credentials_maps_full_config():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            scopes=["read", "write"],
+            audience="https://up.example.com",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+    )
+    assert spec is not None
+    config = spec.config
+    assert isinstance(config, ClientCredentialsConfig)
+    assert config.client_id == "cid"
+    assert config.client_secret is not None
+    assert config.client_secret.get_secret_value() == "csec"
+    assert config.token_url == "https://idp.example.com/token"
+    assert config.scopes == ("read", "write")
+    assert config.audience == "https://up.example.com"
+    assert config.token_endpoint_auth_method == "client_secret_basic"
+
+
+def test_client_credentials_omits_audience_when_unset():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.audience is None
+    assert spec.config.upstream_resource is None
+
+
+def test_client_credentials_resolves_upstream_resource_onto_the_config():
+    """The adapter is the one MCPServer -> config chokepoint, so it resolves the RFC 8707 send value
+    (auto here derives the canonical server URI) and every M2M token request inherits it."""
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            upstream_resource="auto",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.upstream_resource == "https://up.example.com/mcp"
+
+
+def test_client_credentials_with_incomplete_grant_fields_is_owned_for_fail_closed():
+    # An M2M server missing its grant fields is still owned by v2 (spec, not None) so it fails
+    # closed at the source (misconfigured, 500) rather than deferring to v1, which would connect
+    # unauthenticated and mask the upstream 401 as an empty tool list.
+    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials", client_id="cid"))
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.token_url is None
+    assert spec.config.client_secret is None
+
+
+def test_client_credentials_wins_over_delegate_flag():
+    # v1 never delegates for M2M servers; the explicit oauth2_flow opt-in outranks the delegate flag.
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            delegate_auth_to_upstream=True,
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
 
 
 def test_token_exchange_maps_full_config():
@@ -160,6 +267,50 @@ def test_token_exchange_with_creds_but_no_endpoint_is_owned_for_fail_closed():
     assert spec.config.token_exchange_endpoint is None
 
 
+def test_token_exchange_maps_entra_obo_profile():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_profile="entra_obo",
+            scopes=["api://target/.default"],
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "entra_obo"
+
+
+def test_token_exchange_defaults_to_rfc8693_profile():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "rfc8693"
+
+
+@pytest.mark.parametrize("bogus", ["", "RFC8693", "jwt_bearer", "entra", "unknown"])
+def test_token_exchange_unknown_profile_normalizes_to_rfc8693(bogus):
+    # A bad DB/config value must normalize to rfc8693, not raise a ValidationError building the spec.
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp/token",
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_profile=bogus,
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "rfc8693"
+
+
 def test_token_exchange_omits_audience_when_unset():
     spec = to_server_spec(
         _server(
@@ -188,6 +339,12 @@ def test_token_exchange_empty_subject_token_type_normalizes_to_default():
     assert spec is not None
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+def test_client_forwarded_modes_map_to_passthrough_config(auth_type):
+    spec = to_server_spec(_server(auth_type=auth_type))
+    assert spec is not None and isinstance(spec.config, PassthroughConfig)
 
 
 @pytest.mark.parametrize(
@@ -330,3 +487,95 @@ def test_raise_token_exchange_challenge_includes_server_root_path():
         raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/api/v1")
     www = exc_info.value.headers["WWW-Authenticate"]
     assert 'resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/obo-srv"' in www
+
+
+def test_raise_token_exchange_challenge_static_form_is_unchanged_without_step_up():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="")
+    assert exc_info.value.headers["WWW-Authenticate"] == (
+        'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv", '
+        'error="invalid_token", '
+        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    )
+
+
+def test_raise_token_exchange_challenge_uses_insufficient_claims_with_claims_present():
+    # Per the Microsoft claims-challenge format, a claims challenge MUST use error=insufficient_claims
+    # (the value MSAL-family clients key on), and the claims ride base64-encoded, never raw.
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="", claims=claims)
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
+    assert 'error="insufficient_claims"' in www
+    assert 'error="invalid_token"' not in www
+    assert f'claims="{base64.b64encode(claims.encode()).decode()}"' in www
+    assert claims not in www  # raw JSON never appears; only the base64 form
+
+
+def test_id_jag_client_secret_maps_to_config():
+    spec = to_server_spec(_id_jag_server())
+    assert spec is not None and isinstance(spec.config, IdJagConfig)
+    assert spec.config.org_token_endpoint == "https://idp.example.com/token"
+    assert spec.config.resource_token_endpoint == "https://mcp-as.example.com/token"
+    assert spec.config.client_id == "litellm-client-id"
+    assert spec.config.audience == "api://mcp-server"
+    assert spec.config.scopes == ("mcp.read", "mcp.write")
+    # ID-JAG asserts the user's id_token; the access_token default maps to id_token.
+    assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:id_token"
+    assert isinstance(spec.config.client_auth, ClientSecretAuth)
+    assert spec.config.client_auth.client_secret.get_secret_value() == (
+        "litellm-client-secret"
+    )
+
+
+def test_id_jag_private_key_maps_to_private_key_jwt_auth():
+    spec = to_server_spec(
+        _id_jag_server(
+            client_secret=None,
+            client_private_key="PEM-DATA",
+            client_private_key_id="kid-1",
+            client_assertion_signing_alg="RS384",
+        )
+    )
+    assert spec is not None and isinstance(spec.config, IdJagConfig)
+    assert isinstance(spec.config.client_auth, PrivateKeyJwtAuth)
+    assert spec.config.client_auth.private_key.get_secret_value() == "PEM-DATA"
+    assert spec.config.client_auth.key_id == "kid-1"
+    assert spec.config.client_auth.signing_alg == "RS384"
+
+
+def test_id_jag_private_key_wins_over_client_secret():
+    spec = to_server_spec(_id_jag_server(client_private_key="PEM-DATA"))
+    assert spec is not None and isinstance(spec.config, IdJagConfig)
+    assert isinstance(spec.config.client_auth, PrivateKeyJwtAuth)
+
+
+def test_id_jag_honors_explicit_subject_token_type():
+    spec = to_server_spec(
+        _id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2")
+    )
+    assert spec is not None and isinstance(spec.config, IdJagConfig)
+    assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:saml2"
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        _id_jag_server(token_exchange_endpoint=None),
+        _id_jag_server(id_jag_resource_token_endpoint=None),
+        _id_jag_server(client_id=None),
+        _id_jag_server(client_secret=None, client_private_key=None),
+    ],
+)
+def test_id_jag_half_configured_defers_to_v1(server):
+    # A half-configured server must defer (None) rather than 500 at IdJagConfig construction.
+    assert to_server_spec(server) is None

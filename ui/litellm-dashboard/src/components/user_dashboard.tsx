@@ -2,9 +2,7 @@
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
-import Onboarding from "../app/onboarding/page";
 import { fetchTeams } from "./common_components/fetch_teams";
 import { KeyResponse, Team } from "./key_team_helpers/key_list";
 import {
@@ -76,12 +74,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
 
-  // Assuming useSearchParams() hook exists and works in your setup
-  const searchParams = useSearchParams()!;
-
   const token = getCookie("token");
-
-  const invitation_id = searchParams.get("invitation_id");
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [teamSpend, setTeamSpend] = useState<number | null>(null);
@@ -232,10 +225,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     }
   }, [selectedTeam]);
 
-  if (invitation_id != null) {
-    return <Onboarding></Onboarding>;
-  }
-
   function gotoLogin() {
     // Clear token cookies using the utility function
     clearTokenCookies();
@@ -296,21 +285,24 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
   return (
-    <div className="w-full mx-4 h-[75vh]">
+    <div className="mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {canCreateKey && (
-            <CreateKey
-              key={selectedTeam ? selectedTeam.team_id : null}
-              team={selectedTeam as Team | null}
-              teams={teams as Team[]}
-              data={keys}
-              addKey={addKey}
-              autoOpenCreate={autoOpenCreate}
-              prefillData={prefillData}
-            />
-          )}
-          <VirtualKeysTable />
+          <VirtualKeysTable
+            headerActions={
+              canCreateKey ? (
+                <CreateKey
+                  key={selectedTeam ? selectedTeam.team_id : null}
+                  team={selectedTeam as Team | null}
+                  teams={teams as Team[]}
+                  data={keys}
+                  addKey={addKey}
+                  autoOpenCreate={autoOpenCreate}
+                  prefillData={prefillData}
+                />
+              ) : undefined
+            }
+          />
         </Col>
       </Grid>
     </div>

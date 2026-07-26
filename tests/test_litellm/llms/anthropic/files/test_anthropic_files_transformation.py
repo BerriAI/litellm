@@ -309,6 +309,31 @@ class TestAnthropicFilesConfig:
         assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/files/file-abc123/content"
         assert params == {}
 
+    def test_transform_file_content_request_routes_message_batch_id_to_batch_results(self):
+        """
+        Regression test for anthropic passthrough batch cost tracking (LIT-4008).
+
+        Anthropic batch results are exposed via output_file_id=<msgbatch_...>.
+        The Files API rejects those ids ("File id must have `file_` prefix"),
+        so file content for a msgbatch_ id must be fetched from the message
+        batches results endpoint instead.
+        """
+        url, params = self.config.transform_file_content_request(
+            file_content_request={"file_id": "msgbatch_01WA5hdsa2Xx8w4zyPjV1frs"},
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/messages/batches/msgbatch_01WA5hdsa2Xx8w4zyPjV1frs/results"
+        assert params == {}
+
+    def test_transform_file_content_request_message_batch_id_custom_api_base(self):
+        url, _ = self.config.transform_file_content_request(
+            file_content_request={"file_id": "msgbatch_abc"},
+            optional_params={},
+            litellm_params={"api_base": "https://custom.example.com/"},
+        )
+        assert url == "https://custom.example.com/v1/messages/batches/msgbatch_abc/results"
+
     def test_transform_file_content_request_rejects_dot_segment(self):
         with pytest.raises(ValueError, match="file_id cannot be a dot path segment"):
             self.config.transform_file_content_request(

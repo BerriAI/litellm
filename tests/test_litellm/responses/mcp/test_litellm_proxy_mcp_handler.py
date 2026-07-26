@@ -1,4 +1,6 @@
+import subprocess
 import sys
+import textwrap
 import types
 from unittest.mock import AsyncMock, MagicMock
 
@@ -6,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 import importlib
 
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -28,6 +31,7 @@ def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         call_tool=AsyncMock(return_value=_DummyMCPResult()),
         # Newer logging path calls this to enrich spend logs metadata
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -280,6 +284,87 @@ async def test_execute_tool_calls_keeps_tool_name_when_equal_to_server(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_name(
+    monkeypatch,
+):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    fake_server = types.SimpleNamespace(
+        alias="my_deepwiki",
+        server_name="deepwiki_test",
+        server_id="test-server-id",
+        short_prefix=None,
+        mcp_info=None,
+        tool_name_to_display_name=None,
+    )
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
+
+    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(
+        return_value=fake_server
+    )
+
+    tool_name = "my_deepwiki-read_wiki_structure"
+    tool_calls = [
+        {
+            "id": "call-4",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki_test"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["name"] == "read_wiki_structure"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    colliding_server = types.SimpleNamespace(
+        alias=None,
+        server_name="other_mcp",
+        server_id="other-server-id",
+        short_prefix=None,
+        mcp_info=None,
+        tool_name_to_display_name={"search": "search_docs"},
+    )
+    fake_server = types.SimpleNamespace(
+        alias=None,
+        server_name="deepwiki_mcp",
+        server_id="test-server-id",
+        short_prefix=None,
+        mcp_info=None,
+        tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
+    )
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
+
+    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(return_value=colliding_server)
+    _msm.global_mcp_server_manager.get_mcp_server_by_name = MagicMock(return_value=fake_server)
+
+    tool_name = "browse_repo_docs"
+    tool_calls = [
+        {
+            "id": "call-5",
+            "function": {"name": tool_name, "arguments": "{}"},
+        }
+    ]
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki_mcp"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_args is not None
+    assert call_tool_mock.await_args.kwargs["name"] == "read_wiki_structure"
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkeypatch):
     """
     Regression test for ae4d92ad...:
@@ -371,7 +456,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     Regression test for 872e5b98...:
     Ensure responses-side tool discovery enables list-tools SpendLogs logging flags.
     """
-    mock_get_tools = AsyncMock(return_value=[])
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
@@ -425,7 +510,7 @@ def test_get_parent_request_tags_from_nested_litellm_params():
 
 @pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
-    mock_get_tools = AsyncMock(return_value=[])
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
@@ -475,3 +560,91 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
     )
 
     assert captured["metadata"]["tags"] == ["team-a", "prod"]
+
+
+def test_completion_with_function_tools_works_without_fastapi_installed():
+    script = textwrap.dedent(
+        """
+        import sys
+
+        class _FastapiBlocker:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "fastapi" or fullname.startswith("fastapi."):
+                    raise ModuleNotFoundError("No module named 'fastapi'")
+                return None
+
+        sys.meta_path.insert(0, _FastapiBlocker())
+
+        import litellm
+
+        response = litellm.completion(
+            model="openai/gpt-5.5",
+            messages=[{"role": "user", "content": "What is the weather in SF?"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            mock_response="sunny",
+        )
+        assert response.choices[0].message.content == "sunny"
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_extract_tool_call_details_reads_anthropic_tool_use_input():
+    """
+    Regression test (LIT-4517): an Anthropic tool_use block carries its arguments
+    under `input`, not `arguments`.
+
+    Given: A tool_use content block as /v1/messages returns it
+    When:  The shared extractor reads it
+    Then:  The arguments come back, so the MCP tool is called with them
+
+    Reading only `arguments` fails silently rather than loudly: _parse_tool_arguments
+    turns the resulting None into {}, so the tool still executes, just with every
+    argument dropped.
+    """
+    tool_use_block = {
+        "type": "tool_use",
+        "id": "toolu_01ABC",
+        "name": "read_wiki_structure",
+        "input": {"repoName": "BerriAI/litellm"},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_use_block)
+
+    assert name == "read_wiki_structure"
+    assert call_id == "toolu_01ABC"
+    assert arguments == {"repoName": "BerriAI/litellm"}
+    assert LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(arguments) == {"repoName": "BerriAI/litellm"}
+
+
+def test_extract_tool_call_details_still_prefers_openai_arguments():
+    """The OpenAI chat shape must keep winning; `input` is only the fallback."""
+    openai_tool_call = {
+        "id": "call_123",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
+
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(openai_tool_call)
+
+    assert name == "get_weather"
+    assert call_id == "call_123"
+    assert arguments == '{"city": "Paris"}'

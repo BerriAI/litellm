@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -31,6 +32,14 @@ DEFAULT_QUALIFIRE_API_BASE = "https://proxy.qualifire.ai"
 
 
 class QualifireGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -86,6 +95,7 @@ class QualifireGuardrail(CustomGuardrail):
         # Initialize async HTTP client for direct API calls
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
     def _has_any_check_enabled(self) -> bool:

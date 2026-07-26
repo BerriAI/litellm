@@ -1330,6 +1330,8 @@ def test_router_fallbacks_with_custom_model_costs():
     Goal: make sure custom model doesn't override default model costs.
     """
 
+    default_model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
+
     model_list = [
         {
             "model_name": "claude-sonnet-4-5-20250929",
@@ -1383,8 +1385,8 @@ def test_router_fallbacks_with_custom_model_costs():
 
     print(f"key: {model_info['key']}")
 
-    assert model_info["input_cost_per_token"] == 30
-    assert model_info["output_cost_per_token"] == 60
+    assert model_info["input_cost_per_token"] == default_model_info["input_cost_per_token"]
+    assert model_info["output_cost_per_token"] == default_model_info["output_cost_per_token"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

@@ -13,6 +13,17 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 
 
+def is_azure_document_intelligence_model(model: str) -> bool:
+    """Whether an azure_ai OCR model routes to Azure Document Intelligence.
+
+    Azure AI exposes two OCR services on the same provider; the sub-route in the
+    model name (`azure_ai/doc-intelligence/<model>`) selects Document Intelligence
+    over Mistral OCR. This is the single source of truth for that routing decision.
+    """
+    lowered = model.lower()
+    return "doc-intelligence" in lowered or "documentintelligence" in lowered
+
+
 def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
     """
     Determine which Azure AI OCR configuration to use based on the model name.
@@ -41,7 +52,7 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
     from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
 
     # Check for Azure Document Intelligence models
-    if "doc-intelligence" in model or "documentintelligence" in model:
+    if is_azure_document_intelligence_model(model):
         verbose_logger.debug(f"Routing {model} to Azure Document Intelligence OCR config")
         return AzureDocumentIntelligenceOCRConfig()
 

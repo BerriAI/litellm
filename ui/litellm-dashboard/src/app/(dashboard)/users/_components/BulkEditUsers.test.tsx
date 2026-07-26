@@ -91,7 +91,7 @@ describe("BulkEditUserModal", () => {
   it("should display budget information in table", () => {
     renderWithProviders(<BulkEditUserModal {...defaultProps} />);
 
-    expect(screen.getByText("$50")).toBeInTheDocument();
+    expect(screen.getByText("$50.00")).toBeInTheDocument();
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 

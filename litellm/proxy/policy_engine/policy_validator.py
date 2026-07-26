@@ -9,9 +9,11 @@ Validates:
 - Inheritance chains are valid (no cycles, parents exist)
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -151,6 +153,71 @@ class PolicyValidator:
         except Exception as e:
             verbose_proxy_logger.warning(f"Could not check model '{model}': {str(e)}")
             return True  # Assume valid on error
+
+    @staticmethod
+    def _scope_error(
+        policy_name: str,
+        error_type: PolicyValidationErrorType,
+        field: str,
+        value: str,
+        label: str,
+    ) -> PolicyValidationError:
+        return PolicyValidationError(
+            policy_name=policy_name,
+            error_type=error_type,
+            message=(
+                f"{label.capitalize()} '{value}' does not exist. Reference an existing "
+                f"{label} or use a wildcard pattern (e.g. '{value}*') to match by prefix."
+            ),
+            field=field,
+            value=value,
+        )
+
+    async def find_invalid_scope_entries(
+        self,
+        policy_name: str,
+        teams: list[str] | None = None,
+        keys: list[str] | None = None,
+        models: list[str] | None = None,
+    ) -> list[PolicyValidationError]:
+        """
+        Validate the concrete scope entries of a policy attachment.
+
+        Returns an error for every non-wildcard entry that does not resolve to an
+        existing team alias, key alias, or model. Wildcard patterns are always
+        accepted: a pattern like "healthcare-*" may match zero entities today and
+        match ones created later, so it cannot be validated by existence. Tags are
+        intentionally not checked - they are free-form labels with no registry to
+        validate against.
+        """
+        # A concrete entry is one the request-time matcher compares by exact equality;
+        # only a trailing "*" is a wildcard (RouteChecks._is_wildcard_pattern), and those
+        # are left unvalidated since they may match zero entities today and more later.
+        is_pattern = RouteChecks._is_wildcard_pattern
+        concrete_teams = [t for t in (teams or []) if not is_pattern(pattern=t)]
+        concrete_keys = [k for k in (keys or []) if not is_pattern(pattern=k)]
+        concrete_models = [m for m in (models or []) if not is_pattern(pattern=m)]
+
+        team_exists = await asyncio.gather(*(self.check_team_alias_exists(t) for t in concrete_teams))
+        key_exists = await asyncio.gather(*(self.check_key_alias_exists(k) for k in concrete_keys))
+
+        return [
+            *(
+                self._scope_error(policy_name, PolicyValidationErrorType.INVALID_TEAM, "teams", team, "team")
+                for team, exists in zip(concrete_teams, team_exists)
+                if not exists
+            ),
+            *(
+                self._scope_error(policy_name, PolicyValidationErrorType.INVALID_KEY, "keys", key, "key")
+                for key, exists in zip(concrete_keys, key_exists)
+                if not exists
+            ),
+            *(
+                self._scope_error(policy_name, PolicyValidationErrorType.INVALID_MODEL, "models", model, "model")
+                for model in concrete_models
+                if not self.check_model_exists(model)
+            ),
+        ]
 
     def _validate_inheritance_chain(
         self,

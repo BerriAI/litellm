@@ -1,0 +1,48 @@
+name: "Detect backend-relevant changes"
+description: >-
+  Classify the pull request's changed files with .circleci/scripts/classify_changes.sh
+  and expose decision=run|skip. decision=skip means only ui/**, **.md or **.mdx files
+  changed, so callers can short-circuit expensive steps while the job still completes
+  successfully and satisfies its required status check. The decision defaults to run for
+  any non pull_request event or whenever the changed set cannot be resolved, so tests are
+  never skipped when the classification is uncertain.
+
+outputs:
+  decision:
+    description: "run when backend-relevant files changed, otherwise skip"
+    value: ${{ steps.classify.outputs.decision }}
+
+runs:
+  using: composite
+  steps:
+    - id: classify
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -uo pipefail
+        if [ -z "${BASE_SHA:-}" ]; then
+          echo "detect-backend-changes: not a pull_request event; running job"
+          echo "decision=run" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        if ! git fetch --no-tags --depth=1 origin "${BASE_SHA}" >/dev/null 2>&1; then
+          echo "detect-backend-changes: could not fetch base ${BASE_SHA}; running job"
+          echo "decision=run" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        changed="$(git diff --name-only "${BASE_SHA}" HEAD 2>/dev/null)" || {
+          echo "detect-backend-changes: git diff failed; running job"
+          echo "decision=run" >> "${GITHUB_OUTPUT}"
+          exit 0
+        }
+        if [ -z "${changed}" ]; then
+          echo "detect-backend-changes: no changed files vs ${BASE_SHA}; skipping job"
+          echo "decision=skip" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+        echo "detect-backend-changes: changed files vs ${BASE_SHA}:"
+        printf '%s\n' "${changed}" | sed 's/^/  /'
+        decision="$(printf '%s\n' "${changed}" | bash .circleci/scripts/classify_changes.sh backend)" || decision="run"
+        echo "detect-backend-changes: decision=${decision}"
+        echo "decision=${decision}" >> "${GITHUB_OUTPUT}"

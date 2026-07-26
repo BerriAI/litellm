@@ -51,10 +51,7 @@ class AmazonQwen2Config(AmazonQwen3Config):
         Qwen2 uses "text" field, but we also support "generation" field for compatibility.
         """
         try:
-            if hasattr(raw_response, "json"):
-                response_data = raw_response.json()
-            else:
-                response_data = raw_response
+            response_data = raw_response.json()
 
             # Extract the generated text - Qwen2 uses "text" field, but also support "generation" for compatibility
             generated_text = response_data.get("generation", "") or response_data.get("text", "")

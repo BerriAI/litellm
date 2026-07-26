@@ -2961,10 +2961,13 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
     with (
         patch("litellm.litellm_core_utils.realtime_streaming.GLOBAL_LOGGING_WORKER") as mock_worker,
         patch("litellm.litellm_core_utils.realtime_streaming.asyncio.create_task") as mock_create_task,
-        patch("litellm.litellm_core_utils.realtime_streaming.executor.submit"),
     ):
         await streaming.log_messages()
 
         mock_worker.ensure_initialized_and_enqueue.assert_called_once()
+        enqueued = mock_worker.ensure_initialized_and_enqueue.call_args
+        assert (enqueued.args or tuple(enqueued.kwargs.values()))[0] is logging_obj.dispatch_success_handlers.return_value
+        logging_obj.dispatch_success_handlers.assert_called_once_with(streaming.messages, prefer_async_handlers=True)
+        logging_obj.success_handler.assert_not_called()
         # the bare create_task path must no longer be used for success logging
         mock_create_task.assert_not_called()

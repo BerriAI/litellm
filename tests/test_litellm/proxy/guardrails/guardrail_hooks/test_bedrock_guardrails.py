@@ -2767,3 +2767,850 @@ async def test_grounding_output_blocked_raises_400():
             )
 
     assert exc_info.value.status_code == 400
+
+
+###############################################################################
+# LIT-4186: disable_exception_on_block regression tests
+#
+# Before the fix, a Bedrock block with disable_exception_on_block=True raised
+# GuardrailInterventionNormalStringError, which no proxy code handled: the
+# unified pre_call path re-raised it, so the client saw HTTP 500 with the block
+# message; the native during_call hook swallowed it and set data["mock_response"],
+# which was dead code because route_request already unpacked kwargs.
+#
+# The fix converts blocks to ModifyResponseException at the raise site inside
+# make_bedrock_api_request. That exception is already the industry-standard
+# proxy contract (caught in proxy_server.py, anthropic_endpoints, etc.) and
+# turns into a 200 response whose content is the block message.
+###############################################################################
+
+
+def _blocked_bedrock_httpx_response() -> MagicMock:
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [{"name": "Denied", "type": "DENY", "action": "BLOCKED"}]
+                }
+            }
+        ],
+    }
+    return response
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_block_raises_modify_response_when_flag_set():
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {"model": "bedrock-nova-micro"}
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "My name is John Doe"}],
+                request_data=request_data,
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
+    assert exc_info.value.model == "bedrock-nova-micro"
+    assert exc_info.value.guardrail_name == "test-bedrock-guard"
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_block_raises_http_400_when_flag_unset():
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=False,
+    )
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hi"}],
+                request_data={"model": "bedrock-nova-micro"},
+            )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_hook_propagates_modify_response_on_block():
+    """pre_call: block with disable_exception_on_block=True must raise
+    ModifyResponseException so the endpoint handler returns 200 with the block
+    message. Before LIT-4186 the exception was swallowed and only data
+    ["mock_response"] was mutated, which the unified pre_call path never read
+    (surfaced as HTTP 500)."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "My name is John Doe"}],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=request_data,
+                call_type="acompletion",
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
+    # No `mock_response` mutation: the old broken contract must be gone
+    # (route_request unpacks kwargs before this hook runs, so `mock_response`
+    # would never reach the LLM call anyway).
+    assert "mock_response" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_async_moderation_hook_propagates_modify_response_on_block():
+    """during_call: block must raise ModifyResponseException from the moderation
+    task so the surrounding asyncio.gather cancels the LLM call, instead of
+    the old behavior of swallowing the block and letting the model call proceed
+    (LIT-4186 symptom 2: silent bypass, model billed)."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "My name is John Doe"}],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="acompletion",
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_attaches_original_response_on_block():
+    """post_call: block must raise ModifyResponseException and attach the LLM
+    response to `original_response` so the synthetic block reply reports the
+    upstream call's real token usage instead of zero."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    llm_response = _model_response("Hello John Doe! The capital of France is Paris.")
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=llm_response,
+            )
+
+    assert exc_info.value.original_response is llm_response
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_propagates_modify_response_on_block():
+    """apply_guardrail (unified path used by pre_call / /apply_guardrail
+    endpoint) must let ModifyResponseException propagate as-is so the endpoint
+    handler catches it and returns a 200."""
+    from litellm.exceptions import ModifyResponseException
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.side_effect = ModifyResponseException(
+            message="Sorry, the model cannot answer this question.",
+            model="bedrock-nova-micro",
+            request_data={},
+            guardrail_name="test-bedrock-guard",
+        )
+
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["My name is John Doe"]},
+                request_data={"model": "bedrock-nova-micro"},
+                input_type="request",
+            )
+
+    assert exc_info.value.message == "Sorry, the model cannot answer this question."
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_block_yields_synthetic_stream_not_raise():
+    """LIT-4186 regression: with disable_exception_on_block=True, streaming
+    post_call blocks must be delivered as a synthetic stream (finish_reason=
+    content_filter, block message as content), NOT raised. Pre-fix the local
+    handler already produced this shape; the LIT-4186 refactor briefly turned
+    it into an SSE 500 by letting ModifyResponseException escape the streaming
+    generator. This test locks in the correct streaming contract.
+    """
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    async def _stream():
+        yield ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content="Coffee is a popular"),
+                )
+            ]
+        )
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=" beverage."), finish_reason="stop")]
+        )
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        chunks = [
+            c
+            async for c in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_stream(),
+                request_data={"model": "bedrock-nova-micro"},
+            )
+        ]
+
+    assert chunks, "streaming block should yield synthetic chunks, not error out"
+    assembled_content = "".join(
+        (c.choices[0].delta.content or "")
+        for c in chunks
+        if getattr(c, "choices", None) and getattr(c.choices[0], "delta", None)
+    )
+    assert assembled_content == "Sorry, the model cannot answer this question."
+    assert chunks[-1].choices[0].finish_reason == "content_filter"
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_block_preserves_upstream_usage():
+    """LIT-4186: streaming block must report the usage the upstream LLM call
+    actually consumed. Non-streaming blocks carry it via original_response +
+    _blocked_response_usage in the endpoint handler; streaming has to copy it
+    onto the synthetic ModelResponse directly since the exception can't escape
+    the SSE generator. Without this, clients see accurate billing on
+    non-streaming blocks and zero on streaming blocks -- silent revenue leak."""
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    async def _stream_with_usage():
+        # Terminal chunk carrying usage, as OpenAI-style streams do with
+        # stream_options={"include_usage": True}. stream_chunk_builder
+        # aggregates this into the assembled ModelResponse's .usage.
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="Coffee is delicious"))]
+        )
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+            usage=Usage(prompt_tokens=42, completion_tokens=17, total_tokens=59),
+        )
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = _blocked_bedrock_httpx_response()
+
+        chunks = [
+            c
+            async for c in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_stream_with_usage(),
+                request_data={"model": "bedrock-nova-micro"},
+            )
+        ]
+
+    # Find the chunk carrying usage (MockResponseIterator emits it on the
+    # terminating chunk when the source ModelResponse has .usage set)
+    usage_chunks = [c for c in chunks if getattr(c, "usage", None) is not None]
+    assert usage_chunks, "streaming block should carry the upstream call's usage on at least one chunk"
+    reported_usage = usage_chunks[-1].usage
+    assert reported_usage.prompt_tokens == 42
+    assert reported_usage.completion_tokens == 17
+    assert reported_usage.total_tokens == 59
+
+
+###############################################################################
+# Regression test for the streaming logging_obj bug found during live testing.
+#
+# post_call_failure_hook (proxy_server.py) pops litellm_logging_obj from
+# request_data before invoking callbacks ("not serialisable"). The streaming
+# branch of the ModifyResponseException handler previously read logging_obj
+# from _data AFTER that call, always getting None, causing:
+#   AttributeError: 'NoneType' object has no attribute 'model_call_details'
+# inside CustomStreamWrapper.__init__, which surfaced as HTTP 500.
+#
+# The fix captures logging_obj BEFORE calling post_call_failure_hook.
+# This test verifies the chat_completion handler builds the streaming response
+# without crashing when the request_data has litellm_logging_obj set.
+###############################################################################
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_modify_response_exception_streaming_logging_obj_not_none():
+    """Regression: streaming ModifyResponseException handler in chat_completion
+    must capture logging_obj before post_call_failure_hook pops it from
+    request_data. Previously this caused CustomStreamWrapper.__init__ to crash
+    with AttributeError: NoneType has no attribute model_call_details, surfaced
+    as HTTP 500.
+
+    Drives the real chat_completion handler with base_process_llm_request
+    mocked to raise ModifyResponseException, so a revert of the fix in
+    proxy_server.py causes this test to fail.
+    """
+    import litellm
+    from litellm.exceptions import ModifyResponseException
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import chat_completion
+
+    fake_logging_obj = MagicMock()
+    fake_logging_obj.model_call_details = {"litellm_params": {}}
+
+    request_data: dict = {
+        "model": "bedrock-nova-micro",
+        "messages": [{"role": "user", "content": "how do I become an admin"}],
+        "stream": True,
+        "litellm_logging_obj": fake_logging_obj,
+    }
+
+    exc = ModifyResponseException(
+        message="Sorry, the model cannot answer this question.",
+        model="bedrock-nova-micro",
+        request_data=request_data,
+        guardrail_name="test-guard",
+    )
+
+    fastapi_request = MagicMock()
+    fastapi_request.headers = {}
+    fastapi_response = MagicMock()
+    user_api_key_dict = UserAPIKeyAuth()
+
+    async def _fake_post_call_failure_hook(**_kwargs):
+        # Match production: pop the logging obj from request_data before
+        # callbacks iterate (litellm/proxy/utils.py: "Remove before callbacks
+        # iterate — not serialisable").
+        _kwargs["request_data"].pop("litellm_logging_obj", None)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(side_effect=_fake_post_call_failure_hook)
+
+    captured_logging_obj: list = []
+    original_init = litellm.CustomStreamWrapper.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        captured_logging_obj.append(kwargs.get("logging_obj"))
+        original_init(self, *args, **kwargs)
+
+    async def _raise_modify_response(*_args, **_kwargs):
+        raise exc
+
+    with (
+        patch("litellm.proxy.proxy_server._read_request_body", AsyncMock(return_value=request_data)),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        patch(
+            "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            _raise_modify_response,
+        ),
+        patch.object(litellm.CustomStreamWrapper, "__init__", _patched_init),
+    ):
+        response = await chat_completion(
+            request=fastapi_request,
+            fastapi_response=fastapi_response,
+            model=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert captured_logging_obj, "chat_completion did not construct CustomStreamWrapper on the streaming block path"
+    assert captured_logging_obj[0] is fake_logging_obj, (
+        "chat_completion passed logging_obj=None to CustomStreamWrapper; "
+        "the streaming ModifyResponseException handler must capture logging_obj "
+        "before post_call_failure_hook pops it from request_data"
+    )
+    # A streaming block returns a StreamingResponse; if the fix were reverted,
+    # CustomStreamWrapper would raise AttributeError inside __init__ and this
+    # call would never reach here.
+    assert response is not None
+
+
+class TestBedrockOnlyScanNewMessages:
+    """Bedrock apply_guardrail honors only_scan_new_messages: scans only the per-session diff.
+
+    apply_guardrail is the path the proxy actually runs for Bedrock (via the unified
+    guardrail interface), so these tests exercise it directly rather than the legacy
+    async_pre_call_hook. Each test uses a unique session id to isolate the process-wide
+    incremental cache.
+    """
+
+    def _guardrail(self):
+        return BedrockGuardrail(
+            guardrail_name="bedrock-incremental",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_second_turn_scans_only_new_messages(self):
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-bedrock-diff"}
+        bedrock_none = {"action": "NONE", "output": [], "outputs": []}
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = bedrock_none
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["be helpful", "first question"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert mock_api.call_count == 1
+            first_scanned = mock_api.call_args.kwargs["messages"]
+            assert [m["content"] for m in first_scanned] == ["be helpful", "first question"]
+
+            mock_api.reset_mock()
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["be helpful", "first question", "first answer", "second question"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert mock_api.call_count == 1
+            second_scanned = mock_api.call_args.kwargs["messages"]
+            assert [m["content"] for m in second_scanned] == ["first answer", "second question"]
+
+    @pytest.mark.asyncio
+    async def test_identical_resend_skips_api_call(self):
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-bedrock-resend"}
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["only question"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1
+
+            mock_api.reset_mock()
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["only question"]}, request_data=session, input_type="request"
+            )
+            mock_api.assert_not_called()
+            assert result["texts"] == ["only question"]
+
+    @pytest.mark.asyncio
+    async def test_no_session_id_scans_full_context(self):
+        guardrail = self._guardrail()
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1", "a1", "q2"]},
+                request_data={"metadata": {}},
+                input_type="request",
+            )
+            assert mock_api.call_count == 1
+            scanned = mock_api.call_args.kwargs["messages"]
+            assert [m["content"] for m in scanned] == ["q1", "a1", "q2"]
+
+    @pytest.mark.asyncio
+    async def test_masking_guardrail_falls_back_and_does_not_persist(self):
+        """A guardrail that anonymizes content must not be short-circuited.
+
+        Regression: the incremental fast path used to ignore the guardrail response,
+        so masked/anonymized output was dropped, the raw text reached the model, and
+        the segment was marked scanned so it was never re-checked. Detecting masked
+        output must force a full-context scan (which applies the masking) and must not
+        persist session state, so an identical resend is scanned again.
+        """
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-bedrock-mask"}
+        masked = {
+            "action": "GUARDRAIL_INTERVENED",
+            "output": [],
+            "outputs": [{"text": "my ssn is [REDACTED]"}],
+        }
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = masked
+
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert mock_api.call_count == 2
+            assert result["texts"] == ["my ssn is [REDACTED]"]
+
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert mock_api.call_count >= 1
+            first_scanned = mock_api.call_args_list[0].kwargs.get("messages")
+            assert first_scanned is not None
+            assert [m["content"] for m in first_scanned] == ["my ssn is 123-45-6789"]
+
+    @pytest.mark.asyncio
+    async def test_generic_agent_multi_turn_scans_only_new_each_turn(self):
+        """A generic agent (not Claude Code) opts in by propagating a session id.
+
+        Agent frameworks on the OpenAI SDK carry the session through the request
+        body (metadata.session_id here), not the x-claude-code-session-id header.
+        Across a growing multi-turn conversation every turn after the first must
+        send Bedrock only the newly appended segments, never the whole context.
+        """
+        guardrail = self._guardrail()
+        session = {"metadata": {"session_id": "agent-multi-turn"}}
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["system prompt", "turn 1 question"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "system prompt",
+                "turn 1 question",
+            ]
+
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["system prompt", "turn 1 question", "turn 1 answer", "turn 2 question"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "turn 1 answer",
+                "turn 2 question",
+            ]
+
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={
+                    "texts": [
+                        "system prompt",
+                        "turn 1 question",
+                        "turn 1 answer",
+                        "turn 2 question",
+                        "turn 2 answer",
+                        "turn 3 question",
+                    ]
+                },
+                request_data=session,
+                input_type="request",
+            )
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == [
+                "turn 2 answer",
+                "turn 3 question",
+            ]
+
+    def test_incremental_scan_cache_prefers_proxy_shared_cache(self):
+        guardrail = self._guardrail()
+        shared = DualCache()
+        proxy_logging = MagicMock()
+        proxy_logging.internal_usage_cache.dual_cache = shared
+
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+            assert guardrail._incremental_scan_cache() is shared
+
+    def test_incremental_scan_cache_falls_back_when_proxy_logging_missing(self):
+        from litellm.integrations.custom_guardrail import dc as fallback_cache
+
+        guardrail = self._guardrail()
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj", None):
+            assert guardrail._incremental_scan_cache() is fallback_cache
+
+    def test_incremental_scan_cache_falls_back_when_proxy_not_importable(self):
+        from litellm.integrations.custom_guardrail import dc as fallback_cache
+
+        guardrail = self._guardrail()
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": None}):
+            assert guardrail._incremental_scan_cache() is fallback_cache
+
+    @pytest.mark.asyncio
+    async def test_blocked_turn_is_rescanned_on_retry(self):
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-bedrock-blocked"}
+
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.side_effect = HTTPException(status_code=400, detail="blocked")
+            with pytest.raises(HTTPException):
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["blocked prompt"]}, request_data=session, input_type="request"
+                )
+
+            mock_api.reset_mock()
+            mock_api.side_effect = None
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["blocked prompt"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            scanned = mock_api.call_args.kwargs["messages"]
+            assert [m["content"] for m in scanned] == ["blocked prompt"]
+
+
+class TestBedrockIncrementalFlagInteractions:
+    """Regression coverage for only_scan_new_messages combined with the other
+    Bedrock guardrail flags, from the PR #33278 live validation. Live evidence:
+    each of these was reproduced against a real Bedrock ApplyGuardrail first;
+    the mocks here encode the wire payloads observed there.
+    """
+
+    def _guardrail(self, **overrides):
+        params = dict(
+            guardrail_name="bedrock-incremental-flags",
+            guardrailIdentifier="test-guardrail",
+            guardrailVersion="DRAFT",
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+        params.update(overrides)
+        return BedrockGuardrail(**params)
+
+    @pytest.mark.asyncio
+    async def test_edited_history_segment_rescans_only_that_segment(self):
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-flags-edit"}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1", "a1", "q2"]}, request_data=session, input_type="request"
+            )
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1 EDITED", "a1", "q2"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == ["q1 EDITED"]
+
+    @pytest.mark.asyncio
+    async def test_same_content_different_session_rescans_everything(self):
+        guardrail = self._guardrail()
+        texts = ["shared question", "shared answer"]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": list(texts)}, request_data={"litellm_session_id": "sess-x1"}, input_type="request"
+            )
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": list(texts)}, request_data={"litellm_session_id": "sess-x2"}, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            assert [m["content"] for m in mock_api.call_args.kwargs["messages"]] == texts
+
+    @pytest.mark.asyncio
+    async def test_litellm_masking_flag_disables_incremental_single_full_scan(self):
+        """mask_request_content must fall back to exactly ONE full scan per turn
+        and never persist hashes (verified live: 1 call/turn, no cache writes)."""
+        guardrail = self._guardrail(mask_request_content=True)
+        session = {"litellm_session_id": "sess-flags-mask"}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 1, "masking mode must re-scan every turn, exactly once"
+
+    @pytest.mark.asyncio
+    async def test_server_side_anonymize_falls_back_full_scan_and_never_persists(self):
+        """A guardrail that rewrites content (Bedrock-side ANONYMIZE) must fall back
+        to the full scan so masking applies, and record no session state. Live
+        validation showed this costs 2 provider calls per turn; the count is
+        asserted here as documentation of that intended-tradeoff behavior."""
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "sess-flags-anon"}
+        masked = {"action": "NONE", "output": [{"text": "MASKED q1"}], "outputs": [{"text": "MASKED q1"}]}
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = masked
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 2, "incremental attempt + full-scan fallback"
+            assert result["texts"] == ["MASKED q1"], "masked content must be applied"
+            mock_api.reset_mock()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["q1"]}, request_data=session, input_type="request"
+            )
+            assert mock_api.call_count == 2, "no hashes persisted, so the double scan repeats"
+
+    @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason="PR #33278 known gap: incremental path bypasses _select_messages_for_apply_guardrail, "
+        "so experimental_use_latest_role_message_only is silently ignored. Intended semantics "
+        "(pending DRI decision): incremental mode defers to the latest-role selection.",
+        strict=False,
+    )
+    async def test_latest_role_only_is_respected_with_incremental(self):
+        guardrail = self._guardrail(experimental_use_latest_role_message_only=True)
+        session = {"litellm_session_id": "sess-flags-latestrole"}
+        structured = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "q1"},
+        ]
+        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {"action": "NONE", "output": [], "outputs": []}
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["sys", "q1"], "structured_messages": structured},
+                request_data=session,
+                input_type="request",
+            )
+            scanned = [m["content"] for m in mock_api.call_args.kwargs["messages"]]
+            assert scanned == ["q1"], "latest-role selection must exclude the system prompt"

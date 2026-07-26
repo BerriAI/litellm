@@ -1,6 +1,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { BarChart } from "@/components/shared/charts";
+import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
-import { BarChart, Button } from "@tremor/react";
 import { Segmented, Tooltip } from "antd";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
@@ -83,20 +84,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     {
       header: "Key ID",
       accessorKey: "api_key",
-      cell: (info: any) => (
-        <div className="overflow-hidden">
-          <Tooltip title={info.getValue() as string}>
-            <Button
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-              onClick={() => handleKeyClick(info.row.original)}
-            >
-              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
-            </Button>
-          </Tooltip>
-        </div>
-      ),
+      cell: (info: any) => <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />,
     },
     {
       header: "Key Alias",
@@ -164,10 +152,8 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   const spendColumn = {
     header: "Spend (USD)",
     accessorKey: "spend",
-    cell: (info: any) => {
-      const value = info.getValue();
-      return value > 0 && value < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(value, 2)}`;
-    },
+    meta: { numeric: true },
+    cell: (info: any) => <MoneyCell value={info.getValue()} decimals={2} />,
   };
 
   const columns = showTags ? [...baseColumns, tagsColumn, spendColumn] : [...baseColumns, spendColumn];
@@ -247,13 +233,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable
-            columns={columns}
-            data={topKeys}
-            renderSubComponent={() => <></>}
-            getRowCanExpand={() => false}
-            isLoading={false}
-          />
+          <DataTable columns={columns} data={topKeys} isLoading={false} />
         </div>
       )}
 

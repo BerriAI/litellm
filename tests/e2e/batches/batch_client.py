@@ -1,11 +1,13 @@
 """Client for the batches e2e suite: file upload/download and the batch
-operations (create / retrieve / cancel / list) over the shared Gateway.
+operations (create / retrieve / cancel / list) over the shared ProxyClient.
 
-`create_batch` returns the raw HTTP outcome (StreamingResponse) so a 403 model
-access denial and a provider-native batch body both surface; the test parses
-BatchObject from the body. A `provider` arg routes a call to /{provider}/v1/...,
-which the provider-fallback scenario needs (its ids are raw, not model-encoded).
-The request/response models are co-located here because only this suite uses them.
+Batch deployments are registered at runtime via /model/new (see conftest.py),
+not baked into the proxy config. `create_batch` returns the raw HTTP outcome
+(StreamingResponse) so a 403 model access denial and a provider-native batch
+body both surface; the test parses BatchObject from the body. A `provider` arg
+routes a call to /{provider}/v1/..., which the provider-fallback scenario needs
+(its ids are raw, not model-encoded). The request/response models are
+co-located here because only this suite uses them.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from e2e_gateway import Gateway, build_gateway
+from proxy_client import ProxyClient
 from e2e_http import (
     FileUploadForm,
     NoBody,
@@ -22,15 +24,24 @@ from e2e_http import (
     StreamingResponse,
     UnknownApiError,
 )
+from models import LiteLLMParamsBody
+
+UPLOAD_FILENAME = "batch_input.jsonl"
 
 
 class FileObject(BaseModel):
     id: str
     object: str | None = None
     purpose: str | None = None
+    filename: str | None = None
     bytes: int | None = None
     status: str | None = None
     created_at: int | None = None
+
+
+class FileList(BaseModel):
+    object: str | None = None
+    data: list[FileObject] = []
 
 
 class BatchObject(BaseModel):
@@ -82,7 +93,13 @@ def is_result_access_denied[R: BaseModel](result: Result[R]) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class BatchClient:
-    gateway: Gateway
+    proxy: ProxyClient
+
+    def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
+        return self.proxy.create_model(model_name, litellm_params, mode="batch")
+
+    def delete_model(self, model_id: str) -> None:
+        self.proxy.delete_model(model_id)
 
     def upload_file(
         self,
@@ -93,31 +110,49 @@ class BatchClient:
         model: str | None = None,
         provider: str | None = None,
     ) -> Result[FileObject]:
-        return self.gateway.transport.upload(
+        return self.proxy.transport.upload(
             _files_path(provider),
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             form=form,
-            filename="batch_input.jsonl",
+            filename=UPLOAD_FILENAME,
             content=content,
             params=ModelQuery(model=model),
             response_type=FileObject,
         )
 
+    def retrieve_file(
+        self, file_id: str, *, key: str, provider: str | None = None
+    ) -> Result[FileObject]:
+        return self.proxy.transport.get(
+            f"{_files_path(provider)}/{file_id}",
+            headers=self.proxy.transport.bearer(key),
+            params=NoBody(),
+            response_type=FileObject,
+        )
+
+    def list_files(self, *, key: str, provider: str | None = None) -> Result[FileList]:
+        return self.proxy.transport.get(
+            _files_path(provider),
+            headers=self.proxy.transport.bearer(key),
+            params=NoBody(),
+            response_type=FileList,
+        )
+
     def create_batch(
         self, *, body: BatchCreateBody, key: str, provider: str | None = None
     ) -> StreamingResponse:
-        return self.gateway.transport.send(
+        return self.proxy.transport.send(
             _batches_path(provider),
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             json=body,
         )
 
     def retrieve_batch(
         self, batch_id: str, *, key: str, provider: str | None = None
     ) -> Result[BatchObject]:
-        return self.gateway.transport.get(
+        return self.proxy.transport.get(
             f"{_batches_path(provider)}/{batch_id}",
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             params=NoBody(),
             response_type=BatchObject,
         )
@@ -125,9 +160,9 @@ class BatchClient:
     def cancel_batch(
         self, batch_id: str, *, key: str, provider: str | None = None
     ) -> Result[BatchObject]:
-        return self.gateway.transport.post(
+        return self.proxy.transport.post(
             f"{_batches_path(provider)}/{batch_id}/cancel",
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             json=NoBody(),
             response_type=BatchObject,
         )
@@ -135,9 +170,9 @@ class BatchClient:
     def list_batches(
         self, *, key: str, provider: str | None = None
     ) -> Result[BatchList]:
-        return self.gateway.transport.get(
+        return self.proxy.transport.get(
             _batches_path(provider),
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             params=NoBody(),
             response_type=BatchList,
         )
@@ -145,9 +180,9 @@ class BatchClient:
     def delete_file(
         self, file_id: str, *, key: str, provider: str | None = None
     ) -> Result[FileDeleteResponse]:
-        return self.gateway.transport.delete(
+        return self.proxy.transport.delete(
             f"{_files_path(provider)}/{file_id}",
-            headers=self.gateway.transport.bearer(key),
+            headers=self.proxy.transport.bearer(key),
             json=NoBody(),
             response_type=FileDeleteResponse,
         )
@@ -161,5 +196,5 @@ def _batches_path(provider: str | None) -> str:
     return f"/{provider}/v1/batches" if provider else "/v1/batches"
 
 
-def build_client() -> BatchClient:
-    return BatchClient(gateway=build_gateway())
+def build_client(proxy: ProxyClient) -> BatchClient:
+    return BatchClient(proxy=proxy)

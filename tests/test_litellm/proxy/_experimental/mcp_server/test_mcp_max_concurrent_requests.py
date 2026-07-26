@@ -164,6 +164,25 @@ async def test_openapi_backed_server_also_respects_the_cap():
     assert tracker.peak_by_server["srv-openapi"] == 2
 
 
+@pytest.mark.asyncio
+async def test_edited_limit_takes_effect_without_restart():
+    """Editing max_concurrent_requests must rebuild the cached semaphore so the
+    new cap applies to subsequent calls immediately, not only after a restart."""
+    manager = MCPServerManager()
+    server = _make_server("srv-edited", max_concurrent_requests=3)
+
+    before_edit = _ConcurrencyTracker()
+    with _patch_client_with_tracker(manager, before_edit):
+        await _fire(manager, server, n=6)
+    assert before_edit.peak_by_server["srv-edited"] == 3
+
+    server.max_concurrent_requests = 1
+    after_edit = _ConcurrencyTracker()
+    with _patch_client_with_tracker(manager, after_edit):
+        await _fire(manager, server, n=6)
+    assert after_edit.peak_by_server["srv-edited"] == 1
+
+
 def test_semaphore_is_reused_per_server_and_distinct_across_servers():
     manager = MCPServerManager()
     server_a = _make_server("srv-a", max_concurrent_requests=3)

@@ -1558,7 +1558,7 @@ class AWSEventStreamDecoder:
             text = chunk_data["outputText"]
         # ai21 mapping
         elif "ai21" in self.model:  # fake ai21 streaming
-            text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
+            text = chunk_data["completions"][0]["data"]["text"]
             is_finished = True
             finish_reason = "stop"
         ######## /bedrock/converse mappings ###############

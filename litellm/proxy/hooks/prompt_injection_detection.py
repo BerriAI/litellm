@@ -250,7 +250,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             self.print_verbose(f"Received LLM Moderation response: {response}")
             self.print_verbose(f"llm_api_fail_call_string: {self.prompt_injection_params.llm_api_fail_call_string}")
             if isinstance(response, litellm.ModelResponse) and isinstance(response.choices[0], litellm.Choices):
-                if self.prompt_injection_params.llm_api_fail_call_string in response.choices[0].message.content:  # type: ignore
+                fail_call_string = self.prompt_injection_params.llm_api_fail_call_string
+                content = response.choices[0].message.content
+                if fail_call_string is not None and content is not None and fail_call_string in content:
                     is_prompt_attack = True
 
         if is_prompt_attack is True:

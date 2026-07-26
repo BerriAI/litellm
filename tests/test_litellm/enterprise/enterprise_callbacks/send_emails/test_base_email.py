@@ -348,7 +348,9 @@ async def test_get_invitation_link(base_email_logger):
         result = await base_email_logger._get_invitation_link(
             user_id="test-user", base_url="http://test.com"
         )
-        assert result == "http://test.com/ui?invitation_id=test-invitation-id"
+        assert (
+            result == "http://test.com/ui/onboarding?invitation_id=test-invitation-id"
+        )
 
         # Test with None user_id
         result = await base_email_logger._get_invitation_link(
@@ -372,7 +374,7 @@ def test_construct_invitation_link(base_email_logger):
     result = base_email_logger._construct_invitation_link(
         invitation_id="test-id-123", base_url="http://test.com"
     )
-    assert result == "http://test.com/ui?invitation_id=test-id-123"
+    assert result == "http://test.com/ui/onboarding?invitation_id=test-id-123"
 
 
 @pytest.mark.asyncio
@@ -408,7 +410,10 @@ async def test_get_invitation_link_creates_new_when_none_exist(base_email_logger
             assert call_args["user_api_key_dict"].user_id == "test-user"
 
             # Verify the returned link uses the new invitation ID
-            assert result == "http://test.com/ui?invitation_id=new-invitation-id"
+            assert (
+                result
+                == "http://test.com/ui/onboarding?invitation_id=new-invitation-id"
+            )
 
 
 @pytest.mark.asyncio
@@ -439,7 +444,10 @@ async def test_get_invitation_link_uses_existing_when_available(base_email_logge
             mock_create_invitation.assert_not_called()
 
             # Verify the returned link uses the existing invitation ID
-            assert result == "http://test.com/ui?invitation_id=existing-invitation-id"
+            assert (
+                result
+                == "http://test.com/ui/onboarding?invitation_id=existing-invitation-id"
+            )
 
 
 @pytest.mark.asyncio
@@ -475,7 +483,10 @@ async def test_get_invitation_link_creates_new_when_list_is_none(base_email_logg
             assert call_args["user_api_key_dict"].user_id == "test-user"
 
             # Verify the returned link uses the new invitation ID
-            assert result == "http://test.com/ui?invitation_id=new-invitation-from-none"
+            assert (
+                result
+                == "http://test.com/ui/onboarding?invitation_id=new-invitation-from-none"
+            )
 
 
 @pytest.mark.asyncio
@@ -495,7 +506,7 @@ async def test_get_email_params_user_invitation(
         with mock.patch.object(
             base_email_logger,
             "_get_invitation_link",
-            return_value="http://test.com/ui?invitation_id=test-id",
+            return_value="http://test.com/ui/onboarding?invitation_id=test-id",
         ):
             # Test with user invitation event
             result = await base_email_logger._get_email_params(
@@ -509,7 +520,9 @@ async def test_get_email_params_user_invitation(
                 == "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
             )
             assert result.support_contact == "support@berri.ai"
-            assert result.base_url == "http://test.com/ui?invitation_id=test-id"
+            assert (
+                result.base_url == "http://test.com/ui/onboarding?invitation_id=test-id"
+            )
             assert result.recipient_email == "test@example.com"
 
 

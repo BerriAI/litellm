@@ -125,7 +125,9 @@ if MCP_AVAILABLE:
         get_user_env_vars_bulk,
         get_user_oauth_credential,
         list_user_oauth_credentials,
+        mcp_oauth_token_identity,
         merge_user_env_vars,
+        purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         store_user_credential,
         store_user_oauth_credential,
@@ -134,9 +136,12 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _raise_if_not_oauth2,
         authorize_with_server,
+        client_supplied_redirect_uris,
         exchange_token_with_server,
         get_request_base_url,
+        redeem_passthrough_authorization_code,
         register_client_with_server,
+        resolve_ephemeral_dcr_client,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -176,7 +181,11 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp import MCPAuth, MCPCredentials
+    from litellm.types.mcp import (
+        MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
+        MCPAuth,
+        MCPCredentials,
+    )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     @dataclass
@@ -214,6 +223,34 @@ if MCP_AVAILABLE:
     def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
+
+    def stamp_omitted_oauth2_flow(payload: NewMCPServerRequest) -> None:
+        """Fallback only: fill in oauth2_flow when an oauth2 create omits it.
+
+        An explicit oauth2_flow from the caller (the dashboard's flow selector, a REST
+        body, config.yaml) always wins and is never touched. The shape check below runs
+        solely for oauth2 creates that leave the field unset, so those rows still
+        persist a flow instead of relying on read-time inference.
+
+        The create payload carries the plaintext credentials, so the M2M-vs-interactive
+        decision is reliable here in a way it is not at read time (credentials are
+        encrypted at rest and redacted in responses). The client_credentials shape
+        mirrors the legacy inference in MCPServerManager._resolve_oauth2_flow; every
+        other oauth2 configuration is the authorization_code grant, including
+        delegate_auth_to_upstream, where the client runs that grant upstream.
+        """
+        if payload.auth_type != MCPAuth.oauth2:
+            return
+        if payload.oauth2_flow:
+            return
+        credentials = payload.credentials or {}
+        has_m2m_shape = bool(
+            payload.token_url
+            and credentials.get("client_id")
+            and credentials.get("client_secret")
+            and not payload.authorization_url
+        )
+        payload.oauth2_flow = "client_credentials" if has_m2m_shape else "authorization_code"
 
     _VALID_MCP_REQUIRED_FIELDS: frozenset = frozenset(NewMCPServerRequest.model_fields)
 
@@ -443,7 +480,8 @@ if MCP_AVAILABLE:
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
-        """Return a copy of the MCP server object with credentials removed."""
+        """Return a copy with secret credentials removed, keeping only non-secret admin config so the
+        admin form can show and clear it. Non-admin and virtual-key views strip the whole blob."""
 
         try:
             redacted_server = mcp_server.model_copy(deep=True)
@@ -451,9 +489,34 @@ if MCP_AVAILABLE:
             redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
 
         if hasattr(redacted_server, "credentials"):
-            setattr(redacted_server, "credentials", None)
+            setattr(redacted_server, "credentials", _preserved_admin_config_credentials(redacted_server.credentials))
 
         return redacted_server
+
+    def _preserved_admin_config_credentials(
+        credentials: "MCPCredentials | str | None",
+    ) -> "dict[str, str] | None":
+        """Keep only the non-secret admin-config keys, which are stored unencrypted so they lift out
+        as plaintext; every secret and minted-token key is dropped.
+
+        Total over every stored shape: a dict is read directly, a JSON-object string is parsed, and
+        anything else (a malformed or non-object JSON string, a scalar, ``None``) falls back to full
+        redaction rather than raising, because this runs on every admin list and get and one bad row
+        must not fail them all."""
+        parsed: object = credentials
+        if isinstance(credentials, str):
+            try:
+                parsed = json.loads(credentials)
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(parsed, dict):
+            return None
+        preserved = {
+            key: value
+            for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
+            if isinstance((value := parsed.get(key)), str) and value
+        }
+        return preserved or None
 
     def _redact_mcp_credentials_list(
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
@@ -496,6 +559,7 @@ if MCP_AVAILABLE:
         ``[]``/``{}`` for required list/dict fields).
         """
         sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
         # similar tokens in the OpenAPI spec URL.
@@ -506,9 +570,14 @@ if MCP_AVAILABLE:
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
         # Drop env vars entirely rather than only blanking global values: the
         # names alone (DB_PASSWORD, GITHUB_API_KEY, ...) leak what secrets the
         # admin configured. Non-admins get the per-user vars they must fill in
@@ -534,6 +603,7 @@ if MCP_AVAILABLE:
         """
 
         sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
 
         # Remove potentially sensitive config + identity fields.
         sanitized.url = None
@@ -547,9 +617,14 @@ if MCP_AVAILABLE:
         sanitized.teams = []
         sanitized.env_vars = None
 
+        sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        sanitized.token_exchange_endpoint = None
+        sanitized.audience = None
+        sanitized.subject_token_type = None
+        sanitized.token_exchange_profile = None
 
         sanitized.health_check_error = None
         sanitized.last_health_check = None
@@ -572,36 +647,47 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
 
+    # (server attribute, credentials key) a session server inherits from the server it derives from.
+    # Declared as a table rather than a chain of ifs, which is how upstream_resource was missed.
+    _INHERITED_CREDENTIAL_FIELDS: tuple[tuple[str, str], ...] = (
+        ("authentication_token", "auth_value"),
+        ("client_id", "client_id"),
+        ("client_secret", "client_secret"),
+        ("scopes", "scopes"),
+        ("aws_access_key_id", "aws_access_key_id"),
+        ("aws_secret_access_key", "aws_secret_access_key"),
+        ("aws_session_token", "aws_session_token"),
+        ("aws_region_name", "aws_region_name"),
+        ("aws_service_name", "aws_service_name"),
+        ("upstream_resource", "upstream_resource"),
+    )
+
+    def _has_non_admin_config_credentials(credentials: "MCPCredentials | None") -> bool:
+        """Did the caller supply an actual credential? Admin config rides in the same blob but is not
+        one, so a form that round-trips it must not read as "credentials supplied"."""
+        if not credentials:
+            return False
+        as_dict: dict[str, Any] = dict(credentials)
+        return any(value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS)
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
-        if not payload.server_id or payload.credentials:
+        if not payload.server_id or _has_non_admin_config_credentials(payload.credentials):
             return payload
 
         existing_server = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
         if existing_server is None:
             return payload
 
-        inherited_credentials: MCPCredentials = {}
-        if existing_server.authentication_token:
-            inherited_credentials["auth_value"] = existing_server.authentication_token
-        if existing_server.client_id:
-            inherited_credentials["client_id"] = existing_server.client_id
-        if existing_server.client_secret:
-            inherited_credentials["client_secret"] = existing_server.client_secret
-        if existing_server.scopes:
-            inherited_credentials["scopes"] = existing_server.scopes
-        # AWS SigV4 fields
-        if existing_server.aws_access_key_id:
-            inherited_credentials["aws_access_key_id"] = existing_server.aws_access_key_id
-        if existing_server.aws_secret_access_key:
-            inherited_credentials["aws_secret_access_key"] = existing_server.aws_secret_access_key
-        if existing_server.aws_session_token:
-            inherited_credentials["aws_session_token"] = existing_server.aws_session_token
-        if existing_server.aws_region_name:
-            inherited_credentials["aws_region_name"] = existing_server.aws_region_name
-        if existing_server.aws_service_name:
-            inherited_credentials["aws_service_name"] = existing_server.aws_service_name
+        inherited_credentials: dict[str, Any] = {
+            credential_key: value
+            for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
+            if (value := getattr(existing_server, server_attr, None))
+        }
+        # The gate above guarantees anything still supplied is admin config, which the admin just
+        # typed, so it wins over the stored value.
+        inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
 
         if not inherited_credentials:
             return payload
@@ -648,6 +734,7 @@ if MCP_AVAILABLE:
             command=payload.command,
             args=payload.args,
             env=payload.env,
+            issuer=payload.issuer,
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
@@ -682,12 +769,13 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
-        tools = await _list_mcp_tools(
+        listing = await _list_mcp_tools(
             user_api_key_auth=user_api_key_dict,
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
         )
+        tools = listing.tools
         dumped_tools = [dict(tool) for tool in tools]
 
         return {"tools": dumped_tools}
@@ -1057,6 +1145,7 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
         _validate_mcp_required_fields(payload)
 
         payload.approval_status = MCPApprovalStatus.pending_review
@@ -1322,6 +1411,7 @@ if MCP_AVAILABLE:
 
         # Validate and normalize payload fields
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -1413,6 +1503,7 @@ if MCP_AVAILABLE:
 
         # Validate and normalize payload fields (alias/server name rules)
         validate_and_normalize_mcp_server_payload(payload)
+        stamp_omitted_oauth2_flow(payload)
 
         # Restrict to proxy admins similar to the persistent create endpoint
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -1434,6 +1525,7 @@ if MCP_AVAILABLE:
             temporary_server = await global_mcp_server_manager.build_mcp_server_from_table(
                 temp_record,
                 credentials_are_encrypted=False,
+                persist_discovered_endpoints=False,
             )
             _cache_temporary_mcp_server(
                 temporary_server,
@@ -1615,7 +1707,21 @@ if MCP_AVAILABLE:
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
         _raise_if_not_oauth2(mcp_server)
         # Use the server's stored client_id when the caller doesn't supply one
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        stored_or_supplied_client_id = mcp_server.client_id or client_id or ""
+        ephemeral_dcr_client = (
+            await resolve_ephemeral_dcr_client(
+                request=request,
+                mcp_server=mcp_server,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                redirect_uri=redirect_uri,
+            )
+            if not stored_or_supplied_client_id
+            else None
+        )
+        resolved_client_id = stored_or_supplied_client_id or (
+            ephemeral_dcr_client.client_id if ephemeral_dcr_client else ""
+        )
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1637,6 +1743,7 @@ if MCP_AVAILABLE:
             code_challenge_method=code_challenge_method,
             response_type=response_type,
             scope=scope,
+            ephemeral_dcr_client=ephemeral_dcr_client,
         )
 
     @router.post(
@@ -1659,7 +1766,21 @@ if MCP_AVAILABLE:
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
         _raise_if_not_oauth2(mcp_server)
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        # Sealed passthrough codes exist only for the authorization_code grant. A refresh_token
+        # grant must never open one: the minted client is unrecoverable after the single flow by
+        # contract, so an expired browser-held token re-runs authorize instead.
+        sealed_code = (
+            redeem_passthrough_authorization_code(code=code, mcp_server=mcp_server, code_verifier=code_verifier)
+            if grant_type == "authorization_code"
+            else None
+        )
+        resolved_code = sealed_code.upstream_code if sealed_code else code
+        # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
+        # or plain flow alike), so the exchange must present that binding, not the browser page.
+        resolved_redirect_uri = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
+        caller_client_id = sealed_code.client_id if sealed_code else client_id
+        caller_client_secret = sealed_code.client_secret if sealed_code else client_secret
+        resolved_client_id = mcp_server.client_id or caller_client_id or ""
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1675,13 +1796,14 @@ if MCP_AVAILABLE:
             request=request,
             mcp_server=mcp_server,
             grant_type=grant_type,
-            code=code,
-            redirect_uri=redirect_uri,
+            code=resolved_code,
+            redirect_uri=resolved_redirect_uri,
             client_id=resolved_client_id,
-            client_secret=client_secret,
+            client_secret=caller_client_secret,
             code_verifier=code_verifier,
             refresh_token=refresh_token,
             scope=scope,
+            client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
         )
 
     @router.post(
@@ -1697,6 +1819,7 @@ if MCP_AVAILABLE:
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
+        client_redirect_uris = client_supplied_redirect_uris(data.get("redirect_uris"))
 
         return await register_client_with_server(
             request=request,
@@ -1707,6 +1830,7 @@ if MCP_AVAILABLE:
             token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
             fallback_client_id=server_id,
             persist_credentials=_user_is_full_admin(user_api_key_dict),
+            client_redirect_uris=client_redirect_uris,
         )
 
     @router.delete(
@@ -1874,6 +1998,11 @@ if MCP_AVAILABLE:
             expires_in=payload.expires_in,
             scopes=payload.scopes,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         # Read back the persisted record so the response reflects the stored
         # expires_at rather than recomputing it here (which could diverge by
         # milliseconds or if the storage logic ever adds a grace period).
@@ -1914,6 +2043,11 @@ if MCP_AVAILABLE:
                 await delete_user_credential(prisma_client, user_id, server_id)
             except RecordNotFoundError:
                 pass  # Already gone — treat as a successful delete
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+                global_mcp_server_manager,
+            )
+
+            await global_mcp_server_manager.invalidate_user_oauth_token_cache(user_id, server_id)
         return MCPOAuthUserCredentialStatus(
             server_id=server_id,
             has_credential=False,
@@ -2269,6 +2403,41 @@ if MCP_AVAILABLE:
                 },
             )
 
+        # Snapshot the pre-update identity so we can detect a mint-relevant change below. The read is
+        # advisory (it only feeds the stale-token purge decision), so a failure skips the purge with a
+        # warning instead of failing the edit, whose primary job is the update itself.
+        try:
+            old_server_record = await get_mcp_server(prisma_client, payload.server_id)
+            old_server_record_read_failed = False
+        except Exception as exc:  # noqa: BLE001 - advisory read; invalidation is best-effort end-to-end
+            verbose_logger.warning(
+                "MCP server %s: could not snapshot the pre-update record; skipping the stale-token check: %s",
+                payload.server_id,
+                exc,
+            )
+            old_server_record = None
+            old_server_record_read_failed = True
+
+        if (
+            payload.dcr_bridge
+            and payload.auth_type is None
+            and (old_server_record is not None or old_server_record_read_failed)
+        ):
+            stored_auth_type = old_server_record.auth_type if old_server_record else None
+            stored_auth_type_name = getattr(stored_auth_type, "value", stored_auth_type)
+            if stored_auth_type not in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": (
+                            "dcr_bridge is only supported for auth_type true_passthrough or "
+                            f"oauth_delegate (stored auth_type: {stored_auth_type_name!r}). Include "
+                            "the server's auth_type in the update payload or configure one of the "
+                            "client-forwarded token modes first."
+                        )
+                    },
+                )
+
         # try to update the mcp server
         mcp_server_record_updated = await update_mcp_server(
             prisma_client,
@@ -2286,6 +2455,30 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+
+        # If a field that determines which upstream OAuth token gets minted changed (url/audience, OAuth
+        # mode/grant, authorization-server endpoints, or the OAuth client + scopes), every stored per-user
+        # token was minted for the old configuration and is stale. Purge them (DB + cache) so the next
+        # tool call re-authorizes instead of forwarding a token for a resource/AS/client that no longer
+        # matches. Best-effort: a purge failure must not fail the update, whose primary job already
+        # succeeded.
+        if old_server_record is not None and mcp_oauth_token_identity(old_server_record) != mcp_oauth_token_identity(
+            mcp_server_record_updated
+        ):
+            try:
+                purged = await purge_user_oauth_credentials_for_server(prisma_client, payload.server_id)
+                if purged:
+                    verbose_logger.info(
+                        "MCP server %s: purged %d stale per-user OAuth token(s) after a mint-relevant config change",
+                        payload.server_id,
+                        purged,
+                    )
+            except Exception as exc:  # noqa: BLE001 - purge is best-effort; the server update already succeeded
+                verbose_logger.warning(
+                    "MCP server %s: failed to purge stale per-user OAuth tokens after config change: %s",
+                    payload.server_id,
+                    exc,
+                )
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:

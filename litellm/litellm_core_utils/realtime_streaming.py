@@ -1,5 +1,4 @@
 import asyncio
-import concurrent.futures
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, cast
 
@@ -24,9 +23,6 @@ if TYPE_CHECKING:
     CLIENT_CONNECTION_CLASS = ClientConnection
 else:
     CLIENT_CONNECTION_CLASS = Any
-
-# Create a thread pool with a maximum of 10 threads
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
 
 class RealtimeEventNormalizer(Protocol):
@@ -315,13 +311,12 @@ class RealTimeStreaming:
             if self.session_tools or self.tool_calls:
                 self.logging_obj.model_call_details["realtime_tools"] = self.session_tools
                 self.logging_obj.model_call_details["realtime_tool_calls"] = self.tool_calls
-            ## ASYNC LOGGING
             # Route through the bounded logging worker (per-coroutine timeout +
             # concurrency cap) instead of a bare create_task, so a slow callback
             # can't leave suspended tasks pinning each call's response in memory.
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(self.logging_obj.async_success_handler(self.messages))
-            ## SYNC LOGGING
-            executor.submit(self.logging_obj.success_handler(self.messages))
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
+            )
 
     async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.

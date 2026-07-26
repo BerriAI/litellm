@@ -24,8 +24,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.dual_cache_toke
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
+    InvalidatableOAuthTokenStore,
     OAuthToken,
-    OAuthTokenStore,
     RefreshCoordinator,
     RefreshingTokenStore,
     TokenCacheBackend,
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 _DEFAULT_TTL_SECONDS = 300.0
 
 ServerLookup = Callable[[str], "MCPServer | None"]
-StoreBuilder = Callable[[ServerLookup], tuple[OAuthTokenStore, bool]]
+StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
 
 
 async def _read_credential(user_id: str, server_id: str) -> dict[str, object] | None:
@@ -185,7 +185,7 @@ class LazyPerUserOAuthTokenStore:
         self._server_lookup = server_lookup
         self._store_builder = store_builder
         self._redis_available = redis_available
-        self._store: OAuthTokenStore | None = None
+        self._store: InvalidatableOAuthTokenStore | None = None
         self._uses_redis = False
         self._fetch_lock = asyncio.Condition()
         self._local_fetches = 0
@@ -203,7 +203,26 @@ class LazyPerUserOAuthTokenStore:
             if not uses_redis:
                 await self._finish_local_fetch()
 
-    async def _store_for_fetch(self) -> tuple[OAuthTokenStore, bool]:
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        """Drop the chain's cached entry for ``(user_id, server_id)`` after the credential row
+        changes (re-auth, revoke). Builds the chain if no fetch has run yet, so a shared (Redis)
+        cache entry written by another worker is dropped too; the in-process case is then a no-op
+        on an empty cache.
+        """
+        if self._uses_redis:
+            store = self._store
+            if store is not None:
+                await store.invalidate(user_id, server_id)
+                return
+
+        store, uses_redis = await self._store_for_fetch()
+        try:
+            await store.invalidate(user_id, server_id)
+        finally:
+            if not uses_redis:
+                await self._finish_local_fetch()
+
+    async def _store_for_fetch(self) -> tuple[InvalidatableOAuthTokenStore, bool]:
         async with self._fetch_lock:
             while (
                 self._store is not None and not self._uses_redis and self._redis_available() and self._local_fetches > 0

@@ -474,6 +474,22 @@ def test_vertex_ai_empty_content():
                 reasoning_tokens=5,
             ),
         ),
+        (
+            UsageMetadata(
+                promptTokenCount=4647,
+                candidatesTokenCount=1495,
+                totalTokenCount=29426,
+                thoughtsTokenCount=10785,
+                toolUsePromptTokenCount=12499,
+            ),
+            False,
+            Usage(
+                prompt_tokens=17146,
+                completion_tokens=12280,
+                total_tokens=29426,
+                reasoning_tokens=10785,
+            ),
+        ),
     ],
 )
 def test_vertex_ai_candidate_token_count_inclusive(
@@ -492,6 +508,140 @@ def test_vertex_ai_candidate_token_count_inclusive(
     assert usage.prompt_tokens == expected_usage.prompt_tokens
     assert usage.completion_tokens == expected_usage.completion_tokens
     assert usage.total_tokens == expected_usage.total_tokens
+
+
+def test_vertex_ai_grounded_usage_surfaces_tool_use_tokens():
+    """
+    Grounded Gemini requests (googleSearch) return toolUsePromptTokenCount as part of totalTokenCount.
+    Regression for https://github.com/BerriAI/litellm/issues/33530: it must be folded into
+    prompt_tokens (so prompt_tokens + completion_tokens == total_tokens) and surfaced on
+    prompt_tokens_details.tool_use_tokens.
+    """
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=4647,
+        candidatesTokenCount=1495,
+        totalTokenCount=29426,
+        thoughtsTokenCount=10785,
+        toolUsePromptTokenCount=12499,
+    )
+
+    usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+    assert usage.prompt_tokens_details.tool_use_tokens == 12499
+
+
+def test_vertex_ai_non_grounded_usage_omits_tool_use_tokens():
+    """Non-grounded responses must not surface a tool_use_tokens field on prompt_tokens_details."""
+    v = VertexGeminiConfig()
+    usage_metadata = UsageMetadata(
+        promptTokenCount=10,
+        candidatesTokenCount=10,
+        totalTokenCount=20,
+    )
+
+    usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+
+    assert usage.prompt_tokens == 10
+    assert not hasattr(usage.prompt_tokens_details, "tool_use_tokens")
+
+
+def test_response_has_search_grounding_detection():
+    """
+    Only groundingMetadata.webSearchQueries signals an actual Google Search. URL context also
+    emits groundingMetadata (groundingChunks but no webSearchQueries) and must not be treated
+    as search grounding.
+    """
+    assert (
+        VertexGeminiConfig._response_has_search_grounding(
+            {"candidates": [{"groundingMetadata": {"webSearchQueries": ["latest nobel physics"]}}]}
+        )
+        is True
+    )
+    assert (
+        VertexGeminiConfig._response_has_search_grounding(
+            {
+                "candidates": [
+                    {
+                        "urlContextMetadata": {"urlMetadata": []},
+                        "groundingMetadata": {
+                            "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                        },
+                    }
+                ]
+            }
+        )
+        is False
+    )
+    assert (
+        VertexGeminiConfig._response_has_search_grounding({"candidates": [{"groundingMetadata": {"webSearchQueries": []}}]})
+        is False
+    )
+    assert VertexGeminiConfig._response_has_search_grounding({"candidates": []}) is False
+    assert VertexGeminiConfig._response_has_search_grounding({}) is False
+
+
+def test_vertex_ai_search_grounding_tool_use_tokens_excluded_from_prompt_tokens():
+    """
+    Grounding with Google Search retrieved tokens are not billed at the input token rate
+    (Google charges a separate per-request / per-query search fee), so toolUsePromptTokenCount
+    must be surfaced on prompt_tokens_details.tool_use_tokens but excluded from prompt_tokens.
+    See https://ai.google.dev/gemini-api/docs/pricing and
+    https://github.com/BerriAI/litellm/discussions/33198
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [{"groundingMetadata": {"webSearchQueries": ["latest nobel physics"]}}],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=19,
+            candidatesTokenCount=304,
+            thoughtsTokenCount=122,
+            toolUsePromptTokenCount=142,
+            totalTokenCount=587,
+        ),
+    }
+
+    usage = v._calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 19
+    assert usage.completion_tokens == 304 + 122
+    assert usage.total_tokens == 587
+    assert usage.prompt_tokens_details.tool_use_tokens == 142
+    assert usage.total_tokens - usage.prompt_tokens - usage.completion_tokens == 142
+
+
+def test_vertex_ai_url_context_tool_use_tokens_billed_as_input_tokens():
+    """
+    URL context / File Search / code execution tool-use tokens are billed as input tokens, so
+    toolUsePromptTokenCount is folded into prompt_tokens when the response is not search grounded.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=19,
+            candidatesTokenCount=304,
+            thoughtsTokenCount=122,
+            toolUsePromptTokenCount=142,
+            totalTokenCount=587,
+        ),
+    }
+
+    usage = v._calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 19 + 142
+    assert usage.completion_tokens == 304 + 122
+    assert usage.total_tokens == 587
+    assert usage.prompt_tokens_details.tool_use_tokens == 142
+    assert usage.total_tokens - usage.prompt_tokens - usage.completion_tokens == 0
 
 
 def test_streaming_chunk_includes_reasoning_tokens():
@@ -878,6 +1028,12 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
         + result.prompt_tokens_details.image_tokens
         == result.prompt_tokens
     )
+
+
+def test_map_response_modalities_video():
+    """The video modality maps to VIDEO instead of MODALITY_UNSPECIFIED, which Gemini rejects."""
+    v = VertexGeminiConfig()
+    assert v.map_response_modalities(["text", "video"]) == ["TEXT", "VIDEO"]
 
 
 def test_vertex_ai_usage_metadata_accumulates_duplicate_modalities():
@@ -1929,6 +2085,9 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
             return None
 
         async def async_failure_handler(self, *args, **kwargs):
+            return None
+
+        async def dispatch_failure_handlers(self, *args, **kwargs):
             return None
 
     async def failing_make_call(client=None, **kwargs):
@@ -5210,3 +5369,154 @@ class TestModelResponseIteratorCleanup:
 
         mock_iterator.aclose.assert_awaited_once()
         mock_response.aclose.assert_awaited_once()
+
+
+def test_process_candidates_merges_thought_signatures_and_server_side_tools():
+    """
+    thought_signatures and server_side_tool_invocations must both survive in
+    provider_specific_fields when a candidate carries the two at once; the second
+    merge must extend the dict created by the first, not replace it.
+    """
+    candidates = [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "the weather is sunny", "thoughtSignature": "sig-text"},
+                    {
+                        "toolCall": {
+                            "toolType": "google_search",
+                            "id": "tool-1",
+                            "args": {"query": "weather"},
+                        }
+                    },
+                ],
+            },
+            "finishReason": "STOP",
+        }
+    ]
+    model_response = ModelResponse()
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=candidates,
+        model_response=model_response,
+        standard_optional_params={},
+        cumulative_tool_call_index=0,
+    )
+
+    fields = model_response.choices[-1].message.provider_specific_fields
+    assert fields["thought_signatures"] == ["sig-text"]
+    assert fields["server_side_tool_invocations"][0]["id"] == "tool-1"
+
+
+def _accumulating_gemini_iterator():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+    )
+    iterator.chunk_type = "accumulated_json"
+    return iterator
+
+
+def test_accumulated_json_chunk_multi_value_buffer_does_not_wedge():
+    """Two complete Gemini objects buffered together must both surface.
+
+    A whole-buffer json.loads raises "Extra data" on concatenated values and, since
+    the buffer was never reset on failure, returned None forever while growing without
+    bound. Peeling one value from the front keeps the remainder for the next call.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+
+    first = iterator.handle_accumulated_json_chunk(chunk=obj + obj)
+    assert first is not None
+    assert first.choices[0].delta.content == "a"
+
+    second = iterator.handle_accumulated_json_chunk(chunk="")
+    assert second is not None
+    assert second.choices[0].delta.content == "a"
+
+    assert iterator.accumulated_json.strip() == ""
+
+
+def test_accumulated_json_end_of_stream_drains_all_buffered_values():
+    """End of stream must drain every buffered value and then terminate.
+
+    With concatenated values a whole-buffer parse never succeeds, so __next__ kept
+    returning None without shrinking the buffer - an unrecoverable per-request spin.
+    The bounded loop asserts the iterator both surfaces all values and terminates.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.response_iterator = iter([])
+    iterator.accumulated_json = obj + obj + obj
+
+    out = []
+    terminated = False
+    for _ in range(100):
+        try:
+            chunk = iterator.__next__()
+        except StopIteration:
+            terminated = True
+            break
+        if chunk is not None:
+            out.append(chunk)
+
+    assert terminated, "iterator did not terminate - accumulated buffer wedged"
+    assert len(out) == 3
+    assert iterator.accumulated_json.strip() == ""
+
+
+def test_accumulated_json_end_of_stream_surfaces_leading_value_before_truncated_tail():
+    """A complete leading value must survive a truncated trailing value at end of stream.
+
+    The mid-stream perf guard only inspects the buffer's last byte, so a complete leading
+    object followed by a truncated one (a server that cut the stream mid-object, last byte
+    not a closer) would keep the guard from ever parsing and drop the complete value. At end
+    of stream the drain ignores that guard, surfaces the complete value, and discards only
+    the truncated tail.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.response_iterator = iter([])
+    iterator.accumulated_json = obj + '{"candidates":'
+
+    out = []
+    for _ in range(100):
+        try:
+            chunk = iterator.__next__()
+        except StopIteration:
+            break
+        if chunk is not None:
+            out.append(chunk)
+
+    assert len(out) == 1
+    assert out[0].choices[0].delta.content == "a"
+
+
+def test_accumulated_json_skips_non_dict_leading_value():
+    """A non-dict value at the front must not block the dict values behind it.
+
+    raw_decode advances past a decoded value, so a leading non-dict (a JSON array or scalar,
+    which Gemini never emits but a malformed stream could) must be consumed and skipped. If
+    the drain stopped on it, the trailing objects would be lost at end of stream.
+    """
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.response_iterator = iter([])
+    iterator.accumulated_json = "[1, 2]" + obj
+
+    out = []
+    for _ in range(100):
+        try:
+            chunk = iterator.__next__()
+        except StopIteration:
+            break
+        if chunk is not None:
+            out.append(chunk)
+
+    assert len(out) == 1
+    assert out[0].choices[0].delta.content == "a"

@@ -1390,7 +1390,14 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming():
         assert exception.status_code == 400
         assert "Violated guardrail policy" in str(exception.detail)
 
-    # Test 2: disable_exception_on_block=True - should NOT raise exception
+    # Test 2: disable_exception_on_block=True - raises ModifyResponseException.
+    # LIT-4186: pre-fix, the native hook swallowed the block and set
+    # data["mock_response"], which was dead code (route_request already
+    # unpacked kwargs) so during_call let the model call proceed anyway.
+    # The correct contract is to raise ModifyResponseException so the endpoint
+    # handler returns a 200 with the block message as content.
+    from litellm.exceptions import ModifyResponseException
+
     guardrail_disabled = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
@@ -1402,20 +1409,13 @@ async def test_bedrock_guardrail_disable_exception_on_block_non_streaming():
     ) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
-        # Should NOT raise exception when disable_exception_on_block=True
-        try:
-            response = await guardrail_disabled.async_moderation_hook(
+        with pytest.raises(ModifyResponseException) as exc_info:
+            await guardrail_disabled.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
                 call_type="completion",
             )
-            # Should succeed and return data (even though content was blocked)
-            assert response is not None
-            print("✅ No exception raised when disable_exception_on_block=True")
-        except Exception as e:
-            pytest.fail(
-                f"Should not raise exception when disable_exception_on_block=True, but got: {e}"
-            )
+        assert exc_info.value.message == "I can't provide that information."
 
 
 @pytest.mark.asyncio
@@ -1514,7 +1514,10 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
             async for chunk in result_generator:
                 pass
 
-    # Test 2: disable_exception_on_block=True - should NOT raise exception
+    # Test 2: disable_exception_on_block=True. Streaming can't raise up to the
+    # endpoint handler (SSE headers already flushed), so the block is delivered
+    # as a synthetic stream with finish_reason=content_filter and the block
+    # message as content -- same shape a non-streaming block produces.
     guardrail_disabled = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
@@ -1526,31 +1529,20 @@ async def test_bedrock_guardrail_disable_exception_on_block_streaming():
     ) as mock_post:
         mock_post.return_value = mock_bedrock_response
 
-        # Should NOT raise exception when disable_exception_on_block=True
-        try:
-            result_generator = (
-                guardrail_disabled.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=mock_user_api_key_dict,
-                    response=mock_streaming_response(),
-                    request_data=request_data,
-                )
-            )
-
-            # Consume the generator - should succeed without exceptions
-            result_chunks = []
-            async for chunk in result_generator:
-                result_chunks.append(chunk)
-
-            # Should have received chunks back even though content was blocked
-            assert len(result_chunks) > 0
-            print(
-                "✅ Streaming completed without exception when disable_exception_on_block=True"
-            )
-
-        except Exception as e:
-            pytest.fail(
-                f"Should not raise exception when disable_exception_on_block=True in streaming, but got: {e}"
-            )
+        result_generator = guardrail_disabled.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_streaming_response(),
+            request_data=request_data,
+        )
+        chunks = [c async for c in result_generator]
+        assert chunks, "streaming block should yield synthetic chunks, not empty"
+        assembled_content = "".join(
+            (c.choices[0].delta.content or "")
+            for c in chunks
+            if getattr(c, "choices", None) and getattr(c.choices[0], "delta", None)
+        )
+        assert assembled_content == "I can't provide that information."
+        assert chunks[-1].choices[0].finish_reason == "content_filter"
 
 
 @pytest.mark.asyncio
