@@ -200,6 +200,15 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("+2 more")).toBeInTheDocument();
   });
 
+  it("renders the toolbar divider centered rather than stretched to the top of the row", () => {
+    const { container } = render(<AllModelsTable {...baseProps} />);
+
+    const separators = container.querySelectorAll('[data-slot="separator"][data-orientation="vertical"]');
+    expect(separators).toHaveLength(1);
+    expect(separators[0].className).not.toMatch(/self-stretch/);
+    expect(separators[0].className).toContain("data-vertical:self-center");
+  });
+
   describe("pause / resume", () => {
     it("renders the toggle on for an active DB model and off for a blocked one", () => {
       const { rerender } = render(<AllModelsTable {...baseProps} />);
