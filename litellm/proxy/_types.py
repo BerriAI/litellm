@@ -17,6 +17,7 @@ from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.litellm_core_utils.credential_hashing import hash_credential
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
@@ -2672,16 +2673,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         1. Regular API keys from LiteLLM DB
         2. JWT tokens used for connecting to LiteLLM API
         """
-        normalized = api_key
-        if normalized[:7].lower() == "bearer ":
-            normalized = normalized[7:]
-        if normalized.startswith("sk-"):
-            return hash_token(normalized)
-        from litellm.proxy.auth.handle_jwt import JWTHandler
-
-        if JWTHandler.is_jwt(token=normalized):
-            return f"hashed-jwt-{hash_token(token=normalized)}"
-        return normalized
+        return hash_credential(api_key)
 
     @classmethod
     def get_litellm_internal_health_check_user_api_key_auth(cls) -> "UserAPIKeyAuth":

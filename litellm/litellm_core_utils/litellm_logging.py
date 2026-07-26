@@ -5,6 +5,7 @@ import copy
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -64,10 +65,7 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
-from litellm.litellm_core_utils.credential_hashing import (
-    is_valid_sha256_hash,
-    sanitize_key_hash,
-)
+from litellm.litellm_core_utils.credential_hashing import sanitize_key_hash
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -4509,6 +4507,11 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
                     return True
 
     return False
+
+
+def is_valid_sha256_hash(value: str) -> bool:
+    # Check if the value is a valid SHA-256 hash (64 hexadecimal characters)
+    return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
 
 
 class StandardLoggingPayloadSetup:

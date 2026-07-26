@@ -1,45 +1,38 @@
-import base64
 import hashlib
-import json
-import re
 
-_SHA256_HEX_RE = re.compile(r"[a-fA-F0-9]{64}")
 _BEARER_PREFIX = "bearer "
+_JWT_SEGMENT_COUNT = 3
 
 
-def is_valid_sha256_hash(value: str) -> bool:
-    return bool(_SHA256_HEX_RE.fullmatch(value))
+def sha256_hex(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _is_jwt(value: str) -> bool:
-    header, _, rest = value.partition(".")
-    payload, _, signature = rest.partition(".")
-    if not header or not payload or not signature or "." in signature:
-        return False
-    try:
-        decoded_header = json.loads(base64.urlsafe_b64decode(header + "=" * (-len(header) % 4)))
-    except Exception:
-        return False
-    return isinstance(decoded_header, dict) and "alg" in decoded_header
+def _is_jwt(token: str) -> bool:
+    return len(token.split(".")) == _JWT_SEGMENT_COUNT
+
+
+def hash_credential(value: str) -> str:
+    """
+    Replace credential material with a stable digest, leaving anything that is
+    not a credential untouched.
+
+    Covers LiteLLM virtual keys (`sk-...`, with or without a `Bearer ` prefix)
+    and JWTs used to authenticate against the proxy. Values that are already a
+    digest, and non-secret identifiers such as the master key alias, are
+    returned unchanged so downstream grouping by key stays stable.
+
+    Single source of truth for `UserAPIKeyAuth.api_key` and for the
+    `user_api_key_hash` field of the standard logging payload, so the same
+    credential yields the same value whichever boundary hashes it.
+    """
+    normalized = value[len(_BEARER_PREFIX) :] if value[: len(_BEARER_PREFIX)].lower() == _BEARER_PREFIX else value
+    if normalized.startswith("sk-"):
+        return sha256_hex(normalized)
+    if _is_jwt(normalized):
+        return f"hashed-jwt-{sha256_hex(normalized)}"
+    return normalized
 
 
 def sanitize_key_hash(value: str | None) -> str | None:
-    """
-    Guarantee that a value destined for a `user_api_key_hash` field carries no
-    credential material, since those fields land in durable sinks (spend logs,
-    S3 request logs, Prometheus labels).
-
-    Virtual keys (`sk-...`, optionally still `Bearer `-prefixed) and JWTs are
-    replaced with their sha256 digest, matching the digest virtual keys are
-    already stored and looked up under. Values that are already a digest, and
-    non-credential identifiers such as the master key alias, pass through
-    untouched so downstream grouping stays stable.
-    """
-    if value is None:
-        return None
-    credential = value[len(_BEARER_PREFIX) :] if value[: len(_BEARER_PREFIX)].lower() == _BEARER_PREFIX else value
-    if is_valid_sha256_hash(credential):
-        return credential
-    if credential.startswith("sk-") or _is_jwt(credential):
-        return hashlib.sha256(credential.encode()).hexdigest()
-    return value
+    return hash_credential(value) if isinstance(value, str) else value
