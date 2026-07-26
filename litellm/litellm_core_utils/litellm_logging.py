@@ -5,7 +5,6 @@ import copy
 import datetime
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -65,6 +64,10 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
+from litellm.litellm_core_utils.credential_hashing import (
+    is_valid_sha256_hash,
+    sanitize_key_hash,
+)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -4508,11 +4511,6 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     return False
 
 
-def is_valid_sha256_hash(value: str) -> bool:
-    # Check if the value is a valid SHA-256 hash (64 hexadecimal characters)
-    return bool(re.fullmatch(r"[a-fA-F0-9]{64}", value))
-
-
 class StandardLoggingPayloadSetup:
     @staticmethod
     def cleanup_timestamps(
@@ -4694,6 +4692,7 @@ class StandardLoggingPayloadSetup:
             user_api_key = metadata.get("user_api_key")
             if user_api_key and isinstance(user_api_key, str) and is_valid_sha256_hash(user_api_key):
                 clean_metadata["user_api_key_hash"] = user_api_key
+            clean_metadata["user_api_key_hash"] = sanitize_key_hash(clean_metadata["user_api_key_hash"])
             _potential_requester_metadata = metadata.get(
                 "metadata", None
             )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields
@@ -5536,6 +5535,7 @@ def get_standard_logging_metadata(
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
                 clean_metadata["user_api_key_hash"] = metadata.get("user_api_key")  # this is the hash
+        clean_metadata["user_api_key_hash"] = sanitize_key_hash(clean_metadata["user_api_key_hash"])
     return clean_metadata
 
 

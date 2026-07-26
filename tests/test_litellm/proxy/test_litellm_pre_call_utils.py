@@ -5421,3 +5421,36 @@ async def test_overwrite_user_with_key_hash_rejects_alias_without_marker(monkeyp
     )
 
     assert updated_data["user"] == "caller-chosen-id"
+
+
+def test_get_sanitized_user_information_from_key_hashes_raw_credential():
+    """
+    Custom auth (documented as `return UserAPIKeyAuth(api_key=api_key)`) and
+    proxies running without a master key hand back the raw client credential.
+    It must be hashed before it reaches logging metadata, while proxy-validated
+    values (key hashes, the master key alias) stay untouched
+    """
+    import hashlib
+
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    raw_key = "sk-my-secret-virtual-key"
+
+    sanitized = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=UserAPIKeyAuth(api_key=raw_key)
+    )
+    assert sanitized["user_api_key_hash"] == hashlib.sha256(raw_key.encode()).hexdigest()
+
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    assert (
+        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=UserAPIKeyAuth(api_key=key_hash)
+        )["user_api_key_hash"]
+        == key_hash
+    )
+    assert (
+        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+        )["user_api_key_hash"]
+        == LITELLM_PROXY_MASTER_KEY_ALIAS
+    )

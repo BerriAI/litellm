@@ -4101,3 +4101,41 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_standard_logging_metadata_hashes_raw_virtual_key_in_key_hash_field():
+    """
+    user_api_key_hash lands in durable sinks (spend logs, S3 request logs). A raw
+    virtual key arriving in that field must never be persisted verbatim
+    """
+    import hashlib
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        StandardLoggingPayloadSetup,
+        get_standard_logging_metadata,
+    )
+
+    raw_key = "sk-my-secret-virtual-key"
+    expected = hashlib.sha256(raw_key.encode()).hexdigest()
+
+    setup_result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": raw_key}
+    )
+    legacy_result = get_standard_logging_metadata({"user_api_key_hash": raw_key})
+
+    assert setup_result["user_api_key_hash"] == expected
+    assert legacy_result["user_api_key_hash"] == expected
+
+
+def test_standard_logging_metadata_preserves_hashed_key():
+    import hashlib
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    hashed_key = hashlib.sha256(b"sk-my-secret-virtual-key").hexdigest()
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        {"user_api_key_hash": hashed_key}
+    )
+
+    assert result["user_api_key_hash"] == hashed_key
