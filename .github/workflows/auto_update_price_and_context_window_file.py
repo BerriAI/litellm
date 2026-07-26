@@ -110,6 +110,61 @@ def transform_vercel_ai_gateway_data(data):
     return transformed
 
 
+def transform_friendli_data(data):
+    transformed = {}
+    for row in data:
+        f = row.get("functionality", {}) or {}
+        p = row.get("pricing", {}) or {}
+        inp = row.get("input_modalities", []) or []
+        out = row.get("output_modalities", []) or []
+
+        obj = {
+            "max_input_tokens": row.get("context_length"),
+            "max_output_tokens": row.get("max_completion_tokens"),
+            "max_tokens": row.get("max_completion_tokens") or row.get("context_length"),
+            "input_cost_per_token": float(p.get("input", 0)),
+            "output_cost_per_token": float(p.get("output", 0)),
+            "supports_function_calling": bool(f.get("tool_call")),
+            "supports_parallel_function_calling": bool(f.get("parallel_tool_call")),
+            "supports_response_schema": bool(f.get("structured_output")),
+            "litellm_provider": "friendliai",
+            "mode": row.get("mode", "chat"),
+        }
+
+        # cache pricing (optional)
+        if p.get("input_cache_read") is not None:
+            obj["cache_read_input_token_cost"] = float(p["input_cache_read"])
+        if p.get("cache_write") is not None:
+            obj["cache_creation_input_token_cost"] = float(p["cache_write"])
+
+        # only set these when the API actually returns them — don't overwrite
+        # an existing true with false just because the field is absent.
+        if f.get("tool_choice") is not None:
+            obj["supports_tool_choice"] = bool(f["tool_choice"])
+        if f.get("system_messages") is not None:
+            obj["supports_system_messages"] = bool(f["system_messages"])
+
+        # reasoning
+        if row.get("reasoning"):
+            obj["supports_reasoning"] = True
+
+        # deprecation
+        if v := row.get("deprecation_date"):
+            obj["deprecation_date"] = v[:10]
+
+        # vision modality
+        if "image" in inp or "video" in inp:
+            obj["supports_vision"] = True
+        if inp:
+            obj["supported_modalities"] = inp
+        if out:
+            obj["supported_output_modalities"] = out
+
+        transformed[f'friendliai/{row["id"]}'] = obj
+
+    return transformed
+
+
 # Load local data from a specified file
 def load_local_data(file_path):
     try:
@@ -130,6 +185,7 @@ def main():
     local_file_path = "model_prices_and_context_window.json"  # Path to the local data file
     openrouter_url = "https://openrouter.ai/api/v1/models"  # URL to fetch OpenRouter data
     vercel_ai_gateway_url = "https://ai-gateway.vercel.sh/v1/models"  # URL to fetch Vercel AI Gateway data
+    friendli_url = "https://api.friendli.ai/serverless/v1/models"  # URL to fetch Friendli serverless data
 
     # Load local data from file
     local_data = load_local_data(local_file_path)
@@ -143,9 +199,14 @@ def main():
     vercel_data = asyncio.run(fetch_data(vercel_ai_gateway_url))
     # Transform the fetched Vercel AI Gateway data
     vercel_data = transform_vercel_ai_gateway_data(vercel_data)
+
+    # Fetch Friendli serverless data
+    friendli_data = asyncio.run(fetch_data(friendli_url))
+    # Transform the fetched Friendli data
+    friendli_data = transform_friendli_data(friendli_data)
     
-    # Combine both datasets
-    all_remote_data = {**openrouter_data, **vercel_data}
+    # Combine all datasets
+    all_remote_data = {**openrouter_data, **vercel_data, **friendli_data}
 
     # If both local and openrouter data are available, synchronize and save
     if local_data and all_remote_data:
