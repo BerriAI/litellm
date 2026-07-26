@@ -982,9 +982,6 @@
     "max-lines": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 2
     },
@@ -1061,7 +1058,17 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/layout.tsx": {
+  "src/app/(dashboard)/models-and-endpoints/page.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }

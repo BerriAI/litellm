@@ -20,6 +20,13 @@ describe("BarChart", () => {
     expect(fills).toEqual(new Set(["var(--color-green-500, #22c55e)", "var(--color-red-500, #ef4444)"]));
   });
 
+  it("renders the No data placeholder instead of a chart when data is empty", () => {
+    const { container, getByText } = render(<BarChart data={[]} index="date" categories={["passed"]} />);
+
+    expect(getByText("No data")).toBeTruthy();
+    expect(container.querySelector('[data-slot="chart"]')).toBeNull();
+  });
+
   it("falls back to the tremor default color cycle when no colors are passed", () => {
     const { container } = render(<BarChart data={data} index="date" categories={["passed", "blocked"]} />);
 
