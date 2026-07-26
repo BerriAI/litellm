@@ -424,6 +424,62 @@ def test_main_print_verbose_redacts_and_sanitizes_stdout(capsys, monkeypatch):
     assert "\\r\\n" in out and "\x9b" not in out
 
 
+def test_streaming_handler_print_verbose_redacts_and_sanitizes(capsys, monkeypatch):
+    from litellm.litellm_core_utils.streaming_handler import print_verbose as sh_pv
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    sh_pv(f"chunk {_secret_payload()}\r\n\x9b")
+    out = capsys.readouterr().out
+    assert SECRET_VALUE not in out and "REDACTED" in out
+    assert "\\r\\n" in out and "\x9b" not in out
+
+
+def test_caching_print_verbose_redacts_and_sanitizes(capsys, monkeypatch):
+    from litellm.caching.caching import print_verbose as cache_pv
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    cache_pv(f"cache {_secret_payload()}\r\n\x9b")
+    out = capsys.readouterr().out
+    assert SECRET_VALUE not in out and "REDACTED" in out
+    assert "\\r\\n" in out and "\x9b" not in out
+
+
+def test_proxy_print_verbose_sanitizes_stdout(capsys, monkeypatch):
+    from litellm.proxy.utils import print_verbose as proxy_pv
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    proxy_pv("proxy line\r\nINJ\x9b")
+    out = capsys.readouterr().out
+    assert "\\r\\n" in out and "\x9b" not in out
+
+
+def test_proxy_hook_print_verbose_methods_redact_and_sanitize(capsys, monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+    from litellm.proxy.hooks.batch_redis_get import _PROXY_BatchRedisRequests
+    from litellm.proxy.hooks.parallel_request_limiter import (
+        _PROXY_MaxParallelRequestsHandler,
+    )
+    from litellm.proxy.hooks.prompt_injection_detection import (
+        _OPTIONAL_PromptInjectionDetection,
+    )
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    payload = f"hook {_secret_payload()}\r\nINJ\x9b"
+    for cls in (
+        _OPTIONAL_PresidioPIIMasking,
+        _PROXY_BatchRedisRequests,
+        _OPTIONAL_PromptInjectionDetection,
+        _PROXY_MaxParallelRequestsHandler,
+    ):
+        cls.print_verbose(object.__new__(cls), payload)
+        out = capsys.readouterr().out
+        assert SECRET_VALUE not in out, cls.__name__
+        assert "REDACTED" in out, cls.__name__
+        assert "\\r\\n" in out and "\x9b" not in out, cls.__name__
+
+
 def test_utils_print_verbose_skips_stdout_when_not_verbose(capsys, monkeypatch):
     from litellm.utils import print_verbose as utils_print_verbose
 

@@ -8,7 +8,11 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import (
+    _sanitize_log_message,
+    redact_secrets,
+    verbose_proxy_logger,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
@@ -51,7 +55,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa: T201
+                print(  # noqa: T201
+                    _sanitize_log_message(redact_secrets(str(print_statement)))
+                )
         except Exception:
             pass
 

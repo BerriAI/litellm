@@ -9,7 +9,11 @@ from typing import Literal, Optional
 from fastapi import HTTPException
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import (
+    _sanitize_log_message,
+    redact_secrets,
+    verbose_proxy_logger,
+)
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -31,7 +35,9 @@ class _PROXY_BatchRedisRequests(CustomLogger):
         elif debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa: T201
+            print(  # noqa: T201
+                _sanitize_log_message(redact_secrets(str(print_statement)))
+            )
 
     async def async_pre_call_hook(
         self,

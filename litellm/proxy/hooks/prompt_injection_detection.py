@@ -13,7 +13,11 @@ from typing import List, Literal, Optional
 from fastapi import HTTPException
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import (
+    _sanitize_log_message,
+    redact_secrets,
+    verbose_proxy_logger,
+)
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD
 from litellm.integrations.custom_logger import CustomLogger
@@ -72,7 +76,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
 
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa: T201
+            print(  # noqa: T201
+                _sanitize_log_message(redact_secrets(str(print_statement)))
+            )
 
     def update_environment(self, router: Optional[Router] = None):
         self.llm_router = router
