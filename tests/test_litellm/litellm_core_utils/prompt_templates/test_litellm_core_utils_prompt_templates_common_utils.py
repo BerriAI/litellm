@@ -839,18 +839,40 @@ def test_hoist_images_from_tool_messages_does_not_mutate_input():
     assert len(messages) == 2
 
 
-def test_hoist_images_from_tool_messages_none_content_tool_message_passes_through():
-    none_content_tool_msg = _tool_msg(None, tool_call_id="call_2")
+@pytest.mark.parametrize(
+    "sibling_content",
+    [None, [{"type": "text", "text": "42 files"}]],
+    ids=["none_content", "text_only_list"],
+)
+def test_hoist_images_from_tool_messages_imageless_sibling_in_image_run_unchanged(sibling_content):
+    imageless_tool_msg = _tool_msg(sibling_content, tool_call_id="call_2")
     messages = [
         _assistant_tool_call_msg("call_1", "call_2"),
         _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
-        none_content_tool_msg,
+        imageless_tool_msg,
     ]
 
     result = hoist_images_from_tool_messages(messages)
 
-    roles = [m["role"] for m in result]
-    assert roles == ["assistant", "tool", "tool", "user"]
+    assert [m["role"] for m in result] == ["assistant", "tool", "tool", "user"]
     assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
-    assert result[2] is none_content_tool_msg
+    assert result[2] is imageless_tool_msg
     assert result[3]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_earlier_tool_run_without_images_unchanged():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("plain text result"),
+        _assistant_tool_call_msg("call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_2"),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert [m["role"] for m in result] == ["assistant", "tool", "assistant", "tool", "user"]
+    assert result[1]["content"] == "plain text result"
+    assert result[3]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[4]["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
