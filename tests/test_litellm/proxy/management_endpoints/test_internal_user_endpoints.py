@@ -2013,6 +2013,52 @@ def test_update_internal_user_params_keeps_original_max_budget_when_not_provided
     assert "user_alias" in non_default_values
 
 
+@pytest.mark.parametrize(
+    "field, empty_value",
+    [
+        ("models", []),
+        ("allowed_cache_controls", []),
+        ("model_max_budget", {}),
+    ],
+)
+def test_update_internal_user_params_clears_empty_collection_field(field, empty_value):
+    """
+    Regression for LIT-3888: an explicitly provided empty list/dict for a real
+    user column must reach the DB update so the field can be cleared via
+    /user/update. Previously [] / {} were filtered out as "defaults" and the old
+    values persisted.
+    """
+    data = UpdateUserRequest(user_id="test_user", **{field: empty_value})
+    data_json = data.model_dump(exclude_unset=True)
+
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    assert field in non_default_values
+    assert non_default_values[field] == empty_value
+
+
+def test_update_internal_user_params_sets_personal_models():
+    """A non-empty models list is still applied unchanged."""
+    data = UpdateUserRequest(user_id="test_user", models=["gpt-4o"])
+    data_json = data.model_dump(exclude_unset=True)
+
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    assert non_default_values["models"] == ["gpt-4o"]
+
+
+def test_update_internal_user_params_keeps_clearable_fields_when_not_provided():
+    """When a clearable field is omitted, its column must be left untouched."""
+    data = UpdateUserRequest(user_id="test_user", user_alias="test_alias")
+    data_json = data.model_dump(exclude_unset=True)
+
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    assert "models" not in non_default_values
+    assert "allowed_cache_controls" not in non_default_values
+    assert "model_max_budget" not in non_default_values
+
+
 def test_generate_request_base_validator():
     """
     Test that GenerateRequestBase validator converts empty string to None for max_budget
