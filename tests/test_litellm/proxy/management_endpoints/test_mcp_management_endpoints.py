@@ -1556,6 +1556,14 @@ class TestTeamScopedMCPServerAccess:
 
 
 class TestTemporaryMCPSessionEndpoints:
+    @pytest.fixture(autouse=True)
+    def unset_proxy_base_url(self, monkeypatch):
+        """``get_request_base_url`` resolves ``PROXY_BASE_URL`` ahead of ``request.base_url``, so a
+        developer with that env var set (a ``.env`` in any parent directory of the checkout is
+        enough, since ``import litellm`` runs dotenv) would otherwise silently bypass the mocked
+        ``request.base_url`` these tests assert on."""
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
     def test_inherit_credentials_from_existing_server(self):
         payload = NewMCPServerRequest(
             server_id="server-123",

@@ -20,3 +20,15 @@ def _hermetic_server_root_path():
     finally:
         if saved is not None:
             os.environ["SERVER_ROOT_PATH"] = saved
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_proxy_base_url(monkeypatch):
+    """Isolate MCP discovery tests from a developer's ``PROXY_BASE_URL``.
+
+    ``get_request_base_url`` resolves that env var ahead of the request's own base URL, and
+    ``import litellm`` loads a ``.env`` from any parent directory of the checkout, so a set value
+    silently overrides the origins these tests drive through the request. Clearing it here pins
+    the request-derived origin; a test that exercises the env override sets the value itself.
+    """
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
