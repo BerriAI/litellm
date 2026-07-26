@@ -414,6 +414,16 @@ def test_print_verbose_sanitizes_c1_control_chars(capsys, monkeypatch):
     assert "?" in out
 
 
+def test_main_print_verbose_redacts_and_sanitizes_stdout(capsys, monkeypatch):
+    from litellm.main import print_verbose as main_print_verbose
+
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    main_print_verbose(f"line in async streaming: {_secret_payload()}\r\nINJ\x9b")
+    out = capsys.readouterr().out
+    assert SECRET_VALUE not in out and "REDACTED" in out
+    assert "\\r\\n" in out and "\x9b" not in out
+
+
 def test_utils_print_verbose_skips_stdout_when_not_verbose(capsys, monkeypatch):
     from litellm.utils import print_verbose as utils_print_verbose
 
