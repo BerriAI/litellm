@@ -421,7 +421,7 @@ def _sanitize_log_message(message: str) -> str:
     }
     for char, escaped in line_breaks.items():
         message = message.replace(char, escaped)
-    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "?", message)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "?", message)
 
 
 def print_verbose(print_statement):

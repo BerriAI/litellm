@@ -404,6 +404,16 @@ def test_print_verbose_sanitizes_unicode_line_separators(capsys, monkeypatch):
     assert "\x85" not in out and "\u2028" not in out and "\u2029" not in out
 
 
+def test_print_verbose_sanitizes_c1_control_chars(capsys, monkeypatch):
+    import litellm._logging as _logging_mod
+
+    monkeypatch.setattr(_logging_mod, "set_verbose", True)
+    _logging_mod.print_verbose("a\x80b\x9bc\x9fd")
+    out = capsys.readouterr().out
+    assert "\x80" not in out and "\x9b" not in out and "\x9f" not in out
+    assert "?" in out
+
+
 def test_utils_print_verbose_skips_stdout_when_not_verbose(capsys, monkeypatch):
     from litellm.utils import print_verbose as utils_print_verbose
 
