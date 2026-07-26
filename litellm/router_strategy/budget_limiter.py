@@ -43,9 +43,6 @@ from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
 
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
-# KEYS[1] = budget start time key, KEYS[2] = spend key
-# ARGV[1] = current time, ARGV[2] = response cost, ARGV[3] = window length in seconds
-# Returns {window start time, "1" if this caller opened the window else "0"}
 BUDGET_WINDOW_CLAIM_SCRIPT = """
 local budget_start = redis.call('GET', KEYS[1])
 local current_time = tonumber(ARGV[1])
@@ -437,6 +434,10 @@ class RouterBudgetLimiting(CustomLogger):
         expired start time resets the counter, everyone else racing across the
         same boundary increments it.
 
+        The script takes KEYS = [start_time_key, spend_key] and ARGV =
+        [current_time, response_cost, window_length_seconds], and returns
+        [window_start, "1" if this caller opened the window else "0"].
+
         Returns the window start time, or None when Redis is unavailable, so the
         caller can fall back to the local path.
         """
@@ -619,15 +620,19 @@ class RouterBudgetLimiting(CustomLogger):
                 "Pushing Redis Increment Pipeline for queue: %s",
                 self.redis_increment_operation_queue,
             )
-            pending_increments = list(self.redis_increment_operation_queue)
+            pending_increments = self.redis_increment_operation_queue
             if len(pending_increments) == 0:
                 return
 
-            await self.dual_cache.redis_cache.async_increment_pipeline(
-                increment_list=pending_increments,
-            )
+            self.redis_increment_operation_queue = []
 
-            self.redis_increment_operation_queue = self.redis_increment_operation_queue[len(pending_increments) :]
+            try:
+                await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=pending_increments,
+                )
+            except Exception:
+                self.redis_increment_operation_queue = pending_increments + self.redis_increment_operation_queue
+                raise
 
         except Exception as e:
             verbose_router_logger.error(f"Error syncing in-memory cache with Redis: {str(e)}")

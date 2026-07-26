@@ -243,6 +243,71 @@ async def test_push_in_memory_increments_waits_for_redis_and_keeps_new_increment
 
 
 @pytest.mark.asyncio
+async def test_concurrent_pushes_do_not_double_apply_increments(disable_budget_sync):
+    """
+    A second sync racing while the first push is still writing must not resubmit
+    the same queued increments, otherwise the spend counter is inflated.
+    """
+    redis_cache = FakeAtomicRedisCache()
+    limiter = _budget_limiter(redis_cache=redis_cache)
+    spend_key = "provider_spend:synthetic:1h"
+
+    pipeline_started = asyncio.Event()
+    release_pipeline = asyncio.Event()
+    original_increment_pipeline = redis_cache.async_increment_pipeline
+
+    async def blocking_increment_pipeline(increment_list, **kwargs):
+        pipeline_started.set()
+        await release_pipeline.wait()
+        return await original_increment_pipeline(increment_list, **kwargs)
+
+    redis_cache.async_increment_pipeline = blocking_increment_pipeline  # type: ignore[method-assign]
+
+    await limiter._increment_spend_in_current_window(spend_key=spend_key, response_cost=0.05, ttl=3600)
+
+    first_push = asyncio.create_task(limiter._push_in_memory_increments_to_redis())
+    await pipeline_started.wait()
+    second_push = asyncio.create_task(limiter._push_in_memory_increments_to_redis())
+    await asyncio.sleep(0)
+    release_pipeline.set()
+    await asyncio.gather(first_push, second_push)
+
+    assert len(redis_cache.increment_pipeline_calls) == 1
+    assert [op["increment_value"] for op in redis_cache.increment_pipeline_calls[0]] == [0.05]
+    assert float(redis_cache.store[spend_key]) == pytest.approx(0.05)
+    assert limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_budget_window_claim_decodes_bytes_returned_by_redis(disable_budget_sync):
+    """
+    redis-py can hand back bytes; the claim result must still be decoded and the
+    winning reset mirrored into the in-memory cache.
+    """
+
+    class BytesRedisCache(FakeAtomicRedisCache):
+        def async_register_script(self, script: str):
+            async def run_script(keys, args, client=None):
+                return [str(args[0]).encode("utf-8"), b"1"]
+
+            return run_script
+
+    limiter = _budget_limiter(redis_cache=BytesRedisCache())
+    spend_key = "provider_spend:synthetic:1h"
+
+    start_time = await limiter._handle_new_budget_window(
+        spend_key=spend_key,
+        start_time_key="provider_budget_start_time:synthetic",
+        current_time=1000.0,
+        response_cost=0.05,
+        ttl_seconds=3600,
+    )
+
+    assert start_time == 1000.0
+    assert float(limiter.dual_cache.in_memory_cache.get_cache(spend_key)) == pytest.approx(0.05)
+
+
+@pytest.mark.asyncio
 async def test_push_in_memory_increments_retains_queue_when_redis_write_fails(disable_budget_sync):
     redis_cache = FakeAtomicRedisCache()
     limiter = _budget_limiter(redis_cache=redis_cache)
