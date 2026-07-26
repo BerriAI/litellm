@@ -18,9 +18,11 @@ import pytest
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy._experimental.mcp_server.tool_search import (
+    DEFAULT_MCP_TOOL_SEARCH_TOP_K,
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
     coerce_top_k,
+    get_mcp_tool_search_default_top_k,
     get_virtual_tool_definitions,
     search_tools,
 )
@@ -71,6 +73,20 @@ class TestCoerceTopK:
 
     def test_custom_default(self) -> None:
         assert coerce_top_k("nope", default=10) == 10
+
+
+class TestMcpToolSearchDefaultTopK:
+    def test_uses_builtin_default_when_unconfigured(self) -> None:
+        assert get_mcp_tool_search_default_top_k(None) == DEFAULT_MCP_TOOL_SEARCH_TOP_K
+
+    def test_uses_litellm_settings_default(self) -> None:
+        assert get_mcp_tool_search_default_top_k({"mcp_tool_search_default_top_k": 10}) == 10
+
+    def test_invalid_litellm_settings_default_uses_builtin_default(self) -> None:
+        assert (
+            get_mcp_tool_search_default_top_k({"mcp_tool_search_default_top_k": "invalid"})
+            == DEFAULT_MCP_TOOL_SEARCH_TOP_K
+        )
 
 
 class TestSearchTools:
@@ -132,6 +148,11 @@ class TestGetVirtualToolDefinitions:
         assert "query" in props
         assert search_tool["inputSchema"]["required"] == ["query"]
 
+    def test_mcp_tool_search_schema_uses_configured_default(self) -> None:
+        tools = get_virtual_tool_definitions(default_top_k=10)
+        search_tool = next(tool for tool in tools if tool["name"] == MCP_TOOL_SEARCH_TOOL_NAME)
+        assert search_tool["inputSchema"]["properties"]["top_k"]["default"] == 10
+
     def test_mcp_tool_call_schema_has_tool_name_and_arguments(self) -> None:
         tools = get_virtual_tool_definitions()
         call_tool = next(t for t in tools if t["name"] == MCP_TOOL_CALL_TOOL_NAME)
@@ -178,16 +199,22 @@ class TestListToolRestApiWithToolSearch:
             if hasattr(r, "path") and r.path.endswith("/tools/list") and hasattr(r, "methods") and "GET" in r.methods
         )
 
-        result = await list_fn(
-            request=mock_request,
-            server_id=None,
-            include_disabled_tools=False,
-            user_api_key_dict=user_api_key_dict,
-        )
+        with patch(
+            "litellm.proxy.proxy_server.proxy_config.get_config_state",
+            return_value={"litellm_settings": {"mcp_tool_search_default_top_k": 10}},
+        ):
+            result = await list_fn(
+                request=mock_request,
+                server_id=None,
+                include_disabled_tools=False,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         assert result["error"] is None
         tool_names = [t["name"] for t in result["tools"]]
         assert set(tool_names) == {MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME}
+        search_tool = next(tool for tool in result["tools"] if tool["name"] == MCP_TOOL_SEARCH_TOOL_NAME)
+        assert search_tool["inputSchema"]["properties"]["top_k"]["default"] == 10
 
     @pytest.mark.asyncio
     async def test_returns_full_catalog_when_flag_disabled(self) -> None:
@@ -396,6 +423,35 @@ class TestCallToolRestApiVirtualTools:
         assert any(t["name"] == "github-create_issue" for t in returned_tools)
 
     @pytest.mark.asyncio
+    async def test_mcp_tool_search_call_uses_configured_default_top_k(
+        self,
+    ) -> None:
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            object_permission=_make_perm(mcp_tool_search_enabled=True),
+        )
+        request = self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "issue"}})
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.proxy_config.get_config_state",
+                return_value={"litellm_settings": {"mcp_tool_search_default_top_k": 10}},
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+                new_callable=AsyncMock,
+                return_value="SEARCH_RESULT",
+            ) as mock_search,
+        ):
+            result = await self._get_call_fn()(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        assert result == "SEARCH_RESULT"
+        assert mock_search.await_args.kwargs["top_k"] == 10
+
+    @pytest.mark.asyncio
     async def test_mcp_tool_call_executes_discovered_tool(self) -> None:
         from mcp.types import CallToolResult, TextContent
 
@@ -590,6 +646,52 @@ class TestDispatchVirtualMcpTool:
         assert result == "SEARCH_RESULT"
         assert mock_search.await_args.kwargs["client_ip"] == "203.0.113.9"
         assert mock_search.await_args.kwargs["query"] == "q"
+        assert mock_search.await_args.kwargs["top_k"] == 3
+
+    @pytest.mark.asyncio
+    async def test_routes_search_with_configured_default_top_k(self) -> None:
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_enabled=True),
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            new_callable=AsyncMock,
+            return_value="SEARCH_RESULT",
+        ) as mock_search:
+            await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_SEARCH_TOOL_NAME,
+                arguments={"query": "q"},
+                user_api_key_auth=uak,
+                client_ip=None,
+                default_top_k=10,
+            )
+
+        assert mock_search.await_args.kwargs["top_k"] == 10
+
+    @pytest.mark.asyncio
+    async def test_explicit_top_k_overrides_configured_default(self) -> None:
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(
+            api_key="k",
+            object_permission=_make_perm(mcp_tool_search_enabled=True),
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            new_callable=AsyncMock,
+            return_value="SEARCH_RESULT",
+        ) as mock_search:
+            await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_SEARCH_TOOL_NAME,
+                arguments={"query": "q", "top_k": 3},
+                user_api_key_auth=uak,
+                client_ip=None,
+                default_top_k=10,
+            )
+
         assert mock_search.await_args.kwargs["top_k"] == 3
 
     @pytest.mark.asyncio
@@ -840,10 +942,16 @@ class TestHandleListToolsVirtual:
         from litellm.proxy._experimental.mcp_server import server as srv
 
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
-        with patch(
-            "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
-            new_callable=AsyncMock,
-            return_value=(uak, None, None, None, None, None, None),
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+                new_callable=AsyncMock,
+                return_value=(uak, None, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_config.get_config_state",
+                return_value={"litellm_settings": {"mcp_tool_search_default_top_k": 10}},
+            ),
         ):
             tools = await srv.handle_list_tools()
 
@@ -851,6 +959,8 @@ class TestHandleListToolsVirtual:
             MCP_TOOL_SEARCH_TOOL_NAME,
             MCP_TOOL_CALL_TOOL_NAME,
         }
+        search_tool = next(tool for tool in tools if tool.name == MCP_TOOL_SEARCH_TOOL_NAME)
+        assert search_tool.inputSchema["properties"]["top_k"]["default"] == 10
 
 
 class TestMcpServerToolCallErrorHandling:
