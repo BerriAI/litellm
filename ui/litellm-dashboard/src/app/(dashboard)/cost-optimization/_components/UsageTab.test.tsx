@@ -23,8 +23,24 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: ({ data, label }: { data: unknown; label: string }) => (
     <div data-testid="donut-chart" data-label={label} data-slices={JSON.stringify(data)} />
   ),
-  BarChart: ({ data, categories }: { data: unknown; categories: string[] }) => (
-    <div data-testid="bar-chart" data-categories={categories.join(",")} data-series={JSON.stringify(data)} />
+  BarChart: ({
+    data,
+    categories,
+    colors,
+    showLegend,
+  }: {
+    data: unknown;
+    categories: string[];
+    colors?: readonly string[];
+    showLegend?: boolean;
+  }) => (
+    <div
+      data-testid="bar-chart"
+      data-categories={categories.join(",")}
+      data-colors={(colors ?? []).join(",")}
+      data-show-legend={String(showLegend ?? true)}
+      data-series={JSON.stringify(data)}
+    />
   ),
   CustomLegend: ({ categories }: { categories: readonly string[] }) => (
     <div data-testid="chart-legend">{categories.join(",")}</div>
@@ -224,5 +240,26 @@ describe("UsageTab", () => {
     const bars = await findAllByTestId("bar-chart");
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
+  });
+
+  it("renders the tool legend once outside the charts, with both charts sharing the tool colors", async () => {
+    const toolSpend = {
+      by_tool: [
+        { tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 },
+        { tool_name: "read_file", spend: 1.0, call_count: 2, total_tokens: 50 },
+      ],
+      daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
+      start_date: "2026-07-12",
+      end_date: "2026-07-12",
+    };
+    const { findAllByTestId, getAllByTestId } = renderWith([day("2026-07-12", {})], { toolSpend });
+
+    const bars = await findAllByTestId("bar-chart");
+    const [totalByTool, dailyByTool] = bars.slice(-2);
+    expect(dailyByTool.getAttribute("data-show-legend")).toBe("false");
+    expect(totalByTool.getAttribute("data-colors")).toBe(dailyByTool.getAttribute("data-colors"));
+
+    const toolLegends = getAllByTestId("chart-legend").filter((legend) => legend.textContent === "search,read_file");
+    expect(toolLegends).toHaveLength(1);
   });
 });

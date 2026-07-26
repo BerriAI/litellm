@@ -278,7 +278,8 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   data={topToolsChart}
                   index="tool_name"
                   categories={["spend"]}
-                  colors={["emerald"]}
+                  colors={toolColors}
+                  colorByDatum
                   layout="vertical"
                   yAxisWidth={140}
                   showLegend={false}
@@ -287,6 +288,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               </div>
               <div>
                 <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
+                <CustomLegend categories={topToolNames} colors={toolColors} />
                 <BarChart
                   data={dailyToolSeries}
                   index="date"
@@ -294,6 +296,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
                   colors={toolColors}
                   stack
                   valueFormatter={usd}
+                  showLegend={false}
                 />
               </div>
             </div>
