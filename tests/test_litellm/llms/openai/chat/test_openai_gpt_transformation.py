@@ -16,7 +16,8 @@ from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
+from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
 class TestOpenAIGPTConfig:
@@ -755,6 +756,29 @@ class TestOpenAIShouldFakeStream:
             assert (
                 self.config.should_fake_stream(model="openai/no-stream", stream=True)
                 is True
+            )
+
+    @pytest.mark.parametrize(
+        "config_class",
+        (OpenAIGPT5Config, OpenAIOSeriesConfig, OpenAILikeChatConfig),
+    )
+    def test_fake_stream_for_openai_config_variants(
+        self, config_class: type[OpenAIGPTConfig]
+    ) -> None:
+        with patch(
+            self.GET_MODEL_INFO, return_value={"supports_native_streaming": False}
+        ) as mock_get_model_info:
+            assert (
+                config_class().should_fake_stream(
+                    model="gateway-model",
+                    stream=True,
+                    custom_llm_provider="custom_openai",
+                )
+                is True
+            )
+            mock_get_model_info.assert_called_once_with(
+                model="gateway-model",
+                custom_llm_provider="custom_openai",
             )
 
     def test_no_fake_stream_when_native_streaming_supported(self):
