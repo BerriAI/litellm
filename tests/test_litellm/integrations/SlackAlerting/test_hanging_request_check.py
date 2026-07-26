@@ -338,3 +338,91 @@ class TestAlertingHangingRequestCheck:
 
         # Should not crash and should not send any alerts
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_add_request_uses_top_level_metadata_when_litellm_params_absent(
+        self, hanging_request_checker
+    ):
+        """Fall back to top-level metadata when litellm_params is absent."""
+        request_data = {
+            "litellm_call_id": "precall_request_001",
+            "model": "gpt-4",
+            "metadata": {
+                "user_api_key_alias": "my-key-alias",
+                "user_api_key_team_alias": "my-team-alias",
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(request_data)
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="precall_request_001"
+            )
+        )
+
+        assert cached_data is not None
+        assert cached_data.key_alias == "my-key-alias"
+        assert cached_data.team_alias == "my-team-alias"
+
+    @pytest.mark.asyncio
+    async def test_add_request_prefers_litellm_params_metadata_when_present(
+        self, hanging_request_checker
+    ):
+        """Prefer litellm_params.metadata over top-level metadata when present."""
+        request_data = {
+            "litellm_call_id": "postcall_request_002",
+            "model": "gpt-4",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_alias": "lp-key-alias",
+                    "user_api_key_team_alias": "lp-team-alias",
+                },
+            },
+            "metadata": {
+                "user_api_key_alias": "should-not-use-this",
+                "user_api_key_team_alias": "should-not-use-this-either",
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(request_data)
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="postcall_request_002"
+            )
+        )
+
+        assert cached_data is not None
+        assert cached_data.key_alias == "lp-key-alias"
+        assert cached_data.team_alias == "lp-team-alias"
+
+    @pytest.mark.asyncio
+    async def test_add_request_preserves_team_alias_without_key_alias(
+        self, hanging_request_checker
+    ):
+        """Keep litellm_params team alias when key alias is absent (no overwrite)."""
+        request_data = {
+            "litellm_call_id": "team_only_request_003",
+            "model": "gpt-4",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_team_alias": "lp-team-alias",
+                },
+            },
+            "metadata": {
+                "user_api_key_team_alias": "should-not-use-this",
+            },
+        }
+
+        await hanging_request_checker.add_request_to_hanging_request_check(request_data)
+
+        cached_data = (
+            await hanging_request_checker.hanging_request_cache.async_get_cache(
+                key="team_only_request_003"
+            )
+        )
+
+        assert cached_data is not None
+        assert cached_data.key_alias == ""
+        assert cached_data.team_alias == "lp-team-alias"
