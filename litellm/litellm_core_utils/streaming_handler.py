@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
-from litellm._logging import _sanitize_log_message, redact_secrets
+from litellm._logging import _redact_and_sanitize
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
@@ -94,9 +94,7 @@ def is_async_iterable(obj: Any) -> bool:
 def print_verbose(print_statement):
     try:
         if litellm.set_verbose:
-            print(  # noqa: T201
-                _sanitize_log_message(redact_secrets(str(print_statement)))
-            )
+            print(_redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 

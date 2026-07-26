@@ -179,7 +179,7 @@ from litellm.utils import (
     validate_openai_optional_params,
 )
 
-from ._logging import _sanitize_log_message, redact_secrets, verbose_logger
+from ._logging import _redact_and_sanitize, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
@@ -8381,9 +8381,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(  # noqa: T201
-                _sanitize_log_message(redact_secrets(str(print_statement)))
-            )
+            print(_redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 

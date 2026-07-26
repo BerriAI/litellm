@@ -9,8 +9,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._logging import (
-    _sanitize_log_message,
-    redact_secrets,
+    _redact_and_sanitize,
     verbose_proxy_logger,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -55,9 +54,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(  # noqa: T201
-                    _sanitize_log_message(redact_secrets(str(print_statement)))
-                )
+                print(_redact_and_sanitize(print_statement))  # noqa: T201
         except Exception:
             pass
 

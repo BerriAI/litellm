@@ -424,12 +424,14 @@ def _sanitize_log_message(message: str) -> str:
     return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "?", message)
 
 
+def _redact_and_sanitize(value) -> str:
+    return _sanitize_log_message(redact_secrets(str(value)))
+
+
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(  # noqa: T201
-                _sanitize_log_message(redact_secrets(str(print_statement)))
-            )
+            print(_redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 

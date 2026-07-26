@@ -89,8 +89,8 @@ from litellm import (
     Router,
 )
 from litellm._logging import (
+    _redact_and_sanitize,
     _redact_string,
-    _sanitize_log_message,
     verbose_proxy_logger,
 )
 from litellm._service_logger import ServiceLogging, ServiceTypes
@@ -201,7 +201,7 @@ def print_verbose(print_statement):
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
         print(  # noqa: T201
-            f"LiteLLM Proxy: {_sanitize_log_message(_redact_string(str(print_statement)))}"
+            f"LiteLLM Proxy: {_redact_and_sanitize(print_statement)}"
         )
 
 

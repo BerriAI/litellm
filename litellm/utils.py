@@ -397,8 +397,7 @@ from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
 from ._logging import (
     _is_debugging_on,
-    _sanitize_log_message,
-    redact_secrets,
+    _redact_and_sanitize,
     verbose_logger,
 )
 from .caching.caching import (
@@ -497,9 +496,7 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(  # noqa: T201
-                _sanitize_log_message(redact_secrets(str(print_statement)))
-            )
+            print(_redact_and_sanitize(print_statement))  # noqa: T201
     except Exception:
         pass
 

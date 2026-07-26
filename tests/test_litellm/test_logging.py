@@ -480,6 +480,14 @@ def test_proxy_hook_print_verbose_methods_redact_and_sanitize(capsys, monkeypatc
         assert "\\r\\n" in out and "\x9b" not in out, cls.__name__
 
 
+def test_redact_and_sanitize_helper_combines_both_stages():
+    from litellm._logging import _redact_and_sanitize
+
+    out = _redact_and_sanitize({"api_key": SECRET_VALUE, "note": "a\r\nb\x9b"})
+    assert SECRET_VALUE not in out and "REDACTED" in out
+    assert "\\r\\n" in out and "\x9b" not in out
+
+
 def test_utils_print_verbose_skips_stdout_when_not_verbose(capsys, monkeypatch):
     from litellm.utils import print_verbose as utils_print_verbose
 
