@@ -1553,13 +1553,32 @@ def _extract_base64_data(image_url: str) -> str:
     return image_url
 
 
+def _extract_ollama_image_data(image_url: str) -> str:
+    """
+    Return pure base64 image data for providers like Ollama that do not accept URLs.
+
+    Remote http(s) URLs are downloaded and base64-encoded; data URLs have their base64
+    payload extracted; anything else is returned unchanged.
+    """
+    if image_url.startswith(("http://", "https://")):
+        from litellm.litellm_core_utils.prompt_templates.image_handling import (
+            convert_url_to_base64,
+        )
+
+        try:
+            return _extract_base64_data(convert_url_to_base64(image_url))
+        except litellm.ImageFetchError:
+            return image_url
+    return _extract_base64_data(image_url)
+
+
 def extract_images_from_message(message: AllMessageValues) -> List[str]:
     """
     Extract images from a message.
 
-    For data URLs (e.g., "data:image/png;base64,iVBOR..."), only the base64
-    data portion is extracted. This is required for providers like Ollama
-    that expect pure base64 data rather than full data URLs.
+    For data URLs (e.g., "data:image/png;base64,iVBOR..."), only the base64 data portion is
+    extracted, and remote http(s) URLs are downloaded and base64-encoded. This is required for
+    providers like Ollama that expect pure base64 data rather than URLs or full data URLs.
     """
     images = []
     message_content = message.get("content")
@@ -1568,9 +1587,9 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
             image_url = m.get("image_url")
             if image_url:
                 if isinstance(image_url, str):
-                    images.append(_extract_base64_data(image_url))
+                    images.append(_extract_ollama_image_data(image_url))
                 elif isinstance(image_url, dict) and "url" in image_url:
-                    images.append(_extract_base64_data(image_url["url"]))
+                    images.append(_extract_ollama_image_data(image_url["url"]))
     return images
 
 
