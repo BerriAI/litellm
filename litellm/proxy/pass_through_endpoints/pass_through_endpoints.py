@@ -1666,9 +1666,7 @@ def create_pass_through_route(
             adapter = target
         else:
             adapter = get_instance_fn(value=target, config_file_path=config_file_path)
-        existing_entry = next(
-            (entry for entry in litellm.adapters if entry["adapter"] is adapter), None
-        )
+        existing_entry = next((entry for entry in litellm.adapters if entry["adapter"] is adapter), None)
         if existing_entry is not None:
             adapter_id = existing_entry["id"]
         else:
