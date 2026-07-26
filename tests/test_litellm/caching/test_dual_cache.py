@@ -61,6 +61,62 @@ async def test_dual_cache_async_batch_get_cache_rolls_back_redis_reservation_on_
         assert "shared_b" not in dual_cache.last_redis_batch_access_time
 
 
+def test_limited_size_ordered_dict_update_at_capacity_does_not_evict():
+    """
+    Updating an existing key when the map is full must not evict another entry.
+    Eviction should only happen when a genuinely new key is inserted at capacity.
+    """
+    from litellm.caching.dual_cache import LimitedSizeOrderedDict
+
+    d = LimitedSizeOrderedDict(max_size=2)
+    d["a"] = 1
+    d["b"] = 2
+
+    d["a"] = 10
+
+    assert list(d.keys()) == ["a", "b"]
+    assert d["a"] == 10
+
+    d["c"] = 3
+
+    assert "a" not in d
+    assert list(d.keys()) == ["b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_refresh_does_not_evict_fresh_throttle_entry():
+    """
+    Regression test for #34681: refreshing an expired throttle timestamp at
+    capacity must not evict a different, still-fresh entry. Before the fix the
+    fresh "unrelated" key was popped when "expired" was refreshed, so a lookup
+    for "unrelated" wrongly hit Redis instead of staying throttled.
+    """
+    dual_cache = DualCache(
+        redis_cache=MagicMock(spec=RedisCache),
+        default_redis_batch_cache_expiry=10,
+        default_max_redis_batch_cache_size=2,
+    )
+    dual_cache.last_redis_batch_access_time["unrelated"] = 99.9
+    dual_cache.last_redis_batch_access_time["expired"] = 0.0
+
+    async def _mock_async_batch_get_cache(key_list, parent_otel_span=None):
+        return {k: None for k in key_list}
+
+    with patch(
+        "litellm.caching.dual_cache.time.time", return_value=100.0
+    ), patch.object(
+        dual_cache.redis_cache,
+        "async_batch_get_cache",
+        new=AsyncMock(side_effect=_mock_async_batch_get_cache),
+    ) as mock_async_batch_get_cache:
+        await dual_cache.async_batch_get_cache(keys=["expired"])
+        await dual_cache.async_batch_get_cache(keys=["unrelated"])
+
+    assert "unrelated" in dual_cache.last_redis_batch_access_time
+    assert mock_async_batch_get_cache.call_count == 1
+    assert mock_async_batch_get_cache.call_args_list[0].args[0] == ["expired"]
+
+
 @pytest.mark.asyncio
 async def test_dual_cache_async_set_cache_injects_default_in_memory_ttl():
     """
