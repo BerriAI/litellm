@@ -3638,6 +3638,69 @@ async def test_sync_to_async_queue_iterator_aclose_cancels_queued_producer():
     assert wrapper._producer_future.cancelled()
 
 
+def test_sync_to_async_queue_iterator_producer_exits_early_if_already_closed():
+    """
+    Regression: if _closed is already set by the time _producer() actually
+    starts running (e.g. cancel() raced and lost against the task starting),
+    the producer must not touch the sync iterator at all - just signal done.
+    """
+
+    class NeverCalledIter:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise AssertionError("producer must not iterate once _closed is set")
+
+    wrapper = object.__new__(_SyncToAsyncQueueIterator)
+    wrapper._sync_iter = NeverCalledIter()
+    wrapper._loop = asyncio.new_event_loop()
+    wrapper._queue = asyncio.Queue()
+    wrapper._exhausted = False
+    wrapper._closed = threading.Event()
+    wrapper._closed.set()
+    wrapper._done = threading.Event()
+
+    wrapper._producer()
+
+    assert wrapper._done.is_set()
+    wrapper._loop.close()
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_producer_swallows_close_exception_on_exhaustion():
+    """
+    Regression: when the producer itself closes the sync iterator after being
+    signalled to stop (the producer-was-already-running path, not the
+    cancelled-before-start one), a close() failure must not prevent the
+    exhaustion sentinel and _done from being set.
+    """
+    entered_next = threading.Event()
+    release_producer = threading.Event()
+
+    class ExplodingCloseSlowIter:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            entered_next.set()
+            release_producer.wait(timeout=2)
+            return "chunk"
+
+        def close(self):
+            raise RuntimeError("close failed")
+
+    wrapper = _SyncToAsyncQueueIterator(ExplodingCloseSlowIter())
+    await asyncio.to_thread(entered_next.wait, 2)
+
+    close_task = asyncio.create_task(wrapper.aclose())
+    await asyncio.sleep(0.05)
+    release_producer.set()
+    await close_task
+
+    assert wrapper._done.is_set()
+
+
 @pytest.mark.asyncio
 async def test_sync_to_async_queue_iterator_aclose_swallows_close_exception():
     class ExplodingCloseIter:
