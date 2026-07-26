@@ -110,7 +110,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
               <img src={resolveLogoSrc(mcpLogoImg)} alt="MCP Logo" className="mr-2 size-5 object-contain" />
               <DialogTitle className="text-xl font-semibold">Add MCP Server</DialogTitle>
             </div>
-            <Button variant="link" size="sm" onClick={onCustomServer}>
+            <Button variant="link" size="sm" className="mr-8" onClick={onCustomServer}>
               + Custom Server
             </Button>
           </div>

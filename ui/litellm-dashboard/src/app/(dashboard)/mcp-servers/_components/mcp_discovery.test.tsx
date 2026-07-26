@@ -121,6 +121,17 @@ describe("MCPDiscovery", () => {
     expect(width).not.toContain("sm:max-w-md");
   });
 
+  // The close button is absolutely positioned, so it is out of flow and the header
+  // row lays out as if it were not there. Without a reserved margin the custom-server
+  // action sits underneath it. jsdom has no layout engine, so this pins the class.
+  it("keeps the custom-server action clear of the close button", async () => {
+    render(<MCPDiscovery {...defaultProps} />);
+    await screen.findByText("GitHub");
+
+    expect(document.querySelector("[data-slot='dialog-close']")).toHaveClass("absolute");
+    expect(screen.getByRole("button", { name: "+ Custom Server" })).toHaveClass("mr-8");
+  });
+
   it("does not fetch while hidden", () => {
     render(<MCPDiscovery {...defaultProps} isVisible={false} />);
 
