@@ -279,9 +279,11 @@ class TeamMemberBudgetHandler:
             user_api_key_dict=user_api_key_dict,
         )
 
-        # Add team_member_budget_id as metadata field to team table
+        # Add team_member_budget_id as metadata field to team table. Seed from
+        # the team's real existing metadata (not {}) so unrelated keys already
+        # on the team aren't wiped by this write (see issue #31447).
         if new_team_data_json.get("metadata") is None:
-            new_team_data_json["metadata"] = {}
+            new_team_data_json["metadata"] = dict(data.metadata) if data.metadata else {}
         new_team_data_json["metadata"]["team_member_budget_id"] = team_member_budget_table.budget_id
 
         # Remove team member fields from new_team_data_json
@@ -330,7 +332,7 @@ class TeamMemberBudgetHandler:
                 f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
             )
             if updated_kv.get("metadata") is None:
-                updated_kv["metadata"] = {}
+                updated_kv["metadata"] = dict(team_table.metadata) if team_table.metadata else {}
             updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
 
         else:  # budget does not exist
@@ -1871,6 +1873,14 @@ async def update_team(
             )
         else:
             TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+            # A metadata-only update replaces the Json metadata column
+            # wholesale (Prisma doesn't merge Json fields), so without this
+            # the server-owned team_member_budget_id stripped above would be
+            # silently dropped instead of carried forward (see issue #31447).
+            if isinstance(updated_kv.get("metadata"), dict):
+                _existing_budget_id = (existing_team_row.metadata or {}).get("team_member_budget_id")
+                if isinstance(_existing_budget_id, str) and "team_member_budget_id" not in updated_kv["metadata"]:
+                    updated_kv["metadata"]["team_member_budget_id"] = _existing_budget_id
 
         # Check object permission
         if data.object_permission is not None:

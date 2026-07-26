@@ -2355,6 +2355,134 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
 
 @pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_preserves_unrelated_metadata():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/31447 (symptom 1).
+
+    upsert_team_member_budget_table must merge team_member_budget_id into the
+    team's existing metadata rather than replacing it - unrelated keys set by
+    other callers (e.g. managed_by) must survive a budget write.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {
+        "team_member_budget_id": "existing_budget_123",
+        "managed_by": "my-controller",
+    }
+
+    updated_kv = {
+        "team_id": "test_team_id",
+        "team_member_budget": 200.0,
+    }
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "existing_budget_123"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        mock_update_budget.return_value = mock_budget_response
+
+        result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            team_member_budget=200.0,
+        )
+
+    assert result["metadata"]["team_member_budget_id"] == "existing_budget_123"
+    assert (
+        result["metadata"]["managed_by"] == "my-controller"
+    ), f"expected unrelated metadata key to survive a budget write, got: {result.get('metadata')}"
+
+
+@pytest.mark.asyncio
+async def test_update_team_metadata_only_preserves_team_member_budget_pointer():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/31447 (symptom 2).
+
+    A metadata-only /team/update request (no team_member_* fields) must not
+    null out the team's existing team_member_budget_id - Prisma replaces the
+    Json metadata column wholesale, so the existing pointer has to be carried
+    forward explicitly rather than left to be dropped by
+    strip_system_managed_metadata_keys with nothing re-adding it.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.llm_router"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object"),
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "test_team_id",
+            "team_alias": "test_team",
+            "metadata": {"team_member_budget_id": "existing_budget_123"},
+        }
+        mock_existing_team.metadata = {"team_member_budget_id": "existing_budget_123"}
+        mock_existing_team.members_with_roles = []
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "test_team_id"
+        mock_updated_team.model_dump.return_value = {"team_id": "test_team_id"}
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
+        mock_prisma_client.jsonify_team_object = MagicMock(
+            side_effect=lambda db_data: db_data
+        )
+
+        update_request = UpdateTeamRequest(
+            team_id="test_team_id",
+            metadata={"managed_by": "my-controller"},
+        )
+
+        await update_team(
+            data=update_request,
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert mock_prisma_client.db.litellm_teamtable.update.called
+        call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
+        update_data = call_args[1]["data"]
+
+        assert update_data["metadata"]["managed_by"] == "my-controller"
+        assert update_data["metadata"].get("team_member_budget_id") == "existing_budget_123", (
+            f"expected existing team_member_budget_id to survive a metadata-only "
+            f"update, got: {update_data.get('metadata')}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_update_team_with_team_member_budget_duration():
     """
     Test that team/update endpoint properly handles team_member_budget_duration.
@@ -10011,17 +10139,25 @@ async def test_top_level_fields_identical_post_and_patch(body, field, expected):
 @pytest.mark.asyncio
 async def test_patch_strips_system_managed_metadata_key_like_post():
     """A caller cannot inject/overwrite server-owned keys via PATCH any more than
-    via POST: team_member_budget_id is stripped from the write in both."""
+    via POST: a caller-supplied team_member_budget_id is discarded by both.
+
+    Both also re-inject the team's real, existing team_member_budget_id after
+    stripping the caller's value, so a metadata-only write doesn't orphan the
+    team's budget row (see issue #31447). PATCH gets this for free because it
+    delegates to update_team() for the actual write (see patch_team).
+    """
     existing = {"team_member_budget_id": "budget-123", "cost_center": "1234"}
     body = {"metadata": {"team_member_budget_id": "HACKED", "cost_center": "9999"}}
 
     post_meta = await _written_metadata("post", existing, body)
     patch_meta = await _written_metadata("patch", existing, body)
 
-    assert "team_member_budget_id" not in post_meta
-    assert "team_member_budget_id" not in patch_meta
-    assert post_meta == {"cost_center": "9999"}
-    assert patch_meta == {"cost_center": "9999"}
+    # The caller's injected value must never survive, in either endpoint.
+    assert post_meta.get("team_member_budget_id") != "HACKED"
+    assert patch_meta.get("team_member_budget_id") != "HACKED"
+
+    assert post_meta == {"cost_center": "9999", "team_member_budget_id": "budget-123"}
+    assert patch_meta == {"cost_center": "9999", "team_member_budget_id": "budget-123"}
 
 
 @pytest.mark.parametrize(
