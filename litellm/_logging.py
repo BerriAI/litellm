@@ -412,9 +412,16 @@ def _enable_debugging():
 
 
 def _sanitize_log_message(message: str) -> str:
-    sanitized_message = message.replace("\r", "\\r").replace("\n", "\\n")
-    sanitized_message = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "?", sanitized_message)
-    return sanitized_message
+    line_breaks = {
+        "\r": "\\r",
+        "\n": "\\n",
+        "\x85": "\\x85",
+        "\u2028": "\\u2028",
+        "\u2029": "\\u2029",
+    }
+    for char, escaped in line_breaks.items():
+        message = message.replace(char, escaped)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "?", message)
 
 
 def print_verbose(print_statement):

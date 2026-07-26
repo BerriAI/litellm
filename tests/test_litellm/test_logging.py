@@ -394,6 +394,16 @@ def test_print_verbose_redaction_opt_out_still_sanitizes(capsys, monkeypatch):
     assert "\\r\\n" in out
 
 
+def test_print_verbose_sanitizes_unicode_line_separators(capsys, monkeypatch):
+    import litellm._logging as _logging_mod
+
+    monkeypatch.setattr(_logging_mod, "set_verbose", True)
+    _logging_mod.print_verbose("a\x85b\u2028c\u2029d")
+    out = capsys.readouterr().out
+    assert "\\x85" in out and "\\u2028" in out and "\\u2029" in out
+    assert "\x85" not in out and "\u2028" not in out and "\u2029" not in out
+
+
 def test_utils_print_verbose_skips_stdout_when_not_verbose(capsys, monkeypatch):
     from litellm.utils import print_verbose as utils_print_verbose
 
