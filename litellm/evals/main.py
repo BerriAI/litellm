@@ -37,6 +37,49 @@ from litellm.utils import ProviderConfigManager, client
 base_llm_http_handler = BaseLLMHTTPHandler()
 DEFAULT_OPENAI_API_BASE = "https://api.openai.com"
 
+# Internal LiteLLM metadata keys that the proxy attaches to `metadata` and that
+# must never be forwarded to the provider.
+INTERNAL_METADATA_KEYS = {
+    "headers",
+    "requester_metadata",
+    "user_api_key_hash",
+    "user_api_key_alias",
+    "user_api_key_spend",
+    "user_api_key_max_budget",
+    "user_api_key_team_id",
+    "user_api_key_user_id",
+    "user_api_key_org_id",
+    "user_api_key_team_alias",
+    "user_api_key_end_user_id",
+    "user_api_key_user_email",
+    "user_api_key_request_route",
+    "user_api_key_budget_reset_at",
+    "user_api_key_auth_metadata",
+    "user_api_key",
+    "user_api_end_user_max_budget",
+    "user_api_key_auth",
+    "litellm_api_version",
+    "global_max_parallel_requests",
+    "user_api_key_team_max_budget",
+    "user_api_key_team_spend",
+    "user_api_key_model_max_budget",
+    "user_api_key_user_spend",
+    "user_api_key_user_max_budget",
+    "user_api_key_metadata",
+    "endpoint",
+    "litellm_parent_otel_span",
+    "requester_ip_address",
+    "user_agent",
+}
+
+
+def _user_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return only the caller's metadata keys, or None if nothing is left."""
+    if metadata is None:
+        return None
+    filtered = {k: v for k, v in metadata.items() if k not in INTERNAL_METADATA_KEYS}
+    return filtered or None
+
 
 @client
 async def acreate_eval(
@@ -166,6 +209,11 @@ def create_eval(
         }
         if name is not None:
             create_request["name"] = name
+
+        # Filter metadata to exclude internal LiteLLM fields
+        filtered_metadata = _user_metadata(metadata)
+        if filtered_metadata is not None:
+            create_request["metadata"] = filtered_metadata
 
         # Merge extra_body if provided
         if extra_body:
@@ -681,44 +729,9 @@ def update_eval(
             update_request["name"] = name
 
         # Filter metadata to exclude internal LiteLLM fields
-        if metadata is not None:
-            # List of internal LiteLLM metadata keys that should NOT be sent to OpenAI
-            internal_keys = {
-                "headers",
-                "requester_metadata",
-                "user_api_key_hash",
-                "user_api_key_alias",
-                "user_api_key_spend",
-                "user_api_key_max_budget",
-                "user_api_key_team_id",
-                "user_api_key_user_id",
-                "user_api_key_org_id",
-                "user_api_key_team_alias",
-                "user_api_key_end_user_id",
-                "user_api_key_user_email",
-                "user_api_key_request_route",
-                "user_api_key_budget_reset_at",
-                "user_api_key_auth_metadata",
-                "user_api_key",
-                "user_api_end_user_max_budget",
-                "user_api_key_auth",
-                "litellm_api_version",
-                "global_max_parallel_requests",
-                "user_api_key_team_max_budget",
-                "user_api_key_team_spend",
-                "user_api_key_model_max_budget",
-                "user_api_key_user_spend",
-                "user_api_key_user_max_budget",
-                "user_api_key_metadata",
-                "endpoint",
-                "litellm_parent_otel_span",
-                "requester_ip_address",
-                "user_agent",
-            }
-            # Only include user-provided metadata keys
-            filtered_metadata = {k: v for k, v in metadata.items() if k not in internal_keys}
-            if filtered_metadata:  # Only add if there's user metadata
-                update_request["metadata"] = filtered_metadata
+        filtered_metadata = _user_metadata(metadata)
+        if filtered_metadata is not None:
+            update_request["metadata"] = filtered_metadata
 
         # Merge extra_body if provided
         if extra_body:
@@ -1215,8 +1228,11 @@ def create_run(
         }
         if name is not None:
             create_request["name"] = name
-        # if metadata is not None:
-        #     create_request["metadata"] = metadata
+
+        # Filter metadata to exclude internal LiteLLM fields
+        filtered_metadata = _user_metadata(metadata)
+        if filtered_metadata is not None:
+            create_request["metadata"] = filtered_metadata
 
         # Merge extra_body if provided
         if extra_body:
