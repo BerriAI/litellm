@@ -103,7 +103,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
 
   return (
     <Dialog open={isVisible} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[1000px]">
+      <DialogContent className="sm:max-w-[1000px]">
         <DialogHeader>
           <div className="flex items-center justify-between border-b border-border pb-4">
             <div className="flex items-center space-x-3">

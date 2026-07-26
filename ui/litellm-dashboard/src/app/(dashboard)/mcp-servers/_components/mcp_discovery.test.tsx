@@ -110,6 +110,17 @@ describe("MCPDiscovery", () => {
     expect(await screen.findByText(/No servers found/)).toBeInTheDocument();
   });
 
+  it("keeps the wide dialog width the antd modal had", async () => {
+    render(<MCPDiscovery {...defaultProps} />);
+    await screen.findByText("GitHub");
+
+    const dialog = document.querySelector("[data-slot='dialog-content']");
+    const width = Array.from(dialog?.classList ?? []).filter((c) => c.includes("max-w-"));
+
+    expect(width).toContain("sm:max-w-[1000px]");
+    expect(width).not.toContain("sm:max-w-md");
+  });
+
   it("does not fetch while hidden", () => {
     render(<MCPDiscovery {...defaultProps} isVisible={false} />);
 
