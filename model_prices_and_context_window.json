@@ -46290,7 +46290,7 @@
         "litellm_provider": "greenpt",
         "max_input_tokens": 32768,
         "max_output_tokens": 2560,
-        "max_tokens": 32768,
+        "max_tokens": 2560,
         "mode": "embedding",
         "output_cost_per_token": 0,
         "source": "https://docs.greenpt.ai/pricing"
@@ -46409,7 +46409,7 @@
         "litellm_provider": "greenpt",
         "max_input_tokens": 32768,
         "max_output_tokens": 4096,
-        "max_tokens": 32768,
+        "max_tokens": 4096,
         "mode": "embedding",
         "output_cost_per_token": 0,
         "source": "https://docs.greenpt.ai/pricing"

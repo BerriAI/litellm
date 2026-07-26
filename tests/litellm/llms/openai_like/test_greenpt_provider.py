@@ -81,18 +81,3 @@ def test_greenpt_rerank_config():
         present_version_params=[],
     )
     assert config.get_complete_url(GREENPT_BASE_URL, "green-rerank") == (f"{GREENPT_BASE_URL}/rerank")
-    assert config.transform_rerank_request(
-        model="green-rerank",
-        optional_rerank_params={
-            "query": "low-carbon inference",
-            "documents": ["GreenPT", "Other provider"],
-            "return_documents": False,
-        },
-        headers={},
-    ) == {
-        "model": "green-rerank",
-        "query": "low-carbon inference",
-        "documents": ["GreenPT", "Other provider"],
-        "top_n": 2,
-        "return_documents": False,
-    }

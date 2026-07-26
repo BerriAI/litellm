@@ -1,5 +1,3 @@
-from typing import Dict
-
 from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -28,7 +26,7 @@ class GreenPTRerankConfig(HostedVLLMRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:

@@ -8008,11 +8008,12 @@ class ProviderConfigManager:
             )
 
             return DashScopeRerankConfig()
-        elif litellm.LlmProviders.GREENPT == provider:
-            from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
+        from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
 
-            return GreenPTRerankConfig()
-        return litellm.CohereRerankConfig()
+        config_class = {
+            litellm.LlmProviders.GREENPT: GreenPTRerankConfig,
+        }.get(provider, litellm.CohereRerankConfig)
+        return config_class()
 
     @staticmethod
     def get_provider_anthropic_messages_config(
