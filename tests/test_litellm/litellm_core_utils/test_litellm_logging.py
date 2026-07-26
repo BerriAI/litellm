@@ -4161,3 +4161,69 @@ def test_success_handler_survives_concurrent_model_call_details_mutation(logging
         mock_langfuse_logger.log_event_on_langfuse.assert_called_once()
     finally:
         litellm.success_callback = original_success_callbacks
+
+
+def _build_model_response():
+    return ModelResponse(
+        id="resp-snapshot",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+
+@pytest.mark.parametrize("callback_name", ["logfire", "greenscale", "athina", "traceloop"])
+def test_success_handler_snapshots_model_call_details_per_callback(logging_obj, callback_name):
+    """Every sync success callback that copies model_call_details must iterate a snapshot."""
+    logger_attr = {
+        "logfire": "logfireLogger",
+        "greenscale": "greenscaleLogger",
+        "athina": "athinaLogger",
+        "traceloop": "traceloopLogger",
+    }[callback_name]
+
+    original_success_callbacks = list(litellm.success_callback or [])
+    litellm.success_callback = [callback_name]
+    try:
+        logging_obj.stream = False
+        logging_obj.call_type = "completion"
+        with patch(
+            f"litellm.litellm_core_utils.litellm_logging.{logger_attr}",
+            MagicMock(),
+            create=True,
+        ):
+            logging_obj.success_handler(result=_build_model_response())
+    finally:
+        litellm.success_callback = original_success_callbacks
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse", "logfire"])
+def test_failure_handler_snapshots_model_call_details_per_callback(logging_obj, callback_name):
+    """Every sync failure callback that copies model_call_details must iterate a snapshot."""
+    original_failure_callbacks = list(litellm.failure_callback or [])
+    litellm.failure_callback = [callback_name]
+    try:
+        logging_obj.stream = False
+        logging_obj.call_type = "completion"
+        with (
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.logfireLogger",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.LangFuseHandler.get_langfuse_logger_for_request",
+                return_value=MagicMock(),
+            ),
+        ):
+            logging_obj.failure_handler(
+                Exception("boom"),
+                "traceback",
+            )
+    finally:
+        litellm.failure_callback = original_failure_callbacks
