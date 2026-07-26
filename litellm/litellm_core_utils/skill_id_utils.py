@@ -2,7 +2,6 @@
 
 import base64
 import json
-from typing import Any
 
 _SKILL_ID_PREFIX = "litellm_skill_"
 
@@ -41,7 +40,7 @@ def get_model_from_skill_id(skill_id: str) -> str | None:
     return decoded["model"] if decoded is not None else None
 
 
-def rewrite_skill_references(value: Any) -> Any:
+def rewrite_skill_references(value: object) -> object:
     if isinstance(value, dict):
         rewritten = {key: rewrite_skill_references(item) for key, item in value.items()}
         if isinstance(rewritten.get("skill_id"), str):

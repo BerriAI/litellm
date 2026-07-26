@@ -5801,7 +5801,6 @@ class Router:
                 "aget_skill_version_content",
                 "adelete_skill_version",
             ):
-                kwargs["_litellm_skill_model"] = kwargs.get("model")
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     **kwargs,

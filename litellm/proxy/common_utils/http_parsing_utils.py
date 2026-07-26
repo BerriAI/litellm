@@ -39,6 +39,11 @@ def _is_json_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) == "application/json"
 
 
+def _extract_model_param(request: Request, request_body: dict) -> Optional[str]:
+    """Extract the model from the request body, query, or header."""
+    return request_body.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+
+
 async def _read_request_body(request: Optional[Request]) -> Dict:
     """
     Safely read the request body and parse it as JSON.

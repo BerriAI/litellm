@@ -2,17 +2,22 @@
 Anthropic Skills API endpoints - /v1/skills
 """
 
-from typing import Any, Optional
+from typing import Any, Optional  # noqa: RUF100, TID251  # endpoint payloads are provider-defined
 
-import orjson
 from fastapi import APIRouter, Depends, Request, Response
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
+    _extract_model_param,
+    _read_request_body,
     convert_upload_files_to_file_data,
     get_form_data,
+)
+from litellm.proxy.common_utils.openai_endpoint_utils import (
+    get_custom_llm_provider_from_request_headers,
+    get_custom_llm_provider_from_request_query,
 )
 from litellm.types.llms.openai_skills import (
     OpenAIDeletedSkillVersion,
@@ -87,7 +92,12 @@ async def _process_skill_request(
     return result
 
 
-def _set_skill_route_params(data: dict[str, Any], request: Request, skill_id: str | None = None) -> dict[str, Any]:
+def _set_skill_route_params(
+    data: dict[str, Any],
+    request: Request,
+    skill_id: str | None = None,
+    custom_llm_provider: str | None = None,
+) -> dict[str, Any]:
     from litellm.litellm_core_utils.skill_id_utils import decode_skill_id
 
     if skill_id is not None:
@@ -97,9 +107,15 @@ def _set_skill_route_params(data: dict[str, Any], request: Request, skill_id: st
             data["skill_id"] = decoded["id"]
             data["model"] = decoded["model"]
     if "model" not in data:
-        model = request.query_params.get("model") or request.headers.get("x-litellm-model")
+        model = _extract_model_param(request, data)
         if model:
             data["model"] = model
+    data["custom_llm_provider"] = (
+        get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or data.get("custom_llm_provider")
+        or custom_llm_provider
+    )
     return data
 
 
@@ -163,13 +179,7 @@ async def create_skill(
     form_data = await get_form_data(request)
     data = await convert_upload_files_to_file_data(form_data)
 
-    # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
-    if model:
-        data["model"] = model
-
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
+    _set_skill_route_params(data, request, custom_llm_provider=custom_llm_provider)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -256,9 +266,7 @@ async def list_skills(
         version,
     )
 
-    # Read request body
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    data = await _read_request_body(request=request) or {}
 
     # Use query params if not in body
     if "limit" not in data and limit is not None:
@@ -272,14 +280,7 @@ async def list_skills(
     if "before_id" not in data and before_id is not None:
         data["before_id"] = before_id
 
-    # Extract model for routing (header > query > body)
-    model = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
-    if model:
-        data["model"] = model
-
-    # Set custom_llm_provider: body > query param > default
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
+    _set_skill_route_params(data, request, custom_llm_provider=custom_llm_provider)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -362,15 +363,9 @@ async def get_skill(
         version,
     )
 
-    # Read request body
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    data = await _read_request_body(request=request) or {}
 
-    _set_skill_route_params(data, request, skill_id)
-
-    # Set custom_llm_provider: body > query param > default
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
+    _set_skill_route_params(data, request, skill_id, custom_llm_provider)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -455,15 +450,9 @@ async def delete_skill(
         version,
     )
 
-    # Read request body
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
+    data = await _read_request_body(request=request) or {}
 
-    _set_skill_route_params(data, request, skill_id)
-
-    # Set custom_llm_provider: body > query param > default
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
+    _set_skill_route_params(data, request, skill_id, custom_llm_provider)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -508,10 +497,8 @@ async def update_skill(
     custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008, RUF100  # FastAPI dependency injection
 ):
-    body = await request.body()
-    data = orjson.loads(body) if body else {}
-    _set_skill_route_params(data, request, skill_id)
-    data.setdefault("custom_llm_provider", custom_llm_provider)
+    data = await _read_request_body(request=request) or {}
+    _set_skill_route_params(data, request, skill_id, custom_llm_provider)
     return await _process_skill_request(
         data=data,
         request=request,
@@ -533,8 +520,7 @@ async def get_skill_content(
     custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008, RUF100  # FastAPI dependency injection
 ):
-    data = _set_skill_route_params({}, request, skill_id)
-    data.setdefault("custom_llm_provider", custom_llm_provider)
+    data = _set_skill_route_params({}, request, skill_id, custom_llm_provider)
     return await _process_skill_request(
         data=data,
         request=request,
@@ -559,10 +545,9 @@ async def create_skill_version(
 ):
     form_data = await get_form_data(request)
     data = await convert_upload_files_to_file_data(form_data)
-    _set_skill_route_params(data, request, skill_id)
+    _set_skill_route_params(data, request, skill_id, custom_llm_provider)
     if isinstance(data.get("default"), str):
         data["default"] = data["default"].lower() == "true"
-    data.setdefault("custom_llm_provider", custom_llm_provider)
     return await _process_skill_request(
         data=data,
         request=request,
@@ -588,10 +573,9 @@ async def list_skill_versions(
     data: dict[str, Any] = {
         key: value for key, value in request.query_params.items() if key in {"after", "limit", "order", "model"}
     }
-    _set_skill_route_params(data, request, skill_id)
+    _set_skill_route_params(data, request, skill_id, custom_llm_provider)
     if "limit" in data:
         data["limit"] = int(data["limit"])
-    data.setdefault("custom_llm_provider", custom_llm_provider)
     return await _process_skill_request(
         data=data,
         request=request,
@@ -615,9 +599,8 @@ async def get_skill_version(
     custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    data = _set_skill_route_params({}, request, skill_id)
+    data = _set_skill_route_params({}, request, skill_id, custom_llm_provider)
     data["version"] = version
-    data.setdefault("custom_llm_provider", custom_llm_provider)
     return await _process_skill_request(
         data=data,
         request=request,
@@ -640,9 +623,8 @@ async def get_skill_version_content(
     custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    data = _set_skill_route_params({}, request, skill_id)
+    data = _set_skill_route_params({}, request, skill_id, custom_llm_provider)
     data["version"] = version
-    data.setdefault("custom_llm_provider", custom_llm_provider)
     return await _process_skill_request(
         data=data,
         request=request,
@@ -666,9 +648,8 @@ async def delete_skill_version(
     custom_llm_provider: str | None = "anthropic",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    data = _set_skill_route_params({}, request, skill_id)
+    data = _set_skill_route_params({}, request, skill_id, custom_llm_provider)
     data["version"] = version
-    data.setdefault("custom_llm_provider", custom_llm_provider)
     return await _process_skill_request(
         data=data,
         request=request,

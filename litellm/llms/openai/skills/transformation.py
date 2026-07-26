@@ -1,6 +1,6 @@
 """OpenAI Skills API configuration and transformations."""
 
-from typing import Any
+from typing import Any  # noqa: RUF100, TID251  # provider query and response payloads are dynamic
 
 import httpx
 
