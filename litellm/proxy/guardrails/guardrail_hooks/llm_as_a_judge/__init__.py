@@ -1,8 +1,9 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score responses against weighted criteria."""
 
 import json
+import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union, cast
 
 import litellm
 from fastapi import HTTPException
@@ -13,6 +14,7 @@ from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailInte
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
+    from litellm import Router
     from litellm.types.guardrails import Guardrail, LitellmParams
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import StandardLoggingEvalInformation
@@ -28,6 +30,38 @@ Return ONLY valid JSON in this exact format:
 }"""
 
 _VALID_ON_FAILURE = frozenset({"block", "log"})
+
+
+def _default_router_provider() -> "Router | None":
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except ImportError:
+        return None
+
+    return llm_router
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+
+def _parse_judge_verdict(raw: str) -> Dict[str, Any]:
+    """Parse the judge's JSON verdict, tolerating markdown fences and surrounding prose."""
+    text = raw.strip()
+    fenced = _JSON_FENCE_RE.search(text)
+    if fenced is not None:
+        text = fenced.group(1).strip()
+    parsed: object
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("judge response is not a JSON object")
+    return cast(Dict[str, Any], parsed)  # cast-ok: narrowed to dict by the isinstance guard above
 
 
 def _extract_text_from_content(content: Any) -> str:
@@ -94,6 +128,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         on_failure: Literal["block", "log"] = "block",
         event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None,
         default_on: bool = False,
+        router_provider: "Callable[[], Router | None] | None" = None,
         **kwargs: Any,
     ) -> None:
         _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = None
@@ -114,6 +149,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         self.criteria = criteria
         self.overall_threshold = overall_threshold
         self.on_failure = on_failure
+        self._router_provider = router_provider or _default_router_provider
 
     @classmethod
     def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
@@ -131,14 +167,27 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "content": _build_judge_prompt(self.criteria, messages, response_text),
             },
         ]
-        response = await litellm.acompletion(
-            model=self.judge_model,
-            messages=judge_messages,
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
+        router = self._router_provider()
+        if router is not None and (
+            self.judge_model in router.model_group_alias or router.get_model_list(model_name=self.judge_model)
+        ):
+            response = await router.acompletion(
+                model=self.judge_model,
+                messages=judge_messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+                num_retries=0,
+                fallbacks=[],
+            )
+        else:
+            response = await litellm.acompletion(
+                model=self.judge_model,
+                messages=judge_messages,
+                response_format={"type": "json_object"},
+                temperature=0,
+            )
         raw = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
-        return json.loads(raw)
+        return _parse_judge_verdict(raw)
 
     async def apply_guardrail(
         self,
