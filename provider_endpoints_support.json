@@ -2941,6 +2941,23 @@
         "rerank": false,
         "a2a": false
       }
+    },
+    "greenpt": {
+      "display_name": "GreenPT (`greenpt`)",
+      "url": "https://docs.greenpt.ai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
     }
   },
   "endpoints": {
