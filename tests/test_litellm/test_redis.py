@@ -170,6 +170,29 @@ def test_get_signature_arg_names_strips_var_args_and_kwargs():
     assert "kwargs" not in names
 
 
+def test_get_redis_url_kwargs_introspects_provided_client():
+    """The async caller passes client=async_redis.Redis.from_url, so the allow-list must be
+    read from that client and not the sync redis.Redis.from_url. Otherwise async-only args like
+    single_connection_client / auto_close_connection_pool are silently dropped before connecting."""
+    sync_args = _get_redis_url_kwargs()
+    async_args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
+
+    assert "single_connection_client" in async_args
+    assert "auto_close_connection_pool" in async_args
+    assert "single_connection_client" not in sync_args
+    assert "auto_close_connection_pool" not in sync_args
+
+
+def test_get_redis_cluster_kwargs_introspects_provided_client():
+    """Async cluster allow-list must be read from async_redis.RedisCluster, not the sync class,
+    so async-only constructor args survive the allow-list filter."""
+    sync_args = _get_redis_cluster_kwargs()
+    async_args = _get_redis_cluster_kwargs(client=async_redis.RedisCluster)
+
+    assert "decode_responses" in async_args
+    assert "decode_responses" not in sync_args
+
+
 def test_max_connections_in_cluster_kwargs():
     """Test that max_connections is included in Redis cluster kwargs"""
     kwargs = _get_redis_cluster_kwargs()

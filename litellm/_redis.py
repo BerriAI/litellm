@@ -80,19 +80,19 @@ def _get_redis_url_kwargs(client=None):
 
     include_args = ["url"]
 
-    available_args = [x for x in _get_signature_arg_names(redis.Redis.from_url) if x not in exclude_args] + include_args
+    available_args = [x for x in _get_signature_arg_names(client) if x not in exclude_args] + include_args
 
     return available_args
 
 
 def _get_redis_cluster_kwargs(client=None):
     if client is None:
-        client = redis.Redis.from_url
+        client = redis.RedisCluster
 
     # Only allow primitive arguments
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
 
-    available_args = {x for x in _get_signature_arg_names(redis.RedisCluster) if x not in exclude_args}
+    available_args = {x for x in _get_signature_arg_names(client) if x not in exclude_args}
     available_args |= {
         "password",
         "username",
@@ -571,7 +571,7 @@ def get_redis_async_client(
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
 
-        args = _get_redis_cluster_kwargs()
+        args = _get_redis_cluster_kwargs(client=async_redis.RedisCluster)
         cluster_kwargs = {}
         for arg in redis_kwargs:
             if arg in args:
