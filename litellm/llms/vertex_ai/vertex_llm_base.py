@@ -24,6 +24,7 @@ from .common_utils import (
     all_gemini_url_modes,
     get_vertex_base_model_name,
     get_vertex_base_url,
+    normalize_gemini_model_path,
 )
 
 GOOGLE_IMPORT_ERROR_MESSAGE = (
@@ -637,7 +638,7 @@ class VertexBase:
                 # For Gemini (Google AI Studio), construct the full path like other providers
                 if model is None:
                     raise ValueError("Model parameter is required for Gemini custom API base URLs")
-                url = "{}/models/{}:{}".format(api_base, model, endpoint)
+                url = "{}/{}:{}".format(api_base, normalize_gemini_model_path(model), endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."

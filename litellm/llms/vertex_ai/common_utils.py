@@ -463,7 +463,7 @@ def _get_gemini_url(
         VertexGeminiConfig,
     )
 
-    _gemini_model_name = "models/{}".format(model)
+    _gemini_model_name = normalize_gemini_model_path(model)
     api_version = "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
 
     if mode == "chat":
@@ -492,6 +492,13 @@ def _get_gemini_url(
         raise ValueError(f"Unsupported mode: {mode}")
 
     return url, endpoint
+
+
+def normalize_gemini_model_path(model: str) -> str:
+    """Return a Gemini resource path with exactly one leading ``models/`` segment."""
+    if model.startswith("models/"):
+        return model
+    return f"models/{model}"
 
 
 def _check_text_in_content(parts: List[PartType]) -> bool:

@@ -1140,13 +1140,18 @@ def test_get_gemini_url_excludes_api_key():
     """
     from litellm.llms.vertex_ai.common_utils import _get_gemini_url
 
-    for mode in ("chat", "embedding", "batch_embedding", "count_tokens"):
-        url, _ = _get_gemini_url(
-            mode=mode,
-            model="gemini-2.5-flash",
-            stream=False,
-        )
-        assert "key=" not in url, f"API key found in URL for mode={mode}: {url}"
+    for model in ("gemini-1.5-flash", "models/gemini-1.5-flash"):
+        for mode in ("chat", "embedding", "batch_embedding", "count_tokens"):
+            url, _ = _get_gemini_url(
+                mode=mode,
+                model=model,
+                stream=False,
+            )
+            assert "key=" not in url, f"API key found in URL for mode={mode}: {url}"
+            assert "/models/models/" not in url, f"Duplicate models path for mode={mode}: {url}"
+
+        url, _ = _get_gemini_url(mode="chat", model=model, stream=False)
+        assert url == "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
     # Streaming chat should only have ?alt=sse
     url, _ = _get_gemini_url(mode="chat", model="gemini-2.5-flash", stream=True)
