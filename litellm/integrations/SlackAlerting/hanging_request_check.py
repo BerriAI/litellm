@@ -58,6 +58,17 @@ class AlertingHangingRequestCheck:
             return
 
         request_metadata = get_litellm_metadata_from_kwargs(kwargs=request_data)
+        if not request_metadata:
+            # At proxy pre-call time, `litellm_params` is not populated yet, so
+            # `get_litellm_metadata_from_kwargs` returns {}. The key/team alias is
+            # present at the top level of the request at this point, so fall back
+            # to it - otherwise the hanging-request alert cannot identify which
+            # key/team is responsible (Key Alias / Team Alias show up empty).
+            request_metadata = (
+                request_data.get("metadata")
+                or request_data.get("litellm_metadata")
+                or {}
+            )
         model = request_data.get("model", "")
         api_base: Optional[str] = None
 
