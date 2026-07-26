@@ -469,7 +469,7 @@ async def new_project(
         return response
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.new_project(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.project_endpoints.new_project(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -707,7 +707,7 @@ async def update_project(
         return updated_project
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.update_project(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.project_endpoints.update_project(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -815,7 +815,7 @@ async def delete_project(
         return deleted_projects
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.delete_project(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.project_endpoints.delete_project(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -896,7 +896,7 @@ async def project_info(
         return project
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.project_info(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.project_endpoints.project_info(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -956,7 +956,7 @@ async def list_projects(
         return projects
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.list_projects(): Exception occured - {}".format(
+            "litellm.proxy.management_endpoints.project_endpoints.list_projects(): Exception occurred - {}".format(
                 str(e)
             )
         )
