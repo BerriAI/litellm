@@ -254,6 +254,96 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
     assert standard_logging_object["response_cost"] >= 0.003
 
 
+@pytest.mark.asyncio
+async def test_aquery_forwards_provider_retrieval_config_and_router_to_search():
+    """
+    Regression: provider-specific retrieval_config keys (aws_region_name,
+    embedding_model, vector_bucket_name, ...) and the router must be forwarded
+    to the vector store search call. Pre-fix they were silently dropped, so
+    /v1/rag/query failed with provider config errors (e.g. S3 Vectors
+    "aws_region_name is required") even when the caller supplied them.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            }
+        ]
+    )
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    with patch("litellm.vector_stores.asearch", new=fake_search):
+        response = await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={
+                "vector_store_id": "bkt:idx",
+                "custom_llm_provider": "s3_vectors",
+                "top_k": 5,
+                "aws_region_name": "eu-west-1",
+                "embedding_model": "my-embed",
+                "vector_bucket_name": "bkt",
+            },
+            router=router,
+            mock_response="hi",
+        )
+
+    assert isinstance(response, ModelResponse)
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["vector_store_id"] == "bkt:idx"
+    assert search_kwargs["custom_llm_provider"] == "s3_vectors"
+    assert search_kwargs["max_num_results"] == 5
+    assert search_kwargs["router"] is router
+    # provider-specific extras forwarded
+    assert search_kwargs["aws_region_name"] == "eu-west-1"
+    assert search_kwargs["embedding_model"] == "my-embed"
+    assert search_kwargs["vector_bucket_name"] == "bkt"
+    # consumed keys are not duplicated into the spread
+    assert "top_k" not in search_kwargs
+
+
+@pytest.mark.asyncio
+async def test_aquery_minimal_retrieval_config_forwards_no_extras():
+    """
+    A minimal retrieval_config must not leak consumed keys (or invent extras)
+    into the vector store search call.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    with patch("litellm.vector_stores.asearch", new=fake_search):
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+            mock_response="hi",
+        )
+
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["vector_store_id"] == "vs_test_123"
+    assert search_kwargs["custom_llm_provider"] == "openai"
+    assert search_kwargs["router"] is None
+    leaked = {"top_k", "filters", "retrieval_filter", "aws_region_name", "embedding_model", "vector_bucket_name"}
+    assert not (leaked & set(search_kwargs.keys()))
+
+
 def test_rag_call_types_are_registered():
     """
     query/aquery/ingest/aingest are @client-decorated entry points, so their

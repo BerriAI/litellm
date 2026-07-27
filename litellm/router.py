@@ -5820,6 +5820,7 @@ class Router:
                 return await self._init_vector_store_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
+                    call_type=call_type,
                     **kwargs,
                 )
             elif call_type in ("afile_delete", "afile_content"):
@@ -5860,6 +5861,7 @@ class Router:
         self,
         original_function: Callable,
         custom_llm_provider: Optional[str] = None,
+        call_type: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -5877,6 +5879,12 @@ class Router:
                 original_function=original_function,
                 **kwargs,
             )
+
+        # For search, pass the router so provider transforms can resolve
+        # router-managed embedding models (e.g. S3 Vectors query embeddings).
+        # Assigning into kwargs also overrides any client-supplied `router` key.
+        if call_type == "avector_store_search":
+            kwargs["router"] = self
 
         # Otherwise, call the original function directly
         return await original_function(**kwargs)

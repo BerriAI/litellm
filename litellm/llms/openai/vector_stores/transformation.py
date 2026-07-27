@@ -21,6 +21,7 @@ from litellm.utils import add_openai_metadata
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -99,6 +100,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        router: Optional["Router"] = None,
     ) -> Tuple[str, Dict]:
         encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}/search"

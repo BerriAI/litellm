@@ -16,6 +16,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -56,6 +57,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        router: Optional["Router"] = None,
     ) -> Tuple[str, Dict]:
         pass
 
@@ -68,6 +70,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        router: Optional["Router"] = None,
     ) -> Tuple[str, Dict]:
         """
         Optional async version of transform_search_vector_store_request.
@@ -83,6 +86,7 @@ class BaseVectorStoreConfig:
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
             extra_body=extra_body,
+            router=router,
         )
 
     @abstractmethod

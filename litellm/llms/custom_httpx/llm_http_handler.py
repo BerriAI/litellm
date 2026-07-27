@@ -167,6 +167,7 @@ if TYPE_CHECKING:
         AnthropicMessagesStreamingResponse,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.router import Router
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -9409,6 +9410,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        router: Optional["Router"] = None,
     ) -> VectorStoreSearchResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
@@ -9443,6 +9445,7 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
+                router=router,
             )
         else:
             (
@@ -9456,6 +9459,7 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
+                router=router,
             )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -9507,6 +9511,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        router: Optional["Router"] = None,
     ) -> Union[VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]]:
         if _is_async:
             return self.async_vector_store_search_handler(
@@ -9521,6 +9526,7 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+                router=router,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -9551,6 +9557,7 @@ class BaseLLMHTTPHandler:
             litellm_logging_obj=logging_obj,
             litellm_params=dict(litellm_params),
             extra_body=extra_body,
+            router=router,
         )
 
         all_optional_params: Dict[str, Any] = dict(litellm_params)

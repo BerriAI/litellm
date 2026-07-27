@@ -6,7 +6,7 @@ import asyncio
 import builtins
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Union
 
 import httpx
 
@@ -27,6 +27,9 @@ from litellm.types.vector_stores import (
 )
 from litellm.utils import ProviderConfigManager, client
 from litellm.vector_stores.utils import VectorStoreRequestUtils
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -279,6 +282,7 @@ async def asearch(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
+    router: Optional["Router"] = None,
     **kwargs,
 ) -> VectorStoreSearchResponse:
     """
@@ -307,6 +311,7 @@ async def asearch(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
+            router=router,
             **kwargs,
         )
 
@@ -346,6 +351,7 @@ def search(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     # LiteLLM specific params,
     custom_llm_provider: Optional[str] = None,
+    router: Optional["Router"] = None,
     **kwargs,
 ) -> Union[VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]]:
     """
@@ -449,6 +455,7 @@ def search(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            router=router,
         )
 
         return response
