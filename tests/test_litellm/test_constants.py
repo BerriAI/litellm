@@ -75,7 +75,17 @@ def _build_constant_env_var_map() -> dict[str, str]:
 
 @pytest.mark.parametrize(
     "env_value, expected",
-    [("0", 0.1), ("-5", 0.1), ("0.05", 0.1), ("30", 30.0), (None, 10.0)],
+    [
+        ("0", 0.1),
+        ("-5", 0.1),
+        ("0.05", 0.1),
+        ("30", 30.0),
+        (" 30 ", 30.0),
+        ("", 10.0),
+        ("abc", 10.0),
+        ("10s", 10.0),
+        (None, 10.0),
+    ],
 )
 def test_proxy_shutdown_spend_drain_timeout_is_clamped_positive(env_value, expected):
     with mock.patch.dict(
@@ -90,3 +100,26 @@ def test_proxy_shutdown_spend_drain_timeout_is_clamped_positive(env_value, expec
             assert reloaded.PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS == expected
         finally:
             importlib.reload(constants)
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (None, 7.5),
+        ("", 7.5),
+        ("   ", 7.5),
+        ("abc", 7.5),
+        ("10s", 7.5),
+        ("2.5", 2.5),
+        (" 2.5 ", 2.5),
+        ("-1", -1.0),
+    ],
+)
+def test_get_env_float_falls_back_on_unusable_values(raw, expected):
+    from litellm.litellm_core_utils.env_utils import get_env_float
+
+    env = {} if raw is None else {"LITELLM_TEST_FLOAT_ENV": raw}
+    with mock.patch.dict(os.environ, env, clear=False):
+        if raw is None:
+            os.environ.pop("LITELLM_TEST_FLOAT_ENV", None)
+        assert get_env_float("LITELLM_TEST_FLOAT_ENV", 7.5) == expected
