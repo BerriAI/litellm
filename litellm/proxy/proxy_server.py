@@ -786,19 +786,12 @@ def cleanup_router_config_variables():
 
 
 async def _drain_spend_buffers_on_shutdown() -> None:
-    """Stop the spend scheduler and flush in-memory spend buffers to the DB.
-
-    Runs before the Prisma disconnect: the ``update_spend`` scheduler job and the
-    daily-tag-spend queue hold rows in memory between intervals, so a worker
-    recycle or SIGTERM drops whatever has not been committed yet.
-    """
     global scheduler
 
     if scheduler is not None:
         try:
-            # AsyncIOExecutor.shutdown() cancels pending job coroutines and cannot
-            # honor wait=True, so a mid-flight update_spend is aborted either way;
-            # the explicit flush below is what actually commits those rows.
+            # AsyncIOExecutor.shutdown() cannot honor wait=True and cancels pending
+            # job coroutines, so the explicit flush below is what commits those rows.
             scheduler.shutdown(wait=False)
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping scheduler on shutdown: {e}")
