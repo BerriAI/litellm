@@ -12,24 +12,11 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, Optional, TypedDict, cast
+from typing import Any, Literal
 
 import click
 
 Mode = Literal["text", "file", "messages"]
-
-
-class TokenCountMessage(TypedDict, total=False):
-    """A single message accepted by ``litellm.token_counter(messages=...)``.
-
-    Only ``role`` and ``content`` are required by the underlying
-    counter; other fields are passed through and may be ignored for
-    counting purposes. Marked ``total=False`` so callers can omit
-    fields they don't need.
-    """
-
-    role: str
-    content: Any
 
 
 @dataclass(frozen=True)
@@ -53,12 +40,12 @@ def _read_text_file(path: str) -> str:
         return f.read()
 
 
-def _resolve_messages_payload(value: str) -> list[TokenCountMessage]:
+def _resolve_messages_payload(value: str) -> list[Any]:
     """Parse the --messages argument (raw JSON string or '-' for stdin) into a list.
 
-    Returns a typed list of message dicts so the downstream
-    ``token_counter(messages=...)`` call does not propagate
-    ``Unknown`` into the call site.
+    The downstream ``token_counter(messages=...)`` call accepts a
+    list of OpenAI-style message dicts; the JSON-decoded list is
+    structurally compatible without further validation.
     """
     raw = _read_stdin() if value == "-" else value
     try:
@@ -67,14 +54,14 @@ def _resolve_messages_payload(value: str) -> list[TokenCountMessage]:
         raise click.UsageError(f"--messages must be valid JSON: {exc}") from exc
     if not isinstance(parsed, list):
         raise click.UsageError("--messages must be a JSON list of message objects.")
-    return cast(list[TokenCountMessage], parsed)
+    return parsed
 
 
 def _resolve_input(
     *,
-    text: Optional[str],
-    file: Optional[str],
-    messages: Optional[str],
+    text: str | None,
+    file: str | None,
+    messages: str | None,
 ) -> tuple[Mode, Any]:
     """Pick the right input-source option and return (mode, payload).
 
@@ -83,7 +70,7 @@ def _resolve_input(
 
     - ``text``     -> the raw string
     - ``file``     -> the file contents (already read)
-    - ``messages`` -> the parsed JSON list (typed as ``list[TokenCountMessage]``)
+    - ``messages`` -> the parsed JSON list
 
     Raises ``click.UsageError`` on invalid combinations so the CLI
     surfaces exit 2 instead of a Python traceback.
@@ -106,16 +93,15 @@ def _resolve_input(
             raise click.UsageError(f"--file {file!r} does not exist.") from exc
         except OSError as exc:
             raise click.UsageError(f"--file {file!r} could not be read: {exc}") from exc
-    parsed = _resolve_messages_payload(messages)  # type: ignore[arg-type]
-    return "messages", parsed
+    return "messages", _resolve_messages_payload(messages)  # type: ignore[arg-type]
 
 
 def count_tokens(
     model: str,
     *,
-    text: Optional[str] = None,
-    file: Optional[str] = None,
-    messages: Optional[str] = None,
+    text: str | None = None,
+    file: str | None = None,
+    messages: str | None = None,
 ) -> TokenCount:
     """Public helper for programmatic use. Returns a ``TokenCount``.
 
@@ -184,9 +170,9 @@ def _render_line(result: TokenCount) -> str:
 )
 def cli(
     model: str,
-    text: Optional[str],
-    file_path: Optional[str],
-    messages_json: Optional[str],
+    text: str | None,
+    file_path: str | None,
+    messages_json: str | None,
     output_json: bool,
 ) -> None:
     """Count tokens for a single prompt against a model tokenizer."""
