@@ -17210,6 +17210,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
@@ -17273,6 +17274,7 @@
         "output_cost_per_token": 4e-07,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,

@@ -21,29 +21,30 @@ class FriendliModel(NamedTuple):
     cache_read_input_token_cost: float | None
     max_input_tokens: int
     max_output_tokens: int
+    supports_reasoning: bool
 
 
 EXPECTED_MODELS: Final[tuple[FriendliModel, ...]] = (
     FriendliModel(
-        "friendliai/LGAI-EXAONE/K-EXAONE-236B-A23B", 2e-07, 8e-07, 1e-07, 262144, 262144
+        "friendliai/LGAI-EXAONE/K-EXAONE-236B-A23B", 2e-07, 8e-07, 1e-07, 262144, 262144, True
     ),
     FriendliModel(
-        "friendliai/MiniMaxAI/MiniMax-M2.5", 3e-07, 1.2e-06, 6e-08, 196608, 196608
+        "friendliai/MiniMaxAI/MiniMax-M2.5", 3e-07, 1.2e-06, 6e-08, 196608, 196608, True
     ),
     FriendliModel(
-        "friendliai/Qwen/Qwen3-235B-A22B-Instruct-2507", 2e-07, 8e-07, None, 262144, 262144
+        "friendliai/Qwen/Qwen3-235B-A22B-Instruct-2507", 2e-07, 8e-07, None, 262144, 262144, False
     ),
     FriendliModel(
-        "friendliai/deepseek-ai/DeepSeek-V3.2", 5e-07, 1.5e-06, 2.5e-07, 163840, 163840
+        "friendliai/deepseek-ai/DeepSeek-V3.2", 5e-07, 1.5e-06, 2.5e-07, 163840, 163840, True
     ),
     FriendliModel(
-        "friendliai/google/gemma-4-31B-it", 1.4e-07, 4e-07, None, 262144, 262144
+        "friendliai/google/gemma-4-31B-it", 1.4e-07, 4e-07, None, 262144, 262144, True
     ),
     FriendliModel(
-        "friendliai/zai-org/GLM-5.1", 1.4e-06, 4.4e-06, 2.6e-07, 202752, 202752
+        "friendliai/zai-org/GLM-5.1", 1.4e-06, 4.4e-06, 2.6e-07, 202752, 202752, True
     ),
     FriendliModel(
-        "friendliai/zai-org/GLM-5.2", 1.4e-06, 4.4e-06, 2.6e-07, 1048576, 1048576
+        "friendliai/zai-org/GLM-5.2", 1.4e-06, 4.4e-06, 2.6e-07, 1048576, 1048576, True
     ),
 )
 
@@ -104,6 +105,12 @@ def test_prompt_caching_flag_tracks_cache_read_cost() -> None:
         assert entry.get("supports_prompt_caching", False) is (
             expected.cache_read_input_token_cost is not None
         ), f"{expected.key} prompt-caching flag disagrees with cache_read cost"
+
+
+@pytest.mark.parametrize("expected", EXPECTED_MODELS, ids=lambda m: m.key)
+def test_reasoning_flag_matches_verified_behaviour(expected: FriendliModel) -> None:
+    entry = _load(ROOT_PATH)[expected.key]
+    assert entry.get("supports_reasoning", False) is expected.supports_reasoning
 
 
 def test_deprecating_model_carries_iso_date() -> None:
