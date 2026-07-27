@@ -5587,6 +5587,50 @@ class TestSSEKeepalive:
         monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", Hostile(), raising=False)
         assert _resolve_sse_keepalive_interval() is None
 
+    async def test_keepalive_applies_without_a_request_object(self, monkeypatch):
+        """Callers that omit request have no disconnect arm, but a configured
+        interval must still keep their stream alive."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(2.5),
+            media_type="text/event-stream",
+            headers={},
+        )
+        chunks = await self._collect(response)
+
+        assert chunks[0] == SSE_KEEPALIVE_COMMENT
+        assert [c for c in chunks if c != SSE_KEEPALIVE_COMMENT] == [
+            "data: first\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_no_request_and_interval_unset_stays_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", None, raising=False)
+
+        response = await create_response(
+            generator=self._stalling_gen(0.05),
+            media_type="text/event-stream",
+            headers={},
+        )
+
+        assert await self._collect(response) == ["data: first\n\n", "data: [DONE]\n\n"]
+
+    async def test_no_request_fast_chunk_still_returns_json_error(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def error_gen():
+            yield 'data: {"error": {"message": "blocked", "code": 400}}\n\n'
+
+        response = await create_response(
+            generator=error_gen(),
+            media_type="text/event-stream",
+            headers={},
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+
     async def test_keepalive_path_keeps_datadog_chunk_spans(self, monkeypatch):
         """The keepalive path bypasses combined_generator, so it has to carry the
         per-chunk tracing itself or a stalled stream silently loses every span."""

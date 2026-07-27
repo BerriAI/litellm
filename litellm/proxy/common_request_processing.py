@@ -549,9 +549,16 @@ async def _buffer_first_chunk_honoring_disconnect(
 
     Returns ``(first_chunk, None)`` once a chunk is in hand, or ``(None, chunk_task)``
     when ``keepalive_interval`` elapses first. A disconnect takes priority over both.
+    Callers without a ``request`` still get the keepalive arm, just no disconnect arm.
     """
     if request is None:
-        return await generator.__anext__(), None
+        if keepalive_interval is None:
+            return await generator.__anext__(), None
+        chunk_only_task: asyncio.Task[str] = asyncio.ensure_future(generator.__anext__())
+        done, _ = await asyncio.wait({chunk_only_task}, timeout=keepalive_interval)
+        if not done:
+            return None, chunk_only_task
+        return chunk_only_task.result(), None
 
     chunk_task: asyncio.Task[str] = asyncio.ensure_future(generator.__anext__())
     disconnect_task: asyncio.Task[None] = asyncio.ensure_future(_wait_for_http_disconnect(request))
