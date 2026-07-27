@@ -7841,3 +7841,72 @@ class TestPreemptive401ModeAware:
             await self._run(delegate, None, has_stored_token=False)
         assert exc.value.status_code == 401
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_type",
+    [MCPAuth.authorization, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.basic, MCPAuth.token],
+)
+async def test_list_tools_injects_byok_credential_for_non_oauth2_auth_types(auth_type):
+    """Regression for BYOK servers on a non-oauth2 auth_type: the stored per-user credential must be
+    attached when listing tools, otherwise the upstream 401 is absorbed and the server lists nothing."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="byok_user")
+    set_auth_context(user_api_key_auth)
+
+    server = MagicMock()
+    server.server_id = "byok_server"
+    server.name = "byok"
+    server.alias = "byok"
+    server.server_name = "byok"
+    server.auth_type = auth_type
+    server.is_byok = True
+    server.allowed_tools = None
+    server.disallowed_tools = None
+    server.extra_headers = None
+    server.tool_name_to_display_name = None
+    server.tool_name_to_description = None
+
+    seen_auth_headers = []
+
+    async def mock_get_tools_from_server(server, mcp_auth_header=None, add_prefix=False, **kwargs):
+        seen_auth_headers.append(mcp_auth_header)
+        tool = MagicMock()
+        tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
+        tool.description = "desc"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=[server.server_id])
+    mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_byok_credential",
+            AsyncMock(return_value="personal-api-key"),
+        ),
+    ):
+        listing = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+        )
+
+    assert seen_auth_headers == ["personal-api-key"]
+    assert [tool.name for tool in listing.tools] == ["byok-toolA"]

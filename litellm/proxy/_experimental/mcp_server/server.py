@@ -2014,6 +2014,9 @@ if MCP_AVAILABLE:
                         prefetched_creds=_prefetched_oauth_creds,
                     )
 
+                if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
+                    server_auth_header = await _get_byok_credential(server, user_api_key_auth)
+
                 try:
                     tools = await global_mcp_server_manager._get_tools_from_server(
                         server=server,
