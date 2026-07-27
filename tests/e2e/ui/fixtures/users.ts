@@ -1,3 +1,11 @@
+import {
+  ADMIN_STORAGE_PATH,
+  ADMIN_VIEWER_STORAGE_PATH,
+  INTERNAL_USER_STORAGE_PATH,
+  INTERNAL_VIEWER_STORAGE_PATH,
+  TEAM_ADMIN_STORAGE_PATH,
+} from "../constants";
+
 export enum Role {
   ProxyAdmin = "proxy_admin",
   ProxyAdminViewer = "proxy_admin_viewer",
@@ -29,10 +37,12 @@ export const users: Record<Role, { email: string; password: string }> = {
   },
 };
 
+// Re-exported from constants so the paths have one definition; they must honor
+// ARTIFACT_DIR, since the suite runs from a read-only cwd in the e2e image.
 export const STORAGE_PATHS: Record<Role, string> = {
-  [Role.ProxyAdmin]: "admin.storageState.json",
-  [Role.ProxyAdminViewer]: "adminViewer.storageState.json",
-  [Role.InternalUser]: "internalUser.storageState.json",
-  [Role.InternalUserViewer]: "internalViewer.storageState.json",
-  [Role.TeamAdmin]: "teamAdmin.storageState.json",
+  [Role.ProxyAdmin]: ADMIN_STORAGE_PATH,
+  [Role.ProxyAdminViewer]: ADMIN_VIEWER_STORAGE_PATH,
+  [Role.InternalUser]: INTERNAL_USER_STORAGE_PATH,
+  [Role.InternalUserViewer]: INTERNAL_VIEWER_STORAGE_PATH,
+  [Role.TeamAdmin]: TEAM_ADMIN_STORAGE_PATH,
 };

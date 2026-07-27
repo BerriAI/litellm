@@ -1,7 +1,8 @@
 import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
-import { UI_BASE_URL } from "./constants";
+import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 import * as fs from "fs";
+import * as path from "path";
 
 async function globalSetup() {
   const browser = await chromium.launch();
@@ -47,9 +48,24 @@ async function globalSetup() {
       await page.context().clearCookies({ name: "litellm_return_url" });
       await page.context().storageState({ path: storagePath });
     } catch (e) {
-      fs.mkdirSync("test-results", { recursive: true });
-      await page.screenshot({ path: `test-results/global-setup-${role}-failure.png`, fullPage: true });
-      console.error(`Global setup failed for role ${role}. Screenshot saved. URL: ${page.url()}`);
+      // Best-effort diagnostics only: this handler must never replace the real
+      // failure with its own. Writing the screenshot used to throw ENOENT/EROFS
+      // on the read-only cwd in the e2e image, which masked every underlying
+      // login error and made the run look like a filesystem bug.
+      try {
+        const failureDir = path.join(ARTIFACT_DIR, "test-results");
+        fs.mkdirSync(failureDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(failureDir, `global-setup-${role}-failure.png`),
+          fullPage: true,
+        });
+        console.error(`Global setup failed for role ${role}. Screenshot saved. URL: ${page.url()}`);
+      } catch (diagnosticError) {
+        console.error(
+          `Global setup failed for role ${role} at URL: ${page.url()}. ` +
+            `Could not save a screenshot: ${diagnosticError}`,
+        );
+      }
       throw e;
     } finally {
       await page.close();
