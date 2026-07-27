@@ -88,6 +88,8 @@ class PrismaWrapper:
     # Fallback refresh interval if token parsing fails (10 minutes)
     FALLBACK_REFRESH_INTERVAL_SECONDS = 600
 
+    PLANNED_REPLACEMENT_DRAIN_SECONDS = 0.5
+
     def __init__(
         self,
         original_prisma: Any,
@@ -425,6 +427,38 @@ class PrismaWrapper:
 
         return True
 
+    async def _replace_prisma_client_for_token_refresh_locked(
+        self,
+        new_db_url: str,
+        http_client: Any | None = None,
+    ) -> None:
+        from prisma import Prisma
+
+        kwargs: dict[str, Any] = {}
+        if http_client is not None:
+            kwargs["http"] = http_client
+        if self._recreate_uses_datasource:
+            kwargs["datasource"] = {"url": new_db_url}
+
+        old_engine_pid = self._get_engine_pid()
+        replacement_prisma = Prisma(**kwargs)
+        await replacement_prisma.connect()
+
+        if old_engine_pid > 0:
+            if len(self._expected_engine_deaths) >= 64:
+                self._expected_engine_deaths.clear()
+            self._expected_engine_deaths.add(old_engine_pid)
+
+        self._original_prisma = replacement_prisma
+        self._engine_generation += 1
+
+        if self.on_engine_replaced is not None:
+            self.on_engine_replaced()
+
+        if old_engine_pid > 0:
+            await asyncio.sleep(self.PLANNED_REPLACEMENT_DRAIN_SECONDS)
+            await self._kill_engine_process(old_engine_pid)
+
     async def start_token_refresh_task(self) -> None:
         """
         Start the background token refresh task.
@@ -527,11 +561,17 @@ class PrismaWrapper:
                 )
                 return
 
+            previous_db_url = os.getenv(self._db_url_env_var)
             new_db_url = self.get_rds_iam_token()
             if new_db_url:
-                # We already hold `_reconnection_lock`; call the locked core
-                # directly (the public method would re-acquire and deadlock).
-                await self._recreate_prisma_client_locked(new_db_url)
+                try:
+                    await self._replace_prisma_client_for_token_refresh_locked(new_db_url)
+                except Exception:
+                    if previous_db_url is None:
+                        os.environ.pop(self._db_url_env_var, None)
+                    else:
+                        os.environ[self._db_url_env_var] = previous_db_url
+                    raise
                 self._last_refresh_time = datetime.utcnow()
                 verbose_proxy_logger.info(
                     "%sRDS IAM token refreshed successfully. New token valid for ~15 minutes.",
