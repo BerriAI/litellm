@@ -18,7 +18,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import UnknownApiError
-from guardrails_client import GuardrailsClient
+from guardrails_client import GuardrailsClient, poll_until_blocked
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -47,7 +47,7 @@ class TestBedrockGuardrail:
         )
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        result = client.chat(scoped_key, MODEL, BLOCKED_PROMPT)
+        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, BLOCKED_PROMPT))
 
         match result:
             case UnknownApiError(status_code=status, body=body):
