@@ -20,7 +20,7 @@ anthropic:
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -42,6 +42,31 @@ from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
 
 DEFAULT_REDIS_SYNC_INTERVAL = 1
+
+BUDGET_WINDOW_RESET_SCRIPT = """
+local start_time_key = KEYS[1]
+local spend_key = KEYS[2]
+local current_time = ARGV[1]
+local response_cost = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+local window_start = redis.call('GET', start_time_key)
+if window_start == false or (tonumber(current_time) - tonumber(window_start)) > ttl then
+    redis.call('SET', start_time_key, current_time, 'EX', ttl)
+    redis.call('SET', spend_key, response_cost, 'EX', ttl)
+    return {current_time, response_cost}
+end
+
+local new_spend = redis.call('INCRBYFLOAT', spend_key, response_cost)
+if redis.call('TTL', spend_key) < 0 then
+    redis.call('EXPIRE', spend_key, ttl)
+end
+return {window_start, new_spend}
+"""
+
+
+def _as_float(value: Union[bytes, str, float, int]) -> float:
+    return float(value.decode() if isinstance(value, bytes) else value)
 
 
 class _LiteLLMParamsDictView:
@@ -99,6 +124,12 @@ class RouterBudgetLimiting(CustomLogger):
         model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         self.dual_cache = dual_cache
+        self._budget_window_reset_script: Callable[..., Awaitable[Any]] | None = (
+            dual_cache.redis_cache.async_register_script(BUDGET_WINDOW_RESET_SCRIPT)
+            if dual_cache.redis_cache is not None
+            else None
+        )
+        self._local_budget_window_lock = asyncio.Lock()
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
         self.provider_budget_config: Optional[GenericBudgetConfigType] = provider_budget_config
@@ -359,20 +390,50 @@ class RouterBudgetLimiting(CustomLogger):
         ttl_seconds: int,
     ) -> float:
         """
-        Handle start of new budget window by resetting spend and start time
+        Start a new budget window, or join one another caller just started.
 
-        Enters this when:
-        - The budget does not exist in cache, so we need to set it
-        - The budget window has expired, so we need to reset everything
+        Enters this when the budget window has expired, which several concurrent
+        responses can observe at the same time. Only the first of them may reset
+        the spend to its own cost; the others have to add their cost on top, else
+        every reset would drop the spend written by the resets racing with it.
 
-        Does 2 things:
-        - stores key: `provider_spend:{provider}:1d`, value: response_cost
-        - stores key: `provider_budget_start_time:{provider}`, value: current_time.
-            This stores the start time of the new budget window
+        Redis does the window check, reset and increment in one atomic script so
+        the winner is decided server-side, and the resulting window is mirrored
+        into the in-memory cache. Without Redis a local lock is enough, since
+        there is a single instance reading and writing the spend.
+
+        Returns the start time of the window this spend was recorded against.
         """
-        await self.dual_cache.async_set_cache(key=spend_key, value=response_cost, ttl=ttl_seconds)
-        await self.dual_cache.async_set_cache(key=start_time_key, value=current_time, ttl=ttl_seconds)
-        return current_time
+        if self._budget_window_reset_script is not None:
+            try:
+                raw_window_start, raw_spend = await self._budget_window_reset_script(
+                    keys=[start_time_key, spend_key],
+                    args=[str(current_time), str(response_cost), ttl_seconds],
+                )
+                window_start = _as_float(raw_window_start)
+                await self.dual_cache.in_memory_cache.async_set_cache(
+                    key=start_time_key, value=window_start, ttl=ttl_seconds
+                )
+                await self.dual_cache.in_memory_cache.async_set_cache(
+                    key=spend_key, value=_as_float(raw_spend), ttl=ttl_seconds
+                )
+                return window_start
+            except Exception as e:
+                verbose_router_logger.warning(
+                    "Atomic budget window reset failed for %s, falling back to local reset: %s",
+                    spend_key,
+                    str(e),
+                )
+
+        async with self._local_budget_window_lock:
+            existing_start = await self.dual_cache.async_get_cache(start_time_key)
+            if existing_start is not None and (current_time - float(existing_start)) <= ttl_seconds:
+                await self.dual_cache.async_increment_cache(key=spend_key, value=response_cost, ttl=ttl_seconds)
+                return float(existing_start)
+
+            await self.dual_cache.async_set_cache(key=spend_key, value=response_cost, ttl=ttl_seconds)
+            await self.dual_cache.async_set_cache(key=start_time_key, value=current_time, ttl=ttl_seconds)
+            return current_time
 
     async def _increment_spend_in_current_window(self, spend_key: str, response_cost: float, ttl: int):
         """
@@ -471,19 +532,10 @@ class RouterBudgetLimiting(CustomLogger):
             ttl_seconds=ttl_seconds,
         )
 
-        if budget_start is None:
-            # First spend for this provider
-            budget_start = await self._handle_new_budget_window(
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                current_time=current_time,
-                response_cost=response_cost,
-                ttl_seconds=ttl_seconds,
-            )
-        elif (current_time - budget_start) > ttl_seconds:
+        if (current_time - budget_start) > ttl_seconds:
             # Budget window expired - reset everything
             verbose_router_logger.debug("Budget window expired - resetting everything")
-            budget_start = await self._handle_new_budget_window(
+            await self._handle_new_budget_window(
                 spend_key=spend_key,
                 start_time_key=start_time_key,
                 current_time=current_time,
