@@ -103,9 +103,14 @@ class AnthropicMessageBody(BaseModel):
 
 
 class OpenAIChatBody(BaseModel):
+    """Body for the /openai passthrough route. Passthrough forwards the body to
+    OpenAI untouched, so this carries max_completion_tokens: the gpt-5 family
+    rejects max_tokens outright ("Unsupported parameter"), and no translation
+    layer rewrites it on this route."""
+
     model: str
     messages: list[ChatMessage]
-    max_tokens: int = 64
+    max_completion_tokens: int = 64
 
 
 class VllmChatBody(BaseModel):
@@ -205,7 +210,7 @@ class PassthroughClient:
             headers=self.proxy.transport.bearer(key),
             json=OpenAIChatBody(
                 model=model,
-                max_tokens=max_tokens,
+                max_completion_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
             ),
         )
