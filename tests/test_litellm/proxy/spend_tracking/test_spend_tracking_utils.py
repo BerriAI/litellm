@@ -544,10 +544,10 @@ def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_st
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
-def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_store):
+def test_get_messages_for_spend_logs_acompletion_returns_messages(mock_should_store):
     """
-    Test that _get_messages_for_spend_logs_payload returns '{}' for non-realtime
-    calls even when store_prompts_in_spend_logs is True.
+    When store_prompts_in_spend_logs is True, chat/completions (and other
+    non-realtime) call types must persist messages into SpendLogs (#34747).
     """
     mock_should_store.return_value = True
     payload = cast(
@@ -558,7 +558,26 @@ def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_stor
         },
     )
     result = _get_messages_for_spend_logs_payload(payload)
-    assert result == "{}"
+    parsed = json.loads(result)
+    assert parsed == [{"role": "user", "content": "Hello"}]
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_aresponses_returns_messages(mock_should_store):
+    """Responses API spend rows should also store messages when the gate is on."""
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "aresponses",
+            "messages": [{"role": "user", "content": "test responses prompt log"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    parsed = json.loads(result)
+    assert parsed[0]["content"] == "test responses prompt log"
 
 
 @patch(
