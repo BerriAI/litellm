@@ -40,14 +40,23 @@ const renderDashboard = () =>
     <CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />,
   );
 
+const REQUESTS_CHART_TITLE = "Cache Hits vs API Requests";
+const TOKENS_CHART_TITLE = "Cached Completion Tokens vs Generated Completion Tokens";
+
+// Anchored on each chart's own title rather than on a global card count, so
+// adding cards elsewhere on the page cannot silently repoint these assertions.
+const cardTitled = (title: string): HTMLElement => {
+  const card = screen.getByText(title).closest('[data-slot="card"]');
+  expect(card).not.toBeNull();
+  return card as HTMLElement;
+};
+
 const findChartCards = async () => {
-  await screen.findByText("Cache Hits vs API Requests");
+  await screen.findByText(REQUESTS_CHART_TITLE);
   await waitFor(() => {
     expect(document.querySelectorAll("path.recharts-rectangle").length).toBeGreaterThan(0);
   });
-  const cards = Array.from(document.querySelectorAll('[data-slot="card"]'));
-  expect(cards).toHaveLength(2);
-  return { requestsCard: cards[0] as HTMLElement, tokensCard: cards[1] as HTMLElement };
+  return { requestsCard: cardTitled(REQUESTS_CHART_TITLE), tokensCard: cardTitled(TOKENS_CHART_TITLE) };
 };
 
 const barFills = (card: HTMLElement) =>

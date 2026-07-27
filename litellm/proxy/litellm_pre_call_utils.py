@@ -13,7 +13,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS, PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     iter_client_callback_metadata_dicts,
@@ -48,6 +48,24 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """Only proxy-validated keys are stamped, proven by the unforgeable
+    via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
+    UserAPIKeyAuth stores virtual keys in, or the master key's stable alias.
+    Custom-auth credentials arrive raw (never forward auth material) and hashed
+    JWTs rotate on re-issue (useless as a stable ban id), so both are skipped."""
+    api_key = user_api_key_dict.api_key
+    if not user_api_key_dict.via_virtual_key or api_key is None:
+        return None
+    if api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or _SHA256_HEX_RE.fullmatch(api_key):
+        return api_key
+    return None
+
+
 _ANTHROPIC_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
@@ -1446,6 +1464,11 @@ async def add_litellm_data_to_request(
             user_api_key_dict.end_user_id = user
         if "user" not in data:
             data["user"] = user
+
+    if litellm.overwrite_user_with_key_hash is True:
+        stampable_hash = _stampable_key_hash(user_api_key_dict)
+        if stampable_hash is not None:
+            data["user"] = stampable_hash
 
     data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 

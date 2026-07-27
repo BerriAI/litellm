@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import EndpointsClient, ImagesResult
 from lifecycle import ResourceManager
@@ -50,12 +50,11 @@ class TestImageGeneration:
     def test_bedrock_image_generation_returns_image(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"e2e-bedrock-image-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="bedrock/amazon.titan-image-generator-v2:0",
+                model="bedrock/amazon.nova-canvas-v1:0",
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                 aws_region_name="os.environ/AWS_REGION",

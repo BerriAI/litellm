@@ -136,9 +136,12 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _raise_if_not_oauth2,
         authorize_with_server,
+        client_supplied_redirect_uris,
         exchange_token_with_server,
         get_request_base_url,
+        redeem_passthrough_authorization_code,
         register_client_with_server,
+        resolve_ephemeral_dcr_client,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -178,7 +181,11 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-    from litellm.types.mcp import MCPAuth, MCPCredentials
+    from litellm.types.mcp import (
+        MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
+        MCPAuth,
+        MCPCredentials,
+    )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     @dataclass
@@ -473,7 +480,8 @@ if MCP_AVAILABLE:
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
-        """Return a copy of the MCP server object with credentials removed."""
+        """Return a copy with secret credentials removed, keeping only non-secret admin config so the
+        admin form can show and clear it. Non-admin and virtual-key views strip the whole blob."""
 
         try:
             redacted_server = mcp_server.model_copy(deep=True)
@@ -481,9 +489,34 @@ if MCP_AVAILABLE:
             redacted_server = mcp_server.copy(deep=True)  # type: ignore[attr-defined]
 
         if hasattr(redacted_server, "credentials"):
-            setattr(redacted_server, "credentials", None)
+            setattr(redacted_server, "credentials", _preserved_admin_config_credentials(redacted_server.credentials))
 
         return redacted_server
+
+    def _preserved_admin_config_credentials(
+        credentials: "MCPCredentials | str | None",
+    ) -> "dict[str, str] | None":
+        """Keep only the non-secret admin-config keys, which are stored unencrypted so they lift out
+        as plaintext; every secret and minted-token key is dropped.
+
+        Total over every stored shape: a dict is read directly, a JSON-object string is parsed, and
+        anything else (a malformed or non-object JSON string, a scalar, ``None``) falls back to full
+        redaction rather than raising, because this runs on every admin list and get and one bad row
+        must not fail them all."""
+        parsed: object = credentials
+        if isinstance(credentials, str):
+            try:
+                parsed = json.loads(credentials)
+            except (ValueError, TypeError):
+                return None
+        if not isinstance(parsed, dict):
+            return None
+        preserved = {
+            key: value
+            for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
+            if isinstance((value := parsed.get(key)), str) and value
+        }
+        return preserved or None
 
     def _redact_mcp_credentials_list(
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
@@ -526,6 +559,7 @@ if MCP_AVAILABLE:
         ``[]``/``{}`` for required list/dict fields).
         """
         sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
         # similar tokens in the OpenAPI spec URL.
@@ -569,6 +603,7 @@ if MCP_AVAILABLE:
         """
 
         sanitized = _redact_mcp_credentials(mcp_server)
+        sanitized.credentials = None
 
         # Remove potentially sensitive config + identity fields.
         sanitized.url = None
@@ -612,36 +647,47 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
 
+    # (server attribute, credentials key) a session server inherits from the server it derives from.
+    # Declared as a table rather than a chain of ifs, which is how upstream_resource was missed.
+    _INHERITED_CREDENTIAL_FIELDS: tuple[tuple[str, str], ...] = (
+        ("authentication_token", "auth_value"),
+        ("client_id", "client_id"),
+        ("client_secret", "client_secret"),
+        ("scopes", "scopes"),
+        ("aws_access_key_id", "aws_access_key_id"),
+        ("aws_secret_access_key", "aws_secret_access_key"),
+        ("aws_session_token", "aws_session_token"),
+        ("aws_region_name", "aws_region_name"),
+        ("aws_service_name", "aws_service_name"),
+        ("upstream_resource", "upstream_resource"),
+    )
+
+    def _has_non_admin_config_credentials(credentials: "MCPCredentials | None") -> bool:
+        """Did the caller supply an actual credential? Admin config rides in the same blob but is not
+        one, so a form that round-trips it must not read as "credentials supplied"."""
+        if not credentials:
+            return False
+        as_dict: dict[str, Any] = dict(credentials)
+        return any(value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS)
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
-        if not payload.server_id or payload.credentials:
+        if not payload.server_id or _has_non_admin_config_credentials(payload.credentials):
             return payload
 
         existing_server = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
         if existing_server is None:
             return payload
 
-        inherited_credentials: MCPCredentials = {}
-        if existing_server.authentication_token:
-            inherited_credentials["auth_value"] = existing_server.authentication_token
-        if existing_server.client_id:
-            inherited_credentials["client_id"] = existing_server.client_id
-        if existing_server.client_secret:
-            inherited_credentials["client_secret"] = existing_server.client_secret
-        if existing_server.scopes:
-            inherited_credentials["scopes"] = existing_server.scopes
-        # AWS SigV4 fields
-        if existing_server.aws_access_key_id:
-            inherited_credentials["aws_access_key_id"] = existing_server.aws_access_key_id
-        if existing_server.aws_secret_access_key:
-            inherited_credentials["aws_secret_access_key"] = existing_server.aws_secret_access_key
-        if existing_server.aws_session_token:
-            inherited_credentials["aws_session_token"] = existing_server.aws_session_token
-        if existing_server.aws_region_name:
-            inherited_credentials["aws_region_name"] = existing_server.aws_region_name
-        if existing_server.aws_service_name:
-            inherited_credentials["aws_service_name"] = existing_server.aws_service_name
+        inherited_credentials: dict[str, Any] = {
+            credential_key: value
+            for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
+            if (value := getattr(existing_server, server_attr, None))
+        }
+        # The gate above guarantees anything still supplied is admin config, which the admin just
+        # typed, so it wins over the stored value.
+        inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
 
         if not inherited_credentials:
             return payload
@@ -1661,7 +1707,21 @@ if MCP_AVAILABLE:
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
         _raise_if_not_oauth2(mcp_server)
         # Use the server's stored client_id when the caller doesn't supply one
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        stored_or_supplied_client_id = mcp_server.client_id or client_id or ""
+        ephemeral_dcr_client = (
+            await resolve_ephemeral_dcr_client(
+                request=request,
+                mcp_server=mcp_server,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                redirect_uri=redirect_uri,
+            )
+            if not stored_or_supplied_client_id
+            else None
+        )
+        resolved_client_id = stored_or_supplied_client_id or (
+            ephemeral_dcr_client.client_id if ephemeral_dcr_client else ""
+        )
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1683,6 +1743,7 @@ if MCP_AVAILABLE:
             code_challenge_method=code_challenge_method,
             response_type=response_type,
             scope=scope,
+            ephemeral_dcr_client=ephemeral_dcr_client,
         )
 
     @router.post(
@@ -1705,7 +1766,21 @@ if MCP_AVAILABLE:
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
         _raise_if_not_oauth2(mcp_server)
-        resolved_client_id = mcp_server.client_id or client_id or ""
+        # Sealed passthrough codes exist only for the authorization_code grant. A refresh_token
+        # grant must never open one: the minted client is unrecoverable after the single flow by
+        # contract, so an expired browser-held token re-runs authorize instead.
+        sealed_code = (
+            redeem_passthrough_authorization_code(code=code, mcp_server=mcp_server, code_verifier=code_verifier)
+            if grant_type == "authorization_code"
+            else None
+        )
+        resolved_code = sealed_code.upstream_code if sealed_code else code
+        # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
+        # or plain flow alike), so the exchange must present that binding, not the browser page.
+        resolved_redirect_uri = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
+        caller_client_id = sealed_code.client_id if sealed_code else client_id
+        caller_client_secret = sealed_code.client_secret if sealed_code else client_secret
+        resolved_client_id = mcp_server.client_id or caller_client_id or ""
         if not resolved_client_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1721,13 +1796,14 @@ if MCP_AVAILABLE:
             request=request,
             mcp_server=mcp_server,
             grant_type=grant_type,
-            code=code,
-            redirect_uri=redirect_uri,
+            code=resolved_code,
+            redirect_uri=resolved_redirect_uri,
             client_id=resolved_client_id,
-            client_secret=client_secret,
+            client_secret=caller_client_secret,
             code_verifier=code_verifier,
             refresh_token=refresh_token,
             scope=scope,
+            client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
         )
 
     @router.post(
@@ -1743,6 +1819,7 @@ if MCP_AVAILABLE:
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
+        client_redirect_uris = client_supplied_redirect_uris(data.get("redirect_uris"))
 
         return await register_client_with_server(
             request=request,
@@ -1753,6 +1830,7 @@ if MCP_AVAILABLE:
             token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
             fallback_client_id=server_id,
             persist_credentials=_user_is_full_admin(user_api_key_dict),
+            client_redirect_uris=client_redirect_uris,
         )
 
     @router.delete(

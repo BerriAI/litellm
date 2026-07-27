@@ -62,8 +62,8 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.80",
-    "litellm-enterprise==0.1.51",
+    "litellm-proxy-extras==0.4.81",
+    "litellm-enterprise==0.1.52",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -99,6 +99,10 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
+# SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
+# bundle the native libxmlsec1/libxml2 libraries, so no system packages are
+# required. Kept out of the base `proxy` extra so it stays optional.
+saml = ["python3-saml>=1.16.0,<2.0"]
 semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
@@ -198,6 +202,7 @@ e2e-dev = [
     "playwright==1.61.0",
     "websockets>=15.0.1,<16.0",
     "locust==2.45.0",
+    "mcp>=1.28.1,<2.0",
 ]
 proxy-dev = [
     "prisma==0.11.0",

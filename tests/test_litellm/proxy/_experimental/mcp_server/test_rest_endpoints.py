@@ -2783,3 +2783,68 @@ class TestRestListToolsetFiltering:
             )
 
         assert [tool.name for tool in result] == ["lookup_status"]
+
+
+class TestV1ResolvedOauth2Gate:
+    """The REST surface must stop resolving per-user OAuth2 tokens for servers the v2 resolver owns.
+
+    ``_resolve_v2_auth`` drops any Authorization built here for an ``authorization_code`` server and
+    injects the resolver's own token, so the v1 lookup was a DB round-trip whose result was discarded.
+    A server that still defers to v1 (upstream-delegated oauth2) must keep resolving, which is what
+    makes these assertions non-vacuous.
+    """
+
+    @staticmethod
+    def _oauth2_server(*, delegate_auth_to_upstream: bool) -> Any:
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        return MCPServer(
+            server_id="oauth2-srv",
+            name="oauth2-srv",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=delegate_auth_to_upstream,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "delegate_auth_to_upstream, expected_headers, expected_lookups",
+        [
+            (False, None, 0),
+            (True, {"Authorization": "Bearer stored-token"}, 1),
+        ],
+    )
+    async def test_user_oauth_headers_skip_v2_owned_servers(
+        self, delegate_auth_to_upstream, expected_headers, expected_lookups, monkeypatch
+    ):
+        from litellm.proxy._experimental.mcp_server import db as mcp_db
+
+        server = self._oauth2_server(delegate_auth_to_upstream=delegate_auth_to_upstream)
+        resolve_token = AsyncMock(return_value={"access_token": "stored-token"})
+        monkeypatch.setattr(mcp_db, "resolve_valid_user_oauth_token", resolve_token)
+
+        headers = await rest_endpoints._get_user_oauth_extra_headers(
+            server,
+            UserAPIKeyAuth(user_id="alice", api_key="sk-1234"),
+            prefetched_creds={"oauth2-srv": {"access_token": "stored-token"}},
+        )
+
+        assert headers == expected_headers
+        assert resolve_token.await_count == expected_lookups
+
+    def test_prefetch_preflight_only_counts_v1_resolved_servers(self, monkeypatch):
+        v2_owned = self._oauth2_server(delegate_auth_to_upstream=False)
+        v1_resolved = self._oauth2_server(delegate_auth_to_upstream=True)
+        v1_resolved.server_id = "delegate-srv"
+        registry = {"oauth2-srv": v2_owned, "delegate-srv": v1_resolved}
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: registry.get(server_id),
+        )
+
+        assert rest_endpoints._v1_resolved_oauth2_server_ids(["oauth2-srv"]) == set()
+        assert rest_endpoints._v1_resolved_oauth2_server_ids(["oauth2-srv", "delegate-srv"]) == {"delegate-srv"}

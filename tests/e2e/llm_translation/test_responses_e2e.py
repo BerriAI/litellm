@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from endpoints_client import (
     EndpointsClient,
@@ -255,7 +255,6 @@ class TestResponses:
     def test_responses_bedrock_returns_completion(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(model, _bedrock_params())
         resources.defer(lambda: endpoints_client.delete_model(model_id))
@@ -270,7 +269,6 @@ class TestResponses:
     def test_responses_bedrock_returns_function_call(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"e2e-responses-{unique_marker()}"
         model_id = endpoints_client.create_model(model, _bedrock_params())
         resources.defer(lambda: endpoints_client.delete_model(model_id))

@@ -1671,13 +1671,20 @@ async def get_user_object(
 
         if response is None:
             if user_id_upsert:
+                from litellm.proxy.management_endpoints.internal_user_endpoints import (
+                    add_new_user_to_default_team,
+                    check_if_default_team_set,
+                )
+
+                default_params = litellm.default_internal_user_params or {}
+                scalar_default_params = {
+                    key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
+                }
                 new_user_params: Dict[str, Any] = {
                     "user_id": user_id,
+                    **({"user_email": user_email} if user_email is not None else {}),
+                    **scalar_default_params,
                 }
-                if user_email is not None:
-                    new_user_params["user_email"] = user_email
-                if litellm.default_internal_user_params is not None:
-                    new_user_params.update(litellm.default_internal_user_params)
                 if (
                     new_user_params.get("budget_duration") is not None
                     and new_user_params.get("budget_reset_at") is None
@@ -1690,6 +1697,16 @@ async def get_user_object(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
+
+                default_teams = check_if_default_team_set()
+                if default_teams:
+                    await add_new_user_to_default_team(
+                        user_id=user_id,
+                        user_email=user_email,
+                        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                        teams=default_teams,
+                        prisma_client=prisma_client,
+                    )
             else:
                 if should_check_db:
                     _update_last_db_access_time(
@@ -2661,6 +2678,15 @@ async def get_managed_vector_store_rows_by_uuids(
     return result
 
 
+class OrganizationNotFoundError(Exception):
+    """The organization row is CONFIRMED absent, as opposed to a lookup that failed.
+
+    Subclasses Exception so every existing except Exception caller keeps its current
+    behavior; it exists so a caller that wants to treat "no such org" as "no restriction" can do
+    that WITHOUT also swallowing an outage and silently dropping a real org ceiling.
+    """
+
+
 @log_db_metrics
 async def get_org_object(
     org_id: str,
@@ -2707,24 +2733,29 @@ async def get_org_object(
             query_kwargs["include"] = {"litellm_budget_table": True}
 
         response = await OrganizationRepository(prisma_client).table.find_unique(**query_kwargs)
-
-        if response is None:
-            raise Exception
-
-        _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
-        # Cache the result
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=_org_obj,
-            model_type=LiteLLM_OrganizationTable,
-            ttl=DEFAULT_IN_MEMORY_TTL,
-        )
-
-        return _org_obj
     except Exception:
-        raise Exception(
+        # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
+        # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
+        # apart — a caller that treats absence as "this org places no restriction" then drops a real
+        # org ceiling during an outage. Propagate the real error; callers that already catch
+        # Exception are unaffected.
+        raise
+
+    if response is None:
+        raise OrganizationNotFoundError(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
         )
+
+    _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
+    # Cache the result
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=_org_obj,
+        model_type=LiteLLM_OrganizationTable,
+        ttl=DEFAULT_IN_MEMORY_TTL,
+    )
+
+    return _org_obj
 
 
 async def _get_resources_from_access_groups(
