@@ -420,7 +420,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-xs">
           <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
             <HistoryOutlined />
-            Recent logs
+            Recent invocations
           </h2>
           <LogViewer
             guardrailName={tool.tool_name}

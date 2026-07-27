@@ -3565,6 +3565,13 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ReadTimeout,
 )
 
+# What a NON-IDEMPOTENT write (increment upsert) may retry: only ConnectError
+# proves the statements never reached the database. Post-send errors are
+# ambiguous; a stalled statement can leave its transaction open on the pooled
+# connection, where a retry stacks a second increment set into the same commit.
+# Idempotent writes (create_many with skip_duplicates) may retry the full tuple.
+DB_RETRY_SAFE_ERROR_TYPES = (httpx.ConnectError,)
+
 
 class SSOUserDefinedValues(TypedDict):
     models: List[str]

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bar, BarChart as RechartsBarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { Bar, BarChart as RechartsBarChart, CartesianGrid, Cell, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
 import { cn } from "@/lib/cva.config";
 import { ValueTooltip, type ChartTooltipComponent } from "./chart_tooltip";
@@ -12,6 +12,8 @@ export type BarChartProps<TDatum extends Record<string, unknown>> = {
   index: string;
   categories: readonly string[];
   colors?: readonly ChartColor[];
+  colorByDatum?: boolean;
+  maxBarSize?: number;
   valueFormatter?: (value: number) => string;
   stack?: boolean;
   layout?: "horizontal" | "vertical";
@@ -32,6 +34,8 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   index,
   categories,
   colors,
+  colorByDatum = false,
+  maxBarSize,
   valueFormatter,
   stack = false,
   layout = "horizontal",
@@ -46,7 +50,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   className,
   style,
 }: BarChartProps<TDatum>) {
-  const fills = categoryFills(categories.length, colors);
+  const fills = categoryFills(colorByDatum ? data.length : categories.length, colors);
   const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
   const vertical = layout === "vertical";
   const TooltipContent = customTooltip ?? ValueTooltip;
@@ -104,6 +108,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
             fill={fills[i]}
             stackId={stack ? "stack" : undefined}
             isAnimationActive={false}
+            maxBarSize={maxBarSize}
             onClick={
               onValueChange
                 ? (item: { payload?: TDatum }) => {
@@ -111,7 +116,9 @@ export function BarChart<TDatum extends Record<string, unknown>>({
                   }
                 : undefined
             }
-          />
+          >
+            {colorByDatum && data.map((_, dataIndex) => <Cell key={dataIndex} fill={fills[dataIndex]} />)}
+          </Bar>
         ))}
       </RechartsBarChart>
     </ChartContainer>
