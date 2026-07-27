@@ -85,6 +85,7 @@ class A2ABridgeParams(BaseModel):
 
     custom_llm_provider: str
     model: str
+    api_key: str | None = None
 
 
 class AgentRegisterBody(BaseModel):
@@ -190,11 +191,52 @@ class A2ATaskStatus(BaseModel):
     message: A2AResponseMessage | None = None
 
 
+class A2AListingLocation(BaseModel):
+    """Only the location fields a test reads back off a returned listing."""
+
+    un_locode: str | None = None
+
+
+class A2AListing(BaseModel):
+    """A single property card from the agent's `search_results` artifact; only the
+    identity/location fields a test asserts on are modelled."""
+
+    raia_id: str
+    property_type: str | None = None
+    service_type: str | None = None
+    location: A2AListingLocation = A2AListingLocation()
+
+
+class A2ASearchResults(BaseModel):
+    """The DataPart payload the property agent's `search_properties` skill returns:
+    the run count plus the listing cards themselves. Proof the tool actually ran and
+    matched, not just that the task completed with some text."""
+
+    total: int
+    count: int
+    listings: list[A2AListing] = []
+
+
+class A2AArtifactPart(BaseModel):
+    kind: str | None = None
+    data: A2ASearchResults | None = None
+
+
+class A2AArtifact(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_id: str | None = Field(default=None, alias="artifactId")
+    name: str | None = None
+    parts: list[A2AArtifactPart] = []
+
+
 class A2AResult(BaseModel):
     """A message/send result. In 0.3 the message fields sit directly on the result
     (`kind`/`role`/`parts`); in 1.0 they are nested under `message`; a real agent that
-    runs a task replies with a `task` whose agent text lives on `status.message`.
-    `text` reads the agent's reply from whichever shape the served version produced."""
+    runs a task replies with a `task` whose agent text lives on `status.message` and
+    whose tool output lives on `artifacts`. `text` reads the agent's reply from
+    whichever shape the served version produced; `search_results` reads the tool's
+    structured output when the agent ran a skill."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -204,6 +246,7 @@ class A2AResult(BaseModel):
     parts: list[A2AResponsePart] = []
     message: A2AResponseMessage | None = None
     status: A2ATaskStatus | None = None
+    artifacts: list[A2AArtifact] = []
 
     @property
     def text(self) -> str:
@@ -220,6 +263,14 @@ class A2AResult(BaseModel):
     @property
     def is_nested_v1_shape(self) -> bool:
         return self.message is not None
+
+    @property
+    def search_results(self) -> A2ASearchResults | None:
+        for artifact in self.artifacts:
+            for part in artifact.parts:
+                if part.data is not None:
+                    return part.data
+        return None
 
 
 class A2AError(BaseModel):
