@@ -1928,8 +1928,8 @@ if TYPE_CHECKING:
     )
 
     from .llms.commandcode.chat.transformation import (
-    CommandCodeOpenAIConfig as CommandCodeOpenAIConfig,
-    CommandCodeAnthropicConfig as CommandCodeAnthropicConfig,
+        CommandCodeOpenAIConfig as CommandCodeOpenAIConfig,
+        CommandCodeAnthropicConfig as CommandCodeAnthropicConfig,
     )
     from .llms.azure.chat.gpt_5_transformation import (
         AzureOpenAIGPT5Config as AzureOpenAIGPT5Config,

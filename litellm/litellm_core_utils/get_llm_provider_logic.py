@@ -455,7 +455,7 @@ def get_llm_provider(
             custom_llm_provider = "lemonade"
         elif model.startswith("heroku/"):
             custom_llm_provider = "heroku"
-        elif model.startswith("commandcode/"):   
+        elif model.startswith("commandcode/"):
             custom_llm_provider = "commandcode"
         # cometapi models
         elif model.startswith("cometapi/"):
@@ -778,13 +778,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "commandcode":   
+    elif custom_llm_provider == "commandcode":
         (
             api_base,
             dynamic_api_key,
-        ) = litellm.CommandCodeOpenAIConfig()._get_openai_compatible_provider_info(
-            api_base, api_key
-        )
+        ) = litellm.CommandCodeOpenAIConfig()._get_openai_compatible_provider_info(api_base, api_key)
     # publicai is now handled by JSON config (see litellm/llms/openai_like/providers.json)
     elif custom_llm_provider == "docker_model_runner":
         (

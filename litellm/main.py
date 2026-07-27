@@ -1787,17 +1787,9 @@ def _complete_commandcode(ctx: _CompletionDispatchContext) -> _CompletionDispatc
 
     # Resolve credentials
     api_key = (
-        api_key
-        or litellm.commandcode_key
-        or get_secret_str("COMMANDCODE_API_KEY")
-        or get_secret_str("CMD_API_KEY")
+        api_key or litellm.commandcode_key or get_secret_str("COMMANDCODE_API_KEY") or get_secret_str("CMD_API_KEY")
     )
-    api_base = (
-        api_base
-        or litellm.api_base
-        or get_secret_str("COMMANDCODE_API_BASE")
-        or "https://api.commandcode.ai"
-    )
+    api_base = api_base or litellm.api_base or get_secret_str("COMMANDCODE_API_BASE") or "https://api.commandcode.ai"
 
     # Claude models → Anthropic format
     if "claude" in model.lower():
@@ -1852,6 +1844,7 @@ def _complete_commandcode(ctx: _CompletionDispatchContext) -> _CompletionDispatc
             raise e
 
     return response
+
 
 def _complete_ragflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
