@@ -227,6 +227,37 @@ async def test_stream_transformation_error_async():
                 )
 
 
+def test_prepare_completion_kwargs_includes_stream_options_when_streaming():
+    """
+    Test that _prepare_completion_kwargs includes stream_options={"include_usage": True}
+    when stream=True, and does not when stream=False.
+    """
+    kwargs_streaming = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="gemini-pro",
+        contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+        config={"temperature": 0.7},
+        stream=True,
+        litellm_params={},
+    )
+    assert kwargs_streaming.get("stream") is True
+    assert kwargs_streaming.get("stream_options") == {"include_usage": True}, (
+        "stream_options must be forwarded when streaming so the underlying "
+        "completion call includes per-chunk token usage"
+    )
+
+    kwargs_non_streaming = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="gemini-pro",
+        contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+        stream=False,
+        litellm_params={},
+    )
+    assert kwargs_non_streaming.get("stream") is None, (
+        "stream key should not be present when stream=False"
+    )
+    # stream_options should not be present for non-streaming calls
+    assert kwargs_non_streaming.get("stream_options") is None
+
+
 def test_citation_metadata_transformation():
     """
     Test that citationMetadata.citationSources is properly transformed to citationMetadata.citations

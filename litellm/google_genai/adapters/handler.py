@@ -46,6 +46,10 @@ class GenerateContentToCompletionHandler:
 
         if stream:
             completion_kwargs["stream"] = stream
+            # Request per-chunk usage in the streaming response so
+            # intermediate/final chunks carry token counts.  Without this the
+            # transform path falls back to zero usage.
+            completion_kwargs["stream_options"] = {"include_usage": True}
 
         return completion_kwargs
 
