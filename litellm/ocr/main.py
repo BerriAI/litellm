@@ -6,8 +6,9 @@ import base64
 import mimetypes
 import os
 import re
+from collections.abc import Coroutine, Mapping
 from io import IOBase
-from typing import Any, Coroutine, Union, cast
+from typing import Any, cast
 
 import httpx
 from typing_extensions import Never
@@ -109,7 +110,7 @@ def _raise_ocr_exception(
 
 
 def _timeout_to_seconds(
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> float | None:
     """Convert the Python OCR timeout to a single seconds value for the Rust bridge.
 
@@ -126,22 +127,22 @@ def _timeout_to_seconds(
 
 def _resolve_ocr_call_context(
     model: str,
-    document: dict[str, Any],
+    document: Mapping[str, object],
     api_key: str | None,
     api_base: str | None,
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, Any] | None,
-    kwargs: dict[str, Any],
+    extra_headers: dict[str, object] | None,
+    kwargs: dict[str, object],
 ) -> tuple[
     str,
-    dict[str, Any],
+    dict[str, object],
     str | None,
     str | None,
     str,
     dict[str, object] | None,
     dict[str, object],
-    Union[float, httpx.Timeout],
+    float | httpx.Timeout,
     LiteLLMLoggingObj,
 ]:
     litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.pop("litellm_logging_obj"))
@@ -208,11 +209,11 @@ def _resolve_ocr_call_context(
 
     return (
         model,
-        document,
+        cast(dict[str, object], document),
         api_key,
         api_base,
         custom_llm_provider,
-        cast(dict[str, object] | None, extra_headers),
+        extra_headers,
         cast(dict[str, object], optional_params),
         effective_timeout,
         litellm_logging_obj,
@@ -252,7 +253,7 @@ def _run_rust_ocr(
     custom_llm_provider: str,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: Union[float, httpx.Timeout],
+    timeout: float | httpx.Timeout,
     litellm_logging_obj: LiteLLMLoggingObj,
 ) -> OCRResponse:
     _run_pre_call_logging(
@@ -293,7 +294,7 @@ async def _run_rust_aocr(
     custom_llm_provider: str,
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
-    timeout: Union[float, httpx.Timeout],
+    timeout: float | httpx.Timeout,
     litellm_logging_obj: LiteLLMLoggingObj,
 ) -> OCRResponse:
     _run_pre_call_logging(
@@ -322,13 +323,13 @@ async def _run_rust_aocr(
 @client
 async def aocr(
     model: str,
-    document: dict[str, Any],
+    document: Mapping[str, object],
     api_key: str | None = None,
     api_base: str | None = None,
-    timeout: Union[float, httpx.Timeout] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    **kwargs,
+    extra_headers: dict[str, object] | None = None,
+    **kwargs: object,
 ) -> OCRResponse:
     """
     Async OCR function.
@@ -580,14 +581,14 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
 @client
 def ocr(
     model: str,
-    document: dict[str, Any],
+    document: Mapping[str, object],
     api_key: str | None = None,
     api_base: str | None = None,
-    timeout: Union[float, httpx.Timeout] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    **kwargs,
-) -> Union[OCRResponse, Coroutine[Any, Any, OCRResponse]]:
+    extra_headers: dict[str, object] | None = None,
+    **kwargs: object,
+) -> OCRResponse | Coroutine[object, object, OCRResponse]:
     """
     Synchronous OCR function.
 

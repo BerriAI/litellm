@@ -258,6 +258,158 @@ class TestPrometheusCacheMetrics:
         # Should not emit read metric, because explicit provider value is zero.
         mock_logger.litellm_provider_cache_read_input_tokens_metric.labels.assert_not_called()
 
+    def test_provider_cache_creation_fallback_to_cache_write_tokens(
+        self, sample_enum_values
+    ):
+        """OpenAI-style usage (prompt_tokens_details.cache_write_tokens, no top-level
+        cache_creation_input_tokens) must populate the provider cache creation metric."""
+        mock_logger = MagicMock()
+
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        standard_logging_payload = {
+            "cache_hit": False,
+            "total_tokens": 12100,
+            "prompt_tokens": 12000,
+            "completion_tokens": 100,
+            "model_group": "openai",
+            "request_tags": [],
+            "metadata": {
+                "usage_object": {
+                    "prompt_tokens_details": {
+                        "cached_tokens": 0,
+                        "cache_write_tokens": 800,
+                    },
+                }
+            },
+        }
+
+        mock_logger.litellm_cache_hits_metric = MagicMock()
+        mock_logger.litellm_cache_misses_metric = MagicMock()
+        mock_logger.litellm_cached_tokens_metric = MagicMock()
+        mock_logger.litellm_provider_cache_read_input_tokens_metric = MagicMock()
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric = MagicMock()
+        mock_logger.get_labels_for_metric = MagicMock(
+            return_value=[
+                "model",
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+                "end_user",
+                "user",
+            ]
+        )
+
+        PrometheusLogger._increment_cache_metrics(
+            mock_logger,
+            standard_logging_payload=standard_logging_payload,
+            enum_values=sample_enum_values,
+        )
+
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
+            800
+        )
+
+    def test_provider_cache_creation_fallback_to_cache_creation_tokens(
+        self, sample_enum_values
+    ):
+        """Normalized litellm usage dumps carry cache_creation_tokens in
+        prompt_tokens_details; the fallback must read it when cache_write_tokens is absent."""
+        mock_logger = MagicMock()
+
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        standard_logging_payload = {
+            "cache_hit": False,
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+            "model_group": "openai",
+            "request_tags": [],
+            "metadata": {
+                "usage_object": {
+                    "prompt_tokens_details": {"cache_creation_tokens": 42},
+                }
+            },
+        }
+
+        mock_logger.litellm_cache_hits_metric = MagicMock()
+        mock_logger.litellm_cache_misses_metric = MagicMock()
+        mock_logger.litellm_cached_tokens_metric = MagicMock()
+        mock_logger.litellm_provider_cache_read_input_tokens_metric = MagicMock()
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric = MagicMock()
+        mock_logger.get_labels_for_metric = MagicMock(
+            return_value=[
+                "model",
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+                "end_user",
+                "user",
+            ]
+        )
+
+        PrometheusLogger._increment_cache_metrics(
+            mock_logger,
+            standard_logging_payload=standard_logging_payload,
+            enum_values=sample_enum_values,
+        )
+
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
+            42
+        )
+
+    def test_provider_cache_creation_does_not_fallback_on_explicit_zero(
+        self, sample_enum_values
+    ):
+        """Explicit cache_creation_input_tokens=0 must not trigger fallback to
+        prompt_tokens_details, mirroring the cache-read semantics."""
+        mock_logger = MagicMock()
+
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        standard_logging_payload = {
+            "cache_hit": False,
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+            "model_group": "openai",
+            "request_tags": [],
+            "metadata": {
+                "usage_object": {
+                    "cache_creation_input_tokens": 0,
+                    "prompt_tokens_details": {"cache_write_tokens": 800},
+                }
+            },
+        }
+
+        mock_logger.litellm_cache_hits_metric = MagicMock()
+        mock_logger.litellm_cache_misses_metric = MagicMock()
+        mock_logger.litellm_cached_tokens_metric = MagicMock()
+        mock_logger.litellm_provider_cache_read_input_tokens_metric = MagicMock()
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric = MagicMock()
+        mock_logger.get_labels_for_metric = MagicMock(
+            return_value=[
+                "model",
+                "hashed_api_key",
+                "api_key_alias",
+                "team",
+                "team_alias",
+                "end_user",
+                "user",
+            ]
+        )
+
+        PrometheusLogger._increment_cache_metrics(
+            mock_logger,
+            standard_logging_payload=standard_logging_payload,
+            enum_values=sample_enum_values,
+        )
+
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels.assert_not_called()
+
     def test_increment_cache_metrics_when_cache_hit_is_none(self, sample_enum_values):
         """Test that no metrics are incremented when cache_hit is None"""
         # Create mock for PrometheusLogger instance
