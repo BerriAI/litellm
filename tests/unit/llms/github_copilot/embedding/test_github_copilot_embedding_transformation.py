@@ -37,8 +37,8 @@ def test_github_copilot_embedding_config_validate_environment():
 
     assert validated_headers["Authorization"] == f"Bearer {mock_api_key}"
     assert validated_headers["copilot-integration-id"] == "vscode-chat"
-    assert validated_headers["editor-version"] == "vscode/1.95.0"
-    assert "x-request-id" in validated_headers
+    assert validated_headers["editor-version"] == "vscode/1.115.0"
+    assert "x-request-id" not in validated_headers
 
     # Test with authentication failure
     config.authenticator.get_api_key.side_effect = GetAPIKeyError(

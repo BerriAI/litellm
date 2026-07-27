@@ -18,6 +18,7 @@ from .common_utils import (
     GetAPIKeyError,
     GetDeviceCodeError,
     RefreshAPIKeyError,
+    get_copilot_default_headers,
 )
 
 # Constants (default values — overridable via environment variables at call time)
@@ -237,16 +238,7 @@ class Authenticator:
             os.makedirs(self.token_dir, exist_ok=True)
 
     def _get_github_headers(self, access_token: str | None = None) -> dict[str, str]:
-        """
-        Generate standard GitHub headers for API requests.
-
-        Args:
-            access_token: Optional access token to include in the headers.
-
-        Returns:
-            Dict[str, str]: Headers for GitHub API requests.
-        """
-        return github_api_headers(access_token)
+        return get_copilot_default_headers(access_token=access_token)
 
     def _get_device_code(self) -> _DeviceCode:
         """
