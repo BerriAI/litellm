@@ -1,9 +1,19 @@
+// Target base URL for the proxy and its admin UI. Derived from the environment
+// so the suite can run against a deployed proxy as well as a local one; the
+// previous hardcoded http://localhost:4000 made it local-only.
+export const BASE_URL = (process.env.LITELLM_PROXY_URL ?? "http://localhost:4000").replace(/\/+$/, "");
+
+// Where Playwright storage state is written. cwd is read-only in the e2e runner
+// image (readOnlyRootFilesystem), so allow redirecting it there while keeping
+// the repo-relative default for local runs.
+export const STATE_DIR = (process.env.PLAYWRIGHT_STATE_DIR ?? ".").replace(/\/+$/, "");
+
 // Storage state paths for each role
-export const ADMIN_STORAGE_PATH = "admin.storageState.json";
-export const ADMIN_VIEWER_STORAGE_PATH = "adminViewer.storageState.json";
-export const INTERNAL_USER_STORAGE_PATH = "internalUser.storageState.json";
-export const INTERNAL_VIEWER_STORAGE_PATH = "internalViewer.storageState.json";
-export const TEAM_ADMIN_STORAGE_PATH = "teamAdmin.storageState.json";
+export const ADMIN_STORAGE_PATH = `${STATE_DIR}/admin.storageState.json`;
+export const ADMIN_VIEWER_STORAGE_PATH = `${STATE_DIR}/adminViewer.storageState.json`;
+export const INTERNAL_USER_STORAGE_PATH = `${STATE_DIR}/internalUser.storageState.json`;
+export const INTERNAL_VIEWER_STORAGE_PATH = `${STATE_DIR}/internalViewer.storageState.json`;
+export const TEAM_ADMIN_STORAGE_PATH = `${STATE_DIR}/teamAdmin.storageState.json`;
 
 // Seeded user identities (match seed.sql)
 export const E2E_PROXY_ADMIN_USER_ID = "e2e-proxy-admin";
