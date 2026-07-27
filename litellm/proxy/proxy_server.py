@@ -210,6 +210,7 @@ def generate_feedback_box():
 
 
 import contextlib
+import dataclasses
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -783,9 +784,58 @@ def cleanup_router_config_variables():
     prisma_client = None
 
 
+async def _stop_spend_background_jobs() -> None:
+    """Stop the scheduler and spend-logs queue monitor so nothing writes to the DB
+    while (or after) the shutdown flush runs."""
+    if scheduler is not None:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception as e:  # noqa: BLE001  # shutdown must never be blocked by scheduler teardown
+            verbose_proxy_logger.exception(f"Error stopping APScheduler on shutdown: {e}")
+
+    monitor_task = spend_logs_queue_monitor.task
+    if monitor_task is not None:
+        monitor_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await monitor_task
+        spend_logs_queue_monitor.task = None
+
+
+async def _flush_spend_buffers_on_shutdown() -> None:
+    """Commit in-memory spend buffers before the DB connection goes away.
+
+    Without this, everything accumulated since the last scheduler run (key/team/user/
+    end_user spend, spend logs, daily tag spend) is dropped on every restart."""
+    if prisma_client is None:
+        return
+
+    from litellm.proxy.utils import update_daily_tag_spend, update_spend
+
+    try:
+        await update_spend(
+            prisma_client=prisma_client,
+            db_writer_client=db_writer_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # a failed flush must not stop the rest of shutdown
+        verbose_proxy_logger.exception(f"Error flushing spend updates on shutdown: {e}")
+
+    try:
+        await update_daily_tag_spend(
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # a failed flush must not stop the rest of shutdown
+        verbose_proxy_logger.exception(f"Error flushing daily tag spend on shutdown: {e}")
+
+
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+
+    await _stop_spend_background_jobs()
+    await _flush_spend_buffers_on_shutdown()
+
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -2027,6 +2077,14 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
+
+@dataclasses.dataclass(slots=True)
+class _SpendLogsQueueMonitorHandle:
+    task: Optional["asyncio.Task[None]"] = None
+
+
+spend_logs_queue_monitor = _SpendLogsQueueMonitorHandle()
 
 # Global variable for anthropic beta headers reload scheduling
 last_anthropic_beta_headers_reload = None
@@ -8002,7 +8060,7 @@ class ProxyStartupEvent:
             from litellm.proxy.utils import _monitor_spend_logs_queue
 
             # Start background task to monitor spend logs queue size
-            asyncio.create_task(
+            spend_logs_queue_monitor.task = asyncio.create_task(
                 _monitor_spend_logs_queue(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,

@@ -124,6 +124,116 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_event_flushes_spend_buffers_before_disconnect(monkeypatch):
+    """Regression for #34805: in-memory spend buffers must be committed before the
+    prisma connection is torn down, and the scheduler / queue monitor must be stopped
+    first so nothing is mid-flight against a closing connection."""
+    calls: List[str] = []
+
+    fake_prisma = MagicMock()
+
+    async def _disconnect():
+        calls.append("disconnect")
+
+    fake_prisma.disconnect = _disconnect
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    fake_scheduler = MagicMock()
+    fake_scheduler.shutdown = MagicMock(side_effect=lambda **_: calls.append("scheduler_shutdown"))
+    monkeypatch.setattr(ps, "scheduler", fake_scheduler, raising=False)
+
+    monitor_started = asyncio.Event()
+
+    async def _monitor():
+        monitor_started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            calls.append("monitor_cancelled")
+            raise
+
+    monitor_task = asyncio.create_task(_monitor())
+    await monitor_started.wait()
+    monkeypatch.setattr(ps.spend_logs_queue_monitor, "task", monitor_task, raising=False)
+
+    import litellm.proxy.utils as proxy_utils
+
+    async def _update_spend(**kwargs):
+        calls.append("update_spend")
+
+    async def _update_daily_tag_spend(**kwargs):
+        calls.append("update_daily_tag_spend")
+
+    monkeypatch.setattr(proxy_utils, "update_spend", _update_spend, raising=False)
+    monkeypatch.setattr(proxy_utils, "update_daily_tag_spend", _update_daily_tag_spend, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls == [
+        "scheduler_shutdown",
+        "monitor_cancelled",
+        "update_spend",
+        "update_daily_tag_spend",
+        "disconnect",
+    ]
+    assert monitor_task.cancelled()
+    assert ps.spend_logs_queue_monitor.task is None
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_event_flush_failure_still_disconnects(monkeypatch):
+    """A failing flush must not block the rest of shutdown; both buffers are
+    attempted and prisma is still disconnected."""
+    calls: List[str] = []
+
+    fake_prisma = MagicMock()
+
+    async def _disconnect():
+        calls.append("disconnect")
+
+    fake_prisma.disconnect = _disconnect
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "scheduler", None, raising=False)
+    monkeypatch.setattr(ps.spend_logs_queue_monitor, "task", None, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm.proxy.utils as proxy_utils
+
+    async def _update_spend(**kwargs):
+        calls.append("update_spend")
+        raise RuntimeError("db unreachable")
+
+    async def _update_daily_tag_spend(**kwargs):
+        calls.append("update_daily_tag_spend")
+
+    monkeypatch.setattr(proxy_utils, "update_spend", _update_spend, raising=False)
+    monkeypatch.setattr(proxy_utils, "update_daily_tag_spend", _update_daily_tag_spend, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls == ["update_spend", "update_daily_tag_spend", "disconnect"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=RuntimeError("db gone"))
