@@ -3,7 +3,7 @@ import pytest
 from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
 
 
-def test_supported_params():
+def test_greenpt_supported_params():
     assert GreenPTRerankConfig().get_supported_cohere_rerank_params("green-rerank") == [
         "query",
         "documents",
