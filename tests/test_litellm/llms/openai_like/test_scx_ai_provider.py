@@ -168,3 +168,30 @@ class TestSCXAIModelMetadata:
         for model in self.SCX_MODELS:
             assert model in backup, f"{model} missing from backup json"
             assert backup[model] == model_cost[model], f"{model} differs between root and backup json"
+
+
+class TestSCXAIDashboardRegistration:
+    @staticmethod
+    def _provider_create_fields():
+        import json
+        from pathlib import Path
+
+        import litellm
+
+        path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+        with open(path) as f:
+            return json.load(f)
+
+    def test_scx_ai_is_selectable_in_the_add_model_form(self):
+        entries = [e for e in self._provider_create_fields() if e["litellm_provider"] == "scx-ai"]
+        assert len(entries) == 1, "scx-ai must appear exactly once in provider_create_fields.json"
+
+        entry = entries[0]
+        assert entry["provider"] == "SCX_AI"
+        assert entry["provider_display_name"] == "SCX.ai"
+        assert entry["default_model_placeholder"].startswith("scx-ai/")
+
+        fields = {f["key"]: f for f in entry["credential_fields"]}
+        assert fields["api_key"]["required"] is True
+        assert fields["api_key"]["field_type"] == "password"
+        assert fields["api_base"]["required"] is False
