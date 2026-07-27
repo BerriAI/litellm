@@ -483,24 +483,16 @@ def _resolve_sse_keepalive_interval() -> float | None:
     try:
         interval = float(interval)
     except Exception:  # noqa: BLE001  # a config value of any shape must not break streaming
-        verbose_proxy_logger.warning(
-            "create_response: ignoring non-numeric sse_keepalive_interval_seconds %r",
-            interval,
-        )
+        verbose_proxy_logger.warning("ignoring non-numeric sse_keepalive_interval_seconds %r", interval)
         return None
     if not math.isfinite(interval) or interval <= 0:
-        verbose_proxy_logger.warning(
-            "create_response: ignoring out-of-range sse_keepalive_interval_seconds %r",
-            interval,
-        )
+        verbose_proxy_logger.warning("ignoring out-of-range sse_keepalive_interval_seconds %r", interval)
         return None
     return max(interval, MIN_SSE_KEEPALIVE_INTERVAL_SECONDS)
 
 
 async def _stream_with_pending_first_chunk(
-    generator: AsyncGenerator[str, None],
-    chunk_task: asyncio.Task[str],
-    interval: float,
+    generator: AsyncGenerator[str, None], chunk_task: asyncio.Task[str], interval: float
 ) -> AsyncGenerator[str, None]:
     try:
         while not chunk_task.done():
@@ -564,9 +556,7 @@ async def _buffer_first_chunk_honoring_disconnect(
     disconnect_task: asyncio.Task[None] = asyncio.ensure_future(_wait_for_http_disconnect(request))
     try:
         done, _ = await asyncio.wait(
-            {chunk_task, disconnect_task},
-            timeout=keepalive_interval,
-            return_when=asyncio.FIRST_COMPLETED,
+            {chunk_task, disconnect_task}, timeout=keepalive_interval, return_when=asyncio.FIRST_COMPLETED
         )
         # A completed disconnect_task has already consumed the http.disconnect
         # message, so Starlette's later listen_for_disconnect would never see it.
@@ -631,9 +621,8 @@ async def create_response(
             generator = await generator
 
         # Now get the first chunk from the actual generator
-        first_chunk_value, pending_first_chunk = await _buffer_first_chunk_honoring_disconnect(
-            generator, request, keepalive_interval
-        )
+        buffered = await _buffer_first_chunk_honoring_disconnect(generator, request, keepalive_interval)
+        first_chunk_value, pending_first_chunk = buffered
 
         if pending_first_chunk is not None and keepalive_interval is not None:
             return _UpstreamClosingStreamingResponse(
