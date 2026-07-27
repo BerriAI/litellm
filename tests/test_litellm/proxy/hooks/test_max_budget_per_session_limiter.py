@@ -8,6 +8,7 @@ Tests that session-scoped budget tracking works correctly:
 - Requests without agent_id pass through
 """
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -163,3 +164,158 @@ async def test_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+def _make_handler() -> _PROXY_MaxBudgetPerSessionHandler:
+    return _PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+
+async def _pre_call(handler, session_id, reservation_cost, agent, user_api_key_dict):
+    data = {"metadata": {"session_id": session_id}, "model": "gpt-4o"}
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry, patch.object(
+        handler, "_estimate_reservation_cost", return_value=reservation_cost
+    ):
+        mock_registry.get_agent_by_id.return_value = agent
+        try:
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=handler.internal_usage_cache.dual_cache,
+                data=data,
+                call_type="acompletion",
+            )
+        except HTTPException as e:
+            result = e
+    return result, data
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_do_not_bypass_budget():
+    """
+    Regression for the admission race: several requests firing concurrently
+    against a fresh session budget must not all slip past the gate. With
+    per-request reservation only enough requests to fill the budget are
+    admitted, and the session counter never exceeds max_budget_per_session.
+    """
+    handler = _make_handler()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-key-budget", agent_id="agent-budget-123")
+    agent = _make_mock_agent(max_budget_per_session=1.0)
+    session_id = "session-concurrent"
+
+    results = await asyncio.gather(
+        *[_pre_call(handler, session_id, 0.60, agent, user_api_key_dict) for _ in range(5)]
+    )
+
+    admitted = [r for r, _ in results if r is None]
+    rejected = [r for r, _ in results if isinstance(r, HTTPException)]
+
+    assert len(admitted) == 2
+    assert len(rejected) == 3
+    assert all(r.status_code == 429 for r in rejected)
+
+    spend = await handler._get_current_spend(handler._make_cache_key(session_id))
+    assert spend <= 1.0 + 1e-9
+
+
+@pytest.mark.asyncio
+async def test_first_request_admitted_when_estimate_exceeds_budget():
+    """
+    A single request whose worst-case estimate exceeds the whole budget is
+    still admitted (reservation resized to the remaining budget), but pins the
+    counter at the cap so a concurrent sibling is rejected.
+    """
+    handler = _make_handler()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-key-budget", agent_id="agent-budget-123")
+    agent = _make_mock_agent(max_budget_per_session=1.0)
+    session_id = "session-big-estimate"
+
+    first, _ = await _pre_call(handler, session_id, 5.0, agent, user_api_key_dict)
+    assert first is None
+
+    spend = await handler._get_current_spend(handler._make_cache_key(session_id))
+    assert spend == pytest.approx(1.0)
+
+    second, _ = await _pre_call(handler, session_id, 5.0, agent, user_api_key_dict)
+    assert isinstance(second, HTTPException)
+    assert second.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_reservation_reconciled_to_actual_cost_on_success():
+    """
+    After admission the reservation is reconciled down to the actual response
+    cost, so the reserved worst-case does not permanently inflate the session
+    spend.
+    """
+    handler = _make_handler()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-key-budget", agent_id="agent-budget-123")
+    agent = _make_mock_agent(max_budget_per_session=5.0)
+    session_id = "session-reconcile"
+
+    result, data = await _pre_call(handler, session_id, 0.80, agent, user_api_key_dict)
+    assert result is None
+
+    reserved_spend = await handler._get_current_spend(handler._make_cache_key(session_id))
+    assert reserved_spend == pytest.approx(0.80)
+
+    await handler.async_log_success_event(
+        kwargs={"litellm_params": {"metadata": data["metadata"]}, "response_cost": 0.10},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    final_spend = await handler._get_current_spend(handler._make_cache_key(session_id))
+    assert final_spend == pytest.approx(0.10)
+
+
+@pytest.mark.asyncio
+async def test_reservation_refunded_on_failure():
+    """A failed call refunds its reservation so it doesn't consume budget."""
+    handler = _make_handler()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-key-budget", agent_id="agent-budget-123")
+    agent = _make_mock_agent(max_budget_per_session=5.0)
+    session_id = "session-refund"
+
+    result, data = await _pre_call(handler, session_id, 0.80, agent, user_api_key_dict)
+    assert result is None
+    assert await handler._get_current_spend(handler._make_cache_key(session_id)) == pytest.approx(0.80)
+
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": data["metadata"]}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await handler._get_current_spend(handler._make_cache_key(session_id)) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_reservation_refund_is_idempotent_across_failure_hooks():
+    """
+    The reservation must be refunded at most once even if both
+    async_post_call_failure_hook and async_log_failure_event fire.
+    """
+    handler = _make_handler()
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-key-budget", agent_id="agent-budget-123")
+    agent = _make_mock_agent(max_budget_per_session=5.0)
+    session_id = "session-idempotent"
+
+    result, data = await _pre_call(handler, session_id, 0.80, agent, user_api_key_dict)
+    assert result is None
+
+    await handler.async_post_call_failure_hook(
+        request_data=data,
+        original_exception=Exception("boom"),
+        user_api_key_dict=user_api_key_dict,
+    )
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": data["metadata"]}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert await handler._get_current_spend(handler._make_cache_key(session_id)) == pytest.approx(0.0)
