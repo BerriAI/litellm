@@ -305,3 +305,68 @@ def test_guardrail_success_span_is_unset():
     )
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.UNSET
+
+
+def _tools_payload(count):
+    """A request declaring ``count`` tools, in the chat-completion shape."""
+    return _payload(
+        model_parameters={
+            "temperature": 0.7,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": f"tool_{i}",
+                        "description": f"description for tool {i}",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+                for i in range(count)
+            ],
+        }
+    )
+
+
+def test_many_tools_do_not_evict_core_attributes():
+    """Tool definitions must never crowd core telemetry off the span.
+
+    An agentic client declares hundreds of tools. Spelling each one out as
+    per-index attributes overruns the OTel SDK's 128-attribute span limit,
+    which evicts oldest-first and so destroys the ``gen_ai.*`` attributes
+    written before it. Capping the tool family keeps the core intact.
+    """
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_tools_payload(127))
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.PROVIDER_NAME] == "openai"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
+    assert a[GenAI.RESPONSE_FINISH_REASONS] == ("stop",)
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert a["gen_ai.usage.prompt_tokens"] == 10
+
+    assert span.dropped_attributes == 0
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+    assert a["gen_ai.tool.0.name"] == "tool_0"
+    assert "gen_ai.tool.126.name" not in a
+    assert "llm.request.functions.126.name" not in a
+
+
+def test_tool_definitions_kept_in_full_below_the_cap():
+    """A handful of tools keeps full per-index detail in both vocabularies."""
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_tools_payload(3))
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+
+    assert a[LiteLLM.TOOLS_DECLARED] == 3
+    for idx in range(3):
+        assert a[f"gen_ai.tool.{idx}.name"] == f"tool_{idx}"
+        assert a[f"gen_ai.tool.{idx}.description"] == f"description for tool {idx}"
+        assert a[f"gen_ai.tool.{idx}.parameters"]
+        assert a[f"llm.request.functions.{idx}.name"] == f"tool_{idx}"

@@ -6,15 +6,45 @@ they live in one place.
 """
 
 import json
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Final, Mapping, Sequence
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
-from litellm.integrations.otel.model.payloads import LLMCallSpanData
+from litellm.integrations.otel.model.payloads import LLMCallSpanData, ToolDefinition
+
+MAX_TOOL_DEFINITIONS_PER_SPAN: Final = 8
+"""How many declared tools get their definition spelled out on a span.
+
+Tool definitions are an unbounded attribute family: one entry per declared
+tool, per field, per active vocabulary. Agentic clients declare hundreds, which
+overruns the OTel SDK's default 128-attribute span limit. That limit evicts
+oldest-first, so an uncapped family silently destroys the core ``gen_ai.*``
+attributes written before it. Capping the family keeps core telemetry intact;
+requests declaring fewer tools than this keep full per-tool detail.
+"""
 
 
 def drop_none(values: Mapping[str, AttrValue | None]) -> AttributeMap:
     """Return ``values`` with ``None``-valued entries removed."""
     return {k: v for k, v in values.items() if v is not None}
+
+
+def tool_definition_attrs(
+    key_for: Callable[[int, str], str],
+    tools: Sequence[ToolDefinition],
+    extractors: Mapping[str, Callable[[ToolDefinition], AttrValue | None]],
+) -> AttributeMap:
+    """Per-index attributes for the first ``MAX_TOOL_DEFINITIONS_PER_SPAN`` tools.
+
+    ``key_for`` builds a vocabulary's key from the tool's index and the field
+    name, so each mapper keeps its own naming while sharing the cap.
+    """
+    return drop_none(
+        {
+            key_for(idx, suffix): extract(tool)
+            for idx, tool in enumerate(tools[:MAX_TOOL_DEFINITIONS_PER_SPAN])
+            for suffix, extract in extractors.items()
+        }
+    )
 
 
 def collect(table: Mapping[str, Callable], source: object) -> AttributeMap:

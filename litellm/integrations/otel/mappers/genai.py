@@ -12,9 +12,9 @@ from typing import Callable
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
-    drop_none,
     output_messages,
     serialize_messages,
+    tool_definition_attrs,
 )
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
@@ -153,15 +153,15 @@ class GenAIMapper:
     @classmethod
     def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
         attrs = collect(cls._LLM_CALL_ATTRS, data)
-        attrs.update(
-            drop_none(
-                {
-                    f"gen_ai.tool.{idx}.{suffix}": extract(tool)
-                    for idx, tool in enumerate(data.tools)
-                    for suffix, extract in cls._TOOL_ATTRS.items()
-                }
+        if data.tools:
+            attrs[LiteLLM.TOOLS_DECLARED] = len(data.tools)
+            attrs.update(
+                tool_definition_attrs(
+                    lambda idx, suffix: f"gen_ai.tool.{idx}.{suffix}",
+                    data.tools,
+                    cls._TOOL_ATTRS,
+                )
             )
-        )
         return attrs
 
     @classmethod
