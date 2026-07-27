@@ -5554,18 +5554,6 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
             litellm_params["_langfuse_masking_function"] = masking_fn
         litellm_params["metadata"] = metadata
 
-    ## check user_api_key_metadata for sensitive logging keys
-    cleaned_user_api_key_metadata = {}
-    if "user_api_key_metadata" in metadata and isinstance(metadata["user_api_key_metadata"], dict):
-        for k, v in metadata["user_api_key_metadata"].items():
-            if k == "logging":  # prevent logging user logging keys
-                cleaned_user_api_key_metadata[k] = "scrubbed_by_litellm_for_sensitive_keys"
-            else:
-                cleaned_user_api_key_metadata[k] = v
-
-        metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
-        litellm_params["metadata"] = metadata
-
     return litellm_params
 
 
