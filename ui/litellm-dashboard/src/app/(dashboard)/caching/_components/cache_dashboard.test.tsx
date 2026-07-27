@@ -21,6 +21,7 @@ const cacheActivity = [
     call_type: "acompletion",
     total_rows: 1500,
     cache_hit_true_rows: 300,
+    failed_rows: 200,
     cached_completion_tokens: 12000,
     generated_completion_tokens: 48000,
   },
@@ -30,6 +31,7 @@ const cacheActivity = [
     call_type: "aembedding",
     total_rows: 700,
     cache_hit_true_rows: 100,
+    failed_rows: 50,
     cached_completion_tokens: 2000,
     generated_completion_tokens: 9000,
   },
@@ -108,8 +110,13 @@ describe("CacheDashboard cache analytics charts", () => {
     expect(legendFillByCategory(requestsCard)).toEqual({
       "LLM API requests": "var(--color-sky-500, #0ea5e9)",
       "Cache hit": "var(--color-teal-500, #14b8a6)",
+      "Failed requests": "var(--color-red-500, #ef4444)",
     });
-    expect(barFills(requestsCard)).toEqual(["var(--color-sky-500, #0ea5e9)", "var(--color-teal-500, #14b8a6)"]);
+    expect(barFills(requestsCard)).toEqual([
+      "var(--color-sky-500, #0ea5e9)",
+      "var(--color-teal-500, #14b8a6)",
+      "var(--color-red-500, #ef4444)",
+    ]);
   });
 
   it("renders the tokens chart with each category legend-bound to its fill and stacked in order", async () => {
@@ -133,16 +140,26 @@ describe("CacheDashboard cache analytics charts", () => {
     }
   });
 
-  it("stacks the two categories into one column per call_type", async () => {
+  it("stacks all categories into one column per call_type", async () => {
     renderDashboard();
     const { requestsCard, tokensCard } = await findChartCards();
 
-    for (const card of [requestsCard, tokensCard]) {
+    const expectedRects = { requests: 6, tokens: 4 };
+    for (const [card, rectCount] of [
+      [requestsCard, expectedRects.requests],
+      [tokensCard, expectedRects.tokens],
+    ] as const) {
       const rects = Array.from(card.querySelectorAll("path.recharts-rectangle"));
-      expect(rects).toHaveLength(4);
+      expect(rects).toHaveLength(rectCount);
       const xPositions = rects.map((rect) => rect.getAttribute("d")?.split(",")[0]);
       expect(new Set(xPositions).size).toBe(2);
     }
+  });
+
+  it("keeps failed requests in the cache hit ratio denominator", async () => {
+    renderDashboard();
+
+    expect(await screen.findByText("18.18%")).toBeInTheDocument();
   });
 
   it("formats y-axis ticks with compact notation", async () => {

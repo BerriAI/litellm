@@ -79,6 +79,7 @@ async def get_global_activity(
                 sl."model",
                 COUNT(*) AS total_rows,
                 SUM(CASE WHEN sl."cache_hit" = 'True' THEN 1 ELSE 0 END) AS cache_hit_true_rows,
+                SUM(CASE WHEN sl."status" = 'failure' THEN 1 ELSE 0 END) AS failed_rows,
                 SUM(CASE WHEN sl."cache_hit" = 'True' THEN sl."completion_tokens" ELSE 0 END) AS cached_completion_tokens,
                 SUM(CASE WHEN sl."cache_hit" != 'True' THEN sl."completion_tokens" ELSE 0 END) AS generated_completion_tokens
             FROM "LiteLLM_SpendLogs" sl
