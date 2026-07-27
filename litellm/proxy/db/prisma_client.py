@@ -12,7 +12,7 @@ import urllib
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Union
+from typing import Any, Callable, Protocol, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
@@ -38,6 +38,106 @@ class IAMEndpoint:
         if self.schema:
             url += f"?schema={self.schema}"
         return url
+
+
+class _PrismaProcess(Protocol):
+    pid: object
+
+
+class _PrismaEngine(Protocol):
+    @property
+    def process(self) -> _PrismaProcess: ...
+
+    async def query(self, content: str, *, tx_id: str | None) -> object: ...
+
+    async def start_transaction(self, *, content: str) -> str: ...
+
+    async def commit_transaction(self, tx_id: str) -> None: ...
+
+    async def rollback_transaction(self, tx_id: str) -> None: ...
+
+
+class _PrismaClient(Protocol):
+    _Prisma__engine: _PrismaEngine
+
+    @property
+    def _engine(self) -> _PrismaEngine: ...
+
+
+class _PrismaDrainTracker:
+    def __init__(self) -> None:
+        self._active_operations = 0
+        self._transactions: frozenset[str] = frozenset()
+        self._drained = asyncio.Event()
+        self._drained.set()
+
+    def begin_operation(self) -> None:
+        if self._active_operations == 0:
+            self._drained.clear()
+        self._active_operations += 1
+
+    def end_operation(self) -> None:
+        self._active_operations -= 1
+        if self._active_operations == 0:
+            self._drained.set()
+
+    def transaction_started(self, transaction_id: str) -> None:
+        self._transactions = self._transactions.union((transaction_id,))
+
+    def transaction_finished(self, transaction_id: str) -> None:
+        if transaction_id not in self._transactions:
+            return
+        self._transactions = self._transactions.difference((transaction_id,))
+        self.end_operation()
+
+    async def wait_until_drained(self) -> None:
+        await self._drained.wait()
+
+
+class _TrackedPrismaEngine:
+    def __init__(self, engine: _PrismaEngine, tracker: _PrismaDrainTracker) -> None:
+        self._engine = engine
+        self.tracker = tracker
+
+    @property
+    def process(self) -> _PrismaProcess:
+        return self._engine.process
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._engine, name)
+
+    async def query(self, content: str, *, tx_id: str | None) -> object:
+        self.tracker.begin_operation()
+        try:
+            return await self._engine.query(content, tx_id=tx_id)
+        finally:
+            self.tracker.end_operation()
+
+    async def start_transaction(self, *, content: str) -> str:
+        self.tracker.begin_operation()
+        try:
+            transaction_id = await self._engine.start_transaction(content=content)
+        except (Exception, asyncio.CancelledError):
+            self.tracker.end_operation()
+            raise
+        self.tracker.transaction_started(transaction_id)
+        return transaction_id
+
+    async def commit_transaction(self, tx_id: str) -> None:
+        self.tracker.begin_operation()
+        try:
+            await self._engine.commit_transaction(tx_id)
+        finally:
+            self.tracker.end_operation()
+            self.tracker.transaction_finished(tx_id)
+
+    async def rollback_transaction(self, tx_id: str) -> None:
+        self.tracker.begin_operation()
+        try:
+            await self._engine.rollback_transaction(tx_id)
+        finally:
+            self.tracker.end_operation()
+            self.tracker.transaction_finished(tx_id)
 
 
 def parse_iam_endpoint_from_url(url: str) -> IAMEndpoint:
@@ -88,8 +188,6 @@ class PrismaWrapper:
     # Fallback refresh interval if token parsing fails (10 minutes)
     FALLBACK_REFRESH_INTERVAL_SECONDS = 600
 
-    PLANNED_REPLACEMENT_DRAIN_SECONDS = 0.5
-
     def __init__(
         self,
         original_prisma: Any,
@@ -121,6 +219,8 @@ class PrismaWrapper:
         self._token_refresh_task: asyncio.Task | None = None
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: datetime | None = None
+        self._active_drain_tracker = self._instrument_prisma_client(original_prisma)
+        self._retirement_tasks: frozenset[asyncio.Task[None]] = frozenset()
 
         # Coordination for planned engine restarts (issue #29176). Every
         # `recreate_prisma_client` SIGTERMs the running query-engine on
@@ -138,7 +238,28 @@ class PrismaWrapper:
         self._engine_generation: int = 0
         self.on_engine_replaced: Callable[[], None] | None = None
 
-    def _get_engine_pid(self) -> int:
+    @staticmethod
+    def _read_engine(prisma_client: _PrismaClient) -> _PrismaEngine:
+        return prisma_client._engine
+
+    @staticmethod
+    def _write_engine(prisma_client: _PrismaClient, engine: _PrismaEngine) -> None:
+        prisma_client._Prisma__engine = engine
+
+    def _instrument_prisma_client(self, prisma_client: _PrismaClient) -> _PrismaDrainTracker | None:
+        from prisma.errors import ClientNotConnectedError
+
+        try:
+            engine = self._read_engine(prisma_client)
+        except (AttributeError, ClientNotConnectedError):
+            return None
+        if isinstance(engine, _TrackedPrismaEngine):
+            return engine.tracker
+        tracker = _PrismaDrainTracker()
+        self._write_engine(prisma_client, _TrackedPrismaEngine(engine, tracker))
+        return tracker
+
+    def _get_engine_pid(self, prisma_client: _PrismaClient | None = None) -> int:
         """Get the PID of the current Prisma engine subprocess, or 0 if unavailable.
 
         Must never raise: it runs inside the reconnect path, where the client
@@ -147,18 +268,38 @@ class PrismaWrapper:
         escaped here, ``recreate_prisma_client`` would fail before it could
         build a replacement client and the reconnect loop could never recover.
         """
+        from prisma.errors import ClientNotConnectedError
+
         try:
-            if self._original_prisma.is_connected() is not True:
-                return 0
-            engine = self._original_prisma._engine
-            process = getattr(engine, "process", None) if engine is not None else None
-            if process is not None:
-                pid = process.pid
-                if isinstance(pid, int):
-                    return pid
-        except (AttributeError, TypeError):
+            target_prisma = self._original_prisma if prisma_client is None else prisma_client
+            pid = self._read_engine(target_prisma).process.pid
+            if isinstance(pid, int):
+                return pid
+        except (AttributeError, ClientNotConnectedError, TypeError):
             pass
         return 0
+
+    async def _retire_engine_when_drained(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
+        if tracker is not None:
+            await tracker.wait_until_drained()
+        await self._kill_engine_process(pid)
+
+    def _schedule_engine_retirement(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
+        if pid <= 0:
+            return
+        retirement_task = asyncio.create_task(self._retire_engine_when_drained(pid, tracker))
+        self._retirement_tasks = self._retirement_tasks.union((retirement_task,))
+        retirement_task.add_done_callback(self._retirement_finished)
+
+    def _retirement_finished(self, retirement_task: asyncio.Task[None]) -> None:
+        self._retirement_tasks = self._retirement_tasks.difference((retirement_task,))
+
+    async def connect(self, timeout: int | timedelta | None = None) -> None:
+        if timeout is None:
+            await self._original_prisma.connect()
+        else:
+            await self._original_prisma.connect(timeout)
+        self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:
@@ -417,6 +558,7 @@ class PrismaWrapper:
         self._original_prisma = Prisma(**kwargs)
 
         await self._original_prisma.connect()
+        self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
         self._engine_generation += 1
 
         # Let the owner (PrismaClient) re-arm its engine-death watcher on the
@@ -430,19 +572,27 @@ class PrismaWrapper:
     async def _replace_prisma_client_for_token_refresh_locked(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
     ) -> None:
         from prisma import Prisma
+        from prisma.types import DatasourceOverride
 
-        kwargs: dict[str, Any] = {}
-        if http_client is not None:
-            kwargs["http"] = http_client
         if self._recreate_uses_datasource:
-            kwargs["datasource"] = {"url": new_db_url}
+            datasource = DatasourceOverride(url=new_db_url)
+            replacement_prisma = Prisma(datasource=datasource)
+        else:
+            replacement_prisma = Prisma()
 
-        old_engine_pid = self._get_engine_pid()
-        replacement_prisma = Prisma(**kwargs)
-        await replacement_prisma.connect()
+        old_prisma = self._original_prisma
+        old_engine_pid = self._get_engine_pid(old_prisma)
+        old_drain_tracker = self._active_drain_tracker
+        if old_drain_tracker is None:
+            old_drain_tracker = self._instrument_prisma_client(old_prisma)
+        try:
+            await replacement_prisma.connect()
+        except (Exception, asyncio.CancelledError):
+            self._schedule_engine_retirement(self._get_engine_pid(replacement_prisma), None)
+            raise
+        replacement_drain_tracker = self._instrument_prisma_client(replacement_prisma)
 
         if old_engine_pid > 0:
             if len(self._expected_engine_deaths) >= 64:
@@ -450,14 +600,13 @@ class PrismaWrapper:
             self._expected_engine_deaths.add(old_engine_pid)
 
         self._original_prisma = replacement_prisma
+        self._active_drain_tracker = replacement_drain_tracker
         self._engine_generation += 1
 
         if self.on_engine_replaced is not None:
             self.on_engine_replaced()
 
-        if old_engine_pid > 0:
-            await asyncio.sleep(self.PLANNED_REPLACEMENT_DRAIN_SECONDS)
-            await self._kill_engine_process(old_engine_pid)
+        self._schedule_engine_retirement(old_engine_pid, old_drain_tracker)
 
     async def start_token_refresh_task(self) -> None:
         """
@@ -566,7 +715,7 @@ class PrismaWrapper:
             if new_db_url:
                 try:
                     await self._replace_prisma_client_for_token_refresh_locked(new_db_url)
-                except Exception:
+                except (Exception, asyncio.CancelledError):
                     if previous_db_url is None:
                         os.environ.pop(self._db_url_env_var, None)
                     else:
