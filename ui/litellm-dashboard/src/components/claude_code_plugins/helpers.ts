@@ -177,20 +177,39 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
 };
 
 /**
- * Generate install command for Claude Code CLI
- * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
+ * Marketplace name the proxy publishes in marketplace.json. Claude Code keys its
+ * `extraKnownMarketplaces` config and `@<marketplace>` install suffix off this value.
  */
-export const formatInstallCommand = (plugin: { name: string; source: PluginSource }): string => {
-  const { source } = plugin;
-  if (source.source === "github" && source.repo) {
-    return `/plugin marketplace add ${source.repo}`;
-  }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return `/plugin marketplace add ${source.url}`;
-  }
-  // Fallback to plugin name
-  return `/plugin marketplace add ${plugin.name}`;
-};
+export const MARKETPLACE_NAME = "litellm";
+
+/**
+ * Path the proxy serves the Claude Code marketplace manifest from
+ */
+export const MARKETPLACE_MANIFEST_PATH = "/claude-code/marketplace.json";
+
+/**
+ * Generate the Claude Code install command for a registered skill
+ * Format: /plugin install <name>@litellm
+ */
+export const formatInstallCommand = (plugin: { name: string }): string =>
+  `/plugin install ${plugin.name}@${MARKETPLACE_NAME}`;
+
+export interface MarketplaceSettings {
+  extraKnownMarketplaces: Record<string, { source: { source: "url"; url: string } }>;
+}
+
+/**
+ * Build the `~/.claude/settings.json` snippet that registers the proxy as a Claude Code
+ * marketplace. Claude Code requires `source` to be a nested object, and the marketplace key
+ * must match the name the proxy returns in marketplace.json.
+ */
+export const buildMarketplaceSettings = (marketplaceUrl: string): MarketplaceSettings => ({
+  extraKnownMarketplaces: {
+    [MARKETPLACE_NAME]: {
+      source: { source: "url", url: marketplaceUrl },
+    },
+  },
+});
 
 /**
  * Extract unique categories from plugins list
