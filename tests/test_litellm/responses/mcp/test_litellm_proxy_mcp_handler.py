@@ -27,17 +27,49 @@ def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     proxy_module = types.SimpleNamespace(proxy_logging_obj=object())
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
 
+    # tool_server_map carries server_ids, so dispatch resolves by identity. A real
+    # MCPServer is used rather than a stub so the prefix-stripping and display-name
+    # paths downstream see the attributes they actually read.
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp import MCPTransport
+
+    def _server_by_id(server_id):
+        if server_id is None:
+            return None
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+        )
+
     fake_manager = types.SimpleNamespace(
         call_tool=AsyncMock(return_value=_DummyMCPResult()),
         # Newer logging path calls this to enrich spend logs metadata
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
         get_mcp_server_by_name=MagicMock(return_value=None),
+        get_mcp_server_by_id=MagicMock(side_effect=_server_by_id),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
     return fake_manager.call_tool
+
+
+def _mcp_server(server_id: str, server_name: str, alias=None, tool_name_to_display_name=None):
+    """A real MCPServer, so tests exercise the attributes production actually reads."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp import MCPTransport
+
+    return MCPServer(
+        server_id=server_id,
+        name=server_name,
+        server_name=server_name,
+        alias=alias,
+        transport=MCPTransport.http,
+        tool_name_to_display_name=tool_name_to_display_name,
+    )
 
 
 def _setup_proxy_logging(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
@@ -61,22 +93,75 @@ def test_deduplicate_mcp_tools_single_allowed_server():
     assert server_map == {"search": "everything"}
 
 
-@pytest.mark.parametrize(
-    "tool_name,expected_server",
-    [
-        ("alpha-tool", "alpha"),
-        ("beta-another_tool", "beta"),
-    ],
-)
-def test_deduplicate_mcp_tools_prefixed_names(tool_name, expected_server):
-    tools = [{"name": tool_name}]
-
-    _, server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
-        tools,
-        ["alpha", "beta"],
+def _manager_with(monkeypatch, servers, routes):
+    """A real manager holding `servers`, with `routes` as {server_id: {tool names}}."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
     )
 
-    assert server_map[tool_name] == expected_server
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    for server_id, names in routes.items():
+        manager._replace_server_tool_routes(server_id, names)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    return manager
+
+
+def test_deduplicate_mcp_tools_records_the_owning_server_id(monkeypatch):
+    """A multi-server listing records server_ids, not names, since names are not unique."""
+    _manager_with(
+        monkeypatch,
+        [_mcp_server(server_id="id-alpha", server_name="alpha"), _mcp_server(server_id="id-beta", server_name="beta")],
+        {"id-alpha": {"alpha-tool"}, "id-beta": {"beta-another_tool"}},
+    )
+
+    _, server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        [{"name": "alpha-tool"}, {"name": "beta-another_tool"}],
+        ["id-alpha", "id-beta"],
+    )
+
+    assert server_map == {"alpha-tool": "id-alpha", "beta-another_tool": "id-beta"}
+
+
+def test_deduplicate_mcp_tools_ignores_a_same_named_server_out_of_scope(monkeypatch):
+    """The reviewed case: a reachable server sharing its name with an unreachable one.
+
+    Recording the name would let dispatch re-resolve it against the whole registry and
+    land on the unreachable server, sending that server's upstream credential.
+    """
+    reachable = _mcp_server(server_id="id-reachable", server_name="shared")
+    unreachable = _mcp_server(server_id="id-unreachable", server_name="shared")
+    _manager_with(
+        monkeypatch,
+        [reachable, unreachable],
+        {"id-reachable": {"echo"}, "id-unreachable": {"echo"}},
+    )
+
+    _, server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        [{"name": "echo"}],
+        ["id-reachable"],
+    )
+
+    assert server_map == {"echo": "id-reachable"}
+
+
+def test_deduplicate_mcp_tools_omits_a_name_two_reachable_servers_share(monkeypatch):
+    """Ambiguity within the caller's own scope must not silently pick one server."""
+    _manager_with(
+        monkeypatch,
+        [_mcp_server(server_id="id-alpha", server_name="alpha"), _mcp_server(server_id="id-beta", server_name="beta")],
+        {"id-alpha": {"echo"}, "id-beta": {"echo"}},
+    )
+
+    _, server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        [{"name": "echo"}],
+        ["id-alpha", "id-beta"],
+    )
+
+    assert "echo" not in server_map
 
 
 def test_extract_tool_calls_from_chat_response_handles_tool_calls():
@@ -288,19 +373,14 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
     monkeypatch,
 ):
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
-    fake_server = types.SimpleNamespace(
+    fake_server = _mcp_server(
         alias="my_deepwiki",
         server_name="deepwiki_test",
         server_id="test-server-id",
-        short_prefix=None,
-        mcp_info=None,
-        tool_name_to_display_name=None,
     )
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
 
-    _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(
-        return_value=fake_server
-    )
+    _msm.global_mcp_server_manager.get_mcp_server_by_id = MagicMock(return_value=fake_server)
 
     tool_name = "my_deepwiki-read_wiki_structure"
     tool_calls = [
@@ -311,7 +391,7 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
     ]
 
     await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-        tool_server_map={tool_name: "deepwiki_test"},
+        tool_server_map={tool_name: "test-server-id"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
     )
@@ -324,26 +404,24 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
 @pytest.mark.asyncio
 async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
-    colliding_server = types.SimpleNamespace(
-        alias=None,
+    colliding_server = _mcp_server(
         server_name="other_mcp",
         server_id="other-server-id",
-        short_prefix=None,
-        mcp_info=None,
         tool_name_to_display_name={"search": "search_docs"},
     )
-    fake_server = types.SimpleNamespace(
-        alias=None,
+    fake_server = _mcp_server(
         server_name="deepwiki_mcp",
         server_id="test-server-id",
-        short_prefix=None,
-        mcp_info=None,
         tool_name_to_display_name={"read_wiki_structure": "browse_repo_docs"},
     )
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as _msm
 
+    # Dispatch resolves the server_id recorded at listing time. A name lookup would
+    # be free to return the collider instead, which is the bug this guards.
+    by_id = {"test-server-id": fake_server, "other-server-id": colliding_server}
+    _msm.global_mcp_server_manager.get_mcp_server_by_id = MagicMock(side_effect=by_id.get)
     _msm.global_mcp_server_manager._get_mcp_server_from_tool_name = MagicMock(return_value=colliding_server)
-    _msm.global_mcp_server_manager.get_mcp_server_by_name = MagicMock(return_value=fake_server)
+    _msm.global_mcp_server_manager.get_mcp_server_by_name = MagicMock(return_value=colliding_server)
 
     tool_name = "browse_repo_docs"
     tool_calls = [
@@ -354,7 +432,7 @@ async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
     ]
 
     await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-        tool_server_map={tool_name: "deepwiki_mcp"},
+        tool_server_map={tool_name: "test-server-id"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
     )

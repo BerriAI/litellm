@@ -1069,6 +1069,14 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
         mock_call_tool,
     )
+    # tool_server_map carries server_ids, so dispatch resolves the server by identity.
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp import MCPTransport
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_id",
+        lambda sid: MCPServer(server_id=sid, name=sid, server_name=sid, transport=MCPTransport.http),
+    )
 
     # Create test data
     tool_calls = [

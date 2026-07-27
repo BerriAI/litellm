@@ -68,10 +68,19 @@ def _text_only_stream(text: str, response_id: str = "resp-1") -> _FakeAsyncStrea
 def _mock_mcp_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Patch the MCP tool-call plumbing so _execute_tool_calls can run in tests."""
     call_tool = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="ok")], isError=False))
+    # tool_server_map carries server_ids now, so dispatch resolves by identity.
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp import MCPTransport
+
     fake_manager = types.SimpleNamespace(
         call_tool=call_tool,
         _get_mcp_server_from_tool_name=MagicMock(return_value=None),
         get_mcp_server_by_name=MagicMock(return_value=None),
+        get_mcp_server_by_id=MagicMock(
+            side_effect=lambda sid: (
+                MCPServer(server_id=sid, name=sid, server_name=sid, transport=MCPTransport.http) if sid else None
+            )
+        ),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
