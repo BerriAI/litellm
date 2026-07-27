@@ -54,6 +54,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
+from litellm.types.router import LiteLLMParamsTypedDict
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
@@ -87,14 +88,96 @@ def get_files_provider_config(
     custom_llm_provider: str,
 ):
     global files_config
-    if custom_llm_provider == "vertex_ai":
-        return None
     if files_config is None:
+        if custom_llm_provider == "vertex_ai":
+            return None
         raise ValueError("files_settings is not set, set it on your config.yaml file.")
     for setting in files_config:
         if setting.get("custom_llm_provider") == custom_llm_provider:
             return setting
     return None
+
+
+def get_files_settings_bucket_for_provider(custom_llm_provider: str) -> Optional[str]:
+    """
+    Return the GCS bucket configured under a top-level ``files_settings`` entry for
+    a provider, or None when ``files_settings`` is unset or has no bucket for it.
+
+    Unlike ``get_files_provider_config`` this never raises, so it is safe to call
+    on the managed-files (``target_model_names``) upload path where ``files_settings``
+    is optional.
+    """
+    global files_config
+    if files_config is None:
+        return None
+    for setting in files_config:
+        if setting.get("custom_llm_provider") == custom_llm_provider:
+            return setting.get("gcs_bucket_name") or setting.get("bucket_name")
+    return None
+
+
+def _deployment_is_vertex_ai(litellm_params: LiteLLMParamsTypedDict) -> bool:
+    provider = litellm_params.get("custom_llm_provider")
+    if provider:
+        return provider == "vertex_ai"
+    return str(litellm_params.get("model") or "").startswith("vertex_ai/")
+
+
+def _model_info_bucket(model_info: Optional[dict]) -> Optional[str]:
+    if not model_info:
+        return None
+    for key in ("gcs_bucket_name", "bucket_name"):
+        value = model_info.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def resolve_vertex_files_bucket_override(
+    llm_router: Optional[Router],
+    target_model_names_list: List[str],
+) -> Optional[str]:
+    """
+    Resolve the GCS bucket for a managed Vertex AI batch/file upload.
+
+    precedence (most specific wins):
+      per-model litellm_params bucket > per-model model_info bucket
+      > global files_settings bucket > GCS_BUCKET_NAME env var
+
+    The router already forwards each deployment's ``litellm_params`` to the Vertex
+    upload, so a per-model ``litellm_params`` bucket is left untouched here (returns
+    None so nothing is injected). This resolves the two lower-priority sources that
+    would otherwise be dropped for managed uploads: per-model ``model_info`` and the
+    top-level ``files_settings`` block. Env resolution stays in the transformation.
+    """
+    if llm_router is None:
+        return None
+
+    vertex_deployments = tuple(
+        deployment
+        for model in target_model_names_list
+        for deployment in (llm_router.get_model_list(model_name=model) or [])
+        if _deployment_is_vertex_ai(deployment["litellm_params"])
+    )
+    if not vertex_deployments:
+        return None
+
+    if any(
+        deployment["litellm_params"].get("gcs_bucket_name") or deployment["litellm_params"].get("bucket_name")
+        for deployment in vertex_deployments
+    ):
+        return None
+
+    model_info_bucket = next(
+        (
+            bucket
+            for deployment in vertex_deployments
+            for bucket in (_model_info_bucket(deployment.get("model_info")),)
+            if bucket
+        ),
+        None,
+    )
+    return model_info_bucket or get_files_settings_bucket_for_provider("vertex_ai")
 
 
 def get_first_json_object(file_source: Union[bytes, BinaryIO]) -> Optional[dict]:
@@ -215,6 +298,13 @@ async def route_create_file(
     # Handle managed files (supports loadbalancing via llm_router.acreate_file)
     # Priority: Check for managed files BEFORE deprecated loadbalancing
     if target_model_names_list:
+        if not (_create_file_request.get("gcs_bucket_name") or _create_file_request.get("bucket_name")):
+            bucket_override = resolve_vertex_files_bucket_override(
+                llm_router=llm_router,
+                target_model_names_list=target_model_names_list,
+            )
+            if bucket_override:
+                _create_file_request["gcs_bucket_name"] = bucket_override
         managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
             raise ProxyException(

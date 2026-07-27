@@ -397,6 +397,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## VERTEX AI ##
     vertex_project: Optional[str]
     vertex_location: Optional[str]
+    gcs_bucket_name: Optional[str]
+    bucket_name: Optional[str]
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]

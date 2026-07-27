@@ -402,6 +402,8 @@ class CreateFileRequest(TypedDict, total=False):
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
+    gcs_bucket_name: Optional[str]
+    bucket_name: Optional[str]
 
 
 class FileContentRequest(TypedDict, total=False):

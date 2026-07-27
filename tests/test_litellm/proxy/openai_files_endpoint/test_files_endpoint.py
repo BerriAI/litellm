@@ -2610,3 +2610,246 @@ def test_list_files_with_all_proxy_models_team_uses_openai_deployment(
     assert captured_kwargs.get("api_key") == "team-openai-key"
     assert captured_kwargs.get("custom_llm_provider") == "openai"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+@pytest.fixture
+def _reset_files_config():
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    original = fe.files_config
+    yield
+    fe.files_config = original
+
+
+class TestVertexFilesBucketOverride:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/33419
+
+    Vertex AI batch/file uploads used to ignore both the top-level files_settings
+    block and per-model model_info, so the destination GCS bucket could only come
+    from the GCS_BUCKET_NAME env var (shared with the gcs_bucket logging callback).
+    """
+
+    def test_get_files_provider_config_reads_vertex_files_settings(
+        self, _reset_files_config
+    ):
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            get_files_provider_config,
+            set_files_config,
+        )
+
+        set_files_config(
+            [{"custom_llm_provider": "vertex_ai", "gcs_bucket_name": "batch-bucket"}]
+        )
+        setting = get_files_provider_config(custom_llm_provider="vertex_ai")
+        assert setting is not None
+        assert setting["gcs_bucket_name"] == "batch-bucket"
+
+    def test_get_files_provider_config_vertex_without_files_settings_returns_none(
+        self, _reset_files_config
+    ):
+        from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            get_files_provider_config,
+        )
+
+        fe.files_config = None
+        assert get_files_provider_config(custom_llm_provider="vertex_ai") is None
+
+    def test_get_files_provider_config_non_vertex_without_files_settings_raises(
+        self, _reset_files_config
+    ):
+        from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            get_files_provider_config,
+        )
+
+        fe.files_config = None
+        with pytest.raises(ValueError, match="files_settings is not set"):
+            get_files_provider_config(custom_llm_provider="openai")
+
+    def _vertex_router(self, model_info: dict = None, litellm_params_extra: dict = None):
+        litellm_params = {"model": "vertex_ai/gemini-2.0-flash"}
+        if litellm_params_extra:
+            litellm_params.update(litellm_params_extra)
+        return Router(
+            model_list=[
+                {
+                    "model_name": "vertex-batch",
+                    "litellm_params": litellm_params,
+                    "model_info": {"id": "vertex-batch-id", **(model_info or {})},
+                }
+            ]
+        )
+
+    def test_resolve_uses_global_files_settings_bucket(self, _reset_files_config):
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            resolve_vertex_files_bucket_override,
+            set_files_config,
+        )
+
+        set_files_config(
+            [{"custom_llm_provider": "vertex_ai", "gcs_bucket_name": "global-batch-bucket"}]
+        )
+        assert (
+            resolve_vertex_files_bucket_override(
+                llm_router=self._vertex_router(),
+                target_model_names_list=["vertex-batch"],
+            )
+            == "global-batch-bucket"
+        )
+
+    def test_resolve_prefers_model_info_over_files_settings(self, _reset_files_config):
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            resolve_vertex_files_bucket_override,
+            set_files_config,
+        )
+
+        set_files_config(
+            [{"custom_llm_provider": "vertex_ai", "gcs_bucket_name": "global-batch-bucket"}]
+        )
+        assert (
+            resolve_vertex_files_bucket_override(
+                llm_router=self._vertex_router(
+                    model_info={"gcs_bucket_name": "per-model-bucket"}
+                ),
+                target_model_names_list=["vertex-batch"],
+            )
+            == "per-model-bucket"
+        )
+
+    def test_resolve_defers_to_router_when_litellm_params_pins_bucket(
+        self, _reset_files_config
+    ):
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            resolve_vertex_files_bucket_override,
+            set_files_config,
+        )
+
+        set_files_config(
+            [{"custom_llm_provider": "vertex_ai", "gcs_bucket_name": "global-batch-bucket"}]
+        )
+        assert (
+            resolve_vertex_files_bucket_override(
+                llm_router=self._vertex_router(
+                    litellm_params_extra={"gcs_bucket_name": "per-deployment-bucket"}
+                ),
+                target_model_names_list=["vertex-batch"],
+            )
+            is None
+        )
+
+    def test_resolve_ignores_non_vertex_targets(self, _reset_files_config):
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            resolve_vertex_files_bucket_override,
+            set_files_config,
+        )
+
+        set_files_config(
+            [{"custom_llm_provider": "vertex_ai", "gcs_bucket_name": "global-batch-bucket"}]
+        )
+        openai_router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-batch",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                }
+            ]
+        )
+        assert (
+            resolve_vertex_files_bucket_override(
+                llm_router=openai_router,
+                target_model_names_list=["gpt-batch"],
+            )
+            is None
+        )
+
+    def test_route_create_file_injects_files_settings_bucket_for_managed_vertex_upload(
+        self, _reset_files_config
+    ):
+        import asyncio
+
+        from litellm import CreateFileRequest
+        from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+        from litellm.proxy.openai_files_endpoints.files_endpoints import (
+            route_create_file,
+            set_files_config,
+        )
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        set_files_config(
+            [{"custom_llm_provider": "vertex_ai", "gcs_bucket_name": "global-batch-bucket"}]
+        )
+        llm_router = self._vertex_router()
+
+        proxy_logging_obj = ProxyLogging(
+            user_api_key_cache=DualCache(default_in_memory_ttl=1)
+        )
+        proxy_logging_obj._add_proxy_hooks(llm_router)
+
+        captured: dict = {}
+
+        class DummyManagedFiles(BaseFileEndpoints):
+            async def acreate_file(
+                self,
+                llm_router,
+                create_file_request,
+                target_model_names_list,
+                litellm_parent_otel_span,
+                user_api_key_dict,
+            ):
+                captured["gcs_bucket_name"] = create_file_request.get("gcs_bucket_name")
+                return OpenAIFileObject(
+                    id="file-abc123",
+                    object="file",
+                    bytes=100,
+                    created_at=1234567890,
+                    filename="mydata.jsonl",
+                    purpose="batch",
+                    status="uploaded",
+                )
+
+            async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
+                raise NotImplementedError
+
+            async def afile_list(self, purpose, litellm_parent_otel_span):
+                raise NotImplementedError
+
+            async def afile_delete(
+                self, file_id, litellm_parent_otel_span, llm_router, **data
+            ):
+                raise NotImplementedError
+
+            async def afile_content(
+                self, file_id, litellm_parent_otel_span, llm_router, **data
+            ):
+                raise NotImplementedError
+
+        proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+            parent_otel_span=None,
+        )
+        _create_file_request = CreateFileRequest(
+            file=("mydata.jsonl", b'{"model": "vertex-batch"}', "application/json"),
+            purpose="batch",
+        )
+
+        asyncio.run(
+            route_create_file(
+                llm_router=llm_router,
+                _create_file_request=_create_file_request,
+                purpose="batch",
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                target_model_names_list=["vertex-batch"],
+                is_router_model=False,
+                router_model=None,
+                custom_llm_provider="openai",
+            )
+        )
+
+        assert captured["gcs_bucket_name"] == "global-batch-bucket"
