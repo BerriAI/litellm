@@ -45711,6 +45711,14 @@
         ],
         "supports_audio_input": true
     },
+    "soniox/stt-rt-v5": {
+        "litellm_provider": "soniox",
+        "input_cost_per_second": 0.0,
+        "output_cost_per_second": 3.33333e-05,
+        "mode": "audio_transcription",
+        "source": "https://soniox.com/pricing",
+        "supports_audio_input": true
+    },
     "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": {
         "litellm_provider": "tensormesh",
         "mode": "chat",
