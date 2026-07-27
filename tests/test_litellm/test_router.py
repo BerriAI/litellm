@@ -5626,6 +5626,1093 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     )
 
 
+# ---------------------------------------------------------------------------
+# ttft_timeout tests
+# ---------------------------------------------------------------------------
+
+
+def _make_chunk(content: str, finish_reason: str = "") -> MagicMock:
+    chunk = MagicMock()
+    chunk.choices = [MagicMock()]
+    chunk.choices[0].delta = MagicMock()
+    chunk.choices[0].delta.content = content
+    chunk.choices[0].delta.tool_calls = None  # must be explicit — MagicMock() is truthy
+    chunk.choices[0].finish_reason = finish_reason or None
+    return chunk
+
+
+async def _async_chunks(*chunks):
+    for chunk in chunks:
+        yield chunk
+
+
+def _fake_stream(aiter_factory, model: str = "gpt-4o") -> MagicMock:
+    from litellm.utils import CustomStreamWrapper
+
+    stream = MagicMock(spec=CustomStreamWrapper)
+    stream.model = model
+    stream.custom_llm_provider = "openai"
+    stream.__aiter__ = lambda self: aiter_factory()
+    stream.aclose = AsyncMock()
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_returns_non_streaming_response():
+    """Router reconstructs a non-streaming ModelResponse when provider streams normally."""
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+
+    fake_stream = _fake_stream(lambda: _async_chunks(*chunks))
+
+    reconstructed = MagicMock(spec=ModelResponse)
+    reconstructed.choices = [MagicMock()]
+    reconstructed.choices[0].message = MagicMock()
+    reconstructed.choices[0].message.content = "Hello world"
+
+    with patch("litellm.main.stream_chunk_builder", return_value=reconstructed):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=5.0,
+        )
+
+    assert result is reconstructed
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_reconstruction_runs_off_event_loop_thread():
+    """Final stream reconstruction is CPU-bound, so it must not pin the event loop."""
+    import threading
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+    fake_stream = _fake_stream(lambda: _async_chunks(*chunks))
+    reconstructed = MagicMock(spec=ModelResponse)
+    event_loop_thread_id = threading.get_ident()
+    builder_thread_id: dict[str, int] = {}
+
+    def _fake_stream_chunk_builder(*args, **kwargs):
+        builder_thread_id["value"] = threading.get_ident()
+        return reconstructed
+
+    with patch(
+        "litellm.main.stream_chunk_builder", side_effect=_fake_stream_chunk_builder
+    ):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=5.0,
+        )
+
+    assert result is reconstructed
+    assert builder_thread_id["value"] != event_loop_thread_id
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_raises_on_hung_provider():
+    """Router raises litellm.Timeout when provider never sends a first token."""
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=0.1,
+    )
+
+    async def hung_stream():
+        await asyncio.sleep(10)
+        return
+        yield
+
+    fake_stream = _fake_stream(hung_stream)
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=0.1,
+        )
+
+    assert "ttft_timeout" in str(exc_info.value)
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_not_reset_by_preamble_chunks():
+    """Preamble chunks must not reset the TTFT clock; only the hard deadline counts."""
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=0.2,
+    )
+
+    async def preamble_only_stream():
+        for _ in range(5):
+            yield _make_chunk("")
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(10)
+
+    fake_stream = _fake_stream(preamble_only_stream)
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=0.2,
+        )
+
+    assert "ttft_timeout" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_empty_stream_raises_api_error():
+    """Provider returns an empty stream (StopAsyncIteration immediately); stream_chunk_builder
+    returns None for an empty chunk list, which should raise litellm.APIError."""
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    async def empty_stream():
+        return
+        yield  # make it an async generator
+
+    fake_stream = _fake_stream(empty_stream)
+
+    with pytest.raises(litellm.APIError):
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=5.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_acompletion_intercept():
+    """When ttft_timeout is set and stream=False, _acompletion forces stream=True internally
+    and routes the response through _collect_stream_with_ttft_timeout."""
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm import ModelResponse
+    from litellm.utils import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    fake_stream = MagicMock(spec=CustomStreamWrapper)
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+
+    with (
+        patch.object(
+            router,
+            "_collect_stream_with_ttft_timeout",
+            new_callable=AsyncMock,
+            return_value=reconstructed,
+        ) as mock_collect,
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "async_routing_strategy_pre_call_checks"),
+        patch.object(router, "_get_client", return_value=None),
+        patch.object(router, "_track_deployment_metrics"),
+        patch.object(router, "_should_raise_content_policy_error", return_value=False),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+    ):
+        mock_dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+        }
+
+        result = await router._acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+        )
+
+    assert result is reconstructed
+    assert mock_collect.called
+    call_kwargs = mock_collect.call_args.kwargs
+    assert call_kwargs["ttft_timeout"] == 5.0
+    assert call_kwargs["stream_idle_timeout"] is None
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_acompletion_intercept():
+    """When stream_idle_timeout is set and stream=False, _acompletion forces stream=True
+    and passes stream_idle_timeout (with ttft_timeout=None) to _collect_stream_with_ttft_timeout.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm import ModelResponse
+    from litellm.utils import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=30.0,
+    )
+
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    fake_stream = MagicMock(spec=CustomStreamWrapper)
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+
+    with (
+        patch.object(
+            router,
+            "_collect_stream_with_ttft_timeout",
+            new_callable=AsyncMock,
+            return_value=reconstructed,
+        ) as mock_collect,
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "async_routing_strategy_pre_call_checks"),
+        patch.object(router, "_get_client", return_value=None),
+        patch.object(router, "_track_deployment_metrics"),
+        patch.object(router, "_should_raise_content_policy_error", return_value=False),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+    ):
+        mock_dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+        }
+
+        result = await router._acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+        )
+
+    assert result is reconstructed
+    assert mock_collect.called
+    call_kwargs = mock_collect.call_args.kwargs
+    assert call_kwargs["ttft_timeout"] is None
+    assert call_kwargs["stream_idle_timeout"] == 30.0
+
+
+# ---------------------------------------------------------------------------
+# stream_idle_timeout tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_raises_on_stalled_provider():
+    """After first token arrives, stream_idle_timeout fires if no subsequent chunk arrives in time."""
+    import asyncio
+    from unittest.mock import patch
+
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=0.05,
+    )
+
+    async def _stalled_after_first():
+        yield _make_chunk("Hello")
+        await asyncio.sleep(10)  # stalls; will be killed by stream_idle_timeout
+        yield _make_chunk("", finish_reason="stop")
+
+    fake_stream = _fake_stream(_stalled_after_first)
+
+    with pytest.raises(litellm.Timeout, match="stream_idle_timeout"):
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=0.05,
+        )
+
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_completes_when_not_stalled():
+    """stream_idle_timeout does not fire when chunks arrive within the timeout."""
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+
+    fake_stream = _fake_stream(lambda: _async_chunks(*chunks))
+
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    with patch("litellm.main.stream_chunk_builder", return_value=reconstructed):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=5.0,
+        )
+
+    assert result is reconstructed
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_avoids_per_chunk_wait_for():
+    """The idle timer should use one rescheduled watchdog, not wrap every streamed
+    chunk in asyncio.wait_for."""
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=5.0,
+    )
+
+    chunks = [
+        _make_chunk("Hello"),
+        _make_chunk(" world"),
+        _make_chunk("", finish_reason="stop"),
+    ]
+
+    fake_stream = _fake_stream(lambda: _async_chunks(*chunks))
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    with (
+        patch("asyncio.wait_for", side_effect=AssertionError("per-chunk wait_for")),
+        patch("litellm.main.stream_chunk_builder", return_value=reconstructed),
+    ):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=5.0,
+        )
+
+    assert result is reconstructed
+
+
+@pytest.mark.asyncio
+async def test_router_stream_idle_timeout_does_not_fire_before_first_token():
+    """When stream_idle_timeout is set without ttft_timeout, a slow first token must NOT be
+    treated as a mid-stream stall: the idle clock only governs gaps after content has started.
+    A first token slower than stream_idle_timeout, followed by prompt chunks, must succeed.
+    """
+    import asyncio
+    from unittest.mock import patch
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=0.05,
+    )
+
+    async def _slow_first_token():
+        await asyncio.sleep(0.2)  # first token far slower than stream_idle_timeout
+        yield _make_chunk("Hello")
+        yield _make_chunk(" world")
+        yield _make_chunk("", finish_reason="stop")
+
+    fake_stream = _fake_stream(_slow_first_token)
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    with patch("litellm.main.stream_chunk_builder", return_value=reconstructed):
+        result = await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=0.05,
+        )
+
+    assert result is reconstructed
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_and_idle_timeout_both_active():
+    """When both ttft_timeout and stream_idle_timeout are set, both phases are enforced."""
+    import asyncio
+    from unittest.mock import patch
+
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+        stream_idle_timeout=0.05,
+    )
+
+    async def _stalled_after_first():
+        yield _make_chunk("Hello")
+        await asyncio.sleep(10)
+        yield _make_chunk("", finish_reason="stop")
+
+    fake_stream = _fake_stream(_stalled_after_first)
+
+    with pytest.raises(litellm.Timeout, match="stream_idle_timeout"):
+        await router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=5.0,
+            stream_idle_timeout=0.05,
+        )
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_closes_stream_on_caller_cancellation():
+    """If the caller is cancelled mid-reconstruction, the upstream stream is closed so the
+    provider connection is released instead of leaked."""
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        stream_idle_timeout=30.0,
+    )
+
+    first_chunk_consumed = asyncio.Event()
+
+    async def slow_stream():
+        yield _make_chunk("Hello")
+        first_chunk_consumed.set()
+        await asyncio.sleep(10)  # caller cancels while we wait here
+
+    fake_stream = _fake_stream(slow_stream)
+
+    task = asyncio.create_task(
+        router._collect_stream_with_ttft_timeout(
+            response=fake_stream,
+            messages=[{"role": "user", "content": "hi"}],
+            ttft_timeout=None,
+            stream_idle_timeout=30.0,
+        )
+    )
+    await first_chunk_consumed.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    fake_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_router_semaphore_held_through_reconstruction():
+    """The max_parallel_requests semaphore must stay held while the promoted stream is drained
+    and reconstructed; otherwise a stream=False caller can exceed the configured concurrency.
+    """
+    import asyncio
+
+    from litellm import ModelResponse
+    from litellm.utils import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    semaphore = asyncio.Semaphore(1)
+    reconstructed = MagicMock(spec=ModelResponse)
+    locked_while_reconstructing = {}
+
+    async def fake_collect(**kwargs):
+        locked_while_reconstructing["value"] = semaphore.locked()
+        return reconstructed
+
+    fake_stream = MagicMock(spec=CustomStreamWrapper)
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+
+    def fake_get_client(deployment, kwargs, client_type):
+        return semaphore if client_type == "max_parallel_requests" else None
+
+    with (
+        patch.object(router, "_collect_stream_with_ttft_timeout", new=fake_collect),
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "_get_client", side_effect=fake_get_client),
+        patch.object(router, "_track_deployment_metrics"),
+        patch.object(router, "_should_raise_content_policy_error", return_value=False),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+    ):
+        mock_dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+        }
+
+        result = await router._acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+        )
+
+    assert result is reconstructed
+    assert locked_while_reconstructing["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_reconstructed_response_hits_content_policy():
+    """The reconstructed response from a promoted stream must flow through the same
+    content-policy check as the non-streaming path: a content_filter finish_reason with a
+    content-policy fallback available raises ContentPolicyViolationError."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm import ModelResponse
+    from litellm.types.utils import Choices, Message
+    from litellm.utils import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+        ttft_timeout=5.0,
+        content_policy_fallbacks=[{"test-model": ["test-model"]}],
+    )
+
+    blocked = ModelResponse()
+    blocked.choices = [
+        Choices(
+            index=0,
+            finish_reason="content_filter",
+            message=Message(role="assistant", content="blocked"),
+        )
+    ]
+
+    fake_stream = MagicMock(spec=CustomStreamWrapper)
+    fake_stream.model = "gpt-4o"
+    fake_stream.custom_llm_provider = "openai"
+
+    with (
+        patch.object(
+            router,
+            "_collect_stream_with_ttft_timeout",
+            new_callable=AsyncMock,
+            return_value=blocked,
+        ),
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "_get_client", return_value=None),
+        patch.object(router, "_track_deployment_metrics"),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+    ):
+        mock_dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+        }
+
+        with pytest.raises(litellm.ContentPolicyViolationError):
+            await router._acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+            )
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_tags_failed_deployment_id():
+    """A ttft Timeout must stamp the failed deployment's id on the exception so weighted
+    failover / cooldown can exclude it on retry instead of re-picking the hung deployment.
+    """
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-1"},
+            }
+        ],
+        ttft_timeout=0.05,
+    )
+
+    async def hung_stream():
+        await asyncio.sleep(10)
+        return
+        yield
+
+    fake_stream = _fake_stream(hung_stream)
+
+    with (
+        patch.object(router, "async_get_available_deployment") as mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "_get_client", return_value=None),
+        patch.object(router, "_track_deployment_metrics"),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+    ):
+        mock_dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            "model_info": {"id": "deploy-1"},
+        }
+
+        with pytest.raises(litellm.Timeout) as exc_info:
+            await router._acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+            )
+
+    assert getattr(exc_info.value, "failed_deployment_id", None) == "deploy-1"
+
+
+def _ttft_acompletion_patches(router):
+    """Common patches so _acompletion runs without real deployment plumbing."""
+    mock_dep = patch.object(router, "async_get_available_deployment")
+    return (
+        mock_dep,
+        patch.object(router, "_update_kwargs_with_deployment"),
+        patch.object(router, "_get_client", return_value=None),
+        patch.object(router, "_track_deployment_metrics"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_trips_on_pre_header_hang():
+    """ttft_timeout must bound dispatch -> first token, not just inter-token gaps. A provider
+    that hangs before sending any response headers (the acompletion await itself never
+    returns) must trip ttft_timeout within budget and be attributed to the hung deployment,
+    rather than waiting out the much larger request timeout.
+
+    Regression: previously the deadline was armed only after the stream was established, so a
+    pre-header hang was uncaught by ttft_timeout.
+    """
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-1"},
+            }
+        ],
+        ttft_timeout=0.1,
+        timeout=30.0,
+    )
+
+    async def _hang_before_response(*args, **kwargs):
+        await asyncio.Event().wait()  # never sends headers
+
+    mock_dep, p_upd, p_client, p_metrics = _ttft_acompletion_patches(router)
+    with (
+        mock_dep as dep,
+        p_upd,
+        p_client,
+        p_metrics,
+        patch("litellm.acompletion", new=AsyncMock(side_effect=_hang_before_response)),
+    ):
+        dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            "model_info": {"id": "deploy-1"},
+        }
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        with pytest.raises(litellm.Timeout) as exc_info:
+            # outer guard: if the fix regresses, the hang surfaces as a non-Timeout
+            # failure here instead of blocking the suite forever
+            await asyncio.wait_for(
+                router._acompletion(
+                    model="test-model",
+                    messages=[{"role": "user", "content": "hi"}],
+                    stream=False,
+                ),
+                timeout=10.0,
+            )
+        elapsed = loop.time() - start
+
+    assert elapsed < 5.0, f"ttft did not bound establishment; took {elapsed:.2f}s"
+    assert getattr(exc_info.value, "failed_deployment_id", None) == "deploy-1"
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_outer_request_timeout_takes_precedence():
+    """If ttft_timeout is larger than the request timeout, the provider/request timeout fires
+    first; the ttft establishment wrapper must surface it unchanged, not mask or delay it.
+    """
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-1"},
+            }
+        ],
+        ttft_timeout=30.0,
+        timeout=0.5,
+    )
+
+    async def _provider_times_out(*args, **kwargs):
+        raise litellm.Timeout(
+            message="provider request timed out",
+            model="openai/gpt-4o",
+            llm_provider="openai",
+        )
+
+    mock_dep, p_upd, p_client, p_metrics = _ttft_acompletion_patches(router)
+    with (
+        mock_dep as dep,
+        p_upd,
+        p_client,
+        p_metrics,
+        patch("litellm.acompletion", new=AsyncMock(side_effect=_provider_times_out)),
+    ):
+        dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            "model_info": {"id": "deploy-1"},
+        }
+        with pytest.raises(litellm.Timeout) as exc_info:
+            await router._acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+            )
+
+    assert "provider request timed out" in str(exc_info.value)
+    assert "Router ttft_timeout" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_router_ttft_timeout_no_false_trip_on_fast_first_token():
+    """When establishment and the first token arrive within budget, no ttft Timeout is raised
+    and the reconstructed response is returned."""
+    import asyncio
+
+    from litellm import ModelResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-1"},
+            }
+        ],
+        ttft_timeout=5.0,
+    )
+
+    chunks = [_make_chunk("Hello"), _make_chunk("", finish_reason="stop")]
+    fake_stream = _fake_stream(lambda: _async_chunks(*chunks))
+    reconstructed = MagicMock(spec=ModelResponse)
+
+    mock_dep, p_upd, p_client, p_metrics = _ttft_acompletion_patches(router)
+    with (
+        mock_dep as dep,
+        p_upd,
+        p_client,
+        p_metrics,
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=fake_stream),
+        patch("litellm.main.stream_chunk_builder", return_value=reconstructed),
+        patch.object(router, "_should_raise_content_policy_error", return_value=False),
+    ):
+        dep.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            "model_info": {"id": "deploy-1"},
+        }
+        result = await router._acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+        )
+
+    assert result is reconstructed
+
+
+@pytest.mark.asyncio
+async def test_establish_response_with_ttft_bounds_dispatch():
+    """_establish_response_with_ttft caps the dispatch await by ttft_timeout: it passes through
+    with no deadline when ttft is unset, arms a deadline and returns on fast establishment, and
+    raises litellm.Timeout when the provider never returns within budget."""
+    import asyncio
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"},
+            }
+        ],
+    )
+
+    async def _quick():
+        return "resp"
+
+    resp, deadline = await router._establish_response_with_ttft(
+        _quick(), None, "m", "openai"
+    )
+    assert resp == "resp" and deadline is None
+
+    resp2, deadline2 = await router._establish_response_with_ttft(
+        _quick(), 5.0, "m", "openai"
+    )
+    assert resp2 == "resp" and deadline2 is not None
+
+    async def _hang():
+        await asyncio.Event().wait()
+
+    with pytest.raises(litellm.Timeout):
+        await router._establish_response_with_ttft(_hang(), 0.05, "m", "openai")
+
+
+def test_router_ttft_timeout_resolution_chain():
+    """ttft_timeout / stream_idle_timeout resolve per-request kwarg > per-deployment data >
+    router-level > default_litellm_params, mirroring stream_timeout."""
+    model_list = [
+        {
+            "model_name": "m",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "x"},
+        }
+    ]
+
+    router = litellm.Router(
+        model_list=model_list,
+        ttft_timeout=3.0,
+        stream_idle_timeout=30.0,
+        default_litellm_params={"ttft_timeout": 1.0, "stream_idle_timeout": 10.0},
+    )
+
+    # per-request kwarg wins over everything
+    assert (
+        router._get_ttft_timeout(
+            kwargs={"ttft_timeout": 9.0}, data={"ttft_timeout": 8.0}
+        )
+        == 9.0
+    )
+    assert (
+        router._get_stream_idle_timeout(
+            kwargs={"stream_idle_timeout": 99.0}, data={"stream_idle_timeout": 88.0}
+        )
+        == 99.0
+    )
+
+    # per-deployment data wins over router-level and default
+    assert router._get_ttft_timeout(kwargs={}, data={"ttft_timeout": 8.0}) == 8.0
+    assert (
+        router._get_stream_idle_timeout(kwargs={}, data={"stream_idle_timeout": 88.0})
+        == 88.0
+    )
+
+    # router-level wins over default_litellm_params
+    assert router._get_ttft_timeout(kwargs={}, data={}) == 3.0
+    assert router._get_stream_idle_timeout(kwargs={}, data={}) == 30.0
+
+    # falls back to default_litellm_params when nothing else is set
+    router_defaults_only = litellm.Router(
+        model_list=model_list,
+        default_litellm_params={"ttft_timeout": 1.0, "stream_idle_timeout": 10.0},
+    )
+    assert router_defaults_only._get_ttft_timeout(kwargs={}, data={}) == 1.0
+    assert router_defaults_only._get_stream_idle_timeout(kwargs={}, data={}) == 10.0
+
+    # None when unset anywhere
+    router_unset = litellm.Router(model_list=model_list)
+    assert router_unset._get_ttft_timeout(kwargs={}, data={}) is None
+    assert router_unset._get_stream_idle_timeout(kwargs={}, data={}) is None
+
+
+def _ttft_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_until_first_token_buffers_preamble_then_stops():
+    """_collect_until_first_token buffers content-free preamble chunks and returns as soon
+    as the first chunk carrying content arrives, leaving the rest of the stream unconsumed.
+    """
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+    aiter = _async_chunks(
+        _make_chunk(""),  # preamble: role-only / empty delta
+        _make_chunk("Hello"),  # first real token -> stop here
+        _make_chunk(" world"),  # must not be consumed
+    )
+    chunks: list = []
+    loop = asyncio.get_running_loop()
+
+    await router._collect_until_first_token(
+        aiter, response, chunks, loop.time() + 5.0, 5.0
+    )
+
+    assert [c.choices[0].delta.content for c in chunks] == ["", "Hello"]
+
+
+@pytest.mark.asyncio
+async def test_collect_until_first_token_raises_on_ttft_timeout():
+    """A provider that accepts the connection but sends no token before the deadline
+    raises litellm.Timeout from the first-token phase."""
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+
+    async def _hung():
+        await asyncio.sleep(10)
+        yield _make_chunk("late")
+
+    loop = asyncio.get_running_loop()
+    with pytest.raises(litellm.Timeout):
+        await router._collect_until_first_token(
+            _hung(), response, [], loop.time() + 0.05, 0.05
+        )
+
+
+@pytest.mark.asyncio
+async def test_collect_until_idle_timeout_buffers_active_stream():
+    """_collect_until_idle_timeout buffers every chunk while the provider keeps producing
+    within the idle window."""
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+    aiter = _async_chunks(_make_chunk("a"), _make_chunk("b"), _make_chunk("c"))
+    chunks: list = []
+    loop = asyncio.get_running_loop()
+
+    await router._collect_until_idle_timeout(aiter, response, chunks, loop, 5.0)
+
+    assert [c.choices[0].delta.content for c in chunks] == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_collect_until_idle_timeout_raises_when_provider_stalls():
+    """A gap between tokens longer than stream_idle_timeout raises litellm.Timeout, and the
+    chunks received before the stall are preserved."""
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+
+    async def _stalling():
+        yield _make_chunk("a")
+        await asyncio.sleep(5)  # longer than the idle window below
+        yield _make_chunk("b")
+
+    chunks: list = []
+    loop = asyncio.get_running_loop()
+    with pytest.raises(litellm.Timeout):
+        await router._collect_until_idle_timeout(
+            _stalling(), response, chunks, loop, 0.1
+        )
+    assert [c.choices[0].delta.content for c in chunks] == ["a"]
+
+
 class TestRouterRequestTimeoutPropagation:
     """litellm_settings.request_timeout must act as an independent per-attempt timeout.
 
