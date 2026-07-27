@@ -28257,7 +28257,6 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://platform.kimi.ai/docs/pricing/chat-k3",
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
