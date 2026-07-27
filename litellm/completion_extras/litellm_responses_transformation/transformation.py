@@ -494,7 +494,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         accumulated_tool_calls: List[Dict[str, Any]] = []
         tool_call_index = 0
 
-        for item in output_items:
+        for item in (output_items or []):
             if isinstance(item, ResponseReasoningItem):
                 pending_reasoning_item = _build_reasoning_item(
                     item_id=item.id,
@@ -1322,7 +1322,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
             # Extract reasoning items with encrypted_content for round-tripping
             completed_reasoning_items: Optional[List[Dict[str, Any]]] = None
-            for item in output_items:
+            for item in (output_items or []):
                 if not isinstance(item, dict) or item.get("type") != "reasoning":
                     continue
                 if completed_reasoning_items is None:
