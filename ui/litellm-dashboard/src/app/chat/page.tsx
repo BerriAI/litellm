@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import MessageManager from "@/components/molecules/message_manager";
 import { useRouter } from "next/navigation";
 import { useChatShell } from "@/contexts/ChatShellContext";
-import { CHAT_ROUTES } from "@/components/chat/ChatShell";
+import { getChatRoutes } from "@/components/chat/ChatShell";
 import ChatMessages from "@/components/chat/ChatMessages";
 import MCPConnectPicker from "@/components/chat/MCPConnectPicker";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
@@ -87,7 +87,7 @@ export default function ChatConversationPage() {
   const streamScrollLock = useRef<number | null>(null);
 
   useEffect(() => {
-    if (staleId) router.replace(CHAT_ROUTES.chats);
+    if (staleId) router.replace(getChatRoutes().chats);
   }, [staleId, router]);
 
   // Load models
@@ -140,7 +140,7 @@ export default function ChatConversationPage() {
       if (!convId) {
         convId = createConversation(model);
         setResponsesSessionId(null); // new conversation starts a fresh session
-        router.push(`${CHAT_ROUTES.chats}?id=${convId}`);
+        window.history.pushState(null, "", `${window.location.pathname}?id=${convId}`);
       }
 
       appendMessage(convId, { role: "user", content: trimmed });
@@ -248,7 +248,6 @@ export default function ChatConversationPage() {
       createConversation,
       appendMessage,
       updateLastAssistantMessage,
-      router,
       isStreaming,
       responsesSessionId,
     ],
@@ -529,7 +528,7 @@ export default function ChatConversationPage() {
               Chat with 100+ LLMs + MCP tools; authenticate once, use them here.{" "}
               <Button
                 variant="link"
-                onClick={() => router.push(CHAT_ROUTES.integrations)}
+                onClick={() => router.push(getChatRoutes().integrations)}
                 className="h-auto p-0 text-sm font-medium"
               >
                 Open Integrations -&gt;

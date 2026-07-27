@@ -1,10 +1,10 @@
 import { buildAutoRouterTestTargets } from "./build_auto_router_test_targets";
 
 const tiers = {
-  SIMPLE: "gpt-4o-mini",
-  MEDIUM: "claude-sonnet-4",
-  COMPLEX: "claude-sonnet-4",
-  REASONING: "o3",
+  SIMPLE: ["gpt-4o-mini"],
+  MEDIUM: ["claude-sonnet-4"],
+  COMPLEX: ["claude-sonnet-4"],
+  REASONING: ["o3"],
 };
 
 describe("buildAutoRouterTestTargets", () => {
@@ -17,9 +17,21 @@ describe("buildAutoRouterTestTargets", () => {
     ]);
   });
 
+  it("emits a target per model when a tier has more than one, and dedups across tiers", () => {
+    const targets = buildAutoRouterTestTargets({
+      tiers: { SIMPLE: ["gpt-4o-mini", "claude-sonnet-4"], MEDIUM: ["claude-sonnet-4"], COMPLEX: [], REASONING: [] },
+      semanticMatchingEnabled: false,
+      embeddingModel: undefined,
+    });
+    expect(targets).toEqual([
+      { labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" },
+      { labels: ["SIMPLE", "MEDIUM"], modelGroup: "claude-sonnet-4", mode: "chat" },
+    ]);
+  });
+
   it("drops empty/whitespace tiers", () => {
     const targets = buildAutoRouterTestTargets({
-      tiers: { SIMPLE: "gpt-4o-mini", MEDIUM: "", COMPLEX: "   ", REASONING: "" },
+      tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: ["   "], REASONING: [] },
       semanticMatchingEnabled: false,
       embeddingModel: undefined,
     });
@@ -29,7 +41,7 @@ describe("buildAutoRouterTestTargets", () => {
   it("returns [] when no tier is configured", () => {
     expect(
       buildAutoRouterTestTargets({
-        tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
         semanticMatchingEnabled: false,
         embeddingModel: undefined,
       }),
@@ -38,7 +50,7 @@ describe("buildAutoRouterTestTargets", () => {
 
   it("appends an embedding target only when semantic matching is on and a model is set", () => {
     const targets = buildAutoRouterTestTargets({
-      tiers: { SIMPLE: "gpt-4o-mini", MEDIUM: "", COMPLEX: "", REASONING: "" },
+      tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
       semanticMatchingEnabled: true,
       embeddingModel: "voyage-3-5",
     });
@@ -50,7 +62,7 @@ describe("buildAutoRouterTestTargets", () => {
 
   it("omits the embedding target when semantic matching is on but no model is chosen", () => {
     const targets = buildAutoRouterTestTargets({
-      tiers: { SIMPLE: "gpt-4o-mini", MEDIUM: "", COMPLEX: "", REASONING: "" },
+      tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
       semanticMatchingEnabled: true,
       embeddingModel: undefined,
     });
@@ -59,7 +71,7 @@ describe("buildAutoRouterTestTargets", () => {
 
   it("omits the embedding target when a model is set but semantic matching is off", () => {
     const targets = buildAutoRouterTestTargets({
-      tiers: { SIMPLE: "gpt-4o-mini", MEDIUM: "", COMPLEX: "", REASONING: "" },
+      tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
       semanticMatchingEnabled: false,
       embeddingModel: "voyage-3-5",
     });

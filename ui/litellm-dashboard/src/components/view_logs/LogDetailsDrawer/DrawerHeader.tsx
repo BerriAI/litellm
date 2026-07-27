@@ -2,6 +2,7 @@ import { Button, Space, Tag, Tooltip, Typography } from "antd";
 import { CloseOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
+import { AutoRouterTag } from "@/components/shared/table_cells";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import {
   DRAWER_HEADER_PADDING,
@@ -57,6 +58,7 @@ export function DrawerHeader({
       {/* Row 0: Model + Provider with Logo */}
       <ModelProviderSection
         model={log.model}
+        modelGroup={log.model_group}
         providerLogo={providerInfo?.logo}
         providerName={providerInfo?.displayName}
       />
@@ -80,10 +82,12 @@ export function DrawerHeader({
  */
 function ModelProviderSection({
   model,
+  modelGroup,
   providerLogo,
   providerName,
 }: {
   model: string;
+  modelGroup?: string;
   providerLogo?: string;
   providerName?: string;
 }) {
@@ -109,6 +113,7 @@ function ModelProviderSection({
             {providerName}
           </Text>
         )}
+        <AutoRouterTag modelGroup={modelGroup} />
       </Space>
     </Space>
   );

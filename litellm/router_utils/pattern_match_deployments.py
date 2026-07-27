@@ -73,6 +73,17 @@ class PatternMatchRouter:
             self.patterns[regex] = []
         self.patterns[regex].append(llm_deployment)
 
+    def remove_deployment(self, model_id: str) -> None:
+        """
+        Remove every deployment with the given model id from the pattern registry,
+        dropping any pattern whose deployment list becomes empty.
+        """
+        self.patterns = {
+            regex: remaining
+            for regex, deployments in self.patterns.items()
+            if (remaining := [d for d in deployments if (d.get("model_info") or {}).get("id") != model_id])
+        }
+
     def _pattern_to_regex(self, pattern: str) -> str:
         """
         Convert a wildcard pattern to a regex pattern

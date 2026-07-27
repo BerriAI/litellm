@@ -10,14 +10,14 @@ injected, so the DB/decoding plumbing stays testable and out of this seam.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
 
-CredentialReader = Callable[[str, str], Awaitable["dict[str, object] | None"]]
+CredentialReader = Callable[[str, str], Awaitable["Mapping[str, object] | None"]]
 
 
 def _iso_to_epoch(expires_at: str) -> float | None:
@@ -39,7 +39,7 @@ def _to_scopes(raw: object) -> tuple[str, ...]:
     return ()
 
 
-def _to_oauth_token(payload: dict[str, object]) -> OAuthToken | None:
+def _to_oauth_token(payload: Mapping[str, object]) -> OAuthToken | None:
     access_token = payload.get("access_token")
     if not isinstance(access_token, str):
         return None

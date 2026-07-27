@@ -17,6 +17,7 @@ BaseAWSLLM._sign_request after the request body is finalized.
 
 from typing import Any, Dict, List, Optional
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
@@ -25,7 +26,10 @@ from litellm.llms.bedrock_mantle.common_utils import (
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -41,6 +45,10 @@ _BASE_SUFFIXES_TO_STRIP = (
 
 # Per Bedrock Mantle Responses API validation errors.
 _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
+
+_BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS = frozenset({"auto", "default"})
+
+_CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE = "additional_tools"
 
 
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
@@ -116,15 +124,104 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
         return kept
 
+    @staticmethod
+    def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:
+        service_tier = params.get("service_tier")
+        if service_tier is None or service_tier in _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS:
+            return params
+        if not drop_params:
+            raise litellm.utils.UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    f"bedrock_mantle does not support service_tier={service_tier!r}; the Bedrock Mantle "
+                    "Responses API only accepts 'auto' or 'default'. Set `drop_params: true` (litellm_settings "
+                    "or this deployment's litellm_params) to have LiteLLM drop it, or remove service_tier from "
+                    "the client (Codex CLI sends it when a speed tier is set in ~/.codex/config.toml)."
+                ),
+            )
+        verbose_logger.warning(
+            "Bedrock Mantle Responses API: dropping unsupported service_tier %r (supported: %s).",
+            service_tier,
+            sorted(_BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS),
+        )
+        return {key: value for key, value in params.items() if key != "service_tier"}
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: "str | ResponseInputParam",
+        response_api_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        remaining_input, hoisted_tools = self._hoist_codex_additional_tools(input)
+        request_params = (
+            {
+                **response_api_optional_request_params,
+                "tools": [
+                    *(response_api_optional_request_params.get("tools") or []),
+                    *hoisted_tools,
+                ],
+            }
+            if hoisted_tools
+            else response_api_optional_request_params
+        )
+        return super().transform_responses_api_request(
+            model=model,
+            input=remaining_input,
+            response_api_optional_request_params=request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    @staticmethod
+    def _is_codex_additional_tools_item(item: Any) -> bool:
+        return isinstance(item, dict) and item.get("type") == _CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
+
+    @staticmethod
+    def _tools_of_additional_tools_item(item: "dict[str, Any]") -> "list[Any]":
+        tools = item.get("tools")
+        return tools if isinstance(tools, list) else []
+
+    @classmethod
+    def _hoist_codex_additional_tools(
+        cls,
+        input: "str | ResponseInputParam",
+    ) -> "tuple[str | ResponseInputParam, list[Any]]":
+        """Codex's "responses lite" wire mode ships tool definitions inside
+        `input` as {"type": "additional_tools", "role": "developer",
+        "tools": [...]} items. api.openai.com accepts that item type; Mantle
+        rejects the whole request with 400 "Invalid 'input': value did not
+        match any expected variant" but accepts the same tools at the top
+        level, so move them there and strip the items from `input`.
+        """
+        if not isinstance(input, list):
+            return input, []
+        additional_tools_items = [item for item in input if cls._is_codex_additional_tools_item(item)]
+        if not additional_tools_items:
+            return input, []
+        remaining_input = [item for item in input if not cls._is_codex_additional_tools_item(item)]
+        hoisted_tools = [tool for item in additional_tools_items for tool in cls._tools_of_additional_tools_item(item)]
+        verbose_logger.debug(
+            "Bedrock Mantle Responses API: hoisting %d tool(s) out of %d 'additional_tools' input item(s) "
+            "into the top-level tools param (Mantle rejects that input item type).",
+            len(hoisted_tools),
+            len(additional_tools_items),
+        )
+        return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
+
     def map_openai_params(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
     ) -> Dict:
-        params = super().map_openai_params(
-            response_api_optional_params=response_api_optional_params,
-            model=model,
+        params = self._handle_unsupported_service_tier(
+            super().map_openai_params(
+                response_api_optional_params=response_api_optional_params,
+                model=model,
+                drop_params=drop_params,
+            ),
             drop_params=drop_params,
         )
 

@@ -1,6 +1,6 @@
 from typing import Literal, Optional, Union
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from litellm.types.llms.openai import ChatCompletionCachedContent
 
@@ -12,6 +12,7 @@ class CacheControlMessageInjectionPoint(TypedDict):
     role: Optional[Literal["user", "system", "assistant"]]  # Optional: target by role (user, system, assistant)
     index: Optional[Union[int, str]]  # Optional: target by specific index
     control: Optional[ChatCompletionCachedContent]
+    _litellm_judged: NotRequired[bool]  # Internal: written back by litellm once the client cache_control judgment ran
 
 
 class CacheControlToolConfigInjectionPoint(TypedDict):
@@ -19,6 +20,7 @@ class CacheControlToolConfigInjectionPoint(TypedDict):
 
     location: Literal["tool_config"]
     control: Optional[ChatCompletionCachedContent]
+    _litellm_judged: NotRequired[bool]  # Internal: written back by litellm once the client cache_control judgment ran
 
 
 CacheControlInjectionPoint = Union[

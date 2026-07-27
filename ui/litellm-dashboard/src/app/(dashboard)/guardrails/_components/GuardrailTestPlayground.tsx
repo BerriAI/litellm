@@ -63,7 +63,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
     setSelectedGuardrails(newSelection);
   };
 
-  const handleTestGuardrails = async (text: string) => {
+  const handleTestGuardrails = async (text: string, metadata?: Record<string, unknown> | null) => {
     if (selectedGuardrails.size === 0 || !accessToken) {
       return;
     }
@@ -79,7 +79,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
       Array.from(selectedGuardrails).map(async (guardrailName) => {
         const startTime = Date.now();
         try {
-          const result = await applyGuardrail(accessToken, guardrailName, text, null, null);
+          const result = await applyGuardrail(accessToken, guardrailName, text, null, null, metadata);
           const latency = Date.now() - startTime;
           results.push({
             guardrailName,

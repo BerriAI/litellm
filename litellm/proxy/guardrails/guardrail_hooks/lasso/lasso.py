@@ -772,7 +772,13 @@ class LassoGuardrail(CustomGuardrail):
             data: Request data (used for conversation_id generation and tools extraction)
             cache: Cache instance for storing conversation_id (optional for post-call)
         """
-        payload: Dict[str, Any] = {"messages": messages, "messageType": message_type}
+        payload: Dict[str, Any] = {
+            "messages": messages,
+            "messageType": message_type,
+            # Drives the "Used By" badge on Lasso Application API Keys: every call from this
+            # integration is attributed as "litellm" on the keys list.
+            "source": {"type": "litellm"},
+        }
 
         # Add optional parameters if available
         if self.user_id:

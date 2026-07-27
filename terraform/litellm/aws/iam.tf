@@ -53,6 +53,9 @@ data "aws_iam_policy_document" "secrets_access" {
       [aws_secretsmanager_secret.master_key.arn],
       aws_secretsmanager_secret.license[*].arn,
       aws_secretsmanager_secret.ui_password[*].arn,
+      aws_secretsmanager_secret.billing_metrics_client_cert[*].arn,
+      aws_secretsmanager_secret.billing_metrics_client_key[*].arn,
+      aws_secretsmanager_secret.billing_metrics_ca_cert[*].arn,
       local.extra_secret_arns,
       var.otel_headers_secret_arn == "" ? [] : [var.otel_headers_secret_arn],
     )
