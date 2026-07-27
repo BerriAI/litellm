@@ -6,9 +6,11 @@ import socket
 import ssl
 import sys
 import time
+import weakref
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncIterator,
     Callable,
     Dict,
     List,
@@ -506,6 +508,61 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.status_code = original_error.response.status_code
 
 
+def _schedule_client_close(client: httpx.AsyncClient) -> None:
+    try:
+        asyncio.get_running_loop().create_task(client.aclose())
+    except RuntimeError:
+        verbose_logger.debug("litellm: no running event loop to close an abandoned single-use client on")
+
+
+class _ClientClosingAsyncByteStream(httpx.AsyncByteStream):
+    """Closes a single-use client once the response body it produced is finished."""
+
+    def __init__(
+        self,
+        stream: httpx.AsyncByteStream,
+        client: httpx.AsyncClient,
+        response: httpx.Response,
+    ) -> None:
+        self._stream = stream
+        self._client = client
+        self._closed = False
+        self._finalizer = weakref.finalize(response, _schedule_client_close, client)
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        except BaseException:
+            try:
+                await self.aclose()
+            except Exception as cleanup_error:  # noqa: BLE001  # a cleanup failure must not mask the stream error
+                verbose_logger.debug(
+                    "litellm: failed to close a single-use client after a stream error: %s",
+                    cleanup_error,
+                )
+            raise
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._finalizer.detach()
+        try:
+            await self._stream.aclose()
+        finally:
+            await self._client.aclose()
+
+
+def _attach_client_to_streaming_body(response: httpx.Response, client: httpx.AsyncClient, stream: bool) -> bool:
+    """Hand a streaming response body ownership of the single-use client that produced it."""
+    if not stream or not isinstance(response.stream, httpx.AsyncByteStream):
+        return False
+    response.stream = _ClientClosingAsyncByteStream(response.stream, client, response)
+    return True
+
+
 class AsyncHTTPHandler:
     def __init__(
         self,
@@ -635,19 +692,15 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                )
-            finally:
-                await new_client.aclose()
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.create_client(timeout=timeout, event_hooks=self.event_hooks),
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.TimeoutException as e:
             end_time = time.time()
             time_delta = round(end_time - start_time, 3)
@@ -701,19 +754,15 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                )
-            finally:
-                await new_client.aclose()
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.create_client(timeout=timeout, event_hooks=self.event_hooks),
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -765,19 +814,15 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                )
-            finally:
-                await new_client.aclose()
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.create_client(timeout=timeout, event_hooks=self.event_hooks),
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -829,19 +874,15 @@ class AsyncHTTPHandler:
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
-            new_client = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                )
-            finally:
-                await new_client.aclose()
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.create_client(timeout=timeout, event_hooks=self.event_hooks),
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
@@ -861,7 +902,9 @@ class AsyncHTTPHandler:
         """
         Making POST request for a single connection client.
 
-        Used for retrying connection client errors.
+        Used for retrying connection client errors. Takes ownership of `client`, which serves
+        this one request: a streaming response closes it once its body is finished, a
+        non-streaming response has already been read, so it closes here.
         """
         # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
         request_data, request_content = _prepare_request_data_and_content(data, content)
@@ -875,8 +918,14 @@ class AsyncHTTPHandler:
             headers=headers,
             content=request_content,  # type: ignore
         )
-        response = await client.send(req, stream=stream)
-        response.raise_for_status()
+        try:
+            response = await client.send(req, stream=stream)
+            response.raise_for_status()
+        except BaseException:
+            await client.aclose()
+            raise
+        if not _attach_client_to_streaming_body(response, client, stream):
+            await client.aclose()
         return response
 
     def __del__(self) -> None:
