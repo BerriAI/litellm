@@ -30,11 +30,6 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
     return key
 
 
-def _assert_registered(client: McpClient, server_id: str) -> None:
-    registered = {row.server_id for row in client.registered_servers()}
-    assert server_id in registered, f"registered server {server_id} absent from /v1/mcp/server: {registered}"
-
-
 class TestMcpKeyWithoutAccessIsDenied:
     @pytest.mark.covers("mcp.list_tools.api_key.denied_without_permission")
     def test_list_tools_denied_without_permission(
@@ -43,7 +38,7 @@ class TestMcpKeyWithoutAccessIsDenied:
         resources: ResourceManager,
     ) -> None:
         server_id = register_datadog_mcp(client, resources)
-        _assert_registered(client, server_id)
+        client.await_registered(server_id)
 
         permitted_key = _key(client, resources, mcp_servers=[server_id])
         denied_key = _key(client, resources, mcp_servers=None)
@@ -63,7 +58,7 @@ class TestMcpKeyWithoutAccessIsDenied:
         resources: ResourceManager,
     ) -> None:
         server_id = register_datadog_mcp(client, resources)
-        _assert_registered(client, server_id)
+        client.await_registered(server_id)
 
         permitted_key = _key(client, resources, mcp_servers=[server_id])
         denied_key = _key(client, resources, mcp_servers=None)

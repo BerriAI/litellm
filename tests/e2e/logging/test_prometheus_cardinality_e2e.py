@@ -9,8 +9,10 @@ stamping ``api_key_alias`` (or collapses every key onto one series) would drop
 the aliases and fail here.
 
 Scraping goes through ``transport.probe`` (raw text) and is parsed with
-prometheus_client; the metric is eventually consistent (it increments on the
-success-logging callback), so the scrape polls to a deadline.
+prometheus_client. ``/metrics`` is per-pod behind a round-robin LB and the metric
+is eventually consistent (it increments on the success-logging callback), so the
+poll re-drives each still-missing alias with fresh traffic and unions the aliases
+seen across scrapes until the deadline.
 """
 
 from __future__ import annotations
@@ -48,23 +50,34 @@ class TestPrometheusPerKeyCardinality:
         self, client: LoggingClient, resources: ResourceManager
     ) -> None:
         aliases = tuple(f"e2e-prom-{unique_marker()}" for _ in range(DISTINCT_KEYS))
-        for alias in aliases:
+
+        def provisioned_key(alias: str) -> str:
             key = client.key_with_alias(alias, models=[DRIVER_MODEL])
-            resources.defer(lambda k=key: client.delete_key(k))
-            response = client.chat(key, DRIVER_MODEL, f"reply with one word {alias}")
+            resources.defer(lambda: client.delete_key(key))
+            return key
+
+        def drive(alias: str, key: str) -> None:
+            response = client.chat(key, DRIVER_MODEL, f"reply with one word {alias} {unique_marker()}")
             assert response.model, f"driver call for {alias} returned no model: {response}"
+
+        keys_by_alias = {alias: provisioned_key(alias) for alias in aliases}
+        for alias, key in keys_by_alias.items():
+            drive(alias, key)
 
         wanted = frozenset(aliases)
         deadline = time.monotonic() + client.proxy.poll_timeout
         seen: frozenset[str] = frozenset()
         while time.monotonic() < deadline:
-            seen = _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
+            seen = seen | _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
             if wanted <= seen:
                 break
+            for alias in sorted(wanted - seen):
+                drive(alias, keys_by_alias[alias])
             time.sleep(client.proxy.poll_interval)
 
         missing = wanted - seen
         assert not missing, (
-            f"{REQUESTS_METRIC} is missing a per-key series for aliases {sorted(missing)}; "
+            f"{REQUESTS_METRIC} never exposed a per-key series for aliases {sorted(missing)} "
+            f"on any scraped pod within the deadline despite repeated driver calls; "
             f"each distinct {ALIAS_LABEL} must grow its own series"
         )
