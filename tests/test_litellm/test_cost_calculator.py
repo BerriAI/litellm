@@ -3509,3 +3509,120 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details is not None
     assert combined_pair.prompt_tokens_details.cache_write_tokens == 100
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
+
+def test_image_generation_cost_applies_discount_and_margin(monkeypatch):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34731: image generation
+    returned the raw provider cost, bypassing cost_discount_config / cost_margin_config.
+    """
+    from litellm.types.utils import ImageObject, ImageResponse
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    response = ImageResponse(
+        created=1234567890,
+        data=[ImageObject(url="https://example.com/image.png")],
+        quality="standard",
+        size="1024x1024",
+    )
+    cost_kwargs = dict(
+        completion_response=response,
+        model="dall-e-3",
+        custom_llm_provider="openai",
+        call_type="image_generation",
+        size="1024-x-1024",
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+    base_cost = completion_cost(**cost_kwargs)
+    assert base_cost > 0
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.05})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": 0.10})
+    adjusted_cost = completion_cost(**cost_kwargs)
+
+    assert adjusted_cost == pytest.approx(base_cost * 0.95 * 1.10, rel=1e-9)
+
+
+def test_video_generation_cost_applies_discount_and_margin(monkeypatch):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34731: video generation
+    returned the raw provider cost, bypassing cost_discount_config / cost_margin_config.
+    """
+    from unittest.mock import MagicMock
+
+    response = MagicMock()
+    response.usage = MagicMock()
+    response.usage.duration_seconds = 10.0
+    response.usage.video_resolution = None
+    type(response)._hidden_params = {}
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_params = {"metadata": {"model_info": {"output_cost_per_video_per_second": 0.05}}}
+
+    cost_kwargs = dict(
+        completion_response=response,
+        model="openai/hunyuanvideo",
+        call_type="create_video",
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+    assert completion_cost(**cost_kwargs) == pytest.approx(0.5)
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.05})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"percentage": 0.10, "fixed_amount": 0.01}})
+    adjusted_cost = completion_cost(**cost_kwargs)
+
+    discounted = 0.5 * 0.95
+    assert adjusted_cost == pytest.approx(discounted + discounted * 0.10 + 0.01, rel=1e-9)
+
+
+def test_video_generation_cost_records_discount_breakdown(monkeypatch):
+    """
+    The discount/margin breakdown must reach the logging object for media endpoints too,
+    so spend logs can show original vs charged cost.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    response = MagicMock()
+    response.usage = MagicMock()
+    response.usage.duration_seconds = 10.0
+    response.usage.video_resolution = None
+    type(response)._hidden_params = {}
+
+    logging_obj = Logging(
+        model="openai/hunyuanvideo",
+        messages=[],
+        stream=False,
+        call_type="create_video",
+        start_time=None,
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.litellm_params = {"metadata": {"model_info": {"output_cost_per_video_per_second": 0.05}}}
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.05})
+    monkeypatch.setattr(litellm, "cost_margin_config", {})
+
+    cost = completion_cost(
+        completion_response=response,
+        model="openai/hunyuanvideo",
+        call_type="create_video",
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert cost == pytest.approx(0.475)
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["original_cost"] == pytest.approx(0.5)
+    assert logging_obj.cost_breakdown["discount_amount"] == pytest.approx(0.025)
+    assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(0.475)
