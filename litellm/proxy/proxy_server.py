@@ -793,6 +793,23 @@ def cleanup_router_config_variables():
     prisma_client = None
 
 
+async def _flush_spend_logs_queue_on_shutdown():
+    """Write anything still queued in the spend logs queue before the DB engine goes away."""
+    if prisma_client is None:
+        return
+
+    try:
+        from litellm.proxy.utils import drain_spend_logs_queue
+
+        await drain_spend_logs_queue(
+            prisma_client=prisma_client,
+            db_writer_client=db_writer_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error flushing spend logs queue on shutdown: {e}")
+
+
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
@@ -1148,6 +1165,8 @@ async def proxy_startup_event(app: FastAPI):
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
+
+    await _flush_spend_logs_queue_on_shutdown()
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -8030,8 +8049,7 @@ class ProxyStartupEvent:
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
 
-            # Start background task to monitor spend logs queue size
-            asyncio.create_task(
+            prisma_client.spend_logs_queue_monitor_task = asyncio.create_task(
                 _monitor_spend_logs_queue(
                     prisma_client=prisma_client,
                     db_writer_client=db_writer_client,

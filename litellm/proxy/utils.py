@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import copy
 import hashlib
 import inspect
@@ -2917,6 +2918,7 @@ async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> 
 class PrismaClient:
     spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
+    spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
 
     def __init__(
         self,
@@ -5555,13 +5557,22 @@ async def update_spend_logs_job(
         logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
 
-    await ProxyUpdateSpend.update_spend_logs(
-        n_retry_times=n_retry_times,
-        prisma_client=prisma_client,
-        proxy_logging_obj=proxy_logging_obj,
-        db_writer_client=db_writer_client,
-        logs_to_process=logs_to_process,
-    )
+    try:
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            db_writer_client=db_writer_client,
+            logs_to_process=logs_to_process,
+        )
+    except asyncio.CancelledError:
+        async with prisma_client._spend_log_transactions_lock:
+            prisma_client.spend_log_transactions = logs_to_process + prisma_client.spend_log_transactions
+        verbose_proxy_logger.warning(
+            "Spend tracking - spend log write cancelled, requeued %d rows for the next flush",
+            len(logs_to_process),
+        )
+        raise
 
     # Guardrail/policy usage tracking (same batch, outside spend-logs update)
     try:
@@ -5591,6 +5602,43 @@ async def update_spend_logs_job(
         verbose_proxy_logger.warning(
             "Spend tracking - tool usage tracking failed (non-fatal): %s",
             tool_tracking_err,
+        )
+
+
+MAX_SPEND_LOG_DRAIN_ITERATIONS = 20
+
+
+async def drain_spend_logs_queue(
+    prisma_client: PrismaClient,
+    db_writer_client: "AsyncHTTPHandler | None",
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """Stop the queue monitor and write every queued spend log row, e.g. before the DB engine is torn down."""
+    monitor_task = prisma_client.spend_logs_queue_monitor_task
+    if monitor_task is not None:
+        monitor_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await monitor_task
+        prisma_client.spend_logs_queue_monitor_task = None
+
+    for _ in range(MAX_SPEND_LOG_DRAIN_ITERATIONS):
+        async with prisma_client._spend_log_transactions_lock:
+            queue_size = len(prisma_client.spend_log_transactions)
+        if queue_size == 0:
+            return
+        await update_spend_logs_job(
+            prisma_client=prisma_client,
+            db_writer_client=db_writer_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    async with prisma_client._spend_log_transactions_lock:
+        remaining = len(prisma_client.spend_log_transactions)
+    if remaining > 0:
+        spend_log_error(
+            "Spend tracking - %d spend log rows still queued after %d drain passes",
+            remaining,
+            MAX_SPEND_LOG_DRAIN_ITERATIONS,
         )
 
 

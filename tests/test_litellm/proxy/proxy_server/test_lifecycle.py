@@ -143,6 +143,53 @@ async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _flush_spend_logs_queue_on_shutdown
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_logs_queue_on_shutdown_drains_before_disconnect(monkeypatch):
+    """The queue is written out while the DB engine is still up, so a restart
+    doesn't drop the pending spend rows.
+    """
+    fake_prisma = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    drain = AsyncMock()
+    import litellm.proxy.utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "drain_spend_logs_queue", drain)
+
+    await ps._flush_spend_logs_queue_on_shutdown()
+
+    observed = {
+        "drain_calls": drain.await_count,
+        "drain_prisma": drain.await_args.kwargs["prisma_client"] is fake_prisma,
+    }
+    assert observed == {
+        "drain_calls": 1,
+        "drain_prisma": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_logs_queue_on_shutdown_swallows_drain_errors(monkeypatch):
+    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm.proxy.utils as utils_mod
+
+    monkeypatch.setattr(
+        utils_mod,
+        "drain_spend_logs_queue",
+        AsyncMock(side_effect=RuntimeError("db gone")),
+    )
+
+    await ps._flush_spend_logs_queue_on_shutdown()
+
+
+# ---------------------------------------------------------------------------
 # _initialize_shared_aiohttp_session
 # ---------------------------------------------------------------------------
 
