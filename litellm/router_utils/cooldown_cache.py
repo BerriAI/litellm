@@ -103,7 +103,7 @@ class CooldownCache:
     @staticmethod
     def _is_cooldown_expired(
         cooldown_cache_value: CooldownCacheValue,
-        current_time: Optional[float] = None,
+        current_time: float | None = None,
     ) -> bool:
         """
         Check the cooldown payload's own expiry time.
@@ -127,7 +127,7 @@ class CooldownCache:
         model_id: str,
         result: Any,
         current_time: float,
-    ) -> Optional[Tuple[str, CooldownCacheValue]]:
+    ) -> tuple[str, CooldownCacheValue] | None:
         if result and isinstance(result, dict):
             cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
             if self._is_cooldown_expired(
