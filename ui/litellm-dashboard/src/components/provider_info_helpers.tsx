@@ -443,6 +443,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "cursor/claude-4-sonnet";
   } else if (selectedProvider === Providers.ZAI) {
     return "zai/glm-4.5";
+  } else if (selectedProvider === Providers.SCX_AI) {
+    return "scx-ai/MiniMax-M2.7";
   } else {
     return "gpt-3.5-turbo";
   }
