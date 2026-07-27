@@ -21,6 +21,7 @@ class CacheControlToolConfigInjectionPoint(TypedDict):
     location: Literal["tool_config"]
     control: Optional[ChatCompletionCachedContent]
     _litellm_judged: NotRequired[bool]  # Internal: written back by litellm once the client cache_control judgment ran
+    _litellm_applied: NotRequired[bool]  # Internal: the breakpoint already landed on a tool definition
 
 
 CacheControlInjectionPoint = Union[

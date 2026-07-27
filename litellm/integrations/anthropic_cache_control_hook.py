@@ -77,10 +77,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else:
                 remaining_points.append(point)
 
-        # Non-message points (currently Bedrock tool_config) are handled in the
-        # provider transform, where each tool_config point appends at most one
-        # cachePoint to the tools. That block also counts toward Anthropic's
-        # limit, so reserve a slot for it here to leave room.
+        # A tool_config point ends up as one more cache block on the tools, so
+        # reserve a slot for it here to stay under Anthropic's limit.
         reserved_blocks = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
 
         processed_messages = self._apply_message_injections(
@@ -89,10 +87,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
         )
 
-        # Pass through non-message injection points for provider-specific handling
-        if remaining_points:
+        # Points already written onto the tools are done; the rest are passed
+        # through for provider-specific handling
+        pending_points = [p for p in remaining_points if not p.get("_litellm_applied")]
+        if pending_points:
             non_default_params["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_as_judged(
-                remaining_points
+                pending_points
             )
 
         return model, processed_messages, non_default_params
@@ -428,6 +428,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return tools
 
         control = point.get("control") or ChatCompletionCachedContent(type="ephemeral")
+        non_default_params["cache_control_injection_points"] = [
+            {**p, "_litellm_applied": True} if p is point else p for p in points
+        ]
         return [{**tool, "cache_control": control} if idx == target_index else tool for idx, tool in enumerate(tools)]
 
     @staticmethod
