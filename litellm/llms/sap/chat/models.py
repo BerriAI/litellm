@@ -5,9 +5,52 @@ import warnings
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-def validate_different_content(v: Union[str, dict, list]) -> str:
+def _has_cache_control(v: str | dict | list) -> bool:
+    if isinstance(v, dict):
+        return v.get("cache_control") is not None
+    if isinstance(v, list):
+        return any(_has_cache_control(item) for item in v)
+    return False
+
+
+def _to_text_blocks(v: dict | list) -> tuple[dict, ...]:
+    items = (v,) if isinstance(v, dict) else tuple(v)
+    return tuple(
+        {"type": "text", "text": text, **({"cache_control": cache_control} if cache_control else {})}
+        for text, cache_control in (
+            (item, None) if isinstance(item, str) else (item.get("text"), item.get("cache_control"))
+            for item in items
+            if isinstance(item, (str, dict))
+        )
+        if text
+    )
+
+
+def fold_message_cache_control(values: dict | object) -> dict | object:
+    """
+    Move a message level ``cache_control`` onto a content block, since SAP Orchestration only
+    accepts the marker on content blocks. litellm's ``cache_control_injection_points`` hook sets
+    it at the message level whenever the content is a plain string
+    """
+    if not isinstance(values, dict):
+        return values
+    cache_control = values.get("cache_control")
+    if cache_control is None:
+        return values
+    rest = {key: value for key, value in values.items() if key != "cache_control"}
+    content = values.get("content")
+    if isinstance(content, str) and content:
+        return {**rest, "content": [{"type": "text", "text": content, "cache_control": cache_control}]}
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        return {**rest, "content": [*content[:-1], {**content[-1], "cache_control": cache_control}]}
+    return rest
+
+
+def validate_different_content(v: str | dict | list) -> str | tuple[dict, ...]:
     if v in ((), {}, []):
         return ""
+    elif _has_cache_control(v):
+        return _to_text_blocks(v)  # pyright: ignore[reportArgumentType]  # _has_cache_control implies dict or list
     elif isinstance(v, dict) and "text" in v:
         return v["text"]
     elif isinstance(v, list):
@@ -24,9 +67,19 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
     raise ValueError("Content must be a string")
 
 
+class CacheControl(BaseModel):
+    """
+    Anthropic prompt caching breakpoint, supported by SAP Orchestration for Claude models
+    """
+
+    type_: Literal["ephemeral"] = Field(default="ephemeral", alias="type")
+    ttl: Literal["5m", "1h"] | None = None
+
+
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: CacheControl | None = None
 
 
 class ImageURLContent(BaseModel):
@@ -37,6 +90,7 @@ class ImageURLContent(BaseModel):
 class ImageContent(BaseModel):
     type_: Literal["image_url"] = Field(default="image_url", alias="type")
     image_url: ImageURLContent
+    cache_control: CacheControl | None = None
 
 
 class FunctionObj(BaseModel):
@@ -70,10 +124,29 @@ class FunctionTool(BaseModel):
 class ChatCompletionTool(BaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
+    cache_control: CacheControl | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def hoist_function_cache_control(cls, values: dict | object) -> dict | object:
+        """Accept the OpenAI shape where clients mark the tool under ``function``."""
+        if not isinstance(values, dict) or values.get("cache_control") is not None:
+            return values
+        function = values.get("function")
+        if not isinstance(function, dict) or function.get("cache_control") is None:
+            return values
+        return {
+            **values,
+            "cache_control": function["cache_control"],
+            "function": {key: value for key, value in function.items() if key != "cache_control"},
+        }
 
     def model_dump(self, **kwargs) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        dumped = super().model_dump(**kwargs)
+        if self.cache_control is None:
+            return {key: value for key, value in dumped.items() if key != "cache_control"}
+        return {**dumped, "cache_control": self.cache_control.model_dump(**{**kwargs, "exclude_none": True})}
 
 
 class MessageToolCall(BaseModel):
@@ -88,8 +161,9 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
+    content: str | list[TextContent]
 
+    _cache_control_validator = model_validator(mode="before")(fold_message_cache_control)
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
@@ -97,21 +171,25 @@ class SAPUserMessage(BaseModel):
     role: Literal["user"] = "user"
     content: Union[str, TextContent, ImageContent, list[Union[TextContent, ImageContent]]]
 
+    _cache_control_validator = model_validator(mode="before")(fold_message_cache_control)
+
 
 class SAPAssistantMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
-    content: str = ""
+    content: str | list[TextContent] = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = []
 
+    _cache_control_validator = model_validator(mode="before")(fold_message_cache_control)
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
 class SAPToolChatMessage(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
+    content: str | list[TextContent]
 
+    _cache_control_validator = model_validator(mode="before")(fold_message_cache_control)
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
