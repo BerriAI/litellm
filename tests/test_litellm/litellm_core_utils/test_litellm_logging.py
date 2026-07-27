@@ -4101,3 +4101,20 @@ def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     logging_obj.post_call(original_response='{"ok": true}', input=big_input, api_key="sk-test")
 
     assert litellm.error_logs == {}
+
+
+def test_get_error_information_truncates_base64_in_error_message():
+    from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    payload = "A" * (MAX_BASE64_LENGTH_FOR_LOGGING + 200)
+    data_uri = f"data:image/png;base64,{payload}"
+    exception = Exception(f"provider rejected request: {data_uri}")
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=exception
+    )
+
+    assert payload not in error_information["error_message"]
+    assert "base64_data truncated" in error_information["error_message"]
+    assert "provider rejected request:" in error_information["error_message"]
