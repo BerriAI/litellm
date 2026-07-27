@@ -314,6 +314,7 @@ user_url_allowed_hosts: List[str] = []
 provider_url_destination_allowed_hosts: List[str] = []
 ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
+sse_keepalive_interval_seconds: Optional[float] = None
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False

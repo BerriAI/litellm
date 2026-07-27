@@ -84,6 +84,9 @@ from litellm.types.utils import (
 # is off (the default).
 _DD_STREAMING_TRACE_ENABLED = not isinstance(tracer, NullTracer)
 
+SSE_KEEPALIVE_COMMENT = ": keepalive\n\n"
+MIN_SSE_KEEPALIVE_INTERVAL_SECONDS = 1.0
+
 
 _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation = {
     "error_code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
@@ -393,6 +396,12 @@ def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
     return default_error
 
 
+def _consume_task_outcome(task: asyncio.Task[str]) -> None:
+    if task.cancelled():
+        return
+    task.exception()
+
+
 class _UpstreamClosingStreamingResponse(StreamingResponse):
     """StreamingResponse that always closes its body iterator and the wrapped
     upstream generator.
@@ -414,15 +423,25 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         headers: Optional[dict] = None,
         status_code: int = status.HTTP_200_OK,
         upstream_generator: Optional[AsyncGenerator[str, None]] = None,
+        pending_first_chunk: asyncio.Task[str] | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
+        self._pending_first_chunk = pending_first_chunk
+        if pending_first_chunk is not None:
+            pending_first_chunk.add_done_callback(_consume_task_outcome)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             await super().__call__(scope, receive, send)
         finally:
             with anyio.CancelScope(shield=True):
+                if self._pending_first_chunk is not None and not self._pending_first_chunk.done():
+                    self._pending_first_chunk.cancel()
+                    try:
+                        await self._pending_first_chunk
+                    except BaseException:  # noqa: BLE001  # the cancelled fetch must release the generator before aclose
+                        pass
                 for target in (self.body_iterator, self._upstream_generator):
                     aclose = getattr(target, "aclose", None)
                     if aclose is None:
@@ -457,10 +476,66 @@ async def _wait_for_http_disconnect(request: Request) -> None:
         await asyncio.Event().wait()
 
 
+def _resolve_sse_keepalive_interval() -> float | None:
+    interval = getattr(litellm, "sse_keepalive_interval_seconds", None)
+    if interval is None or isinstance(interval, bool):
+        return None
+    try:
+        interval = float(interval)
+    except Exception:  # noqa: BLE001  # a config value of any shape must not break streaming
+        verbose_proxy_logger.warning(
+            "create_response: ignoring non-numeric sse_keepalive_interval_seconds %r",
+            interval,
+        )
+        return None
+    if not math.isfinite(interval) or interval <= 0:
+        verbose_proxy_logger.warning(
+            "create_response: ignoring out-of-range sse_keepalive_interval_seconds %r",
+            interval,
+        )
+        return None
+    return max(interval, MIN_SSE_KEEPALIVE_INTERVAL_SECONDS)
+
+
+async def _stream_with_pending_first_chunk(
+    generator: AsyncGenerator[str, None],
+    chunk_task: asyncio.Task[str],
+    interval: float,
+) -> AsyncGenerator[str, None]:
+    try:
+        while not chunk_task.done():
+            yield SSE_KEEPALIVE_COMMENT
+            await asyncio.wait({chunk_task}, timeout=interval)
+        try:
+            first_chunk = chunk_task.result()
+        except StopAsyncIteration:
+            return
+        if not _DD_STREAMING_TRACE_ENABLED:
+            # Fast path: no per-chunk span object / context-manager overhead.
+            yield first_chunk
+            async for chunk in generator:
+                yield chunk
+            return
+        with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+            yield first_chunk
+        async for chunk in generator:
+            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                yield chunk
+    finally:
+        if not chunk_task.done():
+            chunk_task.cancel()
+        with anyio.CancelScope(shield=True):
+            try:
+                await chunk_task
+            except BaseException:  # noqa: BLE001  # teardown must swallow whatever the cancelled task raises
+                pass
+
+
 async def _buffer_first_chunk_honoring_disconnect(
     generator: AsyncGenerator[str, None],
     request: Optional[Request],
-) -> str:
+    keepalive_interval: float | None = None,
+) -> tuple[str | None, asyncio.Task[str] | None]:
     """Fetch the first streamed chunk, cancelling the upstream LLM call if the
     client disconnects before it arrives.
 
@@ -471,19 +546,27 @@ async def _buffer_first_chunk_honoring_disconnect(
     until the request timeout (LIT-3568). Cancelling the fetch propagates into
     async_streaming_data_generator, whose finally block records the 499 and
     closes the upstream stream.
+
+    Returns ``(first_chunk, None)`` once a chunk is in hand, or ``(None, chunk_task)``
+    when ``keepalive_interval`` elapses first. A disconnect takes priority over both.
     """
     if request is None:
-        return await generator.__anext__()
+        return await generator.__anext__(), None
 
     chunk_task: asyncio.Task[str] = asyncio.ensure_future(generator.__anext__())
     disconnect_task: asyncio.Task[None] = asyncio.ensure_future(_wait_for_http_disconnect(request))
     try:
-        await asyncio.wait({chunk_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(
+            {chunk_task, disconnect_task},
+            timeout=keepalive_interval,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
         # A completed disconnect_task has already consumed the http.disconnect
         # message, so Starlette's later listen_for_disconnect would never see it.
         # Take the cancellation path whenever a disconnect was observed, even if
         # the first chunk landed in the same scheduler turn.
         disconnect_observed = disconnect_task.done()
+        keepalive_due = not done
     finally:
         disconnect_task.cancel()
         try:
@@ -491,8 +574,11 @@ async def _buffer_first_chunk_honoring_disconnect(
         except BaseException:  # noqa: BLE001
             pass
 
-    if not disconnect_observed and chunk_task.done() and not chunk_task.cancelled():
-        return chunk_task.result()
+    if not disconnect_observed:
+        if keepalive_due and not chunk_task.done():
+            return None, chunk_task
+        if chunk_task.done() and not chunk_task.cancelled():
+            return chunk_task.result(), None
 
     chunk_task.cancel()
     with anyio.CancelScope(shield=True):
@@ -529,6 +615,8 @@ async def create_response(
     }
     first_chunk_value: Optional[str] = None
     final_status_code = default_status_code
+    keepalive_interval = _resolve_sse_keepalive_interval() if media_type == "text/event-stream" else None
+    pending_first_chunk: asyncio.Task[str] | None = None
 
     try:
         # Handle coroutine that returns a generator
@@ -536,7 +624,19 @@ async def create_response(
             generator = await generator
 
         # Now get the first chunk from the actual generator
-        first_chunk_value = await _buffer_first_chunk_honoring_disconnect(generator, request)
+        first_chunk_value, pending_first_chunk = await _buffer_first_chunk_honoring_disconnect(
+            generator, request, keepalive_interval
+        )
+
+        if pending_first_chunk is not None and keepalive_interval is not None:
+            return _UpstreamClosingStreamingResponse(
+                _stream_with_pending_first_chunk(generator, pending_first_chunk, keepalive_interval),
+                media_type=media_type,
+                headers=streaming_headers,
+                status_code=default_status_code,
+                upstream_generator=generator,
+                pending_first_chunk=pending_first_chunk,
+            )
 
         if first_chunk_value is not None:
             try:
