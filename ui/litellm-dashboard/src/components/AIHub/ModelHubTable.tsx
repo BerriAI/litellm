@@ -35,6 +35,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { getCapabilityColor } from "./capabilityColors";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -674,14 +675,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <div className="flex flex-wrap gap-2">
                 {(() => {
                   const capabilities = getModelCapabilities(selectedModel);
-                  const colors = ["green", "blue", "purple", "orange", "red", "yellow"];
 
                   if (capabilities.length === 0) {
                     return <Text className="text-gray-500">No special capabilities listed</Text>;
                   }
 
-                  return capabilities.map((capability, index) => (
-                    <Badge key={capability} color={colors[index % colors.length]}>
+                  return capabilities.map((capability) => (
+                    <Badge key={capability} color={getCapabilityColor(capability)}>
                       {formatCapabilityName(capability)}
                     </Badge>
                   ));

@@ -59,6 +59,22 @@ describe("getModelHubTableColumns", () => {
     expect(screen.queryByText("Parallel Function Calling")).not.toBeInTheDocument();
   });
 
+  it("uses the same badge color for the same feature across rows", () => {
+    renderTable([
+      mockModel,
+      {
+        ...mockModel,
+        model_group: "claude-sonnet",
+        supports_vision: false,
+        supports_function_calling: true,
+        supports_reasoning: true,
+      } as ModelHubData,
+    ]);
+    const functionCallingBadges = screen.getAllByText("Function Calling");
+    expect(functionCallingBadges).toHaveLength(2);
+    expect(functionCallingBadges[0].className).toBe(functionCallingBadges[1].className);
+  });
+
   it("shows the public status badge", () => {
     renderTable([mockModel]);
     expect(screen.getByText("Yes")).toBeInTheDocument();
