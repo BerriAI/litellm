@@ -815,7 +815,7 @@ async def test_drain_spend_buffers_timeout_does_not_block_second_flush(monkeypat
         update_spend=AsyncMock(side_effect=_hang),
         update_daily_tag_spend=tag_spend,
     )
-    monkeypatch.setattr(ps, "PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(ps, "_SPEND_DRAIN_TIMEOUT_SECONDS", 0.01, raising=False)
     warnings: List[tuple] = []
     monkeypatch.setattr(
         ps.verbose_proxy_logger,
@@ -837,8 +837,10 @@ async def test_drain_spend_buffers_timeout_does_not_block_second_flush(monkeypat
 
 @pytest.mark.asyncio
 async def test_drain_spend_buffers_swallows_flush_and_scheduler_errors(monkeypatch):
+    from apscheduler.schedulers.base import SchedulerNotRunningError
+
     scheduler = MagicMock()
-    scheduler.shutdown.side_effect = RuntimeError("scheduler gone")
+    scheduler.shutdown.side_effect = SchedulerNotRunningError()
     tag_spend = AsyncMock()
     _patch_drain_deps(
         monkeypatch,

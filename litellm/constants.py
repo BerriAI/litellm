@@ -1492,7 +1492,6 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv("APSCHEDULER_REPLACE_EXISTING", "True")
     "true",
     "1",
 ]  # always replace existing jobs
-PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS = float(os.getenv("PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS", 10))
 
 # The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS

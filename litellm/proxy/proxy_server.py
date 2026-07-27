@@ -167,6 +167,7 @@ try:
     import orjson
     import yaml  # type: ignore
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import SchedulerNotRunningError
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -240,7 +241,6 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
-    PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -785,16 +785,13 @@ def cleanup_router_config_variables():
     prisma_client = None
 
 
-async def _drain_spend_buffers_on_shutdown() -> None:
-    global scheduler
+_SPEND_DRAIN_TIMEOUT_SECONDS = 10.0
 
+
+async def _drain_spend_buffers_on_shutdown() -> None:
     if scheduler is not None:
-        try:
-            # AsyncIOExecutor.shutdown() cannot honor wait=True and cancels pending
-            # job coroutines, so the explicit flush below is what commits those rows.
+        with contextlib.suppress(SchedulerNotRunningError):
             scheduler.shutdown(wait=False)
-        except Exception as e:
-            verbose_proxy_logger.error(f"Error stopping scheduler on shutdown: {e}")
 
     if prisma_client is None or ProxyUpdateSpend.disable_spend_updates():
         return
@@ -812,13 +809,13 @@ async def _drain_spend_buffers_on_shutdown() -> None:
         try:
             await asyncio.wait_for(
                 coro_factory(),
-                timeout=PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
+                timeout=_SPEND_DRAIN_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             verbose_proxy_logger.warning(
                 "Draining %s on shutdown exceeded %ss; some rows may be lost",
                 label,
-                PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
+                _SPEND_DRAIN_TIMEOUT_SECONDS,
             )
         except Exception as e:
             verbose_proxy_logger.error(f"Error draining {label} on shutdown: {e}")
