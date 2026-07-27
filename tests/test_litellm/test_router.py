@@ -6207,3 +6207,159 @@ class TestPreRoutingStrategyRegistryLifecycle:
         registered = router.quality_routers["quality-router"]
         assert len(registered) == 1
         assert registered[0].strategy.config.default_model == "gpt-4o-mini"
+
+    @staticmethod
+    def _hybrid_router_params(tiers: dict) -> dict:
+        return {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": tiers, "adaptive": True},
+            "complexity_router_default_model": "gpt-4o",
+        }
+
+    @classmethod
+    def _router_with_hybrid_router(cls) -> "litellm.Router":
+        return litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {
+                    "model_name": "hybrid-router",
+                    "litellm_params": cls._hybrid_router_params({"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}),
+                    "model_info": {"id": "router-1", "db_model": True},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+    def test_upsert_of_edited_hybrid_complexity_router_relinks_adaptive(self):
+        """Editing an adaptive-enabled complexity router releases its adaptive companion
+        along with the complexity slot; the finalize re-run must fire for it (not just for
+        `auto_router/adaptive_router` deployments) or the rebuilt complexity router keeps
+        routing while bandit recording, DB persistence and /adaptive_router/state all
+        silently stop until the next full reload."""
+        import litellm as litellm_module
+        from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_hybrid_router()
+        assert "hybrid-router" in router.adaptive_routers
+
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="hybrid-router",
+                litellm_params=LiteLLM_Params(
+                    **self._hybrid_router_params(
+                        {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"}
+                    )
+                ),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert "hybrid-router" in self._model_names(router)
+        assert "hybrid-router" in router.complexity_routers
+        assert "hybrid-router" in router.adaptive_routers
+        rebuilt = router.complexity_routers["hybrid-router"][0].strategy
+        assert router.adaptive_routers["hybrid-router"][0].strategy is rebuilt.adaptive_router
+        hooks = litellm_module.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert len(hooks) == 1
+
+    def test_upsert_turning_adaptive_on_builds_the_companion(self):
+        """An edit that flips `adaptive: true` on an existing complexity router must
+        register the companion immediately; neither side of the old prefix-only gate
+        matches a complexity deployment, so the flip was a silent no-op until restart."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_complexity_router()
+        assert "smart-router" not in router.adaptive_routers
+
+        params = self._complexity_router_params("gpt-4o")
+        params["complexity_router_config"] = {**params["complexity_router_config"], "adaptive": True}
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="smart-router",
+                litellm_params=LiteLLM_Params(**params),
+                model_info=ModelInfo(id="router-1", db_model=True),
+            )
+        )
+
+        assert "smart-router" in router.adaptive_routers
+
+    def test_unregister_pre_routing_strategy_scopes_the_drop_by_tags(self):
+        """The bool return drives the hook re-sync; a tag mismatch must report False and
+        leave the registry untouched, and dropping the last entry must free the key."""
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        registry = {
+            "m": [
+                TaggedPreRoutingStrategy(tags=("team-a",), strategy=object()),
+                TaggedPreRoutingStrategy(tags=(), strategy=object()),
+            ]
+        }
+
+        assert litellm.Router._unregister_pre_routing_strategy(registry, "m", ("team-b",)) is False
+        assert len(registry["m"]) == 2
+
+        assert litellm.Router._unregister_pre_routing_strategy(registry, "m", ("team-a",)) is True
+        assert [entry.tags for entry in registry["m"]] == [()]
+
+        assert litellm.Router._unregister_pre_routing_strategy(registry, "m", ()) is True
+        assert "m" not in registry
+
+    def test_unregister_for_deployment_ignores_non_router_deployments(self):
+        """Direct twin of the endpoint-level test: a regular deployment that shares a
+        router's model_name must not evict the router's registry slot."""
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = self._router_with_complexity_router()
+
+        router._unregister_pre_routing_strategy_for_deployment(
+            deployment=Deployment(
+                model_name="smart-router",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+                model_info=ModelInfo(id="plain-1", db_model=True),
+            )
+        )
+
+        assert "smart-router" in router.complexity_routers
+
+    def test_sync_adaptive_router_hooks_keeps_one_hook_per_registered_router(self):
+        """Re-syncing must replace, not accumulate: a duplicated hook double-fires
+        bandit signal recording for every request."""
+        import litellm as litellm_module
+        from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
+
+        router = self._router_with_hybrid_router()
+
+        router._sync_adaptive_router_hooks()
+        router._sync_adaptive_router_hooks()
+
+        hooks = litellm_module.logging_callback_manager.get_custom_loggers_for_type(AdaptiveRouterPostCallHook)
+        assert len(hooks) == 1
+
+    def test_deployment_participates_in_adaptive_routing_matrix(self):
+        """The upsert finalize re-run keys off this predicate for both the incoming and
+        outgoing deployment; a false negative silently strands the adaptive companion."""
+        from litellm.types.router import LiteLLM_Params
+
+        router = self._router_with_complexity_router()
+
+        cases = [
+            ({"model": "auto_router/adaptive_router", "adaptive_router_config": {}}, True),
+            (self._hybrid_router_params({"SIMPLE": "gpt-4o-mini"}), True),
+            (self._complexity_router_params("gpt-4o"), False),
+            (
+                {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}, "adaptive": False},
+                    "complexity_router_default_model": "gpt-4o",
+                },
+                False,
+            ),
+            ({"model": "openai/gpt-4o"}, False),
+        ]
+        for params, expected in cases:
+            actual = router._deployment_participates_in_adaptive_routing(
+                litellm_params=LiteLLM_Params(**params)
+            )
+            assert actual is expected, params["model"]
