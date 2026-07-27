@@ -1464,6 +1464,18 @@ class LiteLLMAnthropicMessagesAdapter:
             return "signature_delta", ContentThinkingSignatureBlockDelta(
                 type="signature_delta", signature=reasoning_signature
             )
+        elif text:
+            # A single upstream chunk can carry a trailing reasoning_content fragment
+            # *and* the start of real content at the same time -- e.g. vLLM's reasoning
+            # parser closes out "thinking" in the same chunk it starts the answer.
+            # _translate_streaming_openai_chunk_to_anthropic_content_block (which decides
+            # whether to open a new block) checks `content` before `reasoning_content`,
+            # so a chunk like this always opens a "text" block. The delta type returned
+            # here must agree, or a text-typed block receives a thinking_delta, which
+            # real Anthropic SDK clients reject as invalid and disconnect on -- dropping
+            # the rest of the response. Any trailing reasoning_content on the same chunk
+            # is dropped here rather than misrouted into the wrong block type.
+            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
         elif reasoning_content:
             return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
         else:
