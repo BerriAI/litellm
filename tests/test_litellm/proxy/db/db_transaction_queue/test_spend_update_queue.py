@@ -35,6 +35,31 @@ async def test_add_update(spend_queue):
 
 
 @pytest.mark.asyncio
+async def test_project_entity_type_aggregates_into_project_transactions(spend_queue):
+    # PROJECT updates must aggregate into project_list_transactions so project spend is committed.
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.PROJECT,
+            "entity_id": "project123",
+            "response_cost": 0.5,
+        }
+    )
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.PROJECT,
+            "entity_id": "project123",
+            "response_cost": 0.25,
+        }
+    )
+
+    aggregated = (
+        await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    )
+
+    assert aggregated["project_list_transactions"]["project123"] == 0.75
+
+
+@pytest.mark.asyncio
 async def test_missing_response_cost(spend_queue):
     # Test with missing response_cost - should default to 0
     update: SpendUpdateQueueItem = {

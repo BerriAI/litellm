@@ -32,6 +32,7 @@ async def test_async_post_call_failure_hook():
         user_id="test_user_id",
         team_id="test_team_id",
         org_id="test_org_id",
+        project_id="test_project_id",
         team_alias="test_team_alias",
         end_user_id="test_end_user_id",
     )
@@ -70,6 +71,7 @@ async def test_async_post_call_failure_hook():
         assert call_args["end_user_id"] == "test_end_user_id"
         assert call_args["team_id"] == "test_team_id"
         assert call_args["org_id"] == "test_org_id"
+        assert call_args["project_id"] == "test_project_id"
         assert call_args["completion_response"] == original_exception
 
         # Check that metadata was properly updated
@@ -452,6 +454,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         end_user_id="test_end_user_id",
         team_id="test_team_id",
         org_id="test_org_id",
+        project_id="test_project_id",
         kwargs={},
         completion_response=None,
         start_time=datetime.now(),
@@ -462,6 +465,10 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
     )
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+    assert (
+        proxy_logging_obj.db_spend_update_writer.update_database.call_args[1]["project_id"]
+        == "test_project_id"
+    )
     increment_spend_counters.assert_awaited_once_with(
         token="test_api_key",
         team_id="test_team_id",
