@@ -235,3 +235,79 @@ def test_sync_transport_error_before_completed_event_raises():
     with pytest.raises(httpx.ReadError):
         for _ in iterator:
             pass
+
+
+def test_synthetic_iterator_replays_response_synchronously():
+    """The sync SDK path over a materialized response yields created -> deltas -> completed."""
+    from litellm.responses.streaming_iterator import (
+        SyntheticResponsesAPIStreamingIterator,
+    )
+
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.start_time = datetime.now()
+    logging_obj.completion_start_time = None
+    logging_obj.model_call_details = {"litellm_params": {}}
+
+    response = ResponsesAPIResponse(
+        id="resp_sync_replay",
+        created_at=1700000000,
+        model="claude-haiku-4-5",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+            }
+        ],
+        status="completed",
+        error=None,
+    )
+
+    iterator = SyntheticResponsesAPIStreamingIterator(
+        response=response,
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+    )
+
+    events = list(iterator)
+
+    assert events[0].type == ResponsesAPIStreamEvents.RESPONSE_CREATED
+    assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert events[-1].response.id == "resp_sync_replay"
+    streamed_text = "".join(
+        event.delta
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+    )
+    assert streamed_text == "hello"
+    assert iterator._hidden_params["custom_llm_provider"] == "anthropic"
+
+
+def test_cached_iterator_marks_cache_hit():
+    """The cache-replay subclass keeps its cache-hit accounting on top of the synthetic replay."""
+    from litellm.responses.streaming_iterator import (
+        CachedResponsesAPIStreamingIterator,
+    )
+
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.start_time = datetime.now()
+    logging_obj.completion_start_time = None
+    logging_obj.model_call_details = {"litellm_params": {}}
+
+    response = ResponsesAPIResponse(
+        id="resp_cached_replay",
+        created_at=1700000000,
+        model="claude-haiku-4-5",
+        object="response",
+        output=[],
+        status="completed",
+        error=None,
+    )
+
+    iterator = CachedResponsesAPIStreamingIterator(response=response, logging_obj=logging_obj)
+
+    assert iterator._completed_response_cache_hit is True
+    assert iterator._persist_completed_response_before_logging is False
+    assert iterator._hidden_params["custom_llm_provider"] == "cached_response"
+    assert [event.type for event in iterator][-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
