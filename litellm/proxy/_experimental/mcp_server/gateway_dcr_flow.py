@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import secrets
 from base64 import urlsafe_b64encode
 from collections.abc import Mapping
@@ -47,7 +48,7 @@ from typing import Awaitable, Callable, Literal, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import assert_never
 
@@ -94,6 +95,13 @@ server-side session store, and the sealed value never appears in a URL)."""
 
 CONNECT_FLOW_TTL_SECONDS = 600
 GATEWAY_AUTH_CODE_TTL_SECONDS = 120
+MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS = 300
+"""Lifetime of a code the user delivers by hand (headless/remote client, LIT-4863 class):
+copy-pasting a callback URL from a laptop browser to an SSH session is slower than a
+browser redirect, so manual-delivery codes get 5 minutes instead of 2, still well under
+the 10-minute ceiling RFC 6749 section 4.1.2 recommends. Single-use and PKCE binding are
+unchanged, so the longer window only extends how long the legitimate holder has to paste
+it, not what an observer could do with it."""
 _CLAIM_TTL_BUFFER_SECONDS = 60
 _USED_CODE_CACHE_PREFIX = "mcp_gateway_dcr_code_used:"
 _USED_FLOW_CACHE_PREFIX = "mcp_gateway_dcr_flow_used:"
@@ -390,6 +398,7 @@ async def complete_connect_flow(
     flow_handle: str,
     session_user_id: str | None,
     cache: DualCache,
+    delivery: str | None = None,
 ) -> Response:
     """The deliberate finish step of the connect flow: mint the gateway authorization
     code and send the browser back to the client.
@@ -399,7 +408,24 @@ async def complete_connect_flow(
     into the flow: a link crafted by another party dies here with ``access_denied``
     instead of minting a code for the victim's identity. The flow is single-use (an atomic
     claim on its ``jti``), so a double-submit cannot mint two codes from one sign-in.
+
+    ``delivery`` chooses how the code reaches the client. Default (absent or
+    ``"redirect"``) is the 303 to the client's registered redirect URI. ``"manual"``
+    renders the callback URL on a page instead, for a client whose redirect URI is a
+    loopback host but which runs on a DIFFERENT machine than the browser (EC2/SSH box,
+    container): the 303 would dereference the browser machine's loopback and the code
+    would never arrive, so the user carries it over by pasting the URL into the client or
+    fetching it from the client machine's terminal. Manual delivery is honored only for
+    loopback redirect URIs; a routable redirect URI works from any browser by
+    construction, so those flows always redirect. The user who sees the page is exactly
+    the user the 303 would have carried the code to, and the same user already sees the
+    code today in the dead redirect's address bar, so the page exposes the code to no new
+    party. Unknown ``delivery`` values are rejected rather than defaulted: a client that
+    asked for manual delivery and got a dead redirect instead would silently lose its
+    code.
     """
+    if delivery not in (None, "redirect", "manual"):
+        return _oauth_error(400, "invalid_request", "delivery must be 'redirect' or 'manual'")
     sealed_flow = request.cookies.get(_flow_cookie_name(flow_handle))
     if sealed_flow is None:
         return _oauth_error(400, "invalid_request", "unknown or expired connect flow")
@@ -417,6 +443,8 @@ async def complete_connect_flow(
         f"{_USED_FLOW_CACHE_PREFIX}{flow.jti}", CONNECT_FLOW_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
     ):
         return _oauth_error(400, "invalid_request", "this connect flow was already completed; restart the connection")
+    manual_delivery = delivery == "manual" and is_loopback_redirect_host(urlparse(flow.redirect_uri))
+    code_ttl = MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS if manual_delivery else GATEWAY_AUTH_CODE_TTL_SECONDS
     code = _seal(
         GATEWAY_AUTH_CODE_PREFIX,
         _GatewayAuthCode(
@@ -426,14 +454,44 @@ async def complete_connect_flow(
             code_challenge=flow.code_challenge,
             jti=secrets.token_urlsafe(24),
             iat=int(now.timestamp()),
-            exp=int(now.timestamp()) + GATEWAY_AUTH_CODE_TTL_SECONDS,
+            exp=int(now.timestamp()) + code_ttl,
         ),
     )
     params = {"code": code, **({"state": flow.state} if flow.state else {})}
-    response = RedirectResponse(_append_query_params(flow.redirect_uri, params), status_code=303)
+    callback_url = _append_query_params(flow.redirect_uri, params)
+    response: Response = (
+        _manual_delivery_response(callback_url) if manual_delivery else RedirectResponse(callback_url, status_code=303)
+    )
     path, secure = _cookie_path_and_secure(request)
     response.delete_cookie(key=_flow_cookie_name(flow_handle), path=path, secure=secure, httponly=True, samesite="lax")
     return response
+
+
+def _manual_delivery_response(callback_url: str) -> Response:
+    """The manual code-delivery page: the callback URL the 303 would have followed,
+    rendered for the user to carry to the machine the client actually runs on (paste into
+    the client's prompt, or fetch with curl from that machine's terminal). Served
+    no-store because the body holds a live single-use code, and the URL is HTML-escaped
+    because it is client-influenced. The page renders the URL as data only, never as a
+    ready-to-paste shell command: no single quoting of an attacker-influenced string is
+    correct across POSIX shells, cmd.exe, and PowerShell (cmd.exe ignores single quotes
+    and percent-expands inside double quotes), so any command string this page suggested
+    would be wrong for some shell the user might paste it into."""
+    safe_url = html.escape(callback_url, quote=True)
+    minutes = MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS // 60
+    body = (
+        "<html><head><title>Finish connecting</title></head><body>"
+        "<h2>Almost done</h2>"
+        "<p>Your MCP client runs on a different machine, so this browser cannot deliver the"
+        " authorization code to it. On the machine where the client runs, paste this URL into"
+        " the client's prompt (Claude Code accepts the pasted callback URL), or pass it as the"
+        " quoted argument of a curl command from that machine's terminal:</p>"
+        f'<p><input type="text" value="{safe_url}" readonly size="100" onclick="this.select()"></p>'
+        f"<p>The code is single-use and expires in {minutes} minutes. You can close this window"
+        " once the client confirms it is connected.</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(body, headers=TOKEN_NO_CACHE_HEADERS)
 
 
 def _pkce_verifier_matches(code_verifier: str, code_challenge: str) -> bool:
@@ -601,9 +659,11 @@ async def _authorization_code_grant(
     if failure is not None:
         return _reload_failure_response(failure)
     # Atomic single-use claim is the gate: on a concurrent double-redeem exactly one caller
-    # wins, and a claim that cannot be recorded fails closed.
+    # wins, and a claim that cannot be recorded fails closed. The marker's TTL derives from
+    # the code's own remaining lifetime so it outlives whichever lifetime the code was minted with.
     if not await guard.claim(
-        f"{_USED_CODE_CACHE_PREFIX}{parsed.jti}", GATEWAY_AUTH_CODE_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
+        f"{_USED_CODE_CACHE_PREFIX}{parsed.jti}",
+        parsed.exp - int(now.timestamp()) + _CLAIM_TTL_BUFFER_SECONDS,
     ):
         return _oauth_error(400, "invalid_grant", "the authorization code was already used")
     return _session_token_pair(SessionPrincipal(user_id=parsed.user_id, client_id=client_id), keys, now)
