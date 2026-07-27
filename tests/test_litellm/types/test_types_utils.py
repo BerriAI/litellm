@@ -638,6 +638,48 @@ def test_chat_completion_tool_call_from_dict_custom_strips_null_function():
     assert "function" not in parsed.model_dump()
 
 
+def test_chat_completion_tool_call_from_dict_typeless_custom_payload():
+    """A tool-call dict can carry a ``custom`` payload with ``type`` absent or None
+    (e.g. rebuilt from streaming deltas, where only the first chunk has ``type``).
+    Classifying on ``type == "custom"`` alone sent these to the function branch,
+    which raised TypeError (missing ``function``) on a payload the streaming path
+    accepts as custom."""
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall, chat_completion_tool_call_from_dict
+
+    typeless = {"id": "call_1", "custom": {"name": "ApplyPatch", "input": "*** Begin Patch"}}
+    parsed = chat_completion_tool_call_from_dict(typeless)
+    assert isinstance(parsed, ChatCompletionMessageCustomToolCall)
+    assert parsed.type == "custom"
+    assert parsed.custom.name == "ApplyPatch"
+
+    null_typed = {"id": "call_2", "type": None, "custom": {"name": "f", "input": "{}"}}
+    assert isinstance(chat_completion_tool_call_from_dict(null_typed), ChatCompletionMessageCustomToolCall)
+
+
+def test_custom_tool_call_classification_agrees_across_streaming_and_non_streaming():
+    """The streaming Delta coercion and the non-streaming from_dict parser must
+    classify the same tool-call dict identically, or a provider payload becomes a
+    custom tool call mid-stream and something else on the completed message."""
+    from litellm.types.utils import (
+        ChatCompletionDeltaCustomToolCall,
+        ChatCompletionMessageCustomToolCall,
+        Delta,
+        chat_completion_tool_call_from_dict,
+    )
+
+    tool_calls = [
+        {"id": "c1", "type": "custom", "custom": {"name": "ApplyPatch", "input": ""}},
+        {"id": "c2", "custom": {"name": "ApplyPatch", "input": "x"}},
+        {"id": "c3", "type": "function", "function": {"name": "g", "arguments": "{}"}},
+    ]
+    for tool_call in tool_calls:
+        message_parsed = chat_completion_tool_call_from_dict(dict(tool_call))
+        delta_parsed = Delta(tool_calls=[dict(tool_call, index=0)]).tool_calls[0]
+        assert isinstance(message_parsed, ChatCompletionMessageCustomToolCall) == isinstance(
+            delta_parsed, ChatCompletionDeltaCustomToolCall
+        )
+
+
 def test_message_with_mixed_function_and_custom_tool_calls():
     from litellm.types.utils import (
         ChatCompletionMessageCustomToolCall,

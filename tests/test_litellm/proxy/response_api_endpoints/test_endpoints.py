@@ -1121,6 +1121,30 @@ class TestToolEnvelopeConversionMatrix:
         entries = [{"type": "web_search"}, {"type": "custom"}, "junk", None, {}, 42, {"type": "auto"}]
         assert [_convert_tool_envelope(entry, to_chat=to_chat) for entry in entries] == entries
 
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_empty_nested_envelope_falls_back_to_top_level_payload(self, to_chat):
+        """An empty nested envelope must not shadow payload fields that sit at the top
+        level; treating the empty dict as the sole payload source dropped the name."""
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        hybrid = {"type": "custom", "custom": {}, "name": "ApplyPatch", "format": self.TEXT}
+        expected_payload = {"name": "ApplyPatch", "format": self.TEXT}
+        expected = {"type": "custom", "custom": expected_payload} if to_chat else {"type": "custom", **expected_payload}
+        assert _convert_tool_envelope(hybrid, to_chat=to_chat) == expected
+
+    def test_nested_payload_wins_over_stray_top_level_fields(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        tool = {"type": "custom", "custom": {"name": "NestedName"}, "name": "TopName"}
+        assert _convert_tool_envelope(tool, to_chat=False) == {"type": "custom", "name": "NestedName"}
+
+    @pytest.mark.parametrize("to_chat", [True, False])
+    def test_nameless_envelope_passes_through_unchanged(self, to_chat):
+        from litellm.proxy.response_api_endpoints.endpoints import _convert_tool_envelope
+
+        nameless = {"type": "custom", "custom": {}, "description": "no name anywhere"}
+        assert _convert_tool_envelope(nameless, to_chat=to_chat) == nameless
+
 
 class TestToolChoiceSharesTheToolEnvelopeRule:
     """

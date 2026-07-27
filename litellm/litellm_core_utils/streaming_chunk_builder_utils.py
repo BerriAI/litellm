@@ -322,7 +322,7 @@ class ChunkProcessor:
         # Convert the map to a list of tool calls
         for index in sorted(tool_call_map.keys()):
             tool_call_data = tool_call_map[index]
-            if tool_call_data["type"] == "custom" and tool_call_data["id"] and tool_call_data["custom_name"]:
+            if tool_call_data["id"] and tool_call_data["custom_name"]:
                 tool_calls_list.append(
                     ChatCompletionMessageCustomToolCall(
                         id=tool_call_data["id"],
