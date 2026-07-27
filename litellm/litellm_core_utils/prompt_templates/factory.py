@@ -2016,15 +2016,48 @@ def anthropic_process_openai_file_message(
 _EMPTY_TEXT_PLACEHOLDER = "[System: Empty message content sanitised to satisfy protocol]"
 
 
+def _is_empty_text_block(block: object) -> bool:
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return False
+    text = block.get("text")
+    return not isinstance(text, str) or not text.strip()
+
+
+def _carries_non_text_content(message: AllMessageValues) -> bool:
+    if message.get("tool_calls"):
+        return True
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(block, dict) and isinstance(block.get("type"), str) and block.get("type") != "text"
+        for block in content
+    )
+
+
+def _with_content(message: AllMessageValues, content: object, action: str) -> AllMessageValues:
+    sanitized = cast(AllMessageValues, {**message, "content": content})
+    verbose_logger.debug(f"_sanitize_empty_text_content: {action} in {message.get('role')} message")
+    return sanitized
+
+
 def _sanitize_empty_text_content(
     message: AllMessageValues,
 ) -> AllMessageValues:
     """
     Case C: Sanitize empty text content
-    - Replace empty or whitespace-only text content with a placeholder message.
-    - Handles both string content and list-of-blocks content (rewriting only
-      the empty text blocks in place; non-text blocks like images are left
-      untouched).
+
+    Anthropic rejects empty text blocks, so empty or whitespace-only text must never be
+    forwarded verbatim. What replaces it depends on what else the turn carries.
+
+    Assistant turns that already carry substantive content (``tool_calls``, or non-text
+    blocks such as ``tool_use``) get the empty text dropped. Anthropic accepts an assistant
+    turn whose content is just ``tool_use``, so there is nothing to substitute, and
+    substituting anyway leaks a protocol diagnostic into the conversation as though the
+    assistant had said it, which the model then echoes on later turns.
+
+    Every other empty turn would otherwise end up with no content at all, which Anthropic
+    also rejects, so the placeholder is still substituted there.
 
     Returns:
         The message with sanitized content if needed, otherwise the original message
@@ -2033,41 +2066,26 @@ def _sanitize_empty_text_content(
         return message
 
     content = message.get("content")
+    drop_empty_text = message.get("role") == "assistant" and _carries_non_text_content(message)
 
     if isinstance(content, str):
-        if not content or not content.strip():
-            message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = _EMPTY_TEXT_PLACEHOLDER
-            verbose_logger.debug(
-                f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
-            )
+        if content.strip():
+            return message
+        if drop_empty_text:
+            return _with_content(message, None, "Dropped empty text content")
+        return _with_content(message, _EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
+
+    if not isinstance(content, list) or not any(_is_empty_text_block(block) for block in content):
         return message
 
-    if isinstance(content, list):
-        # Walk the blocks and rewrite any empty text blocks. We rewrite (rather
-        # than drop) so callers don't end up with an entirely empty content
-        # list, which Anthropic also rejects.
-        new_blocks: List[Any] = []
-        rewrote_any = False
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                text = block.get("text")
-                if not isinstance(text, str) or not text or not text.strip():
-                    new_block = dict(block)
-                    new_block["text"] = _EMPTY_TEXT_PLACEHOLDER
-                    new_blocks.append(new_block)
-                    rewrote_any = True
-                    continue
-            new_blocks.append(block)
+    if drop_empty_text:
+        kept = [block for block in content if not _is_empty_text_block(block)]
+        return _with_content(message, kept, "Dropped empty text block(s)")
 
-        if rewrote_any:
-            message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = new_blocks  # type: ignore
-            verbose_logger.debug(
-                f"_sanitize_empty_text_content: Replaced empty text block(s) in {message.get('role')} message"
-            )
-
-    return message
+    rewritten = [
+        {**block, "text": _EMPTY_TEXT_PLACEHOLDER} if _is_empty_text_block(block) else block for block in content
+    ]
+    return _with_content(message, rewritten, "Replaced empty text block(s)")
 
 
 def _add_missing_tool_results(
