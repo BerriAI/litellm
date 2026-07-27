@@ -226,6 +226,84 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_merges_org_level_spend_logs_metadata():
+    """Org-level spend_logs_metadata must be merged into the request, with
+    key > team > org precedence and without overriding request-supplied keys.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/33663 where
+    organization-level spend_logs_metadata was silently dropped.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"spend_logs_metadata": {"source": "request"}},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"spend_logs_metadata": {"key_only": "k", "shared": "key"}},
+        team_metadata={"spend_logs_metadata": {"team_only": "t", "shared": "team"}},
+        organization_metadata={
+            "spend_logs_metadata": {"org_only": "o", "shared": "org", "source": "org"}
+        },
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    spend_logs_metadata = updated_data["metadata"]["spend_logs_metadata"]
+    assert spend_logs_metadata["org_only"] == "o"
+    assert spend_logs_metadata["key_only"] == "k"
+    assert spend_logs_metadata["team_only"] == "t"
+    assert spend_logs_metadata["source"] == "request"
+    assert spend_logs_metadata["shared"] == "key"
+
+
+def test_merge_spend_logs_metadata_branches():
+    """Directly exercise every branch of the shared merge helper."""
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    # No spend_logs_metadata on the source -> no-op
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({}, data, "metadata")
+    assert "spend_logs_metadata" not in data["metadata"]
+
+    # Non-dict spend_logs_metadata is ignored
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({"spend_logs_metadata": "nope"}, data, "metadata")
+    assert "spend_logs_metadata" not in data["metadata"]
+
+    # No existing target -> assigned directly
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({"spend_logs_metadata": {"a": 1}}, data, "metadata")
+    assert data["metadata"]["spend_logs_metadata"] == {"a": 1}
+
+    # Existing target -> merge without overriding present keys
+    LiteLLMProxyRequestSetup._merge_spend_logs_metadata({"spend_logs_metadata": {"a": 2, "b": 3}}, data, "metadata")
+    assert data["metadata"]["spend_logs_metadata"] == {"a": 1, "b": 3}
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_admin_injection_slots():
     """User-supplied user_api_key_metadata / user_api_key_team_metadata /
     _pipeline_managed_guardrails must be stripped from both metadata keys
