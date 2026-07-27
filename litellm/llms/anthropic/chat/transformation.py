@@ -2326,7 +2326,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ):
         _hidden_params: Dict = {}
         _hidden_params["additional_headers"] = process_anthropic_headers(dict(raw_response.headers))
-        if "error" in completion_response:
+        if isinstance(completion_response, dict) and completion_response.get("error") is not None:
             response_headers = getattr(raw_response, "headers", None)
             raise AnthropicError(
                 message=str(completion_response["error"]),
