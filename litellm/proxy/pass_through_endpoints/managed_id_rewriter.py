@@ -41,6 +41,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_owner_filter,
     can_access_resource,
+    resolve_resource_owner_id,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.repositories.table_repositories import (
@@ -643,7 +644,7 @@ async def _mint_or_reuse_object(
                     "file_object": json.dumps(body_snapshot),
                     "model_object_id": namespaced_model_object_id,
                     "file_purpose": file_purpose,
-                    "created_by": user_api_key_dict.user_id,
+                    "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
                     "updated_by": user_api_key_dict.user_id,
                 },

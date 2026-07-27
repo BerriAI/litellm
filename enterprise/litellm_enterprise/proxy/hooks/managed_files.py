@@ -21,6 +21,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
     can_access_resource,
+    resolve_resource_owner_id,
 )
 from litellm.proxy._types import (
     CallTypes,
@@ -105,7 +106,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 file_object=file_object,
                 model_mappings=model_mappings,
                 flat_model_file_ids=list(model_mappings.values()),
-                created_by=user_api_key_dict.user_id,
+                created_by=resolve_resource_owner_id(user_api_key_dict),
                 team_id=user_api_key_dict.team_id,
                 updated_by=user_api_key_dict.user_id,
             )
@@ -121,7 +122,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "unified_file_id": file_id,
             "model_mappings": json.dumps(model_mappings),
             "flat_model_file_ids": list(model_mappings.values()),
-            "created_by": user_api_key_dict.user_id,
+            "created_by": resolve_resource_owner_id(user_api_key_dict),
             "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
@@ -189,7 +190,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "file_object": file_object.model_dump_json(),
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
-                    "created_by": user_api_key_dict.user_id,
+                    "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
