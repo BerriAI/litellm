@@ -3166,3 +3166,58 @@ async def test_bedrock_converse_message_level_cache_point_preserves_ttl_async():
     )
 
     assert _collect_cache_points(result) == [{"type": "default", "ttl": "1h"}]
+
+
+def test_map_system_message_pt_string_contents():
+    """Baseline: string contents keep the existing merge behavior."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        map_system_message_pt,
+    )
+
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
+    result = map_system_message_pt(messages=messages)
+    assert result == [{"role": "user", "content": "You are helpful. Hi"}]
+
+
+def test_map_system_message_pt_content_block_lists():
+    """Contents sent as content-block lists (e.g. Anthropic-style requests)
+    must not raise 'can only concatenate list (not "str") to list'.
+    Regression test for supports_system_message=False with block content."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        map_system_message_pt,
+    )
+
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are helpful."}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+    ]
+    result = map_system_message_pt(messages=messages)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert result[0]["content"] == [
+        {"type": "text", "text": "You are helpful."},
+        {"type": "text", "text": "Hi"},
+    ]
+
+
+def test_map_system_message_pt_mixed_contents():
+    """String system content merged into a block-list user message."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        map_system_message_pt,
+    )
+
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": [{"type": "text", "text": "Hi"}]},
+    ]
+    result = map_system_message_pt(messages=messages)
+    assert result[0]["content"] == [
+        {"type": "text", "text": "You are helpful."},
+        {"type": "text", "text": "Hi"},
+    ]
