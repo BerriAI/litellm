@@ -133,6 +133,15 @@ class LangsmithLogger(CustomBatchLogger):
             "dotted_order": metadata.get("dotted_order", None),
         }
 
+    def _redact_metadata(self, metadata: dict) -> dict:
+        # helper is shallow; also scrub nested requester_metadata since
+        # LangSmith forwards the whole dict into the run
+        redacted = redact_user_api_key_info(metadata=dict(metadata))
+        nested = redacted.get("requester_metadata")
+        if isinstance(nested, dict):
+            redacted["requester_metadata"] = redact_user_api_key_info(metadata=nested)
+        return redacted
+
     def _build_extra_metadata(self, metadata: Dict):
         extra_metadata = dict(metadata)
         requester_metadata = extra_metadata.get("requester_metadata")
@@ -141,13 +150,7 @@ class LangsmithLogger(CustomBatchLogger):
                 if key in requester_metadata and key not in extra_metadata:
                     extra_metadata[key] = requester_metadata[key]
 
-        # helper is shallow; also scrub nested requester_metadata since
-        # LangSmith forwards the whole dict into `extra`
-        extra_metadata = redact_user_api_key_info(metadata=extra_metadata)
-        nested = extra_metadata.get("requester_metadata")
-        if isinstance(nested, dict):
-            extra_metadata["requester_metadata"] = redact_user_api_key_info(metadata=nested)
-        return extra_metadata
+        return self._redact_metadata(extra_metadata)
 
     def _build_outputs_with_usage(self, payload: StandardLoggingPayload) -> Dict[str, Any]:
         response = payload["response"]
@@ -200,12 +203,13 @@ class LangsmithLogger(CustomBatchLogger):
 
             metadata = payload["metadata"]
             extra_metadata = self._build_extra_metadata(dict(metadata))
+            inputs = {**payload, "metadata": self._redact_metadata(dict(metadata))}
             outputs = self._build_outputs_with_usage(payload)
 
             data = {
                 "name": fields["run_name"],
                 "run_type": "llm",
-                "inputs": payload,
+                "inputs": inputs,
                 "outputs": outputs,
                 "session_name": fields["project_name"],
                 "start_time": payload["startTime"],

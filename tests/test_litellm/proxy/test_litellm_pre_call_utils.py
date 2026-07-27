@@ -5913,3 +5913,39 @@ async def test_overwrite_user_with_key_hash_rejects_alias_without_marker(monkeyp
     )
 
     assert updated_data["user"] == "caller-chosen-id"
+
+
+def test_get_sanitized_user_information_from_key_drops_callback_config():
+    """
+    Regression (LIT-4306): `user_api_key_auth_metadata` lands in the
+    StandardLoggingPayload every integration receives, so the per-key callback
+    config (and the integration credentials inside it) must not ride along.
+    Everything else - notably `priority`, which the dynamic rate limiter reads
+    back off this exact field - has to survive.
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langsmith",
+                    "callback_vars": {"langsmith_api_key": "litellm_enc::ciphertext"},
+                }
+            ],
+            "callback_settings": {"callback_vars": {"langfuse_secret_key": "litellm_enc::other"}},
+            "priority": "high",
+        },
+    )
+
+    result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    auth_metadata = result["user_api_key_auth_metadata"]
+    assert "logging" not in auth_metadata
+    assert "callback_settings" not in auth_metadata
+    assert "litellm_enc::" not in json.dumps(auth_metadata)
+    assert auth_metadata["priority"] == "high"
+    # UserAPIKeyAuth is the live auth object; the per-key callbacks are resolved
+    # from it during pre-call, so it must not be mutated by building the log view
+    assert "logging" in (user_api_key_dict.metadata or {})

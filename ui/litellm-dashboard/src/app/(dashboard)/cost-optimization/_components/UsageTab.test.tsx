@@ -23,18 +23,37 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: ({ data, label }: { data: unknown; label: string }) => (
     <div data-testid="donut-chart" data-label={label} data-slices={JSON.stringify(data)} />
   ),
-  BarChart: ({ data, categories }: { data: unknown; categories: string[] }) => (
-    <div data-testid="bar-chart" data-categories={categories.join(",")} data-series={JSON.stringify(data)} />
+  BarChart: ({
+    data,
+    categories,
+    colors,
+    showLegend,
+    maxBarSize,
+  }: {
+    data: unknown;
+    categories: string[];
+    colors?: readonly string[];
+    showLegend?: boolean;
+    maxBarSize?: number;
+  }) => (
+    <div
+      data-testid="bar-chart"
+      data-categories={categories.join(",")}
+      data-colors={(colors ?? []).join(",")}
+      data-show-legend={String(showLegend ?? true)}
+      data-max-bar-size={maxBarSize === undefined ? "" : String(maxBarSize)}
+      data-series={JSON.stringify(data)}
+    />
   ),
   CustomLegend: ({ categories }: { categories: readonly string[] }) => (
     <div data-testid="chart-legend">{categories.join(",")}</div>
   ),
-  DEFAULT_COLOR_CYCLE: ["emerald", "blue", "violet", "amber"],
+  SEQUENTIAL_COLOR_RAMP: ["indigo", "blue", "sky", "cyan"],
 }));
 
 import UsageTab from "./UsageTab";
 
-const emptyToolSpend: ToolSpendResponse = { by_tool: [], daily: [], total_spend: 0, start_date: null, end_date: null };
+const emptyToolSpend: ToolSpendResponse = { by_tool: [], daily: [], start_date: null, end_date: null };
 
 const baseMetrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
   spend: 0,
@@ -216,7 +235,6 @@ describe("UsageTab", () => {
         { tool_name: "read_file", spend: 1.0, call_count: 2, total_tokens: 50 },
       ],
       daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
-      total_spend: 5.0,
       start_date: "2026-07-12",
       end_date: "2026-07-12",
     };
@@ -225,32 +243,29 @@ describe("UsageTab", () => {
     const bars = await findAllByTestId("bar-chart");
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
+    // The 64px bar cap is this card's opt-in; the shared BarChart must not cap
+    // by default (other consumers keep their pre-existing geometry).
+    expect(bars[0].getAttribute("data-max-bar-size")).toBe("64");
   });
 
-  it("notes the 30-day cap when the server clamps the tool spend window", async () => {
+  it("renders the tool legend once outside the charts, with both charts sharing the tool colors", async () => {
     const toolSpend = {
-      by_tool: [{ tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 }],
+      by_tool: [
+        { tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 },
+        { tool_name: "read_file", spend: 1.0, call_count: 2, total_tokens: 50 },
+      ],
       daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
-      total_spend: 4.0,
-      start_date: "2026-07-05",
-      end_date: "2026-07-14",
+      start_date: "2026-07-12",
+      end_date: "2026-07-12",
     };
-    const { findByText } = renderWith([day("2026-07-12", {})], { toolSpend });
+    const { findAllByTestId, getAllByTestId } = renderWith([day("2026-07-12", {})], { toolSpend });
 
-    expect(await findByText(/capped at 30 days before the end of the selected range/)).toBeInTheDocument();
-  });
+    const bars = await findAllByTestId("bar-chart");
+    const [totalByTool, dailyByTool] = bars.slice(-2);
+    expect(dailyByTool.getAttribute("data-show-legend")).toBe("false");
+    expect(totalByTool.getAttribute("data-colors")).toBe(dailyByTool.getAttribute("data-colors"));
 
-  it("shows no cap note when the served window matches the request", async () => {
-    const toolSpend = {
-      by_tool: [{ tool_name: "search", spend: 4.0, call_count: 3, total_tokens: 150 }],
-      daily: [{ date: "2026-07-12", tool_name: "search", spend: 4.0, call_count: 3 }],
-      total_spend: 4.0,
-      start_date: "2026-07-01",
-      end_date: "2026-07-14",
-    };
-    const { findAllByTestId, queryByText } = renderWith([day("2026-07-12", {})], { toolSpend });
-
-    await findAllByTestId("bar-chart");
-    expect(queryByText(/capped at 30 days before the end of the selected range/)).not.toBeInTheDocument();
+    const toolLegends = getAllByTestId("chart-legend").filter((legend) => legend.textContent === "search,read_file");
+    expect(toolLegends).toHaveLength(1);
   });
 });
