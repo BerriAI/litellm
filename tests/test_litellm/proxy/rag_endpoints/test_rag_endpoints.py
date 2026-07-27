@@ -327,3 +327,106 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
     assert response.headers.get("content-type", "").startswith("text/event-stream")
     assert '"object":"chat.completion.chunk"' in response.text
     assert "data: [DONE]" in response.text
+
+
+def test_rag_query_merges_managed_store_params(client_internal_user):
+    """
+    Regression: /v1/rag/query must consult the managed vector store registry
+    (like the direct /v1/vector_stores/{id}/search endpoint does) so that
+    provider, region, embedding model, etc. don't have to be repeated in
+    retrieval_config. Pre-fix the registry was never read, so managed S3
+    Vectors stores failed with "aws_region_name is required".
+    """
+    import litellm
+    from litellm.types.utils import ModelResponse
+
+    mock_vector_store = {
+        "vector_store_id": "s3-store",
+        "custom_llm_provider": "s3_vectors",
+        "litellm_params": {
+            "aws_region_name": "eu-west-1",
+            "embedding_model": "my-embed",
+            "vector_bucket_name": "bkt",
+        },
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = mock_vector_store
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="gpt-4o-mini",
+    )
+
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(
+        "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+        new=AsyncMock(),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.endpoints.assert_user_can_access_vector_store",
+        new=AsyncMock(),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "s3-store"},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    mock_aquery.assert_awaited_once()
+    forwarded_config = mock_aquery.await_args.kwargs["retrieval_config"]
+    assert forwarded_config["vector_store_id"] == "s3-store"
+    assert forwarded_config["custom_llm_provider"] == "s3_vectors"
+    assert forwarded_config["aws_region_name"] == "eu-west-1"
+    assert forwarded_config["embedding_model"] == "my-embed"
+    assert forwarded_config["vector_bucket_name"] == "bkt"
+
+
+def test_rag_query_user_retrieval_config_wins_over_store(client_internal_user):
+    """User-supplied retrieval_config keys must win over registry values."""
+    import litellm
+    from litellm.types.utils import ModelResponse
+
+    mock_vector_store = {
+        "vector_store_id": "s3-store",
+        "custom_llm_provider": "s3_vectors",
+        "litellm_params": {"aws_region_name": "eu-west-1"},
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = mock_vector_store
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="gpt-4o-mini",
+    )
+
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(
+        "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
+        new=AsyncMock(),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.endpoints.assert_user_can_access_vector_store",
+        new=AsyncMock(),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "s3-store", "aws_region_name": "us-east-1"},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded_config = mock_aquery.await_args.kwargs["retrieval_config"]
+    assert forwarded_config["aws_region_name"] == "us-east-1"

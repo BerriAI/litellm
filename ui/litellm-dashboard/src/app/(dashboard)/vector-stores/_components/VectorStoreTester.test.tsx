@@ -128,16 +128,33 @@ describe("VectorStoreTester", () => {
     await waitFor(() => expect(mockSearch).toHaveBeenCalledTimes(1));
   });
 
-  it("reports a failed search and keeps the history empty", async () => {
+  it("shows the backend error in the history when a search fails", async () => {
     const user = userEvent.setup();
-    mockSearch.mockRejectedValue(new Error("boom"));
+    const errorBody = '{"error":{"message":"OpenAIException - api_key is required"}}';
+    mockSearch.mockRejectedValue(new Error(errorBody));
     renderTester();
 
     await user.type(queryInput(), "hello");
     await user.click(searchButton());
 
-    await waitFor(() => expect(mockFromBackend).toHaveBeenCalledWith("Failed to search vector store"));
-    expect(screen.getByText(EMPTY_STATE)).toBeInTheDocument();
+    await waitFor(() => expect(mockFromBackend).toHaveBeenCalledWith(errorBody));
+    expect(screen.getByText(`Search failed: ${errorBody}`)).toBeInTheDocument();
+    expect(screen.queryByText("No results found")).not.toBeInTheDocument();
+    expect(screen.queryByText(EMPTY_STATE)).not.toBeInTheDocument();
+    // the failed query stays in the input for retry
+    expect(queryInput()).toHaveValue("hello");
+  });
+
+  it('renders "No results found" for an empty result set, not an error', async () => {
+    const user = userEvent.setup();
+    mockSearch.mockResolvedValue({ object: "vector_store.search_results.page", search_query: "hello", data: [] });
+    renderTester();
+
+    await user.type(queryInput(), "hello");
+    await user.click(searchButton());
+
+    expect(await screen.findByText("No results found")).toBeInTheDocument();
+    expect(screen.queryByText(/search failed/i)).not.toBeInTheDocument();
   });
 
   it("clears the search history", async () => {
