@@ -1449,6 +1449,49 @@ def test_calculate_total_usage_with_dict_usage_cost():
     assert getattr(usage, "cost", None) == 0.00025
 
 
+def test_calculate_total_usage_preserves_prompt_cache_token_details():
+    """Regression for #34801: dropping `prompt_tokens_details` here re-prices OpenAI
+    cache-read tokens at the uncached input rate, overstating spend."""
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+    usage_with_details = Usage(
+        prompt_tokens=6017,
+        completion_tokens=4,
+        total_tokens=6021,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=6004, cache_write_tokens=10
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=2),
+    )
+    chunk_with_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=usage_with_details,
+    )
+    chunk_without_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(prompt_tokens=6017, completion_tokens=4, total_tokens=6021),
+    )
+
+    usage = calculate_total_usage([chunk_with_details, chunk_without_details])
+
+    assert usage.prompt_tokens == 6017
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 6004
+    assert usage.prompt_tokens_details.cache_write_tokens == 10
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 2
+
+
 @pytest.mark.asyncio
 async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Logging):
     from litellm.utils import ModelResponseListIterator

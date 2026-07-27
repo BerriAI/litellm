@@ -735,7 +735,7 @@ def generic_cost_per_token(
 
     # Check for double-counting: sum of details > prompt_tokens means overlap
     total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
-    has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
+    has_double_counting = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
 
     if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
         text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
