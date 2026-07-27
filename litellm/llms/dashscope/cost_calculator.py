@@ -5,7 +5,7 @@ Handles tiered pricing and prompt caching scenarios.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Tuple
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
@@ -49,7 +49,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
 def _calculate_prompt_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tier: Optional[dict],
+    tier: dict | None,
 ) -> float:
     """Calculate total prompt cost including cached tokens."""
     if tier is not None:
@@ -72,7 +72,7 @@ def _calculate_prompt_cost(
 def _calculate_completion_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tier: Optional[dict],
+    tier: dict | None,
 ) -> float:
     """Calculate total completion cost including reasoning tokens."""
     if tier is not None:
@@ -114,7 +114,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     model_info = get_model_info(model=model, custom_llm_provider="dashscope")
     breakdown = _extract_token_breakdown(usage)
     raw_tiered_pricing = model_info.get("tiered_pricing")
-    tiered_pricing: Optional[List[dict]] = raw_tiered_pricing if isinstance(raw_tiered_pricing, list) else None
+    tiered_pricing: list[dict] | None = raw_tiered_pricing if isinstance(raw_tiered_pricing, list) else None
     tier = (
         select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=usage.prompt_tokens or 0)
         if tiered_pricing
