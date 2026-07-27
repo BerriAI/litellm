@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import litellm
 from litellm import Router
+from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+    DeploymentAffinityCheck,
+)
 from litellm.utils import _get_excluded_filtered_deployments
 
 
@@ -769,3 +773,64 @@ async def test_failover_falls_through_to_external_fallback_when_remaining_in_coo
         )
 
     assert response._hidden_params["model_id"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_weighted_failover_exclusion_runs_before_affinity_callback():
+    """Regression: the weighted-failover exclusion must be applied before the
+    deployment-affinity callback in async_get_healthy_deployments. Otherwise a
+    session pinned to the just-failed deployment collapses the candidate set to
+    that one deployment, the exclusion then empties it, and the request escapes
+    to cross-group fallback even though a healthy sibling in the same group is
+    available."""
+    callbacks_snapshot = list(litellm.callbacks)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                    "model_info": {"id": "dep-a"},
+                },
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                    "model_info": {"id": "dep-b"},
+                },
+            ],
+            routing_strategy="simple-shuffle",
+            enable_weighted_failover=True,
+            optional_pre_call_checks=["session_affinity"],
+        )
+
+        affinity_check = next(
+            c
+            for c in (router.optional_callbacks or [])
+            if isinstance(c, DeploymentAffinityCheck)
+        )
+        session_id = "sess-abc"
+        await affinity_check.cache.async_set_cache(
+            DeploymentAffinityCheck.get_session_affinity_cache_key(
+                model_group="test-model", session_id=session_id
+            ),
+            {"model_id": "dep-a"},
+        )
+
+        pinned = await router.async_get_healthy_deployments(
+            model="test-model",
+            request_kwargs={"metadata": {"session_id": session_id}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert {d["model_info"]["id"] for d in pinned} == {"dep-a"}
+
+        rerouted = await router.async_get_healthy_deployments(
+            model="test-model",
+            request_kwargs={
+                "metadata": {"session_id": session_id},
+                "_excluded_deployment_ids": ["dep-a"],
+            },
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert {d["model_info"]["id"] for d in rerouted} == {"dep-b"}
+    finally:
+        litellm.callbacks[:] = callbacks_snapshot
