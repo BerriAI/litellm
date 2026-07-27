@@ -1020,15 +1020,26 @@ class TestMCPServerManager:
         assert exc_info.value.www_authenticate == challenge
 
     @pytest.mark.asyncio
-    async def test_list_surfaces_non_auth_httpexception_as_internal_fault(self):
-        """A non-auth HTTP error (e.g. 412 no endpoint, 503 IdP down) now raises MCPServerListError
-        with an "internal" fault carrying the status code instead of absorbing to []: the silent
-        empty list made a misconfigured/unavailable server indistinguishable from a healthy server
-        with no tools. The aggregate absorbs it into that server's outcome, so one broken server
-        still does not blank the whole aggregate listing."""
+    @pytest.mark.parametrize(
+        "status_code,expected_tag",
+        [
+            (503, "unavailable"),  # resolver's retryable verdict (store/IdP outage) stays retryable
+            (412, "precondition"),  # resolver's per-caller precondition (e.g. gateway SSO sign-in)
+            (500, "internal"),  # only the gateway's own failure reads as the gateway's fault
+        ],
+    )
+    async def test_list_preserves_the_resolvers_verdict_class_on_non_auth_httpexceptions(
+        self, status_code, expected_tag
+    ):
+        """A non-auth HTTP error raises MCPServerListError with a fault that preserves the
+        resolver's retryable-vs-terminal verdict instead of absorbing to [] (the silent empty list
+        made a broken server indistinguishable from a healthy empty one) and instead of collapsing
+        everything to "internal" (which reported an IdP outage as the gateway's own 500). The
+        aggregate absorbs the fault into that server's outcome, so one broken server still does
+        not blank the whole aggregate listing."""
         server = MCPServer(
-            server_id="te-412",
-            name="te-412-server",
+            server_id=f"te-{status_code}",
+            name=f"te-{status_code}-server",
             url="https://up.example.com",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2_token_exchange,
@@ -1037,13 +1048,11 @@ class TestMCPServerManager:
             client_secret="csec",
         )
         manager = MCPServerManager()
-        manager._create_mcp_client = AsyncMock(
-            side_effect=HTTPException(status_code=412, detail="token exchange endpoint is not configured")
-        )
+        manager._create_mcp_client = AsyncMock(side_effect=HTTPException(status_code=status_code, detail="resolver"))
         with pytest.raises(MCPServerListError) as exc_info:
             await manager._get_tools_from_server(server=server, oauth2_headers={"Authorization": "Bearer subj-jwt"})
-        assert exc_info.value.fault == ServerListFault(tag="internal", status_code=412)
-        assert exc_info.value.server_name == "te-412-server"
+        assert exc_info.value.fault == ServerListFault(tag=expected_tag, status_code=status_code)
+        assert exc_info.value.server_name == f"te-{status_code}-server"
 
     def _upstream_status_error(self, status_code: int, www_authenticate: Optional[str] = None) -> httpx.HTTPStatusError:
         """Build an httpx.HTTPStatusError shaped like the one the MCP SDK surfaces for an upstream
@@ -1922,6 +1931,133 @@ class TestMCPServerManager:
         await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
         assert resolved == ["good-subject"]
 
+    @staticmethod
+    def _id_jag_server(server_id: str) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-name",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="gateway-client",
+            client_secret="gateway-secret",
+            token_exchange_endpoint="https://org-idp.example/oauth2/token",
+            id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
+        )
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_surfaces_the_relogin_challenge_at_the_transport_edge(self):
+        """A dead stored assertion must raise the resolver's re-login 401 (challenge header
+        intact) from the preflight, so a single-server front-door client sees the remedy instead
+        of the session opening onto an empty tool/prompt/resource catalog."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(
+                    CredError.of_unauthorized(
+                        "the stored identity assertion has expired; sign in to the gateway again",
+                        www_authenticate='Bearer error="invalid_token", error_description="re-authenticate"',
+                    )
+                )
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_id_jag(
+                server=self._id_jag_server("idjag-preflight-401"),
+                oauth2_headers=None,
+                raw_headers={"x-litellm-api-key": "Bearer sk-admission"},
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 401
+        headers = exc_info.value.headers or {}
+        www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+        assert "invalid_token" in www_authenticate
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_factory,expected_status",
+        [
+            (lambda CredError: CredError.of_upstream_unavailable("the assertion store could not be read"), 503),
+            (lambda CredError: CredError.of_precondition_required("no stored identity assertion"), 412),
+        ],
+    )
+    async def test_preflight_id_jag_preserves_retryable_vs_terminal(self, error_factory, expected_status):
+        """A store/IdP outage must surface as the retryable 503 and a never-signed-in user as the
+        412 — at the transport edge, with the same statuses the call surface uses, so the two
+        surfaces never tell the caller different stories."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(error_factory(CredError))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_id_jag(
+                server=self._id_jag_server("idjag-preflight-status"),
+                oauth2_headers=None,
+                raw_headers=None,
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == expected_status
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_subject_follows_the_shared_bearer_rule(self):
+        """The preflight selects its subject with the same one rule egress uses
+        (`_subject_bearer_token`), including the free-rider guard: an Authorization bearer that
+        did not admit the caller is never handed to the resolver as exchange subject material."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        subjects = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                subjects.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._id_jag_server("idjag-preflight-subject")
+
+        # Admission consumed the explicit key header, so the Authorization bearer is a free
+        # rider: the preflight must resolve through the stored assertion (no inbound subject).
+        await manager.preflight_id_jag(
+            server=server,
+            oauth2_headers=None,
+            raw_headers={"x-litellm-api-key": "sk-admission", "authorization": "Bearer free-rider"},
+            user_api_key_auth=None,
+        )
+        # The bearer WAS the admission credential, so it is the subject.
+        await manager.preflight_id_jag(
+            server=server,
+            oauth2_headers=None,
+            raw_headers={"authorization": "Bearer caller-id-token"},
+            user_api_key_auth=None,
+        )
+        assert subjects == [None, "caller-id-token"]
+
+    @pytest.mark.asyncio
+    async def test_preflight_id_jag_noop_for_other_auth_types(self):
+        """The preflight is mode-terminal: a non-id_jag server never reaches the resolver here
+        (its own preflight or challenge path owns it)."""
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                raise AssertionError("resolver must not run for non-id_jag servers")
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        await manager.preflight_id_jag(
+            server=self._token_exchange_server("te-not-id-jag"),
+            oauth2_headers={"Authorization": "Bearer subject"},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
@@ -2717,6 +2853,7 @@ class TestMCPServerManager:
             extra_headers=None,
             stdio_env=None,
             subject_token=None,
+            user_api_key_auth=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
@@ -3490,7 +3627,7 @@ class TestMCPServerManager:
         # Capture the extra_headers passed to _create_mcp_client
         captured_extra_headers = None
 
-        async def capture_create_mcp_client(server, mcp_auth_header, extra_headers, stdio_env):
+        async def capture_create_mcp_client(server, mcp_auth_header, extra_headers, stdio_env, **kwargs):
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
             return mock_client
@@ -7620,7 +7757,7 @@ class TestHealthCheckInterpolatesGlobalEnvVars:
         mock_client = AsyncMock()
         mock_client.run_with_session = AsyncMock(return_value="ok")
 
-        async def _create(server, mcp_auth_header, extra_headers, stdio_env):
+        async def _create(server, mcp_auth_header, extra_headers, stdio_env, **kwargs):
             captured["extra_headers"] = extra_headers
             return mock_client
 
@@ -9287,3 +9424,292 @@ class TestDiscoveryFailureLogging:
         assert "typo_row" in caplog.text
         assert "authorization_url, token_url" in caplog.text
         assert "unresolved" in caplog.text
+@pytest.mark.parametrize(
+    "auth_type,subject_token,user_id,expected",
+    [
+        (MCPAuth.oauth2_token_exchange, "hdr.jwt.sig", None, True),
+        (MCPAuth.oauth2_token_exchange, None, "alice", False),
+        (MCPAuth.oauth2_id_jag, "hdr.jwt.sig", None, True),
+        (MCPAuth.oauth2_id_jag, None, "alice", True),
+        (MCPAuth.oauth2_id_jag, None, None, False),
+        (MCPAuth.oauth2_id_jag, None, "", False),
+        (MCPAuth.oauth2, "hdr.jwt.sig", "alice", False),
+        (None, "hdr.jwt.sig", "alice", False),
+    ],
+)
+def test_obo_retry_covers_caller_matrix(auth_type, subject_token, user_id, expected):
+    """token_exchange re-mints only from the inbound token; id_jag also re-mints from the
+    stored SSO assertion keyed by user id, so an id_jag caller with a user identity but no
+    inbound assertion must still route through the invalidate-and-retry path."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _obo_retry_covers_caller
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    auth = UserAPIKeyAuth(api_key="sk-x", user_id=user_id) if user_id is not None else None
+    assert _obo_retry_covers_caller(auth_type, subject_token, auth) is expected
+
+
+def test_obo_retry_requires_an_authenticated_caller_for_stored_assertion_retry():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _obo_retry_covers_caller
+
+    assert _obo_retry_covers_caller(MCPAuth.oauth2_id_jag, None, None) is False
+
+
+class TestSubjectBearerTokenSymmetry:
+    """One rule decides whether the caller's bearer becomes exchange subject material, and every
+    egress surface (tools call, tools list, prompts, resources) resolves through it; an id_jag
+    caller presenting a fresh IdP JWT must see identical sourcing on list and call."""
+
+    def _server(self, auth_type):
+        server = MagicMock()
+        server.auth_type = auth_type
+        return server
+
+    @pytest.mark.parametrize(
+        "auth_type,expected",
+        [
+            (MCPAuth.oauth2_token_exchange, "hdr.jwt.sig"),
+            (MCPAuth.oauth2_id_jag, "hdr.jwt.sig"),
+            (MCPAuth.oauth2, None),
+            (MCPAuth.api_key, None),
+            (None, None),
+        ],
+    )
+    def test_subject_bearer_mode_matrix(self, auth_type, expected):
+        manager = MCPServerManager()
+        raw_headers = {"authorization": "Bearer hdr.jwt.sig"}
+        assert manager._subject_bearer_token(self._server(auth_type), raw_headers) == expected
+
+    def test_oauth2_headers_win_over_raw(self):
+        manager = MCPServerManager()
+        token = manager._subject_bearer_token(
+            self._server(MCPAuth.oauth2_id_jag),
+            {"authorization": "Bearer raw.jwt.sig"},
+            oauth2_headers={"Authorization": "Bearer oauth2.jwt.sig"},
+        )
+        assert token == "oauth2.jwt.sig"
+
+    @pytest.mark.parametrize("key_header", ["x-litellm-api-key", "X-Litellm-Api-Key"])
+    def test_id_jag_ignores_a_free_rider_jwt_when_admission_used_the_explicit_key(self, key_header):
+        """A caller admitted with the explicit litellm key can ride any valid IdP JWT in
+        Authorization; it was never validated as THIS caller's identity, so exchanging it would
+        let the caller act upstream as whoever the token belongs to. The bearer is subject
+        material only when it was the admission credential; such callers resolve through the
+        stored assertion, which is bound to the authenticated user."""
+        manager = MCPServerManager()
+        raw_headers = {key_header: "sk-caller-a", "authorization": "Bearer stolen.user-b.jwt"}
+        assert manager._subject_bearer_token(self._server(MCPAuth.oauth2_id_jag), raw_headers) is None
+        assert (
+            manager._subject_bearer_token(
+                self._server(MCPAuth.oauth2_id_jag),
+                raw_headers,
+                oauth2_headers={"Authorization": "Bearer stolen.user-b.jwt"},
+            )
+            is None
+        )
+
+    def test_id_jag_uses_the_bearer_when_it_was_the_admission_credential(self):
+        manager = MCPServerManager()
+        raw_headers = {"authorization": "Bearer admitted.idp.jwt"}
+        assert (
+            manager._subject_bearer_token(self._server(MCPAuth.oauth2_id_jag), raw_headers) == "admitted.idp.jwt"
+        )
+
+    @pytest.mark.parametrize(
+        "raw_headers",
+        [
+            {"x-litellm-api-key": "", "authorization": "Bearer admitted.idp.jwt"},
+            {"X-Litellm-Api-Key": "", "authorization": "Bearer admitted.idp.jwt"},
+        ],
+    )
+    def test_id_jag_empty_explicit_key_is_not_a_free_rider(self, raw_headers):
+        """Admission skips a falsy primary header and authenticates with Authorization, so an
+        empty explicit key means the bearer IS the admission credential and stays usable."""
+        manager = MCPServerManager()
+        assert (
+            manager._subject_bearer_token(self._server(MCPAuth.oauth2_id_jag), raw_headers) == "admitted.idp.jwt"
+        )
+
+    @pytest.mark.parametrize(
+        "raw_headers",
+        [
+            None,
+            {},
+            {"authorization": "Bearer j.w.t"},
+            {"x-litellm-api-key": "", "authorization": "Bearer j.w.t"},
+            {"x-litellm-api-key": "sk-a", "authorization": "Bearer j.w.t"},
+            {"X-LiteLLM-Api-Key": "sk-a", "authorization": "Bearer j.w.t"},
+            {"x-litellm-api-key": " ", "authorization": "Bearer j.w.t"},
+            {"x-litellm-api-key": "sk-a"},
+        ],
+    )
+    def test_free_rider_predicate_agrees_with_the_admission_accessor(self, raw_headers):
+        """The predicate and get_litellm_api_key_from_headers must encode ONE header-preference
+        rule: the bearer is a free rider exactly when admission's chosen credential is NOT the
+        Authorization value. A mutation to either side breaks this agreement."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+        headers = Headers(headers=dict(raw_headers or {}))
+        admission_credential = MCPRequestHandler.get_litellm_api_key_from_headers(headers)
+        authorization_value = headers.get("authorization")
+        expected_free_rider = (
+            admission_credential != authorization_value if authorization_value is not None else bool(admission_credential)
+        )
+        assert MCPRequestHandler.authorization_is_free_rider(raw_headers) == expected_free_rider
+
+    @pytest.mark.asyncio
+    async def test_openapi_egress_uses_the_same_subject_bearer_rule(self):
+        """spec_path servers egress outside _create_mcp_client, so their extraction is the
+        eighth surface; it must resolve through the identical rule or the binding invariant
+        holds on MCP paths while the OpenAPI path exchanges a free-rider token."""
+        manager = MCPServerManager()
+        server = MagicMock()
+        server.auth_type = MCPAuth.oauth2_id_jag
+        server.server_id = "idjag-openapi"
+        server.url = None
+        server.spec_path = "https://spec.example.com/openapi.yaml"
+
+        captured: dict[str, object] = {}
+
+        def fake_rule(mcp_server, raw_headers, oauth2_headers=None):
+            captured["called_with"] = (raw_headers, oauth2_headers)
+            return None
+
+        raw = {"x-litellm-api-key": "sk-a", "authorization": "Bearer free.rider.jwt"}
+        with (
+            patch.object(manager, "_subject_bearer_token", side_effect=fake_rule),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.to_server_spec"
+            ) as spec_mock,
+        ):
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+                ClientSecretAuth,
+                IdJagConfig,
+                ServerSpec,
+            )
+            from pydantic import SecretStr
+
+            spec_mock.return_value = ServerSpec(
+                server_id="idjag-openapi",
+                resource="https://up.example.com",
+                config=IdJagConfig(
+                    org_token_endpoint="https://idp.example.com/token",
+                    resource_token_endpoint="https://ras.example.com/token",
+                    client_id="gw",
+                    client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+                ),
+            )
+            with patch.object(
+                manager._cred_provider, "resolve_credentials", new=AsyncMock(side_effect=RuntimeError("stop"))
+            ):
+                try:
+                    await manager.resolve_openapi_upstream_auth(
+                        mcp_server=server,
+                        oauth2_headers={"Authorization": "Bearer free.rider.jwt"},
+                        raw_headers=raw,
+                        mcp_auth_header=None,
+                        user_api_key_auth=None,
+                        forwarded_headers=None,
+                    )
+                except Exception:
+                    pass
+
+        assert captured.get("called_with") == (raw, {"Authorization": "Bearer free.rider.jwt"})
+
+    def test_obo_keeps_exchange_what_was_presented_semantics(self):
+        manager = MCPServerManager()
+        raw_headers = {"x-litellm-api-key": "sk-caller-a", "authorization": "Bearer presented.obo.jwt"}
+        assert (
+            manager._subject_bearer_token(self._server(MCPAuth.oauth2_token_exchange), raw_headers)
+            == "presented.obo.jwt"
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_path_threads_the_id_jag_subject_token(self):
+        manager = MCPServerManager()
+        server = MagicMock()
+        server.auth_type = MCPAuth.oauth2_id_jag
+        server.server_id = "idjag-1"
+        server.name = "idjag_srv"
+        server.alias = "idjag_srv"
+        server.transport = MCPTransport.http
+        server.spec_path = None
+
+        captured: dict[str, object] = {}
+
+        async def fake_create_client(**kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("stop after capture")
+
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError
+
+        manager._create_mcp_client = fake_create_client
+        with patch.object(manager, "_build_stdio_env", return_value=None):
+            with pytest.raises(MCPServerListError):
+                await manager._get_tools_from_server(
+                    server,
+                    mcp_auth_header=None,
+                    oauth2_headers={"Authorization": "Bearer caller.idp.jwt"},
+                    raw_headers={"authorization": "Bearer caller.idp.jwt"},
+                    user_api_key_auth=None,
+                )
+
+        assert captured.get("subject_token") == "caller.idp.jwt"
+
+
+class TestEgressSurfacesThreadCallerIdentity:
+    """Every id_jag/OBO egress surface must forward the caller's ``user_api_key_auth`` into
+    ``_create_mcp_client`` so the stored SSO assertion resolves to the right user. A surface that
+    drops it silently breaks id_jag for virtual-key callers; prompts and resources did exactly
+    that. This pins the whole prompt/resource family so a surface cannot regress the threading."""
+
+    def _server(self):
+        server = MagicMock()
+        server.static_headers = None
+        server.transport = MCPTransport.http
+        server.url = "https://up.example.com/mcp"
+        server.name = "srv"
+        server.alias = "srv"
+        server.server_name = "srv"
+        server.server_id = "srv-1"
+        return server
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "invoke",
+        [
+            lambda mgr, srv, uk: mgr.get_prompts_from_server(server=srv, raw_headers={}, user_api_key_auth=uk),
+            lambda mgr, srv, uk: mgr.get_resources_from_server(server=srv, raw_headers={}, user_api_key_auth=uk),
+            lambda mgr, srv, uk: mgr.get_resource_templates_from_server(server=srv, raw_headers={}, user_api_key_auth=uk),
+            lambda mgr, srv, uk: mgr.get_prompt_from_server(
+                server=srv, prompt_name="p", raw_headers={}, user_api_key_auth=uk
+            ),
+            lambda mgr, srv, uk: mgr.read_resource_from_server(
+                server=srv, url="https://up.example.com/r", raw_headers={}, user_api_key_auth=uk
+            ),
+        ],
+        ids=["list_prompts", "list_resources", "list_resource_templates", "get_prompt", "read_resource"],
+    )
+    async def test_prompt_and_resource_surfaces_thread_user_api_key_auth(self, invoke):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        caller = UserAPIKeyAuth(api_key="sk-caller", user_id="alice")
+        captured: dict = {}
+
+        async def capture(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock()
+
+        with (
+            patch.object(manager, "_create_mcp_client", side_effect=capture),
+            patch.object(manager, "_build_stdio_env", return_value=None),
+            patch.object(manager, "_subject_bearer_token", return_value=None),
+        ):
+            try:
+                await invoke(manager, self._server(), caller)
+            except Exception:
+                pass
+
+        assert captured.get("user_api_key_auth") is caller
