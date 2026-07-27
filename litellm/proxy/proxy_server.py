@@ -241,6 +241,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -785,9 +786,6 @@ def cleanup_router_config_variables():
     prisma_client = None
 
 
-_SPEND_DRAIN_TIMEOUT_SECONDS = 10.0
-
-
 async def _drain_spend_buffers_on_shutdown() -> None:
     if scheduler is not None:
         with contextlib.suppress(SchedulerNotRunningError):
@@ -809,13 +807,13 @@ async def _drain_spend_buffers_on_shutdown() -> None:
         try:
             await asyncio.wait_for(
                 coro_factory(),
-                timeout=_SPEND_DRAIN_TIMEOUT_SECONDS,
+                timeout=PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             verbose_proxy_logger.warning(
                 "Draining %s on shutdown exceeded %ss; some rows may be lost",
                 label,
-                _SPEND_DRAIN_TIMEOUT_SECONDS,
+                PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
             )
         except Exception as e:
             verbose_proxy_logger.error(f"Error draining {label} on shutdown: {e}")
