@@ -553,11 +553,7 @@ async def update_end_user(
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
+            if v is not None and (isinstance(v, bool) or v not in ([], {}, 0)):
                 non_default_values[k] = v
 
         ## Get end user table data ##
