@@ -105,22 +105,38 @@ def test_destination_set_is_order_independent():
     assert len(cache._providers) == 1
 
 
-def test_provider_cache_is_bounded_and_evicts_lru(monkeypatch):
+def test_provider_cache_evicts_lru_without_shutdown(monkeypatch):
+    """The provider cache stays bounded, and eviction drops the LRU provider WITHOUT
+    a synchronous ``shutdown``. Eviction runs on the request-serving path, and
+    ``TracerProvider.shutdown`` force-flushes/blocks and can drop a concurrent
+    request's in-flight spans, so it mirrors ``TenantFanOutSpanProcessor`` and lets the
+    evicted worker drain on its own. Restoring a shutdown-on-eviction fails this."""
+    from unittest.mock import MagicMock
+
     from litellm.integrations.otel.plumbing import routing as routing_mod
 
     monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 2)
-    shut_down = []
-    monkeypatch.setattr(
-        routing_mod, "_shutdown_provider", lambda p: shut_down.append(p)
-    )
+    real_build = routing_mod.build_tracer_provider
+    created = []
+
+    def spying_build(config):
+        provider = real_build(config)
+        provider.shutdown = MagicMock(wraps=provider.shutdown)
+        created.append(provider)
+        return provider
+
+    monkeypatch.setattr(routing_mod, "build_tracer_provider", spying_build)
+
     cache = _cache("langfuse_otel")
     default = NoOpTracer()
     cache.tracer_for(default, (_dest("https://1/v1"),))
     cache.tracer_for(default, (_dest("https://2/v1"),))
     cache.tracer_for(default, (_dest("https://1/v1"),))  # touch "1" -> "2" is LRU
     cache.tracer_for(default, (_dest("https://3/v1"),))  # overflow -> evict "2"
+
     assert len(cache._providers) == 2
-    assert len(shut_down) == 1
+    for provider in created:
+        provider.shutdown.assert_not_called()
 
 
 # --- fan-out: keep the configured exporters, append one per destination ----- #

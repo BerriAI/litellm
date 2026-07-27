@@ -50,20 +50,6 @@ _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 _MAX_CACHED_PROVIDERS = 256
 
 
-def _shutdown_provider(provider: TracerProvider) -> None:
-    """Flush + stop an evicted provider's processors (reclaims their threads).
-
-    ``TracerProvider.shutdown`` force-flushes each ``SpanProcessor`` before
-    stopping it, so any spans already handed to a ``BatchSpanProcessor`` are
-    exported rather than dropped. Best-effort: a shutdown failure must not break
-    the request that triggered the eviction.
-    """
-    try:
-        provider.shutdown()
-    except Exception as e:  # pragma: no cover - defensive
-        verbose_logger.debug("OTel V2: error shutting down evicted provider: %s", e)
-
-
 class TenantTracerCache:
     """Destination-scoped ``TracerProvider`` cache keyed by endpoint + headers."""
 
@@ -77,6 +63,14 @@ class TenantTracerCache:
         self._callback_name = callback_name
         self._tracer_name = tracer_name
         self._providers: OrderedDict[tuple[object, ...], TracerProvider] = OrderedDict()
+
+    def _evict_if_full(self) -> None:
+        """Drop the least-recently-used provider when over capacity, without a
+        synchronous ``shutdown``. Mirrors ``TenantFanOutSpanProcessor``: the
+        evicted provider's worker drains on its own and is reclaimed at process
+        exit, and the cache stays bounded."""
+        if len(self._providers) > _MAX_CACHED_PROVIDERS:
+            self._providers.popitem(last=False)
 
     def tracers_for(self, default: Tracer, destinations: "tuple[OtelDestination, ...]") -> "tuple[Tracer, ...]":
         """The tracers for this request's gen-AI span, one per distinct Resource group.
@@ -142,9 +136,7 @@ class TenantTracerCache:
                 self._config_with_destinations(tuple(group), include_base_exporters=include_base)
             )
             self._providers[cache_key] = provider
-            if len(self._providers) > _MAX_CACHED_PROVIDERS:
-                _, evicted = self._providers.popitem(last=False)
-                _shutdown_provider(evicted)
+            self._evict_if_full()
         return get_tracer(provider, self._tracer_name)
 
     def tracer_for(self, default: Tracer, destinations: "tuple[OtelDestination, ...]") -> Tracer:
@@ -163,9 +155,7 @@ class TenantTracerCache:
         else:
             provider = build_tracer_provider(self._config_with_destinations(destinations))
             self._providers[cache_key] = provider
-            if len(self._providers) > _MAX_CACHED_PROVIDERS:
-                _, evicted = self._providers.popitem(last=False)
-                _shutdown_provider(evicted)
+            self._evict_if_full()
         return get_tracer(provider, self._tracer_name)
 
     def _owned_otlp_kind(self) -> str:
