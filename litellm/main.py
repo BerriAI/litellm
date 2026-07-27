@@ -522,6 +522,7 @@ async def acompletion(
         custom_llm_provider=cast(Optional[str], custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
     )
+    tools = AnthropicCacheControlHook.with_tool_config_cache_control(non_default_params=kwargs, tools=tools)
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
@@ -5080,6 +5081,7 @@ def completion(  # type: ignore
         custom_llm_provider=cast(Optional[str], kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
     )
+    tools = AnthropicCacheControlHook.with_tool_config_cache_control(non_default_params=non_default_params, tools=tools)
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(

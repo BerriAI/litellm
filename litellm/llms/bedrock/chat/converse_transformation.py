@@ -1566,7 +1566,8 @@ class AmazonConverseConfig(BaseConfig):
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
         cache_injection_points = additional_request_params.pop("cache_control_injection_points", None)
-        if cache_injection_points and len(bedrock_tools) > 0:
+        tools_already_cached = any("cachePoint" in tool for tool in bedrock_tools)
+        if cache_injection_points and len(bedrock_tools) > 0 and not tools_already_cached:
             for point in cache_injection_points:
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)
