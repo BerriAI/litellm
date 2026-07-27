@@ -618,3 +618,44 @@ def test_openrouter_reasoning_effort_high_passes_through():
     )
 
     assert result["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize(
+    "model, input_rate, output_rate",
+    [
+        ("openrouter/poolside/laguna-xs-2.1", 6e-08, 1.2e-07),
+        ("openrouter/poolside/laguna-m.1", 2e-07, 4e-07),
+        ("openrouter/poolside/laguna-s-2.1", 1e-07, 2e-07),
+        ("openrouter/poolside/laguna-s-2.1:free", 0, 0),
+    ],
+)
+def test_poolside_cost_calculation(model, input_rate, output_rate):
+    """cost_per_token should price the Poolside Laguna models at OpenRouter's published rates."""
+    import litellm
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=1000, completion_tokens=2000
+    )
+
+    assert prompt_cost == pytest.approx(1000 * input_rate)
+    assert completion_cost == pytest.approx(2000 * output_rate)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openrouter/poolside/laguna-xs-2.1",
+        "openrouter/poolside/laguna-m.1",
+        "openrouter/poolside/laguna-s-2.1",
+        "openrouter/poolside/laguna-s-2.1:free",
+    ],
+)
+def test_poolside_models_capabilities(model):
+    """litellm capability accessors should report Poolside Laguna models as reasoning-,
+    function-calling-, and tool-choice-capable."""
+    import litellm
+    from litellm.utils import supports_tool_choice
+
+    assert litellm.supports_reasoning(model=model) is True
+    assert litellm.supports_function_calling(model=model) is True
+    assert supports_tool_choice(model=model, custom_llm_provider="openrouter") is True
