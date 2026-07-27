@@ -699,12 +699,12 @@ def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     a100_80gb_price_per_second_public = (
         DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND  # assume all calls sent to A100 80GB for now
     )
-    if total_time == 0.0:  # total time is in ms
+    if total_time == 0.0:  # total time is in seconds
         start_time = completion_response.get("created", time.time())
-        end_time = getattr(completion_response, "ended", time.time())
+        end_time = completion_response.get("ended", time.time())
         total_time = end_time - start_time
 
-    return a100_80gb_price_per_second_public * total_time / 1000
+    return a100_80gb_price_per_second_public * total_time
 
 
 def has_hidden_params(obj: Any) -> bool:
@@ -1164,6 +1164,7 @@ def completion_cost(
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
+        replicate_total_time_seconds = total_time or 0.0
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (
@@ -1283,7 +1284,10 @@ def completion_cost(
                         prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
                         cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
 
-                    total_time = getattr(completion_response, "_response_ms", 0)
+                    response_time_ms: float = getattr(completion_response, "_response_ms", 0) or 0
+                    total_time = response_time_ms
+                    if replicate_total_time_seconds == 0.0:
+                        replicate_total_time_seconds = response_time_ms / 1000
 
                     hidden_params = getattr(completion_response, "_hidden_params", None)
                     if hidden_params is not None:
@@ -1521,7 +1525,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
+                    return get_replicate_completion_pricing(completion_response, replicate_total_time_seconds)  # type: ignore
 
                 if model is None:
                     raise ValueError(
