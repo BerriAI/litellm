@@ -36,6 +36,7 @@ class McpServerNewBody(BaseModel):
     auth_type: str | None = None
     static_headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
 
 
 class McpServerNewResponse(BaseModel):
@@ -155,6 +156,7 @@ class McpClient:
         auth_type: str | None = None,
         static_headers: dict[str, str] | None = None,
         allowed_tools: list[str] | None = None,
+        mcp_access_groups: list[str] | None = None,
     ) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -168,6 +170,7 @@ class McpClient:
                     auth_type=auth_type,
                     static_headers=static_headers,
                     allowed_tools=allowed_tools,
+                    mcp_access_groups=mcp_access_groups,
                 ),
                 response_type=McpServerNewResponse,
             )
@@ -196,10 +199,13 @@ class McpClient:
         *,
         user_id: str,
         mcp_servers: list[str] | None,
+        mcp_access_groups: list[str] | None = None,
         models: list[str] | None = None,
     ) -> str:
         object_permission = (
-            ObjectPermission(mcp_servers=mcp_servers) if mcp_servers is not None else None
+            ObjectPermission(mcp_servers=mcp_servers, mcp_access_groups=mcp_access_groups)
+            if mcp_servers is not None or mcp_access_groups is not None
+            else None
         )
         return self.proxy.generate_key(
             KeyGenerateBody(

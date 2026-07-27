@@ -3655,3 +3655,58 @@ async def test_user_update_explicit_spend_takes_precedence_over_window_reset(moc
         user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
     assert captured.get("spend") == 42.0
+
+
+@pytest.mark.asyncio
+async def test_add_new_user_to_default_team_propagates_max_budget_in_team(mocker):
+    """A configured per-member budget on a default team must reach the membership
+    write; dropping it means the member is unlimited within the team budget."""
+    from litellm.proxy._types import NewUserRequestTeam
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    mock_add = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await add_new_user_to_default_team(
+        user_id="jwt-user",
+        user_email="jwt-user@example.com",
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        teams=[
+            NewUserRequestTeam(team_id="budgeted-team", max_budget_in_team=25.0, user_role="admin"),
+            NewUserRequestTeam(team_id="uncapped-team"),
+        ],
+        prisma_client=mocker.MagicMock(),
+    )
+
+    calls = {c.kwargs["team_id"]: c.kwargs for c in mock_add.call_args_list}
+    assert calls["budgeted-team"]["max_budget_in_team"] == 25.0
+    assert calls["budgeted-team"]["user_role"] == "admin"
+    assert calls["uncapped-team"]["max_budget_in_team"] is None
+
+
+@pytest.mark.asyncio
+async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(mocker):
+    """Bare-string default teams carry no per-member budget."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        add_new_user_to_default_team,
+    )
+
+    mock_add = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await add_new_user_to_default_team(
+        user_id="jwt-user",
+        user_email=None,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        teams=["string-team"],
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert mock_add.call_args.kwargs["max_budget_in_team"] is None
+    assert mock_add.call_args.kwargs["team_id"] == "string-team"

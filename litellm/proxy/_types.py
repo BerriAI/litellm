@@ -629,6 +629,10 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs/v2",
         "/spend/logs/ui",
         "/spend/logs/session/ui",
+        # Reads end users out of spend logs, scoped to the caller's own rows and
+        # permitted teams exactly like /spend/logs/ui — it belongs to the same
+        # access tier, not to customer management.
+        "/customer/aliases",
         "/cost/estimate",
     ]
 
@@ -818,6 +822,7 @@ class LiteLLMRoutes(enum.Enum):
             # Customer / end-user listing (handlers already gate on
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
+            "/customer/aliases",
             "/customer/info",
             # UI Logs page detail drawer (single + session). The list endpoint
             # `/spend/logs/ui` is covered via spend_tracking_routes below.

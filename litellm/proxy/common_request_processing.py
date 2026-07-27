@@ -51,7 +51,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
@@ -1255,6 +1255,21 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        # Merge model-level guardrails before pre_call_hook so DB/UI-configured
+        # guardrails actually execute on pre_call. Without this, guardrails set
+        # via litellm_params.guardrails are only honored on post_call paths
+        # (#29652, partial fix in #23774 covered non-streaming post_call only).
+        # trust_client_model_info=False on pre_call: route_request hasn't run
+        # and add_litellm_data_to_request preserves client-supplied
+        # model_info when allow_client_pricing_override is set, so a caller
+        # could otherwise spoof an unguarded model_info.id while requesting
+        # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
+        self.data = _check_and_merge_model_level_guardrails(
+            data=self.data,
+            llm_router=llm_router,
+            trust_client_model_info=False,
+        )
 
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict,

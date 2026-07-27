@@ -106,6 +106,9 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER = 100
 # prevents an authenticated client from forcing the proxy to buffer an
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES = 4096
+# ASGI scope key holding the tracing span of the request carrying an MCP
+# message, written on the request task and read back by the message handler.
+_MCP_TRANSPORT_SPAN_SCOPE_KEY = "litellm_otel_transport_span"
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -242,10 +245,12 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[dict[str, str]]:
     """The W3C trace context (``traceparent``/``tracestate``) the MCP client
     propagated in the request's ``params._meta`` (SEP-414), or ``None``.
 
-    Per the OTel MCP semconv the MCP span parents to this propagated context rather
-    than to the HTTP/session transport (which is recorded as a link instead), so a
-    streamable-HTTP session that multiplexes many messages does not glue every
-    message under the session's first request. The client's W3C Baggage is
+    When present, per the OTel MCP semconv the MCP span parents to this propagated
+    context rather than to the HTTP transport (which is recorded as a link instead).
+    When absent, the span nests under the transport span of the request carrying
+    this specific message, so a streamable-HTTP session that multiplexes many
+    messages still does not glue every message under the session's first request;
+    see ``resolve_mcp_span_context``. The client's W3C Baggage is
     deliberately excluded: it is caller-controlled, and the otel baggage processor
     stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,
     ...) onto the span, so honoring remote baggage would let a client spoof a
@@ -284,6 +289,82 @@ def _otel_reset_mcp_trace_carrier(token: object) -> None:
         )
 
         reset_mcp_message_trace_carrier(token)
+    except ImportError:
+        return
+
+
+def _otel_publish_transport_span_on_scope(scope: Scope) -> None:
+    """Record this request's tracing span on its own ASGI scope.
+
+    Resolved on the ASGI request task, where the proxy's server span is anchored,
+    and read back by the MCP message handler through ``req_ctx.request`` — the
+    ``Request`` the transport attaches to each message. A stateful streamable-HTTP
+    session handles every message on the task spawned by its ``initialize`` POST, so
+    the handler's own task cannot see later requests' spans.
+
+    The scope, not the shared session auth context: a JSON-RPC *response* POST
+    deliberately skips the per-session lock (it can arrive while the tool call that
+    awaits it is still in flight), so a field on that shared object would be
+    overwritten mid-call and the tool call would attribute itself to the response's
+    request. A scope belongs to exactly one request and dies with it, which also
+    keeps a finished span from being retained by an idle session.
+
+    The live span, not just its context: a failed tool call stamps ``error.*`` on it,
+    which needs a span still open for writes. Lazily imported so opentelemetry stays
+    an optional dependency; a no-op when otel_v2 is unavailable or no request span is
+    anchored."""
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            request_root_span,
+        )
+
+        span = request_root_span()
+    except ImportError:
+        return
+    if span is not None:
+        scope[_MCP_TRANSPORT_SPAN_SCOPE_KEY] = span
+
+
+def _otel_transport_span_from_message(req_ctx: object) -> object:
+    """The tracing span of the HTTP request that carried this MCP message.
+
+    Read off that request's ASGI scope, reached through the ``Request`` the
+    streamable-HTTP transport attaches to each message, so it is this message's
+    transport and not whichever request happens to have touched the session last.
+    Returns whatever the scope holds; the otel plumbing validates it."""
+    request = getattr(req_ctx, "request", None)
+    scope = getattr(request, "scope", None)
+    if not isinstance(scope, Mapping):
+        return None
+    return scope.get(_MCP_TRANSPORT_SPAN_SCOPE_KEY)
+
+
+def _otel_set_mcp_transport_span(span: object) -> object:
+    """Publish the current message's transport span, which the otel_v2 MCP span
+    attaches to and a failed tool call stamps its error on. Returns a reset token,
+    or ``None`` when otel_v2 is unavailable."""
+    if span is None:
+        return None
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            set_mcp_message_transport_span,
+        )
+
+        return set_mcp_message_transport_span(span)
+    except ImportError:
+        return None
+
+
+def _otel_reset_mcp_transport_span(token: object) -> None:
+    """Paired with ``_otel_set_mcp_transport_span``."""
+    if token is None:
+        return
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            reset_mcp_message_transport_span,
+        )
+
+        reset_mcp_message_transport_span(token)
     except ImportError:
         return
 
@@ -670,9 +751,11 @@ if MCP_AVAILABLE:
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
+        _transport_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
+            _transport_token = _otel_set_mcp_transport_span(_otel_transport_span_from_message(req_ctx))
             # Get user authentication from context variable
             (
                 user_api_key_auth,
@@ -728,6 +811,7 @@ if MCP_AVAILABLE:
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
         finally:
+            _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -901,9 +985,11 @@ if MCP_AVAILABLE:
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
+        _transport_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
+            _transport_token = _otel_set_mcp_transport_span(_otel_transport_span_from_message(req_ctx))
             # Validate arguments
             (
                 user_api_key_auth,
@@ -1042,6 +1128,7 @@ if MCP_AVAILABLE:
 
             return response
         finally:
+            _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
@@ -2640,7 +2727,7 @@ if MCP_AVAILABLE:
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail=f"User not allowed to call this tool. Allowed MCP servers: {allowed_mcp_servers}",
+                    detail="User not allowed to call this tool.",
                 )
 
         standard_logging_mcp_tool_call: StandardLoggingMCPToolCall = _get_standard_logging_mcp_tool_call(
@@ -4186,6 +4273,7 @@ if MCP_AVAILABLE:
                 _increment_active_request_session(initialized_session_id)
 
             async def _dispatch() -> None:
+                _otel_publish_transport_span_on_scope(scope)
                 auth_user = _set_or_update_auth_context(
                     user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,

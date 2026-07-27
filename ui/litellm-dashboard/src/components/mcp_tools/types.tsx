@@ -103,6 +103,7 @@ export const getOAuthAuthorizationIdentity = (values: Record<string, unknown>): 
     client_id: credentials.client_id ?? null,
     client_secret: credentials.client_secret ?? null,
     scopes: credentials.scopes ?? null,
+    upstream_resource: credentials.upstream_resource ?? null,
     issuer: values.issuer ?? null,
     authorization_url: values.authorization_url ?? null,
     token_url: values.token_url ?? null,
@@ -129,22 +130,45 @@ export const CLEARED_ON_INVALIDATION = ["credentials"] as const;
 // token-shaped keys so a preserve can never carry minted material through. Shared by both forms.
 const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
 
+// Admin-typed credential config that is NOT part of the declared OAuth app. It is preserved across an
+// invalidation for the same reason the client keys are (nothing programmatic writes it, so a reset
+// would destroy admin input), but it must stay OUT of the declared-app set: whether an app exists is
+// a distinct question that gates the "app may not match upstream" warning, and a server using dynamic
+// client registration can set a resource indicator while having no app at all.
+export const ADMIN_CONFIG_CREDENTIAL_KEYS = ["upstream_resource"] as const;
+
 // Minted token material the oauth2 authorize path writes beside the app keys; stripped from restored
 // snapshots and from any credentials that transit to the temp-session preview so a stale token never
 // reaches the backend or a client-forwarded server row.
 export const MINTED_TOKEN_CREDENTIAL_KEYS = ["access_token", "refresh_token", "expires_in", "scope"] as const;
 
-export const preservedDeclaredAppCredentials = (
+const pickStringCredentials = (
   credentials: Record<string, unknown> | null | undefined,
+  keys: readonly string[],
 ): Record<string, string> | undefined => {
   if (!credentials) return undefined;
   const kept = Object.fromEntries(
-    DECLARED_APP_CREDENTIAL_KEYS.filter((key) => typeof credentials[key] === "string" && credentials[key] !== "").map(
-      (key) => [key, credentials[key] as string],
-    ),
+    keys
+      .filter((key) => typeof credentials[key] === "string" && credentials[key] !== "")
+      .map((key) => [key, credentials[key] as string]),
   );
   return Object.keys(kept).length > 0 ? kept : undefined;
 };
+
+// Does the admin have a declared OAuth client app? Answers only that question; use
+// preservedAdminCredentials for anything deciding what survives a reset or reaches the backend, or a
+// server that only carries admin config would read as having an app it never declared.
+export const preservedDeclaredAppCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined => pickStringCredentials(credentials, DECLARED_APP_CREDENTIAL_KEYS);
+
+// Everything the admin typed into `credentials` and nothing minted: the declared app plus the config
+// keys. This is what must survive the invalidation reset and what a client-forwarded row may persist,
+// so dropping a key from here silently discards admin input on an unrelated edit.
+export const preservedAdminCredentials = (
+  credentials: Record<string, unknown> | null | undefined,
+): Record<string, string> | undefined =>
+  pickStringCredentials(credentials, [...DECLARED_APP_CREDENTIAL_KEYS, ...ADMIN_CONFIG_CREDENTIAL_KEYS]);
 
 // Drop minted token keys, keeping everything else (the declared app plus any non-token config).
 export const withoutMintedTokenCredentials = (

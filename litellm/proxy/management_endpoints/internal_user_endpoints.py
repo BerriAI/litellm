@@ -314,11 +314,13 @@ async def add_new_user_to_default_team(
     tasks = []
     for team in teams:
         user_role: Literal["user", "admin"] = "user"
+        max_budget_in_team: float | None = None
         if isinstance(team, str):
             team_id = team
         elif isinstance(team, NewUserRequestTeam):
             team_id = team.team_id
             user_role = team.user_role
+            max_budget_in_team = team.max_budget_in_team
         else:
             raise ValueError(f"Invalid team type: {type(team)}")
 
@@ -328,6 +330,7 @@ async def add_new_user_to_default_team(
                 team_id=team_id,
                 user_email=user_email,
                 user_api_key_dict=user_api_key_dict,
+                max_budget_in_team=max_budget_in_team,
                 user_role=user_role,
             )
         )
