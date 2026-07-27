@@ -67,13 +67,27 @@ Strict mode exits non-zero on `@pytest.mark.covers(...)` ids that are not checke
 the registry. Add `--fail-on-collection-errors` when the job should also fail on pytest
 collection errors.
 
+## Tiering policy
+
+Tier is what we commit to, not how interesting a behavior is. The signed-off rules:
+
+- guardrails: the surfaces we commit to are bedrock guardrails, OpenAI moderations,
+  the LiteLLM content filter, LLM-as-a-judge and presidio masking. Third-party vendor
+  guardrails are tail and sit at P2
+- AIM stays P2 until its DRI lands a mock AIM server; there is no live AIM tenant in CI,
+  so promoting it would only buy a permanently red or permanently skipped cell
+- logging: s3, GCS, prometheus, datadog and OTEL are P0 on success, failure and stream
+  where the path exists. The remaining eval/analytics/cost destinations are tail at P2
+- auth: virtual keys and JWT are the committed paths at P0. OAuth2 introspection and the
+  IP allowlist are P2
+- P0 + P1 is the number the team is driving to 95%; P2 rows stay enumerated so a tail gap
+  is visible, but they do not gate the target
+
 ## Status: this is a draft for review
 
-The cells were enumerated from the codebase and the tiers are a first proposal. Known
-things to settle before treating the set as final:
+The cells were enumerated from the codebase. Known things to settle before treating the
+set as final:
 
-- tiers are proposed, not signed off; 125 P0 is a lot to prove fail-before-fix, so P0 may
-  want tightening
 - a few cells need a support check or a prune (for example `llm.embeddings.anthropic.*`
   and `reliability.perf.throughput.under_slo`)
 - auth is covered in two places (`other.auth.*` and the mgmt authz assertions); the
