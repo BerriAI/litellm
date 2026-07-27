@@ -722,6 +722,37 @@ class ComplexityRouter(CustomLogger):
             return pinned_model
         return self.get_model_for_tier(escalated_tier)
 
+    def _resolve_pinned_model(
+        self,
+        pinned_model: str,
+        user_message: str | None,
+        system_prompt: str | None,
+    ) -> tuple[str | None, str]:
+        """Resolve the model a pinned session serves this turn, with its routing cause.
+
+        A pin is a floor rather than a lock: the heuristic scorer runs on each pinned turn
+        and raises the pin when the turn scores above the pinned tier, so a session pinned
+        on a trivial opening turn is not held on that tier for the rest of its life. The pin
+        is never lowered, so a provider prompt cache is only invalidated on the way up.
+
+        Scores with ``classify`` rather than ``aclassify`` so a pinned turn never pays for an
+        LLM classifier call or an embedding lookup.
+
+        Returns ``None`` when the pin no longer maps to a configured tier, signalling a full
+        reclassification instead.
+        """
+        if user_message is None:
+            return pinned_model, "session_affinity_pin"
+        if self.escalation_keywords and self._escalation_triggered(user_message):
+            return self._escalated_pin(pinned_model), "session_affinity_escalation"
+        pinned_tier = self._tier_for_model(pinned_model)
+        if pinned_tier is None:
+            return pinned_model, "session_affinity_pin"
+        classified_tier, _, _ = self.classify(user_message, system_prompt)
+        if TIER_SEVERITY_ORDER.index(classified_tier) <= TIER_SEVERITY_ORDER.index(pinned_tier):
+            return pinned_model, "session_affinity_pin"
+        return self.get_model_for_tier(classified_tier), "session_affinity_complexity_escalation"
+
     def _lexical_tier_override(self, user_message: str) -> ComplexityTier | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
 
@@ -970,16 +1001,13 @@ class ComplexityRouter(CustomLogger):
         if cache_key is not None:
             pinned_model = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
             if isinstance(pinned_model, str):
-                routed_model: str | None = pinned_model
-                if self.escalation_keywords:
-                    resolved_messages = self._resolve_messages(messages, request_kwargs)
-                    user_message = (
-                        self._extract_user_message_and_system_prompt(resolved_messages)[0]
-                        if resolved_messages
-                        else None
-                    )
-                    if user_message is not None and self._escalation_triggered(user_message):
-                        routed_model = self._escalated_pin(pinned_model)
+                resolved_messages = self._resolve_messages(messages, request_kwargs)
+                user_message, system_prompt = (
+                    self._extract_user_message_and_system_prompt(resolved_messages)
+                    if resolved_messages
+                    else (None, None)
+                )
+                routed_model, cause = self._resolve_pinned_model(pinned_model, user_message, system_prompt)
                 if routed_model is not None:
                     # Refresh the TTL on every hit so an active session doesn't lose its
                     # pin mid-conversation just because it outlives the original write.
@@ -996,7 +1024,6 @@ class ComplexityRouter(CustomLogger):
                         kwargs_metadata = request_kwargs.setdefault("metadata", {})
                         if isinstance(kwargs_metadata, dict):
                             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = routed_model
-                    cause = "session_affinity_escalation" if routed_model != pinned_model else "session_affinity_pin"
                     verbose_router_logger.info(
                         f"ComplexityRouter: routing decision cause={cause}, routed_model={routed_model}"
                     )
