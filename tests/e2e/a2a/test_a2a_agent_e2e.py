@@ -32,10 +32,14 @@ from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 
+# api_key is deliberately omitted so the provider resolves ANTHROPIC_API_KEY from
+# the proxy's own environment. Setting it to an "os.environ/ANTHROPIC_API_KEY"
+# reference sends that literal string upstream as the key (LIT-4837: the bridge
+# never resolves secret references), which Anthropic rejects with
+# "invalid x-api-key". Do not add it back until that is fixed.
 BRIDGE = A2ABridgeParams(
     custom_llm_provider="anthropic",
     model="claude-haiku-4-5",
-    api_key="os.environ/ANTHROPIC_API_KEY",
 )
 
 MOVEHOME_AGENT_CARD_URL = "https://movehome.org/.well-known/agent.json"
