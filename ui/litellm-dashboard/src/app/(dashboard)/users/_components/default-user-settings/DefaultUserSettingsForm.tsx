@@ -5,7 +5,7 @@ import * as React from "react";
 import { useFieldArray, type Control } from "react-hook-form";
 
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { ModelSelect, MODEL_SELECT_SPECIAL_VALUES_ARRAY } from "@/components/ModelSelect/ModelSelect";
+import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -38,7 +38,7 @@ const TEAM_ROLE_OPTIONS = [
 ] as const;
 
 const MODEL_SENTINEL_LABELS: ReadonlyMap<string, string> = new Map(
-  MODEL_SELECT_SPECIAL_VALUES_ARRAY.map(({ value, label }) => [value, label]),
+  MODEL_SENTINEL_OPTIONS.map(({ value, label }) => [value, label]),
 );
 
 const TEAMS_PAGE_SIZE = 50;

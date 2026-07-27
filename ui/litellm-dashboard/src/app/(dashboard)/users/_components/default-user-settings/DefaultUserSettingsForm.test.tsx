@@ -26,7 +26,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 vi.mock("@/components/ModelSelect/ModelSelect", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/ModelSelect/ModelSelect")>();
   return {
-    MODEL_SELECT_SPECIAL_VALUES_ARRAY: actual.MODEL_SELECT_SPECIAL_VALUES_ARRAY,
+    MODEL_SENTINEL_OPTIONS: actual.MODEL_SENTINEL_OPTIONS,
     ModelSelect: ({ onChange }: { onChange: (values: string[]) => void }) => (
       <button type="button" onClick={() => onChange(["all-proxy-models"])}>
         set-models
