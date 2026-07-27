@@ -8154,3 +8154,61 @@ class TestListFiltersHonorThePrefixBoundary:
 
                 assert refused, entry
                 assert hidden, entry
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "grants,expected",
+        [
+            (None, True),
+            ([], False),
+            (["read_wiki_contents"], True),
+            (["read_wiki_structure"], False),
+            ([f"{SERVER_ID}-read_wiki_contents"], False),
+            (["READ_WIKI_CONTENTS"], False),
+        ],
+    )
+    async def test_key_team_listing_and_dispatch_agree(self, grants, expected):
+        """The key/team grant question, driven through both production paths.
+
+        Listing and dispatch read one predicate, so a row where the tool is advertised
+        and then refused (or hidden while callable) cannot exist. Asserting the expected
+        verdict as well as the agreement matters: both paths reading one predicate makes
+        equality alone tautological, so a wrong predicate would keep them consistent.
+        Grants are stored bare, so the wire-form and case-variant rows deny; that is
+        deliberately unlike the server-level lists, which honor every spelling.
+        """
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            filter_tools_by_key_team_permissions,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        server = MCPServer(
+            server_id=self.SERVER_ID,
+            name=self.SERVER_ID,
+            url="http://127.0.0.1:5115/mcp",
+            transport=MCPTransport.http,
+        )
+        published = MCPTool(
+            name=f"{self.SERVER_ID}-read_wiki_contents", description="", inputSchema={"type": "object"}
+        )
+        auth = UserAPIKeyAuth(api_key="sk-test")
+
+        with patch.object(
+            MCPRequestHandler, "get_allowed_tools_for_server", AsyncMock(return_value=grants)
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        ) as mock_manager:
+            mock_manager.get_mcp_server_by_id.return_value = server
+
+            listed = await filter_tools_by_key_team_permissions([published], self.SERVER_ID, auth) != []
+            callable_ = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="read_wiki_contents", server_id=self.SERVER_ID, user_api_key_auth=auth
+            )
+
+        assert listed == callable_, f"grants={grants!r} listed={listed} callable={callable_}"
+        assert listed is expected, f"grants={grants!r} expected={expected} got={listed}"

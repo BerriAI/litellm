@@ -2305,14 +2305,16 @@ if MCP_AVAILABLE:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
-        if allowed_tool_names is None:
-            return tools
 
         # Tools arrive prefixed with the server's own prefix; strip exactly that
         # prefix (resolved from the server) rather than the first separator, so a
         # prefix containing the separator still reduces to the stored bare name.
         server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-        return [t for t in tools if strip_known_server_prefix(t.name, server) in allowed_tool_names]
+        return [
+            t
+            for t in tools
+            if MCPRequestHandler.tool_is_granted(strip_known_server_prefix(t.name, server), allowed_tool_names)
+        ]
 
     async def _list_mcp_tools(
         user_api_key_auth: UserAPIKeyAuth | None = None,
