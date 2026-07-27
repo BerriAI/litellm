@@ -2094,6 +2094,15 @@ async def _build_oauth_protected_resource_response(
     it. Only the legacy ``is_oauth_passthrough`` opt-in rewrites ``resource`` to
     the gateway's own URL so clients present the bearer token back to the gateway.
 
+    An explicitly named gateway-managed oauth2 server (interactive with
+    gateway-vaulted per-user tokens, or M2M) advertises the gateway's own
+    authorization server (``{base}/mcp``): a keyless DCR client that configured the
+    per-server URL completes the same sign-in flow the aggregate ``/mcp`` endpoint
+    supports and is admitted with a gateway session bearer. The per-server relay
+    authorize/token endpoints stay registered for the keyed interactive flow (which
+    is challenged with an explicit ``authorization_uri``), and the root-resolved
+    (unnamed) legacy shape keeps the relay authorization server.
+
     Args:
         request: FastAPI Request object
         mcp_server_name: Name of the MCP server
@@ -2109,6 +2118,7 @@ async def _build_oauth_protected_resource_response(
 
     request_base_url = get_request_base_url(request)
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
+    explicitly_named = mcp_server_name is not None
 
     # When no server name provided, try to resolve the single OAuth2 server
     if mcp_server_name is None:
@@ -2182,6 +2192,13 @@ async def _build_oauth_protected_resource_response(
     # returns metadata; every other non-oauth2 named server 404s to avoid enumeration.
     if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
         _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
+
+    if explicitly_named and mcp_server is not None and mcp_server.is_gateway_managed_oauth2:
+        return {
+            "authorization_servers": [f"{request_base_url}/mcp"],
+            "resource": resource_url,
+            "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+        }
 
     return {
         "authorization_servers": [

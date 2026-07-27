@@ -37,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
+    _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
@@ -53,6 +54,7 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    get_passthrough_www_authenticate,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -3611,30 +3613,6 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
-    def _get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str:
-        request = StarletteRequest(scope)
-        base_url = get_request_base_url(request)
-        _path = scope.get("_original_path") or scope.get("path", "") or ""
-
-        if _path.startswith(f"/{server_name}/mcp"):
-            return f"{base_url}/.well-known/oauth-protected-resource/{server_name}/mcp"
-        return f"{base_url}/.well-known/oauth-protected-resource/mcp/{server_name}"
-
-    def _get_passthrough_www_authenticate(
-        scope: Scope,
-        server_name: str,
-        invalid_token: bool = False,
-    ) -> str:
-        resource_metadata_url = _get_passthrough_resource_metadata_url(
-            scope=scope,
-            server_name=server_name,
-        )
-        params = []
-        if invalid_token:
-            params.append('error="invalid_token"')
-        params.append(f'resource_metadata="{resource_metadata_url}"')
-        return "Bearer " + ", ".join(params)
-
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -3684,9 +3662,25 @@ if MCP_AVAILABLE:
                     # challenge whenever one is absent, regardless of any bearer.
                     # The v2 resolver owns the existence check, so every
                     # authorization_code resolution (egress and this discovery
-                    # challenge) runs through it.
+                    # challenge) runs through it. A keyless admitted subject is
+                    # challenged with the per-server resource_metadata (whose
+                    # authorization server is the gateway itself, vaulting via the
+                    # authorize interlude); the per-server relay advertised below
+                    # cannot vault without a litellm key on its token request.
                     if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
                         continue
+
+                    if _is_mcp_admitted_user_subject(user_api_key_auth):
+                        raise HTTPException(
+                            status_code=401,
+                            detail="Unauthorized",
+                            headers={
+                                "www-authenticate": get_passthrough_www_authenticate(
+                                    scope=scope,
+                                    server_name=server_name,
+                                )
+                            },
+                        )
 
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
@@ -3712,7 +3706,7 @@ if MCP_AVAILABLE:
                     # the proxied resource_metadata (RFC 9728), not the gateway
                     # authorization_uri above which would authorize against the
                     # gateway instead of the upstream IdP.
-                    www_authenticate = _get_passthrough_www_authenticate(
+                    www_authenticate = get_passthrough_www_authenticate(
                         scope=scope,
                         server_name=server_name,
                     )
@@ -3768,7 +3762,7 @@ if MCP_AVAILABLE:
                 and server.is_oauth_passthrough
                 and not _client_has_passthrough_authorization(server, oauth2_headers, mcp_server_auth_headers)
             ):
-                www_authenticate = _get_passthrough_www_authenticate(
+                www_authenticate = get_passthrough_www_authenticate(
                     scope=scope,
                     server_name=server_name,
                 )
@@ -3785,7 +3779,7 @@ if MCP_AVAILABLE:
                 and _get_forwarded_auth_from_scope(scope) is None
                 and not _client_has_per_server_auth_header(server, mcp_server_auth_headers)
             ):
-                www_authenticate = _get_passthrough_www_authenticate(
+                www_authenticate = get_passthrough_www_authenticate(
                     scope=scope,
                     server_name=server_name,
                 )
@@ -3807,7 +3801,7 @@ if MCP_AVAILABLE:
                         status_code=401,
                         detail="Unauthorized",
                         headers={
-                            "www-authenticate": _get_passthrough_www_authenticate(
+                            "www-authenticate": get_passthrough_www_authenticate(
                                 scope=scope,
                                 server_name=server_name,
                             )
@@ -4014,7 +4008,7 @@ if MCP_AVAILABLE:
                 # Token is missing or expired: keep pass-through clients on the
                 # protected-resource discovery flow so they re-authorize against
                 # the upstream IdP metadata proxied by LiteLLM.
-                www_authenticate = _get_passthrough_www_authenticate(
+                www_authenticate = get_passthrough_www_authenticate(
                     scope=scope,
                     server_name=challenge_server_name,
                     invalid_token=True,

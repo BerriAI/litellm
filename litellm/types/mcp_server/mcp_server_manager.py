@@ -195,6 +195,18 @@ class MCPServer(BaseModel):
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
 
     @property
+    def is_gateway_managed_oauth2(self) -> bool:
+        """True when the gateway itself owns this server's OAuth custody: an ``oauth2`` server
+        (interactive authorization_code with gateway-vaulted per-user tokens, or M2M
+        client_credentials minted at egress) that has NOT opted into upstream-delegated auth.
+        These are the servers the keyless gateway-DCR flow can serve end to end, so the
+        per-server 401 challenge and protected-resource metadata advertise the gateway as the
+        authorization server for exactly this set. ``true_passthrough``, ``oauth_delegate``,
+        DCR-bridge, and token-exchange servers are their own auth types and client-forwarded,
+        so they are excluded by construction."""
+        return self.auth_type == MCPAuth.oauth2 and not self.delegate_auth_to_upstream
+
+    @property
     def is_true_passthrough(self) -> bool:
         """True for the transparent-proxy mode: LiteLLM performs no admission auth and forwards the
         client's ``Authorization`` to the upstream unchanged."""

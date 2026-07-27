@@ -11,6 +11,7 @@ from typing_extensions import assert_never
 import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    get_passthrough_resource_metadata_url,
     get_request_base_url,
     well_known_root_suffix,
 )
@@ -137,52 +138,83 @@ def _is_mcp_admitted_user_subject(user_api_key_auth: UserAPIKeyAuth | None) -> b
     return user_api_key_auth is not None and user_api_key_auth.mcp_admitted_user_subject is True
 
 
-def _is_aggregate_mcp_scope(route: str, mcp_servers: list[str] | None) -> bool:
-    """True when a request targets the aggregate ``/mcp`` endpoint rather than any named
-    server. Named targets arrive either through ``x-mcp-servers`` (``mcp_servers``) or a
-    path segment (``/mcp/{server}`` / ``/{server}/mcp``); the aggregate scope has neither.
-    The gateway-DCR session arm and challenge fire only here, so a per-server flow is never
-    affected."""
-    if mcp_servers:
-        return False
-    return len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0
+def _gateway_dcr_challenge_target(
+    route: str,
+    mcp_servers: list[str] | None,
+    client_ip: str | None,
+) -> str | None:
+    """The single path-named server this request targets, iff it resolves to a
+    gateway-managed oauth2 server — the one per-server shape the gateway's own keyless
+    DCR flow serves end to end, so the 401 challenge may advertise the per-server
+    protected-resource metadata (whose ``authorization_servers`` names the gateway).
+
+    Multi-server CSV paths, header/path mismatches, unknown names, and every
+    client-forwarded or delegated mode return ``None``: those cells keep their existing
+    challenge (or absence of one), and a challenge is never emitted for a name the
+    public discovery routes would 404, so this reveals exactly the server set the
+    per-server protected-resource metadata already reveals."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    targets = _parse_mcp_server_names_from_path(route, mcp_servers)
+    if targets is None:
+        return None
+    server = global_mcp_server_manager.get_mcp_server_by_name(targets[0], client_ip=client_ip)
+    if server is None or not server.is_gateway_managed_oauth2:
+        return None
+    return targets[0]
 
 
-def _is_aggregate_gateway_dcr_challenge_scope(
+def _is_gateway_dcr_challenge_scope(
     route: str,
     mcp_servers: list[str] | None,
     mcp_auth_header: str | None,
     mcp_server_auth_headers: dict[str, dict[str, str]] | None,
     exc: Exception,
+    client_ip: str | None,
 ) -> bool:
-    """True when an unauthenticated request to the aggregate ``/mcp`` endpoint
-    should receive the RFC 9728 401 challenge that advertises the gateway as
-    the authorization server.
+    """True when an unauthenticated MCP request should receive the RFC 9728 401
+    challenge that advertises the gateway as the authorization server.
 
-    Fires only for a genuine 401 on the aggregate scope: any named target
-    (path or ``x-mcp-servers``) belongs to the per-server challenge paths, and
-    client-supplied MCP auth headers mean the caller is not a cold-start DCR
-    client. Fails closed to the original admission error otherwise."""
+    Fires only for a genuine 401 with no client-supplied MCP auth headers (those mean
+    the caller is not a cold-start DCR client), on the scopes the gateway's keyless
+    flow serves: the aggregate ``/mcp`` endpoint, an ``x-mcp-servers``-scoped request
+    (the resource the client configured is still ``/mcp``), or a per-server path whose
+    single target is a gateway-managed oauth2 server. Every other named target keeps
+    its existing behavior, failing closed to the original admission error."""
     if not _is_litellm_auth_admission_error(exc):
         return False
     if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
         return False
-    return _is_aggregate_mcp_scope(route, mcp_servers)
+    if len(MCPRequestHandler._extract_target_server_names_from_path(route)) == 0:
+        return True
+    return _gateway_dcr_challenge_target(route, mcp_servers, client_ip) is not None
 
 
-def _aggregate_gateway_dcr_challenge(request: Request, invalid_token: bool) -> HTTPException:
-    """The RFC 9728 challenge for the aggregate endpoint: points the client at
-    the gateway's own protected-resource metadata so a DCR client discovers
-    the gateway as its authorization server and starts the sign-in flow.
+def _gateway_dcr_challenge(
+    request: Request,
+    route: str,
+    mcp_servers: list[str] | None,
+    invalid_token: bool,
+) -> HTTPException:
+    """The RFC 9728 challenge pointing the client at the protected-resource metadata
+    matching the scope it requested: the per-server document (same URL spelling the
+    request arrived on) when the single target is a gateway-managed oauth2 server,
+    else the gateway's aggregate document. Either way the client discovers the gateway
+    as its authorization server and starts the same sign-in flow.
 
     ``invalid_token`` adds the RFC 6750 error code for a request that DID
     present a bearer that failed admission (expired or revoked), telling
     spec-compliant clients to re-authorize rather than retry; a request with
     no credentials at all gets the bare challenge per RFC 6750 section 3.1."""
-    error_attr = 'error="invalid_token", ' if invalid_token else ""
+    target = _gateway_dcr_challenge_target(route, mcp_servers, IPAddressUtils.get_mcp_client_ip(request))
     resource_metadata_url = (
-        f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
+        get_passthrough_resource_metadata_url(request.scope, target)
+        if target is not None
+        else f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
     )
+    error_attr = 'error="invalid_token", ' if invalid_token else ""
     return HTTPException(
         status_code=401,
         detail={
@@ -225,14 +257,15 @@ def _admission_failure_fallback(
     ):
         verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
         return UserAPIKeyAuth()
-    if _is_aggregate_gateway_dcr_challenge_scope(
+    if _is_gateway_dcr_challenge_scope(
         route=request_route,
         mcp_servers=mcp_servers,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         exc=exc,
+        client_ip=IPAddressUtils.get_mcp_client_ip(request),
     ):
-        raise _aggregate_gateway_dcr_challenge(request, invalid_token=bearer_presented) from exc
+        raise _gateway_dcr_challenge(request, request_route, mcp_servers, invalid_token=bearer_presented) from exc
     raise exc
 
 
@@ -384,18 +417,18 @@ class MCPRequestHandler:
                 request=request,
                 route=request_route,
             )
-        elif (
-            _is_aggregate_mcp_scope(request_route, mcp_servers)
-            and oauth2_headers
-            and is_session_bearer_shaped(oauth2_headers["Authorization"])
-        ):
-            # A gateway DCR session bearer at the aggregate /mcp scope: open the identity-only session
-            # token and admit under the live litellm user. One that does not open fails closed with the
-            # aggregate invalid_token challenge; a non-session bearer falls through to the oauth2 arm.
+        elif oauth2_headers and is_session_bearer_shaped(oauth2_headers["Authorization"]):
+            # A gateway DCR session bearer at any MCP scope: open the identity-only session
+            # token and admit under the live litellm user; downstream grant resolution
+            # intersects the admitted subject's servers with any path or header target, so a
+            # per-server scope narrows and never broadens. One that does not open fails
+            # closed with the scope's invalid_token challenge; a non-session bearer falls
+            # through to the oauth2 arm.
             validated_user_api_key_auth = await MCPRequestHandler._admit_gateway_session(
                 authorization_value=oauth2_headers["Authorization"],
                 request=request,
                 route=request_route,
+                mcp_servers=mcp_servers,
             )
         elif oauth2_headers:
             # Authorization on a non-delegated server: the bearer must be a real
@@ -731,6 +764,7 @@ class MCPRequestHandler:
         authorization_value: str,
         request: Request,
         route: str,
+        mcp_servers: list[str] | None,
     ) -> UserAPIKeyAuth:
         """Open a gateway DCR session bearer and admit the live litellm user it references.
 
@@ -738,8 +772,8 @@ class MCPRequestHandler:
         upstream credential (those are vaulted per user, resolved at egress), so authorization is
         resolved fresh via :meth:`_reload_admitted_user` + the centralized policy gate rather than a
         mint-time snapshot. Pre-DB gates (size, IP, route allowlist) run first, mirroring the standard
-        pipeline. Fails closed with the aggregate ``invalid_token`` challenge on an expired, tampered,
-        foreign, or refresh token, or a missing/deactivated/policy-rejected user."""
+        pipeline. Fails closed with the requested scope's ``invalid_token`` challenge on an expired,
+        tampered, foreign, or refresh token, or a missing/deactivated/policy-rejected user."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
             NotSessionBearer,
             SessionBearerAdmitted,
@@ -765,20 +799,20 @@ class MCPRequestHandler:
                     )
                 except HTTPException as exc:
                     # A cryptographically valid bearer whose referenced user is now missing or
-                    # SCIM-deactivated is an invalid_token at the aggregate scope: relay the RFC 9728
+                    # SCIM-deactivated is an invalid_token at the requested scope: relay the RFC 9728
                     # challenge so the DCR client re-authorizes, matching the SessionBearerInvalid
                     # arm, instead of a bare 401 with no WWW-Authenticate. A 503 (DB outage) is a
                     # transient availability failure, not an auth failure, so it passes through.
                     if exc.status_code == 401:
-                        raise _aggregate_gateway_dcr_challenge(request, invalid_token=True) from exc
+                        raise _gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True) from exc
                     raise
                 return admitted
             case SessionBearerInvalid():
-                raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
+                raise _gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True)
             case NotSessionBearer():
                 # Unreachable: the arm is entered only for an is_session_bearer_shaped
                 # value. Kept for match exhaustiveness and fails closed regardless.
-                raise _aggregate_gateway_dcr_challenge(request, invalid_token=True)
+                raise _gateway_dcr_challenge(request, route, mcp_servers, invalid_token=True)
             case _:
                 assert_never(result)
 
