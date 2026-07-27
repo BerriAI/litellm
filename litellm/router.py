@@ -8505,20 +8505,24 @@ class Router:
 
         try:
             if deployment_idx is not None:
-                try:
-                    deployment_to_remove = self.get_deployment(model_id=id)
-                except Exception:
-                    deployment_to_remove = None
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
-                if deployment_to_remove is not None:
-                    self._unregister_pre_routing_strategy_for_deployment(deployment=deployment_to_remove)
                 self._invalidate_model_group_info_cache()
                 self._invalidate_access_groups_cache()
                 self._update_deployment_indices_after_removal(model_id=id, removal_idx=deployment_idx)
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
+                try:
+                    self._unregister_pre_routing_strategy_for_deployment(
+                        deployment=item if isinstance(item, Deployment) else Deployment(**item)
+                    )
+                except Exception:
+                    verbose_router_logger.exception(
+                        "delete_deployment: could not release pre-routing strategies for model_id=%s; "
+                        "the deployment is out of the model_list and its indices are repaired",
+                        id,
+                    )
                 return item
             else:
                 return None
