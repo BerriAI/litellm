@@ -126,10 +126,12 @@ async def get_marketplace():
 
 
 # Allowlist for git-subdir paths: one or more segments separated by '/'.
-# Each segment must start with an alphanumeric character and contain only
-# alphanumeric characters, dots, hyphens, and underscores.
-# This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
-_VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
+# Each segment contains only alphanumeric characters, dots, hyphens, and
+# underscores, and may start with a dot (e.g. '.claude/skills/my-skill').
+# The negative lookahead rejects the '.' and '..' segments so leading '/',
+# backslashes, percent-encoded sequences, and path traversal are still blocked.
+_GIT_SUBDIR_SEGMENT = r"(?!\.{1,2}(?:/|$))[a-zA-Z0-9._-]+"
+_VALID_GIT_SUBDIR_PATH_RE = re.compile(rf"^{_GIT_SUBDIR_SEGMENT}(?:/{_GIT_SUBDIR_SEGMENT})*$")
 
 
 def _validate_plugin_source(source: Dict[str, Any]) -> None:
