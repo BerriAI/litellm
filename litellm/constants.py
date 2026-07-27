@@ -213,13 +213,6 @@ AIOHTTP_SO_KEEPALIVE = os.getenv("AIOHTTP_SO_KEEPALIVE", "False").lower() == "tr
 AIOHTTP_TCP_KEEPIDLE = int(os.getenv("AIOHTTP_TCP_KEEPIDLE", 60))
 AIOHTTP_TCP_KEEPINTVL = int(os.getenv("AIOHTTP_TCP_KEEPINTVL", 30))
 AIOHTTP_TCP_KEEPCNT = int(os.getenv("AIOHTTP_TCP_KEEPCNT", 5))
-# Application-level SSE keepalive, in seconds; 0 disables it. While a streaming
-# response has not produced its first token the proxy writes nothing to the
-# client, so any hop with an idle timeout (AWS ALB and nginx default to 60s)
-# reaps a healthy connection during a long time-to-first-token. The socket-level
-# knobs above do not help; they never write a byte into the in-flight response.
-# When set, the proxy emits an SSE comment frame at this interval until the
-# first chunk arrives, which resets those idle watchdogs.
 SSE_KEEPALIVE_INTERVAL_SECONDS = float(os.getenv("SSE_KEEPALIVE_INTERVAL_SECONDS", 0))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)

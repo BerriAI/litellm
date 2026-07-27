@@ -32,6 +32,7 @@ from litellm.proxy.common_request_processing import (
     _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
+    sse_keepalive_during_slow_ttft,
     SSE_KEEPALIVE_FRAME,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -1593,153 +1594,141 @@ class TestCommonRequestProcessingHelpers:
 
 
 @pytest.mark.asyncio
-class TestSSEKeepaliveDuringTimeToFirstToken:
-    """Regression coverage for #34819: with SSE_KEEPALIVE_INTERVAL_SECONDS set,
-    a stream whose time-to-first-token is long must put bytes on the wire before
-    an intermediary's idle timeout (AWS ALB and nginx default to 60s) reaps it.
+class TestSSEKeepaliveDuringSlowTimeToFirstToken:
+    """Regression coverage for #34819: with SSE_KEEPALIVE_INTERVAL_SECONDS set, a
+    streaming request that has produced nothing yet must put bytes on the wire
+    before an intermediary's idle timeout (AWS ALB and nginx default to 60s)
+    reaps it. The silent window covers the upstream call itself, which for
+    reasoning models is where most of it is spent, so the keepalive wraps the
+    whole request rather than only the first-chunk buffering in create_response.
     """
 
     @staticmethod
-    def _connected_request() -> Request:
-        async def receive():
-            await asyncio.Event().wait()
+    def _processor() -> ProxyBaseLLMRequestProcessing:
+        return ProxyBaseLLMRequestProcessing(data={"model": "gpt-5.6", "stream": True})
 
-        return Request({"type": "http", "method": "POST", "path": "/", "headers": []}, receive)
+    @staticmethod
+    async def _drain(response: StreamingResponse) -> list:
+        return [chunk async for chunk in response.body_iterator]
 
-    async def test_keepalive_frames_are_sent_while_first_token_is_pending(self):
-        first_token = asyncio.Event()
+    async def test_heartbeats_until_the_upstream_call_returns_then_streams_it(self):
+        upstream_ready = asyncio.Event()
 
-        async def slow_generator():
-            await first_token.wait()
-            yield 'data: {"content": "hi"}\n\n'
-            yield "data: [DONE]\n\n"
+        async def slow_upstream(_self) -> StreamingResponse:
+            await upstream_ready.wait()
 
-        response = await asyncio.wait_for(
-            create_response(
-                slow_generator(),
-                "text/event-stream",
-                {},
-                request=self._connected_request(),
-                keepalive_interval_seconds=0.01,
-            ),
-            timeout=5,
-        )
+            async def body():
+                yield 'data: {"content": "hi"}\n\n'
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(body(), media_type="text/event-stream")
+
+        wrapped = sse_keepalive_during_slow_ttft(slow_upstream, interval_seconds=lambda: 0.01)
+        response = await asyncio.wait_for(wrapped(self._processor()), timeout=5)
+
         assert isinstance(response, StreamingResponse)
-        assert response.status_code == status.HTTP_200_OK
+        assert response.media_type == "text/event-stream"
+        body_iterator = response.body_iterator.__aiter__()
+        heartbeats = [await asyncio.wait_for(body_iterator.__anext__(), timeout=5) for _ in range(3)]
+        assert heartbeats == [SSE_KEEPALIVE_FRAME] * 3
 
-        body = response.body_iterator.__aiter__()
-        keepalives = [await asyncio.wait_for(body.__anext__(), timeout=5) for _ in range(3)]
-        assert keepalives == [SSE_KEEPALIVE_FRAME] * 3
+        upstream_ready.set()
+        assert [chunk async for chunk in body_iterator] == ['data: {"content": "hi"}\n\n', "data: [DONE]\n\n"]
 
-        first_token.set()
-        remaining = [chunk async for chunk in body]
-        assert remaining == ['data: {"content": "hi"}\n\n', "data: [DONE]\n\n"]
-
-    async def test_no_keepalive_frames_when_interval_is_disabled(self):
-        async def slow_generator():
+    async def test_no_heartbeats_when_the_setting_is_disabled(self):
+        async def slow_upstream(_self) -> StreamingResponse:
             await asyncio.sleep(0.05)
-            yield 'data: {"content": "hi"}\n\n'
-            yield "data: [DONE]\n\n"
 
-        response = await asyncio.wait_for(
-            create_response(
-                slow_generator(),
-                "text/event-stream",
-                {},
-                request=self._connected_request(),
-            ),
-            timeout=5,
-        )
-        chunks = [chunk async for chunk in response.body_iterator]
-        assert chunks == ['data: {"content": "hi"}\n\n', "data: [DONE]\n\n"]
+            async def body():
+                yield "data: [DONE]\n\n"
 
-    async def test_error_only_stream_still_returns_json_when_first_chunk_is_fast(self):
-        async def error_generator():
-            yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+            return StreamingResponse(body(), media_type="text/event-stream")
 
-        response = await asyncio.wait_for(
-            create_response(
-                error_generator(),
-                "text/event-stream",
-                {},
-                request=self._connected_request(),
-                keepalive_interval_seconds=5,
-            ),
-            timeout=5,
-        )
+        wrapped = sse_keepalive_during_slow_ttft(slow_upstream, interval_seconds=lambda: 0)
+        response = await asyncio.wait_for(wrapped(self._processor()), timeout=5)
+
+        assert await self._drain(response) == ["data: [DONE]\n\n"]
+
+    async def test_non_streaming_request_is_untouched(self):
+        async def slow_upstream(_self) -> JSONResponse:
+            await asyncio.sleep(0.05)
+            return JSONResponse(status_code=200, content={"id": "chatcmpl-1"})
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-5.6"})
+        wrapped = sse_keepalive_during_slow_ttft(slow_upstream, interval_seconds=lambda: 0.01)
+        response = await asyncio.wait_for(wrapped(processor), timeout=5)
+
         assert isinstance(response, JSONResponse)
-        assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    async def test_error_raised_after_keepalives_is_delivered_as_sse_error_frame(self):
-        release = asyncio.Event()
+    async def test_fast_request_keeps_its_status_and_headers(self):
+        async def fast_error(_self) -> JSONResponse:
+            return JSONResponse(status_code=429, content={"error": {"message": "rate limited"}})
 
-        async def failing_generator():
-            await release.wait()
+        wrapped = sse_keepalive_during_slow_ttft(fast_error, interval_seconds=lambda: 5)
+        response = await asyncio.wait_for(wrapped(self._processor()), timeout=5)
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 429
+
+    async def test_failure_after_heartbeats_is_delivered_as_an_sse_error_frame(self):
+        async def slow_failure(_self) -> StreamingResponse:
+            await asyncio.sleep(0.05)
             raise HTTPException(status_code=429, detail="rate limited")
-            yield "unreachable"
 
-        response = await asyncio.wait_for(
-            create_response(
-                failing_generator(),
-                "text/event-stream",
-                {},
-                request=self._connected_request(),
-                keepalive_interval_seconds=0.01,
-            ),
-            timeout=5,
-        )
-        # Status and headers are already committed once keepalives start, so the
-        # failure can only be reported inside the stream.
-        assert response.status_code == status.HTTP_200_OK
+        wrapped = sse_keepalive_during_slow_ttft(slow_failure, interval_seconds=lambda: 0.01)
+        response = await asyncio.wait_for(wrapped(self._processor()), timeout=5)
 
-        body = response.body_iterator.__aiter__()
-        assert await asyncio.wait_for(body.__anext__(), timeout=5) == SSE_KEEPALIVE_FRAME
-
-        release.set()
-        remaining = [chunk async for chunk in body]
-        assert remaining[-1] == "data: [DONE]\n\n"
-        error = json.loads(remaining[0][len("data: ") :])["error"]
+        chunks = await self._drain(response)
+        assert chunks[0] == SSE_KEEPALIVE_FRAME
+        error_frame, done_frame = chunks[-1].split("\n\n")[0], chunks[-1].split("\n\n")[1]
+        error = json.loads(error_frame[len("data: ") :])["error"]
         assert error["message"] == "rate limited"
         assert error["code"] == "429"
+        assert done_frame == "data: [DONE]"
 
-    async def test_client_disconnect_during_keepalives_closes_upstream_stream(self):
-        upstream_closed = asyncio.Event()
+    async def test_error_response_after_heartbeats_is_delivered_as_an_sse_error_frame(self):
+        async def slow_error_response(_self) -> JSONResponse:
+            await asyncio.sleep(0.05)
+            return JSONResponse(status_code=403, content={"error": {"message": "forbidden", "code": "403"}})
 
-        async def never_first_token():
+        wrapped = sse_keepalive_during_slow_ttft(slow_error_response, interval_seconds=lambda: 0.01)
+        response = await asyncio.wait_for(wrapped(self._processor()), timeout=5)
+
+        chunks = await self._drain(response)
+        assert chunks[0] == SSE_KEEPALIVE_FRAME
+        assert json.loads(chunks[-1].split("\n\n")[0][len("data: ") :])["error"]["message"] == "forbidden"
+
+    async def test_client_disconnect_during_heartbeats_cancels_the_upstream_call(self):
+        upstream_cancelled = asyncio.Event()
+
+        async def never_returns(_self) -> StreamingResponse:
             try:
                 await asyncio.Event().wait()
-                yield "unreachable"
-            finally:
-                upstream_closed.set()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+            raise AssertionError("unreachable")
 
-        response = await asyncio.wait_for(
-            create_response(
-                never_first_token(),
-                "text/event-stream",
-                {},
-                request=self._connected_request(),
-                keepalive_interval_seconds=0.01,
-            ),
-            timeout=5,
-        )
+        wrapped = sse_keepalive_during_slow_ttft(never_returns, interval_seconds=lambda: 0.01)
+        response = await asyncio.wait_for(wrapped(self._processor()), timeout=5)
 
         disconnected = asyncio.Event()
-        keepalives_sent = 0
+        heartbeats_sent = 0
 
         async def receive():
             await disconnected.wait()
             return {"type": "http.disconnect"}
 
         async def send(message):
-            nonlocal keepalives_sent
+            nonlocal heartbeats_sent
             if message["type"] == "http.response.body" and message.get("body"):
-                keepalives_sent += 1
+                heartbeats_sent += 1
                 disconnected.set()
 
         await asyncio.wait_for(response({"type": "http"}, receive, send), timeout=5)
 
-        assert keepalives_sent >= 1
-        assert upstream_closed.is_set()
+        assert heartbeats_sent >= 1
+        assert upstream_cancelled.is_set()
 
 
 class TestExtractErrorFromSSEChunk:
