@@ -128,3 +128,43 @@ class TestSCXAIProviderConfig:
 
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "scx-chat"
+
+
+class TestSCXAIModelMetadata:
+    SCX_MODELS = (
+        "scx-ai/Llama-4-Maverick-17B-128E-Instruct",
+        "scx-ai/gemma-4-31B-it",
+        "scx-ai/Qwen3-32B",
+        "scx-ai/MiniMax-M2.7",
+        "scx-ai/gpt-oss-120b",
+    )
+    VISION_MODELS = ("scx-ai/Llama-4-Maverick-17B-128E-Instruct", "scx-ai/gemma-4-31B-it")
+
+    @staticmethod
+    def _load(path_parts):
+        import json
+        from pathlib import Path
+
+        json_path = Path(__file__).parents[4].joinpath(*path_parts)
+        with open(json_path) as f:
+            return json.load(f)
+
+    def test_scx_ai_models_registered_with_correct_metadata(self):
+        model_cost = self._load(("model_prices_and_context_window.json",))
+        for model in self.SCX_MODELS:
+            info = model_cost.get(model)
+            assert info is not None, f"{model} missing from model_prices_and_context_window.json"
+            assert info["litellm_provider"] == "scx-ai"
+            assert info["mode"] == "chat"
+            assert info["input_cost_per_token"] > 0
+            assert info["output_cost_per_token"] > 0
+            assert info["supports_function_calling"] is True
+            assert info["supports_tool_choice"] is True
+            assert info.get("supports_vision", False) is (model in self.VISION_MODELS)
+
+    def test_scx_ai_models_synced_to_backup(self):
+        model_cost = self._load(("model_prices_and_context_window.json",))
+        backup = self._load(("litellm", "model_prices_and_context_window_backup.json"))
+        for model in self.SCX_MODELS:
+            assert model in backup, f"{model} missing from backup json"
+            assert backup[model] == model_cost[model], f"{model} differs between root and backup json"
