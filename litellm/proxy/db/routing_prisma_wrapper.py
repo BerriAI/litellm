@@ -243,7 +243,7 @@ class RoutingPrismaWrapper:
         if self._reader.iam_token_db_auth:
             new_reader_url = self._reader.get_rds_iam_token()
             if not new_reader_url:
-                raise RuntimeError("Failed to generate fresh IAM token for read replica")
+                raise RuntimeError("Failed to generate fresh database auth token for read replica")
             await self._reader.recreate_prisma_client(new_reader_url, http_client=http_client)
             return
         reader_url = os.getenv("DATABASE_URL_READ_REPLICA", "")

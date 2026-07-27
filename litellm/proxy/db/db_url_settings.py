@@ -37,11 +37,10 @@ from typing import Final, cast
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Imported as a module (not `from ... import generate_iam_auth_token`) so the
-# AWS-touching token mint stays patchable at its canonical location in tests.
-from litellm.proxy.auth import rds_iam_token
+from litellm.proxy.auth import azure_postgres_token, rds_iam_token
 
 _IAM_ENV_KEY = "IAM_TOKEN_DB_AUTH"
+_AZURE_POSTGRES_ENV_KEY = "AZURE_POSTGRESQL_AUTH"
 _DEFAULT_PG_PORT = "5432"
 
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
@@ -91,6 +90,7 @@ class DatabaseURLSettings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
     iam_token_db_auth: bool = Field(default=False, validation_alias=_IAM_ENV_KEY)
+    azure_postgresql_auth: bool = Field(default=False, validation_alias=_AZURE_POSTGRES_ENV_KEY)
 
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
@@ -129,7 +129,8 @@ class DatabaseURLSettings(BaseSettings):
         enabled but a required field is missing — the proxy cannot recover
         from this and a clear startup error beats a Prisma connect failure.
         """
-        if self.iam_token_db_auth:
+        self._validate_token_auth()
+        if self.iam_token_db_auth or self.azure_postgresql_auth:
             missing = [
                 env
                 for env, val in (
@@ -141,20 +142,30 @@ class DatabaseURLSettings(BaseSettings):
             ]
             if missing:
                 raise RuntimeError(
-                    "IAM_TOKEN_DB_AUTH is enabled but required DB env var(s) "
+                    "Database token auth is enabled but required DB env var(s) "
                     f"are unset: {', '.join(missing)}. Set them so the writer "
-                    "DATABASE_URL can be assembled with a minted IAM token."
+                    "DATABASE_URL can be assembled with a minted database token."
                 )
             host = cast(str, self.database_host)
             user = cast(str, self.database_user)
             name = cast(str, self.database_name)
-            # IAM token is already URL-quoted by generate_iam_auth_token;
-            # user/name embedded raw (parity with proxy_cli.py / IAMEndpoint).
-            token = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=self.database_port, db_user=user)
-            url = f"postgresql://{user}:{token}@{host}:{self.database_port}/{name}"
-            if self.database_schema:
-                url += f"?schema={self.database_schema}"
-            return url
+            token = (
+                azure_postgres_token.generate_azure_postgres_auth_token()
+                if self.azure_postgresql_auth
+                else rds_iam_token.generate_iam_auth_token(
+                    db_host=host,
+                    db_port=self.database_port,
+                    db_user=user,
+                )
+            )
+            return self._token_url(
+                user=user,
+                token=token,
+                host=host,
+                port=self.database_port,
+                name=name,
+                schema=self.database_schema,
+            )
 
         # Password auth: an operator-pinned DATABASE_URL always wins.
         if self.database_url:
@@ -177,6 +188,7 @@ class DatabaseURLSettings(BaseSettings):
         pre-existing ``DATABASE_URL_READ_REPLICA``. Reader fields fall back
         to the writer's values.
         """
+        self._validate_token_auth()
         if not self.database_host_read_replica:
             return None  # reader is opt-in
         if self.database_url_read_replica:
@@ -189,7 +201,7 @@ class DatabaseURLSettings(BaseSettings):
         schema = self.database_schema_read_replica or self.database_schema
         password = self.database_password_read_replica or self.database_password
 
-        if self.iam_token_db_auth:
+        if self.iam_token_db_auth or self.azure_postgresql_auth:
             missing = [
                 env
                 for env, val in (
@@ -200,7 +212,7 @@ class DatabaseURLSettings(BaseSettings):
             ]
             if missing:
                 raise RuntimeError(
-                    "IAM_TOKEN_DB_AUTH is enabled and DATABASE_HOST_READ_REPLICA "
+                    "Database token auth is enabled and DATABASE_HOST_READ_REPLICA "
                     "is set, but the reader could not resolve: "
                     f"{', '.join(missing)} (no *_READ_REPLICA value and no "
                     "writer fallback). Set the reader fields or the writer "
@@ -208,11 +220,19 @@ class DatabaseURLSettings(BaseSettings):
                 )
             user = cast(str, user)
             name = cast(str, name)
-            token = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=port, db_user=user)
-            url = f"postgresql://{user}:{token}@{host}:{port}/{name}"
-            if schema:
-                url += f"?schema={schema}"
-            return url
+            token = (
+                azure_postgres_token.generate_azure_postgres_auth_token()
+                if self.azure_postgresql_auth
+                else rds_iam_token.generate_iam_auth_token(db_host=host, db_port=port, db_user=user)
+            )
+            return self._token_url(
+                user=user,
+                token=token,
+                host=host,
+                port=port,
+                name=name,
+                schema=schema,
+            )
 
         if user and name:
             return self._password_url(
@@ -224,6 +244,26 @@ class DatabaseURLSettings(BaseSettings):
                 schema=schema,
             )
         return None
+
+    @staticmethod
+    def _token_url(
+        *,
+        user: str,
+        token: str,
+        host: str,
+        port: str,
+        name: str,
+        schema: str | None,
+    ) -> str:
+        quote = urllib.parse.quote
+        url = f"postgresql://{quote(user, safe='')}:{token}@{host}:{port}/{quote(name, safe='')}"
+        if schema:
+            url += f"?schema={quote(schema, safe='')}"
+        return url
+
+    def _validate_token_auth(self) -> None:
+        if self.iam_token_db_auth and self.azure_postgresql_auth:
+            raise RuntimeError("IAM_TOKEN_DB_AUTH and AZURE_POSTGRESQL_AUTH cannot both be enabled")
 
     @staticmethod
     def _password_url(
@@ -287,6 +327,8 @@ class DatabaseURLSettings(BaseSettings):
                 # Normalize the toggle so downstream readers (PrismaWrapper's
                 # IAM refresh) reliably see IAM on, regardless of spelling.
                 os.environ[_IAM_ENV_KEY] = "True"
+            if self.azure_postgresql_auth:
+                os.environ[_AZURE_POSTGRES_ENV_KEY] = "True"
             wrote_writer = True
 
         reader_url = self.build_reader_url()
