@@ -428,7 +428,7 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        output = response_object.output
+        output = response_object.output or []
         for output_item in output:
             _output_type: Optional[str] = getattr(output_item, "type", None)
             if _output_type == output_type:
