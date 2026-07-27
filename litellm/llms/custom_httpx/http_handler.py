@@ -6,6 +6,7 @@ import socket
 import ssl
 import sys
 import time
+import weakref
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -506,6 +507,41 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.status_code = original_error.response.status_code
 
 
+_CLIENT_OWNER_EXTENSION = "litellm_client_owner"
+
+
+def _pin_owner_on_async_client(owner: "AsyncHTTPHandler", client: httpx.AsyncClient) -> None:
+    """Record the handler that owns `client` on every response that client returns."""
+    owner_ref = weakref.ref(owner)
+    existing_hooks = client.event_hooks
+
+    async def _pin_owner(response: httpx.Response) -> None:
+        handler = owner_ref()
+        if handler is not None:
+            response.extensions[_CLIENT_OWNER_EXTENSION] = handler
+
+    client.event_hooks = {
+        "request": list(existing_hooks.get("request", [])),
+        "response": [_pin_owner, *existing_hooks.get("response", [])],
+    }
+
+
+def _pin_owner_on_sync_client(owner: "HTTPHandler", client: httpx.Client) -> None:
+    """Record the handler that owns `client` on every response that client returns."""
+    owner_ref = weakref.ref(owner)
+    existing_hooks = client.event_hooks
+
+    def _pin_owner(response: httpx.Response) -> None:
+        handler = owner_ref()
+        if handler is not None:
+            response.extensions[_CLIENT_OWNER_EXTENSION] = handler
+
+    client.event_hooks = {
+        "request": list(existing_hooks.get("request", [])),
+        "response": [_pin_owner, *existing_hooks.get("response", [])],
+    }
+
+
 class AsyncHTTPHandler:
     def __init__(
         self,
@@ -553,7 +589,7 @@ class AsyncHTTPHandler:
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers()
 
-        return httpx.AsyncClient(
+        client = httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
@@ -562,6 +598,8 @@ class AsyncHTTPHandler:
             headers=default_headers,
             follow_redirects=True,
         )
+        _pin_owner_on_async_client(self, client)
+        return client
 
     async def close(self):
         # Close the client when you're done with it
@@ -1099,6 +1137,7 @@ class HTTPHandler:
                 headers=default_headers,
                 follow_redirects=True,
             )
+            _pin_owner_on_sync_client(self, self.client)
         else:
             self.client = client
 
