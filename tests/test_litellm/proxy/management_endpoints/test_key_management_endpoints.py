@@ -6257,6 +6257,224 @@ def test_build_key_filter_conditions_agent_id_narrows_visibility():
     assert "agent_id" not in json.dumps(where_without)
 
 
+def test_build_key_filter_conditions_user_email_ids_narrow_visibility():
+    """
+    Deleted-key listings resolve user_email to a list of user IDs which must
+    be ANDed on top of the caller's visibility conditions (narrow, never widen).
+    An email that matches no users must produce a match-nothing filter rather
+    than being dropped (dropping it would return every visible key).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="some-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+        user_ids_for_email=["user-1", "user-2"],
+    )
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert {"user_id": {"in": ["user-1", "user-2"]}} in where["AND"], f"user_id in-filter not ANDed: {where}"
+
+    where_no_match = _build_key_filter_conditions(
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        user_ids_for_email=[],
+    )
+    assert {"user_id": {"in": []}} in where_no_match["AND"], (
+        f"an email matching no users must match nothing, got: {where_no_match}"
+    )
+
+    where_without = _build_key_filter_conditions(
+        user_id="some-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+    )
+    assert '"in"' not in json.dumps(where_without)
+    assert "litellm_user_table" not in json.dumps(where_without)
+
+
+def test_build_key_filter_conditions_user_email_relation_filter():
+    """
+    A live-table user_email filter must be expressed as a relation condition
+    (DB-side semi-join to the user table) ANDed on top of the caller's
+    visibility conditions, so results are complete without materializing
+    user ids in the proxy.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="some-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+        user_email_filter="alias@example.com",
+    )
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert {
+        "litellm_user_table": {"is": {"user_email": {"contains": "alias@example.com", "mode": "insensitive"}}}
+    } in where["AND"], f"relation filter not ANDed: {where}"
+
+
+@pytest.mark.asyncio
+async def test_list_keys_user_email_passes_filter_to_helper():
+    """
+    list_keys must pass the user_email filter through to _list_key_helper
+    verbatim without resolving anything itself. No email filter (including
+    the Query default object from direct calls) must pass None.
+    """
+    from unittest.mock import Mock
+
+    mock_prisma_client = AsyncMock()
+    mock_query_raw = AsyncMock(return_value=[])
+    mock_prisma_client.db.query_raw = mock_query_raw
+    mock_list_key_helper = AsyncMock(
+        return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0}
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+            mock_list_key_helper,
+        ),
+    ):
+        admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=admin,
+            user_email="alias@example.com",
+            include_team_keys=False,
+            include_created_by_keys=False,
+            status=None,
+        )
+        mock_query_raw.assert_not_called()
+        assert mock_list_key_helper.call_args.kwargs["user_email_filter"] == "alias@example.com"
+
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=admin,
+            include_team_keys=False,
+            include_created_by_keys=False,
+            status=None,
+        )
+        assert mock_list_key_helper.call_args.kwargs["user_email_filter"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper_user_email_routes_live_vs_deleted():
+    """
+    Live listings must filter via the user relation (no id materialization);
+    deleted listings have no relation, so the email must resolve to user ids
+    first and land as a user_id in-filter.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_query_raw = AsyncMock(return_value=[{"user_id": "user-1"}])
+    mock_prisma_client.db.query_raw = mock_query_raw
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_deletedverificationtoken.count = AsyncMock(return_value=0)
+
+    await _list_key_helper(
+        prisma_client=mock_prisma_client,
+        page=1,
+        size=10,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        user_email_filter="alias@example.com",
+    )
+    mock_query_raw.assert_not_called()
+    live_where = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert {
+        "litellm_user_table": {"is": {"user_email": {"contains": "alias@example.com", "mode": "insensitive"}}}
+    } in live_where["AND"], f"live listing must use the relation filter: {live_where}"
+
+    await _list_key_helper(
+        prisma_client=mock_prisma_client,
+        page=1,
+        size=10,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        status="deleted",
+        user_email_filter="alias@example.com",
+    )
+    mock_query_raw.assert_called_once()
+    deleted_where = mock_prisma_client.db.litellm_deletedverificationtoken.find_many.call_args.kwargs["where"]
+    assert {"user_id": {"in": ["user-1"]}} in deleted_where["AND"], (
+        f"deleted listing must fall back to the resolved id in-filter: {deleted_where}"
+    )
+    assert "litellm_user_table" not in json.dumps(deleted_where), (
+        "deleted table has no user relation; a relation filter there would error"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_ids_for_email_filter_wildcard_parity_and_refuses_overflow():
+    """
+    The fragment must reach ILIKE verbatim so wildcard behavior matches the
+    live relation path and the Users page email search (Prisma contains
+    passes LIKE wildcards through), and a fragment matching more than the
+    ceiling must 400 instead of silently truncating the id list (truncation
+    would make /key/list drop visible keys).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        USER_EMAIL_KEY_FILTER_MAX_USERS,
+        _resolve_user_ids_for_email_filter,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_query_raw = AsyncMock(return_value=[{"user_id": "user-1"}])
+    mock_prisma_client.db.query_raw = mock_query_raw
+
+    result = await _resolve_user_ids_for_email_filter(mock_prisma_client, "50%_off\\weird")
+    assert result == ["user-1"]
+    assert mock_query_raw.call_args.args[1] == "%50%_off\\weird%"
+
+    mock_query_raw.return_value = [{"user_id": f"user-{i}"} for i in range(USER_EMAIL_KEY_FILTER_MAX_USERS + 1)]
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_user_ids_for_email_filter(mock_prisma_client, "@")
+    assert exc_info.value.status_code == 400
+    assert "too many users" in str(exc_info.value.detail)
+
+
 @pytest.mark.asyncio
 async def test_ensure_user_row_for_key_write_create_only_upsert():
     """

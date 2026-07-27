@@ -5199,6 +5199,34 @@ async def get_member_team_ids(
 
 
 VALID_EXPIRES_FILTER_VALUES = frozenset({"active", "expired"})
+USER_EMAIL_KEY_FILTER_MAX_USERS = 50_000
+
+
+async def _resolve_user_ids_for_email_filter(prisma_client: PrismaClient, user_email: str) -> list[str]:
+    """Resolve a user_email fragment to the complete set of matching user IDs.
+
+    Only used for the deleted-keys table, which has no relation to the user
+    table; live keys filter via the litellm_user_table relation instead. Raw
+    SQL keeps this bounded: only the user_id column is fetched (find_many
+    materializes full rows). The fragment is passed to ILIKE verbatim so LIKE
+    wildcards behave exactly like the live path and the Users page email
+    search, both of which use Prisma contains, which passes wildcards through.
+    Matching more than USER_EMAIL_KEY_FILTER_MAX_USERS users is refused rather
+    than truncated: a silently partial id list would make /key/list drop
+    visible keys.
+    """
+    rows = await prisma_client.db.query_raw(
+        'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_email ILIKE $1 LIMIT $2',
+        f"%{user_email}%",
+        USER_EMAIL_KEY_FILTER_MAX_USERS + 1,
+    )
+    user_ids = [row["user_id"] for row in rows]
+    if len(user_ids) > USER_EMAIL_KEY_FILTER_MAX_USERS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "user_email filter matched too many users; use a more specific email fragment"},
+        )
+    return user_ids
 
 
 @router.get(
@@ -5215,6 +5243,10 @@ async def list_keys(
     user_id: Optional[str] = Query(
         None,
         description="Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
+    ),
+    user_email: str | None = Query(
+        None,
+        description="Filter keys by the owning user's email. Case-insensitive substring match against the user table; only keys whose user_id belongs to a matching user are returned. For status=deleted, fragments matching more than 50,000 users are rejected with a 400.",
     ),
     team_id: Optional[str] = Query(None, description="Filter keys by team ID"),
     organization_id: Optional[str] = Query(None, description="Filter keys by organization ID"),
@@ -5366,6 +5398,7 @@ async def list_keys(
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
             expires_filter=expires if isinstance(expires, str) else None,
+            user_email_filter=user_email if user_email and isinstance(user_email, str) else None,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5594,6 +5627,8 @@ def _build_key_filter_conditions(
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
     expires_filter: str | None = None,
+    user_ids_for_email: list[str] | None = None,
+    user_email_filter: str | None = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -5701,6 +5736,15 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
     if agent_id and isinstance(agent_id, str):
         where = {"AND": [where, {"agent_id": agent_id}]}
+    if user_ids_for_email is not None:
+        where = {"AND": [where, {"user_id": {"in": user_ids_for_email}}]}
+    if user_email_filter:
+        where = {
+            "AND": [
+                where,
+                {"litellm_user_table": {"is": {"user_email": {"contains": user_email_filter, "mode": "insensitive"}}}},
+            ]
+        }
     if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES:
         where = {"AND": [where, _build_expires_where_clause(expires_filter, datetime.now(timezone.utc))]}
 
@@ -5733,6 +5777,7 @@ async def _list_key_helper(
     agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
     expires_filter: str | None = None,
+    user_email_filter: str | None = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5756,6 +5801,18 @@ async def _list_key_helper(
             "total_pages": int,
         }
     """
+    # Determine which table to query based on status
+    use_deleted_table = status == "deleted"
+
+    # The deleted-keys table has no relation to the user table (its rows may
+    # reference users that no longer exist), so an email filter there falls
+    # back to resolving user ids up front; live keys filter via the relation.
+    user_ids_for_email = (
+        await _resolve_user_ids_for_email_filter(prisma_client, user_email_filter)
+        if user_email_filter is not None and use_deleted_table
+        else None
+    )
+
     where = _build_key_filter_conditions(
         user_id=user_id,
         team_id=team_id,
@@ -5771,6 +5828,8 @@ async def _list_key_helper(
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
         expires_filter=expires_filter,
+        user_ids_for_email=user_ids_for_email,
+        user_email_filter=user_email_filter if not use_deleted_table else None,
     )
 
     # Calculate skip for pagination
@@ -5781,9 +5840,6 @@ async def _list_key_helper(
     order_by: Optional[Dict[str, str]] = (
         _validate_sort_params(sort_by, sort_order) if sort_by is not None and isinstance(sort_by, str) else None
     )
-
-    # Determine which table to query based on status
-    use_deleted_table = status == "deleted"
 
     # Fetch keys with pagination
     if use_deleted_table:
