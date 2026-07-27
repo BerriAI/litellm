@@ -16,6 +16,7 @@ from typing import (
     List,
     NoReturn,
     Optional,
+    TypeVar,
     Union,
     cast,
 )
@@ -39,9 +40,11 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
 )
@@ -2254,11 +2257,27 @@ class CustomStreamWrapper:
         return chunk
 
 
+_TokenDetails = TypeVar("_TokenDetails", PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)
+
+
+def _coerce_token_details(
+    usage: Union[dict, BaseModel], field: str, details_type: type[_TokenDetails]
+) -> _TokenDetails | None:
+    raw = usage.get(field) if isinstance(usage, dict) else getattr(usage, field, None)
+    if raw is None:
+        return None
+    if isinstance(raw, details_type):
+        return raw
+    return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
+
+
 def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latest_usage_chunk = None
+    prompt_tokens_details: PromptTokensDetailsWrapper | None = None
+    completion_tokens_details: CompletionTokensDetailsWrapper | None = None
 
     for chunk in chunks:
         if "usage" in chunk and chunk["usage"] is not None:
@@ -2268,11 +2287,21 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
                 prompt_tokens = usage.get("prompt_tokens", 0) or 0
             if "completion_tokens" in usage:
                 completion_tokens = usage.get("completion_tokens", 0) or 0
+            prompt_tokens_details = (
+                _coerce_token_details(usage, "prompt_tokens_details", PromptTokensDetailsWrapper)
+                or prompt_tokens_details
+            )
+            completion_tokens_details = (
+                _coerce_token_details(usage, "completion_tokens_details", CompletionTokensDetailsWrapper)
+                or completion_tokens_details
+            )
 
     returned_usage_chunk = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=prompt_tokens_details,
+        completion_tokens_details=completion_tokens_details,
     )
 
     if latest_usage_chunk is not None:

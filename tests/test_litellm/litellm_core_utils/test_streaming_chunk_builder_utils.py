@@ -992,3 +992,46 @@ def test_cost_field_in_usage_chunks():
     assert usage.cost == 0.00025
     assert usage.prompt_tokens == 10
     assert usage.completion_tokens == 5
+
+
+def test_prompt_tokens_details_survive_later_usage_chunk_without_details():
+    """Regression for #34801: a trailing usage chunk that omits
+    `prompt_tokens_details` must not wipe the OpenAI cache-read/cache-write split,
+    otherwise those tokens get re-priced at the uncached input rate."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk_with_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=Usage(
+            prompt_tokens=6017,
+            completion_tokens=4,
+            total_tokens=6021,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=6004, cache_write_tokens=10
+            ),
+        ),
+    )
+    chunk_without_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(prompt_tokens=6017, completion_tokens=4, total_tokens=6021),
+    )
+
+    chunks = [chunk_with_details, chunk_without_details]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="openai/gpt-5.6-sol", completion_output="Hi"
+    )
+
+    assert usage.prompt_tokens == 6017
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 6004
+    assert usage.prompt_tokens_details.cache_write_tokens == 10
