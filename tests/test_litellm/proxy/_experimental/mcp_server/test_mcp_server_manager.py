@@ -9512,6 +9512,21 @@ class TestServerToolListsHonorThePrefixBoundary:
         assert "include_internal" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
+    async def test_a_case_variant_blocklist_entry_still_blocks(self):
+        server = self._aliased_server(disallowed_tools=["PetStore-DeletePet"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "deletepet")
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_a_case_variant_allowlist_entry_grants_the_tool(self):
+        server = self._aliased_server(allowed_tools=["PetStore-GetPetById"])
+
+        await self._run_check(server, "getpetbyid")
+
+    @pytest.mark.asyncio
     async def test_an_explicitly_empty_allowed_params_list_refuses_every_parameter(self):
         server = self._alias_less_server(allowed_params={"read_wiki_contents": []})
 
