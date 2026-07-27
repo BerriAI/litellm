@@ -9,7 +9,12 @@ sys.path.insert(
 import pytest
 from fastapi import HTTPException, Request
 
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 
 
@@ -3084,3 +3089,91 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Only proxy admin" in str(exc_info.value)
     assert f"Route={route}" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
+
+
+# --- Credential route gating (PR #30873: /credentials opened to self-managed) --- #
+
+
+def test_self_managed_routes_includes_credentials_entries():
+    """The PR adds exactly the credential list + single-name routes to the
+    self-managed set (handlers do their own authz). No wildcard is added, so the
+    by_name/by_model subpaths are NOT covered here."""
+    routes = LiteLLMRoutes.self_managed_routes.value
+    assert "/credentials" in routes
+    assert "/credentials/{credential_name}" in routes
+    assert "/credentials/by_name/{credential_name}" not in routes
+    assert "/credentials/*" not in routes
+
+
+@pytest.mark.parametrize(
+    "route,expected",
+    [
+        ("/credentials", True),
+        ("/credentials/my-dest", True),  # single segment -> {credential_name}
+        ("/credentials/by_name/my-dest", False),  # extra segment -> no match
+        ("/credentials/by_model/model-123", False),  # extra segment -> no match
+    ],
+)
+def test_credentials_self_managed_pattern_matches_single_segment_only(route, expected):
+    """`/credentials/{credential_name}` compiles to ^/credentials/[^/]+$, so a caller
+    who only reaches self-managed routes (team-admin, org-admin, plain internal user)
+    can hit the list/single-name routes but NOT the two-segment by_name/by_model
+    endpoints."""
+    assert (
+        RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/credentials/by_name/my-dest", "/credentials/by_model/model-123"],
+)
+def test_by_name_by_model_forbidden_for_internal_user(route):
+    """A plain internal user (also the role a team-admin/org-admin key carries) is
+    denied by_name/by_model: the route matches no allow-list, so the gate raises."""
+    user_obj = LiteLLM_UserTable(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    with pytest.raises(Exception) as exc:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc.value)
+    assert f"Route={route}" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/credentials/by_name/my-dest", "/credentials/by_model/model-123"],
+)
+def test_by_name_by_model_reachable_by_admin_viewer(route):
+    """PROXY_ADMIN_VIEW_ONLY reaches by_name/by_model via the read-parity safe-GET
+    default-allow (documented in the PR body as a masking inconsistency, not a
+    cross-tenant leak). Pins that the viewer is NOT blocked at the route gate."""
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    # returns None (allow) rather than raising
+    assert (
+        RouteChecks._check_proxy_admin_viewer_access(
+            route=route,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            request_data={},
+            request=request,
+        )
+        is None
+    )

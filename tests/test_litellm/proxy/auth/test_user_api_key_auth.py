@@ -4271,6 +4271,32 @@ async def test_builder_hoists_destinations_before_post_lookup_auth_checks():
     mock_enforce.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_hoist_destinations_resolver_failure_never_breaks_auth():
+    """Destination resolution is best-effort telemetry setup: if the resolver raises,
+    _hoist_request_destinations must swallow it and leave the ContextVar at its empty
+    default so auth proceeds and the fan-out processor no-ops. A raise here would take
+    down every request."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.integrations.otel.plumbing.context import request_destinations
+    from litellm.proxy.auth.user_api_key_auth import _hoist_request_destinations
+
+    request = MagicMock()
+    request.state = MagicMock()
+    valid_token = UserAPIKeyAuth(api_key="sk-x", token="hashed")
+
+    with patch(
+        "litellm.proxy.litellm_pre_call_utils._resolve_logging_exporters",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("resolver blew up"),
+    ):
+        # must not raise
+        await _hoist_request_destinations(request, valid_token)
+
+    assert request_destinations() == ()
+
+
 def _mint_cli_session_token(monkeypatch, *, user_id="cli-admin"):
     """Mint a CLI session token for a PROXY_ADMIN user so auth resolves on the
     admin early-return path (no prisma/common_checks needed)."""

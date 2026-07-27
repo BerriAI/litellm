@@ -530,3 +530,18 @@ def test_generic_backend_resolves_generic_destination():
 
     got = OpenTelemetryV2._destinations_for_backend(_Shim(), event)
     assert [d.endpoint for d in got] == ["http://collector:4318"]
+
+
+def test_otel_destination_is_frozen_and_renders_header_string():
+    """OtelDestination is the immutable value the resolver hands to the runtime;
+    mutating one after resolution must fail (a request can never rewrite where its
+    traces go), and header_string renders the k=v,k2=v2 form the exporter expects."""
+    import pytest
+    from pydantic import ValidationError
+
+    dest = OtelDestination(
+        endpoint="https://c/v1", headers={"Authorization": "Bearer x", "x-k": "y"}
+    )
+    with pytest.raises(ValidationError):
+        dest.endpoint = "https://evil/v1"
+    assert dest.header_string() == "Authorization=Bearer x,x-k=y"
