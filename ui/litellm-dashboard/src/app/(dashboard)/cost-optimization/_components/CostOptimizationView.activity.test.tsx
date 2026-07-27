@@ -5,7 +5,7 @@ const mockUserDailyActivityCall = vi.fn();
 
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
-  getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], total_spend: 0, start_date: null, end_date: null }),
+  getToolSpend: vi.fn().mockResolvedValue({ by_tool: [], daily: [], start_date: null, end_date: null }),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
 }));
 
@@ -19,7 +19,7 @@ vi.mock("@/components/shared/charts", () => ({
   DonutChart: () => <div />,
   BarChart: () => <div />,
   CustomLegend: () => <div />,
-  DEFAULT_COLOR_CYCLE: ["emerald"],
+  SEQUENTIAL_COLOR_RAMP: ["indigo"],
 }));
 
 vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => ({

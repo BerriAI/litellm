@@ -225,11 +225,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-optimization/_components/UsageTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-tracking/_components/add_margin_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
