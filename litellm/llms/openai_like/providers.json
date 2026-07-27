@@ -183,5 +183,17 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "scx-ai": {
+    "base_url": "https://api.scx.ai/v1",
+    "api_key_env": "SCX_API_KEY",
+    "api_base_env": "SCX_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "constraints": {
+      "temperature_max": 1.0
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }

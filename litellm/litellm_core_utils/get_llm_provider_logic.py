@@ -349,6 +349,9 @@ def get_llm_provider(
                     elif endpoint == "https://api.meta.ai/v1":
                         custom_llm_provider = "meta"
                         dynamic_api_key = get_secret_str("META_API_KEY")
+                    elif endpoint == "https://api.scx.ai/v1":
+                        custom_llm_provider = "scx-ai"
+                        dynamic_api_key = get_secret_str("SCX_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception("api base needs to be a string. api_base={}".format(api_base))
