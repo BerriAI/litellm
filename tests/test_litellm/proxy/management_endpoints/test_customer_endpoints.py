@@ -85,6 +85,26 @@ def test_update_customer_success(mock_prisma_client, mock_user_api_key_auth):
     assert response.json()["alias"] == "Updated Test User"
 
 
+def test_update_customer_unblock(mock_prisma_client, mock_user_api_key_auth):
+    mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=True)
+    updated_mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=False)
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_end_user)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated_mock_end_user)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "test-user-1", "blocked": False},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["blocked"] is False
+    update_mock = mock_prisma_client.db.litellm_endusertable.update
+    update_mock.assert_called_once()
+    assert update_mock.call_args.kwargs["data"]["blocked"] is False
+
+
 def test_update_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     """
     Test that update_end_user raises a 404 ProxyException when user_id does not exist.
