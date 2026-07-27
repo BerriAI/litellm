@@ -7394,6 +7394,27 @@ def convert_list_message_to_dict(messages: List):
     return new_messages
 
 
+def normalize_message_content(content: Any) -> Any:
+    """
+    Normalizes a message's ``content`` field to a shape provider transforms expect:
+    ``str`` or ``List[dict]``.
+
+    Some clients send a bare content-part object instead of wrapping it in a
+    list, e.g. ``{"content": {"type": "text", "text": "..."}}`` instead of the
+    valid ``{"content": [{"type": "text", "text": "..."}]}``. Provider-specific
+    transformations (e.g. Anthropic's ``translate_system_message`` and
+    ``anthropic_messages_pt``) only branch on ``str`` and ``list`` content and
+    silently drop anything else - for a system message this makes the entire
+    system prompt disappear with no error, which manifests as the model
+    ignoring instructions/schemas. Wrap a bare dict content part in a list so
+    it flows through the normal list-of-parts handling instead of being
+    dropped.
+    """
+    if isinstance(content, dict):
+        return [content]
+    return content
+
+
 def validate_and_fix_openai_messages(messages: List):
     """
     Ensures all messages are valid OpenAI chat completion messages.
@@ -7406,6 +7427,8 @@ def validate_and_fix_openai_messages(messages: List):
             message["role"] = "assistant"
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
+        if "content" in message:
+            message["content"] = normalize_message_content(message["content"])
 
         convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)

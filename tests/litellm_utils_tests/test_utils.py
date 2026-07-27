@@ -2154,6 +2154,47 @@ def test_validate_user_messages_invalid_content_type():
     print(e)
 
 
+def test_normalize_message_content_wraps_bare_dict():
+    from litellm.utils import normalize_message_content
+
+    content = {"type": "text", "text": "hello"}
+    assert normalize_message_content(content) == [content]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "hello",
+        [{"type": "text", "text": "hello"}],
+        None,
+    ],
+)
+def test_normalize_message_content_passthrough(content):
+    from litellm.utils import normalize_message_content
+
+    assert normalize_message_content(content) == content
+
+
+def test_validate_and_fix_openai_messages_wraps_bare_dict_system_content():
+    """
+    Regression test: a system message with a bare content-part dict instead
+    of a string or list (e.g. {"content": {"type": "text", "text": "..."}})
+    must be normalized into a single-element list so downstream provider
+    transforms (which only branch on str/list) don't silently drop the
+    system prompt.
+    """
+    from litellm.utils import validate_and_fix_openai_messages
+
+    messages = [
+        {"role": "system", "content": {"type": "text", "text": "be helpful"}},
+        {"role": "user", "content": "hi"},
+    ]
+
+    fixed = validate_and_fix_openai_messages(messages=messages)
+
+    assert fixed[0]["content"] == [{"type": "text", "text": "be helpful"}]
+
+
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.utils import get_applied_guardrails
 from unittest.mock import Mock
