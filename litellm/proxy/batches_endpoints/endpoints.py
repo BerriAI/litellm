@@ -254,9 +254,7 @@ async def create_batch(
                     if db_file is not None and getattr(db_file, "storage_url", None):
                         _create_batch_data["input_file_id"] = db_file.storage_url
                 except Exception as e:
-                    verbose_proxy_logger.error(
-                        f"Error resolving unified_file_id in ManagedFileRepository: {e}"
-                    )
+                    verbose_proxy_logger.error(f"Error resolving unified_file_id in ManagedFileRepository: {e}")
 
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
