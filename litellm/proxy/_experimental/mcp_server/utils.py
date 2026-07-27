@@ -23,6 +23,8 @@ import importlib
 import os
 from urllib.parse import quote
 
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
 # Constants
 #
 # NOTE: The environment-backed values below are read once, when this module is
@@ -326,22 +328,29 @@ def iter_known_server_prefixes(server: Any) -> Iterator[str]:
     yield from _emit(server_id)
 
 
-def iter_known_tool_name_spellings(tool_name: str, server: Any) -> Iterator[str]:
-    """Yield every name that denotes the bare ``tool_name`` on ``server``.
-
-    The bare name, then its wire spelling under each prefix from
-    ``iter_known_server_prefixes``. Routing resolves an inbound name against that
-    whole set, so anything keyed by tool name (the routing map, the allow/deny
-    lists, ``allowed_params``) must cover it too or it answers for fewer names
-    than are reachable, which fails open on ``disallowed_tools``.
-    ``get_server_prefix`` alone covers only the published spelling, and that moves
-    with the alias and with ``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``. These are
-    spellings of one tool on one server, so honoring all of them normalizes the
-    entry rather than widening a grant.
+def iter_known_tool_name_spellings(tool_name: str, server: MCPServer) -> Iterator[str]:
+    """Yield every name that denotes the bare ``tool_name`` on ``server``: the bare name,
+    then its wire spelling under each prefix ``iter_known_server_prefixes`` accepts.
+    ``get_server_prefix`` covers only the currently published one, and that moves with the
+    alias and with ``LITELLM_USE_SHORT_MCP_TOOL_PREFIX``.
     """
     yield tool_name
     for prefix in iter_known_server_prefixes(server):
         yield add_server_prefix_to_name(tool_name, prefix)
+
+
+def match_known_tool_name(tool_name: str, server: MCPServer, names: Iterable[str]) -> str | None:
+    """Return the entry of ``names`` that denotes ``tool_name`` on ``server``, else ``None``.
+
+    The single question every tool-name-keyed site asks: the allow list, the deny list,
+    ``allowed_params`` and the discovery filter. Matching spans every spelling routing
+    accepts and ignores case, so discovery hides exactly what dispatch refuses. Callers
+    read the returned entry rather than testing a container's values, which is what stops
+    an explicitly empty ``allowed_params`` list from reading as "nothing configured".
+    """
+    entries = {name.casefold(): name for name in names}
+    spellings = map(str.casefold, iter_known_tool_name_spellings(tool_name, server))
+    return next((entries[spelling] for spelling in spellings if spelling in entries), None)
 
 
 def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:

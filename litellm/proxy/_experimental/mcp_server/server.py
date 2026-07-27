@@ -65,7 +65,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     extract_mcp_tool_result_error_message,
     get_server_prefix,
     iter_known_server_prefixes,
-    iter_known_tool_name_spellings,
+    match_known_tool_name,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -1421,28 +1421,13 @@ if MCP_AVAILABLE:
         """
         Check if a tool name matches any name in the filter list.
 
-        Matches via the same ``iter_known_tool_name_spellings`` the server-level
-        permission checks use, so discovery hides exactly what dispatch refuses;
-        covering fewer spellings here leaves a blocked tool advertised in
-        ``tools/list``. Comparison is case-insensitive to handle OpenAPI
-        operationIds that may be in camelCase.
-
-        Args:
-            tool_name: The tool name to check (may be prefixed like "server-tool_name")
-            filter_list: List of tool names to match against
-            mcp_server: The server the tool belongs to, whose registered prefixes
-                locate the boundary exactly. Required: guessing the boundary at
-                the first separator silently mismatches every tool on a server
-                whose prefix contains the separator.
-
-        Returns:
-            True if any spelling of the tool name is in the filter list
+        Reads the same owner the server-level permission checks use, so discovery hides
+        exactly what dispatch refuses. ``mcp_server`` is required: guessing the boundary
+        at the first separator mismatches every tool on a server whose prefix contains
+        the separator.
         """
-        filter_list_lower = {f.lower() for f in filter_list}
         bare_name = strip_known_server_prefix(tool_name, mcp_server)
-        spellings = (tool_name, *iter_known_tool_name_spellings(bare_name, mcp_server))
-
-        return any(spelling.lower() in filter_list_lower for spelling in spellings)
+        return match_known_tool_name(bare_name, mcp_server, filter_list) is not None
 
     def filter_tools_by_allowed_tools(
         tools: list[MCPTool],

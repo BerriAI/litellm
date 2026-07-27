@@ -118,6 +118,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     is_short_mcp_tool_prefix_enabled,
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
+    match_known_tool_name,
     match_known_server_prefix,
     merge_mcp_headers,
     normalize_server_name,
@@ -4262,26 +4263,19 @@ class MCPServerManager:
         """
         Check if the tool is allowed or banned for the given server.
 
-        ``tool_name`` is bare: every caller resolves the boundary against the
-        server's registered prefixes before dispatch (``server.py``'s
-        ``original_tool_name``, the Responses handler's ``sanitized_tool_name``).
-        Stored entries are matched by deriving the spellings routing accepts
-        rather than by stripping the entries, which would cut a second boundary
-        out of a native name that itself opens with the server prefix.
+        ``tool_name`` is bare: every caller resolves the boundary against the server's
+        registered prefixes before dispatch (``server.py``'s ``original_tool_name``, the
+        Responses handler's ``sanitized_tool_name``). Configured entries are matched by
+        deriving the spellings routing accepts, never by stripping the entry, which would
+        cut a second boundary out of a native name that opens with the server prefix.
         """
         from litellm.proxy._experimental.mcp_server.utils import (
             server_applies_tool_allowlist,
         )
 
-        spellings = tuple(iter_known_tool_name_spellings(tool_name, server))
-
         if server_applies_tool_allowlist(server):
-            if not server.allowed_tools:
-                return False
-            return any(spelling in server.allowed_tools for spelling in spellings)
-        if server.disallowed_tools:
-            return all(spelling not in server.disallowed_tools for spelling in spellings)
-        return True
+            return match_known_tool_name(tool_name, server, server.allowed_tools or ()) is not None
+        return match_known_tool_name(tool_name, server, server.disallowed_tools or ()) is None
 
     def validate_allowed_params(self, tool_name: str, arguments: dict[str, Any], server: MCPServer) -> None:
         """
@@ -4299,18 +4293,12 @@ class MCPServerManager:
         Raises:
             HTTPException: If allowed_params is configured for this tool but arguments contain disallowed params
         """
-        # If no allowed_params configured, return all arguments
-        if not server.allowed_params:
+        allowed_params = server.allowed_params or {}
+        matched = match_known_tool_name(tool_name, server, allowed_params)
+        if matched is None:
             return
 
-        spellings = iter_known_tool_name_spellings(tool_name, server)
-        allowed_params_list = next(
-            (server.allowed_params[name] for name in spellings if name in server.allowed_params), None
-        )
-
-        # If this tool doesn't have allowed_params specified, allow all params
-        if allowed_params_list is None:
-            return None
+        allowed_params_list = allowed_params[matched]
 
         # Filter arguments to only include allowed parameters
         disallowed_params = [param for param in arguments.keys() if param not in allowed_params_list]

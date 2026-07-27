@@ -8146,10 +8146,11 @@ class TestListFiltersHonorThePrefixBoundary:
 
         published = MCPTool(name="eiG-read_wiki_contents", description="", inputSchema={"type": "object"})
         for spelling in registered:
-            server = _server(disallowed_tools=[spelling])
+            for entry in (spelling, spelling.upper()):
+                server = _server(disallowed_tools=[entry])
 
-            refused = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
-            hidden = filter_tools_by_allowed_tools([published], server) == []
+                refused = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
+                hidden = filter_tools_by_allowed_tools([published], server) == []
 
-            assert refused, spelling
-            assert hidden, spelling
+                assert refused, entry
+                assert hidden, entry
