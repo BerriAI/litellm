@@ -7527,7 +7527,6 @@ export interface ToolSpendDailyEntry {
 export interface ToolSpendResponse {
   by_tool: ToolSpendEntry[];
   daily: ToolSpendDailyEntry[];
-  total_spend: number;
   start_date: string | null;
   end_date: string | null;
 }
