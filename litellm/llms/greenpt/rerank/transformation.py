@@ -1,5 +1,7 @@
 from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.rerank import RerankBilledUnits
+from litellm.types.utils import ModelInfo
 
 
 class GreenPTRerankConfig(HostedVLLMRerankConfig):
@@ -38,3 +40,20 @@ class GreenPTRerankConfig(HostedVLLMRerankConfig):
         )
         request.setdefault("top_n", len(request["documents"]))
         return request
+
+    def calculate_rerank_cost(
+        self,
+        model: str,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]:
+        if model_info is None or billed_units is None:
+            return 0.0, 0.0
+        input_cost_per_token = model_info.get("input_cost_per_token")
+        if input_cost_per_token is None:
+            return 0.0, 0.0
+        total_tokens = billed_units.get("total_tokens")
+        if total_tokens is None:
+            return 0.0, 0.0
+        return input_cost_per_token * total_tokens, 0.0

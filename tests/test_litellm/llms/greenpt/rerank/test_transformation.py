@@ -64,3 +64,29 @@ def test_transform_rerank_request_preserves_top_n():
         headers={},
     )
     assert request["top_n"] == 1
+
+
+def test_calculate_rerank_cost():
+    prompt_cost, completion_cost = GreenPTRerankConfig().calculate_rerank_cost(
+        model="green-rerank",
+        billed_units={"total_tokens": 1000},
+        model_info={"input_cost_per_token": 1.36524e-07},
+    )
+    assert prompt_cost == pytest.approx(0.000136524)
+    assert completion_cost == 0.0
+
+
+@pytest.mark.parametrize(
+    ("billed_units", "model_info"),
+    [
+        (None, None),
+        ({}, {"input_cost_per_token": 1.36524e-07}),
+        ({"total_tokens": 1000}, {}),
+    ],
+)
+def test_calculate_rerank_cost_missing_usage_or_pricing(billed_units, model_info):
+    assert GreenPTRerankConfig().calculate_rerank_cost(
+        model="green-rerank",
+        billed_units=billed_units,
+        model_info=model_info,
+    ) == (0.0, 0.0)
