@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatInstallCommand,
+  formatMarketplaceSettingsSnippet,
   extractCategories,
   validatePluginName,
   getSourceDisplayText,
@@ -18,31 +19,44 @@ import {
   parseSkillSource,
   isValidSubPath,
 } from "./helpers";
-import { MarketplacePluginEntry, PluginSource } from "./types";
+import { MarketplacePluginEntry } from "./types";
 
 describe("formatInstallCommand", () => {
-  it("formats github source with repo", () => {
-    const source: PluginSource = { source: "github", repo: "org/repo" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add org/repo");
+  it("installs the skill from the litellm marketplace by name", () => {
+    expect(formatInstallCommand({ name: "my-plugin" })).toBe("/plugin install my-plugin@litellm");
   });
 
-  it("formats url source", () => {
-    const source: PluginSource = { source: "url", url: "https://example.com/plugin" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
-      "/plugin marketplace add https://example.com/plugin",
-    );
+  it("uses the skill name regardless of source shape on the plugin object", () => {
+    expect(
+      formatInstallCommand({
+        name: "code-review",
+      }),
+    ).toBe("/plugin install code-review@litellm");
+  });
+});
+
+describe("formatMarketplaceSettingsSnippet", () => {
+  it("uses litellm as the marketplace key and nests source as an object", () => {
+    expect(formatMarketplaceSettingsSnippet("http://localhost:4000")).toEqual({
+      extraKnownMarketplaces: {
+        litellm: {
+          source: {
+            source: "url",
+            url: "http://localhost:4000/claude-code/marketplace.json",
+          },
+        },
+      },
+    });
   });
 
-  it("formats git-subdir source using its url", () => {
-    const source: PluginSource = { source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe(
-      "/plugin marketplace add https://github.com/org/repo",
-    );
-  });
-
-  it("falls back to plugin name when no repo or url", () => {
-    const source: PluginSource = { source: "github" };
-    expect(formatInstallCommand({ name: "my-plugin", source })).toBe("/plugin marketplace add my-plugin");
+  it("never uses my-org or a flat string source", () => {
+    const snippet = formatMarketplaceSettingsSnippet("https://proxy.example.com");
+    const marketplaces = snippet.extraKnownMarketplaces;
+    expect(Object.keys(marketplaces)).toEqual(["litellm"]);
+    expect(marketplaces).not.toHaveProperty("my-org");
+    expect(typeof marketplaces.litellm.source).toBe("object");
+    expect(marketplaces.litellm.source).not.toBe("url");
+    expect(marketplaces.litellm.source.url).toBe("https://proxy.example.com/claude-code/marketplace.json");
   });
 });
 

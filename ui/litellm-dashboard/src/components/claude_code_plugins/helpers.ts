@@ -176,20 +176,23 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
   return parseRawGitSource(url, subPath);
 };
 
-/**
- * Generate install command for Claude Code CLI
- * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
- */
-export const formatInstallCommand = (plugin: { name: string; source: PluginSource }): string => {
-  const { source } = plugin;
-  if (source.source === "github" && source.repo) {
-    return `/plugin marketplace add ${source.repo}`;
-  }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return `/plugin marketplace add ${source.url}`;
-  }
-  // Fallback to plugin name
-  return `/plugin marketplace add ${plugin.name}`;
+export const CLAUDE_CODE_MARKETPLACE_NAME = "litellm";
+
+export const formatInstallCommand = (plugin: { name: string }): string => {
+  return `/plugin install ${plugin.name}@${CLAUDE_CODE_MARKETPLACE_NAME}`;
+};
+
+export const formatMarketplaceSettingsSnippet = (proxyOrigin: string) => {
+  return {
+    extraKnownMarketplaces: {
+      [CLAUDE_CODE_MARKETPLACE_NAME]: {
+        source: {
+          source: "url" as const,
+          url: `${proxyOrigin}/claude-code/marketplace.json`,
+        },
+      },
+    },
+  };
 };
 
 /**
