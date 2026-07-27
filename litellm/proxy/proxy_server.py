@@ -241,8 +241,8 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
-    PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS,
 )
+from litellm.constants import PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
@@ -548,9 +548,9 @@ from litellm.proxy.utils import (
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
-    update_daily_tag_spend,
     update_spend,
 )
+from litellm.proxy.utils import update_daily_tag_spend
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router import (
