@@ -99,9 +99,9 @@ if MCP_AVAILABLE:
         MCPServer,
         _apply_toolset_scope,
         _fire_mcp_tool_call_logging,
-        _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
+        filter_tools_by_key_team_permissions,
     )
 
     ########################################################
@@ -530,19 +530,17 @@ if MCP_AVAILABLE:
         tools = filter_tools_by_allowed_tools(tools, server)
 
         # Filter by the key's effective tool permissions through the same
-        # primitive the MCP protocol path uses (direct grants, toolset grants,
-        # and team/agent/org ceilings), so REST listing cannot drift from it
+        # function the MCP protocol path uses (direct grants, toolset grants,
+        # and team/agent/org ceilings), so REST listing cannot drift from it.
+        # Entries here are tool names on one server, written bare by every
+        # writer, and dispatch compares them bare; matching a wider set of
+        # spellings would advertise a tool that tools/call then refuses
         if user_api_key_auth:
-            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-                MCPRequestHandler,
-            )
-
-            allowed_tools_for_server = await MCPRequestHandler.get_allowed_tools_for_server(
+            tools = await filter_tools_by_key_team_permissions(
+                tools=tools,
                 server_id=server.server_id,
                 user_api_key_auth=user_api_key_auth,
             )
-            if allowed_tools_for_server is not None:
-                tools = [tool for tool in tools if _tool_name_matches(tool.name, allowed_tools_for_server, server)]
 
         return _create_tool_response_objects(tools, server)
 
