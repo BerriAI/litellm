@@ -1585,15 +1585,15 @@ class TestGuardrailInterventionClassification:
         )
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
 
-    @pytest.mark.parametrize("status_code", [400, 403, 422, 429, 451, 499])
-    def test_4xx_http_exception_is_intervention(self, status_code):
+    @pytest.mark.parametrize("status_code", [400, 403, 422])
+    def test_block_signalling_http_exception_is_intervention(self, status_code):
         from fastapi.exceptions import HTTPException
 
         exc = HTTPException(status_code=status_code, detail="blocked by guardrail")
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
 
-    @pytest.mark.parametrize("status_code", [300, 500, 502, 503])
-    def test_non_4xx_http_exception_is_not_intervention(self, status_code):
+    @pytest.mark.parametrize("status_code", [300, 401, 408, 429, 451, 499, 500, 502, 503])
+    def test_non_block_http_exception_is_not_intervention(self, status_code):
         from fastapi.exceptions import HTTPException
 
         exc = HTTPException(status_code=status_code, detail="guardrail api error")
