@@ -656,6 +656,8 @@ async def common_checks(
 
         async def _user_max_budget_check() -> None:
             # 4.1 user budget, for both personal and team keys.
+            if not RouteChecks.is_llm_api_route(route=route):
+                return
             if user_object is not None and user_object.max_budget is not None:
                 from litellm.proxy.proxy_server import get_current_spend
 

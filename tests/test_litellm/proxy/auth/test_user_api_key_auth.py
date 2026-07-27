@@ -3343,6 +3343,70 @@ async def test_centralized_common_checks_enforces_proxy_admin_user_budget():
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_does_not_enforce_user_budget_on_key_list():
+    """User spend budgets apply to LLM calls, not management reads. v1.83.3
+    only enforced user budgets on AI resource routes; keep /key/list usable for
+    over-budget proxy admins."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(
+        api_key="sk-admin",
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+    request._url = URL(url="/key/list")
+
+    db_user = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        spend=10.0,
+        max_budget=5.0,
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=db_user,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_global_proxy_spend",
+                new_callable=AsyncMock,
+                return_value=0.0,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                new_callable=AsyncMock,
+            ) as mock_get_current_spend,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/key/list",
+            )
+            mock_get_current_spend.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_http_exception_without_team_id():
     """Regression: an HTTPException raised by any of the five parallel
     fetches (user/project/end_user/global_spend) must not trigger the
