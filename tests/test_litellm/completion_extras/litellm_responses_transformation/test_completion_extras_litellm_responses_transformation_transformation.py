@@ -2401,6 +2401,78 @@ def test_parallel_tool_calls_comprehensive_streaming_integration():
     )
 
 
+def test_bridge_streaming_chunks_share_single_id():
+    """Regression test for #32607.
+
+    When a chat completions request is bridged to the Responses API and the
+    streaming events are translated back, every emitted chunk must share one
+    stable id. Previously each ModelResponseStream got a fresh
+    "chatcmpl-<uuid>", which broke clients that group tool-call deltas by
+    chunk.id (splitting a single tool call across multiple messages).
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunks = [
+        {"type": "response.created", "response": {"id": "resp_001"}},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_1",
+                "name": "get_weather",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "delta": '{"city":"Amsterdam"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city":"Amsterdam"}',
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_001",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                        "arguments": '{"city":"Amsterdam"}',
+                    }
+                ],
+            },
+        },
+    ]
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+    ids = [iterator.chunk_parser(chunk).id for chunk in chunks]
+
+    assert len(set(ids)) == 1, (
+        f"All bridged streaming chunks must share one id, got {len(set(ids))} "
+        f"distinct ids: {set(ids)}"
+    )
+    assert ids[0] and ids[0].startswith("chatcmpl-"), (
+        f"Bridged chunk id must keep the chat completion prefix, got {ids[0]!r}"
+    )
+
+
 def test_map_optional_params_preserves_reasoning_summary():
     """Test that reasoning_effort dict with summary field is preserved.
 
