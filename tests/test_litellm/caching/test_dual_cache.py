@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.caching.dual_cache import DualCache
+import litellm.caching.dual_cache as dual_cache_module
+from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 
@@ -445,3 +446,54 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
     assert mock_redis.async_set_cache.call_args[0][:2] == (key_after, val_after)
 
     assert in_memory.get_cache(key_after) == val_after
+
+def test_limited_size_ordered_dict_update_at_capacity_does_not_evict_other_entries():
+    """
+    Updating an existing key must never evict a different entry; only inserting a
+    brand new key over capacity may evict the oldest one.
+    """
+    tracker = LimitedSizeOrderedDict(max_size=2)
+    tracker["a"] = 1
+    tracker["b"] = 2
+
+    tracker["a"] = 3
+
+    assert dict(tracker) == {"a": 3, "b": 2}
+
+    tracker["c"] = 4
+
+    assert "a" not in tracker
+    assert dict(tracker) == {"b": 2, "c": 4}
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_throttle_at_capacity_keeps_other_fresh_entries():
+    """
+    Regression test: rolling back a reservation for an expired key while the
+    throttle map is at capacity used to evict a different, still-fresh entry,
+    causing an avoidable Redis batch read for that key.
+    """
+    mock_redis = MagicMock(spec=RedisCache)
+    dual_cache = DualCache(
+        redis_cache=mock_redis,
+        default_redis_batch_cache_expiry=10,
+        default_max_redis_batch_cache_size=2,
+    )
+
+    mock_redis.async_batch_get_cache = AsyncMock(return_value={})
+    with patch.object(dual_cache_module.time, "time", return_value=0.0):
+        await dual_cache.async_batch_get_cache(keys=["a"])
+    with patch.object(dual_cache_module.time, "time", return_value=5.0):
+        await dual_cache.async_batch_get_cache(keys=["b"])
+
+    mock_redis.async_batch_get_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+    with patch.object(dual_cache_module.time, "time", return_value=11.0):
+        await dual_cache.async_batch_get_cache(keys=["a"])
+
+    assert dual_cache.last_redis_batch_access_time.get("b") == 5.0
+
+    mock_redis.async_batch_get_cache = AsyncMock(return_value={})
+    with patch.object(dual_cache_module.time, "time", return_value=12.0):
+        await dual_cache.async_batch_get_cache(keys=["b"])
+
+    mock_redis.async_batch_get_cache.assert_not_called()
