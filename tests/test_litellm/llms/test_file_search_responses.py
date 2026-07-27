@@ -1024,3 +1024,26 @@ class TestEmulatedFileSearchHandler:
             if getattr(getattr(event, "type", ""), "value", "") == "response.output_text.delta"
         )
         assert streamed_text == "Premium wifi is $10."
+
+    @pytest.mark.asyncio
+    async def test_H17_stream_without_logging_object_falls_back_to_non_streaming(self):
+        """Without a logging object there is nothing to drive stream logging; degrade instead of crashing."""
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        direct_resp = self._make_mock_responses_api_response(text="No tool call needed.")
+
+        with patch(
+            "litellm.responses.file_search.emulated_handler._call_aresponses",
+            new=AsyncMock(return_value=direct_resp),
+        ):
+            result = await aresponses_with_emulated_file_search(
+                input="What is 2+2?",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_h17"]}],
+                stream=True,
+            )
+
+        assert not hasattr(result, "__aiter__")
+        assert getattr(result.output[0], "type") == "file_search_call"
