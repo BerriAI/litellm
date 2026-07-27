@@ -125,10 +125,44 @@ def _replace_file_search_tools(
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_search_params_for_vector_store(vector_store_id: str) -> dict[str, Any]:
+    """
+    Resolve the provider and provider-specific params a registered vector store needs at search time.
+
+    Without this, `asearch` falls back to `custom_llm_provider="openai"` and drops params such as
+    `vector_bucket_name`, `index_name` and `embedding_model`, so a store backed by any other
+    provider (s3_vectors, bedrock, ...) is never actually searched.
+    """
+    import litellm
+
+    registry = litellm.vector_store_registry
+    if registry is None:
+        return {}
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+    except ImportError:
+        prisma_client = None
+
+    vector_store = await registry.get_litellm_managed_vector_store_from_registry_or_db(
+        vector_store_id=vector_store_id,
+        prisma_client=prisma_client,
+    )
+    if vector_store is None:
+        return {}
+
+    litellm_params: dict[str, Any] = vector_store.get("litellm_params") or {}
+    search_params = {k: v for k, v in litellm_params.items() if k not in ("vector_store_id", "custom_llm_provider")}
+    custom_llm_provider = litellm_params.get("custom_llm_provider") or vector_store.get("custom_llm_provider")
+    if custom_llm_provider is None:
+        return search_params
+    return {**search_params, "custom_llm_provider": custom_llm_provider}
+
+
 async def _run_vector_searches(
     queries: List[str],
     vector_store_ids: List[str],
-) -> Tuple[List[str], List[VectorStoreSearchResult]]:
+) -> tuple[list[str], list[VectorStoreSearchResult], tuple[str, ...]]:
     """
     Run `asearch` against all vector stores for all queries and collect results.
 
@@ -137,12 +171,14 @@ async def _run_vector_searches(
         vector_store_ids: Vector store IDs to search
 
     Returns:
-        (queries_list, combined_results)
+        (queries_list, combined_results, search_errors)
     """
     import litellm.vector_stores.main as vs_main
 
     all_results: List[VectorStoreSearchResult] = []
+    errors: list[str] = []
     ids_to_search = vector_store_ids
+    search_params_by_id = {vs_id: await _resolve_search_params_for_vector_store(vs_id) for vs_id in ids_to_search}
 
     # Execute each query against all vector stores
     for query in queries:
@@ -151,19 +187,21 @@ async def _run_vector_searches(
                 response = await vs_main.asearch(
                     vector_store_id=vs_id,
                     query=query,
+                    **search_params_by_id[vs_id],
                 )
                 results_data = response.get("data") if isinstance(response, dict) else getattr(response, "data", None)
                 if results_data:
                     all_results.extend(results_data)
             except Exception as exc:
-                verbose_logger.warning(
+                errors.append(f"vector_store_id={vs_id}: {exc}")
+                verbose_logger.exception(
                     "file_search emulated: search failed for query='%s', vector_store_id='%s': %s",
                     query,
                     vs_id,
                     exc,
                 )
 
-    return queries, all_results
+    return queries, all_results, tuple(errors)
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +280,7 @@ def _build_file_search_call_output(
     queries: List[str],
     results: Optional[List[VectorStoreSearchResult]] = None,
     include_search_results: bool = False,
+    search_errors: tuple[str, ...] = (),
 ) -> Dict[str, Any]:
     """Build the file_search_call output item (mirrors OpenAI's format).
 
@@ -249,18 +288,20 @@ def _build_file_search_call_output(
         call_id: Unique ID for this file_search call.
         queries: List of search queries used.
         results: The raw search results (used when include_search_results=True).
-        include_search_results: Populate search_results when the caller passed
+        include_search_results: Populate results/search_results when the caller passed
             ``include=["file_search_call.results"]``.
+        search_errors: Errors raised while searching; a call that produced no results and
+            only errors is reported as failed instead of completed.
     """
-    search_results = None
-    if include_search_results and results:
-        search_results = _build_search_results_for_include(results)
+    formatted_results = _build_search_results_for_include(results) if include_search_results and results else None
+    status = "failed" if search_errors and not results else "completed"
     return {
         "type": "file_search_call",
         "id": call_id,
-        "status": "completed",
+        "status": status,
         "queries": queries,
-        "search_results": search_results,
+        "results": formatted_results,
+        "search_results": formatted_results,
     }
 
 
@@ -426,11 +467,12 @@ async def _execute_file_search_tool_calls(
     all_vs_ids: List[str],
     input: Any,
     file_search_call_id: str,
-) -> Tuple[List[Dict[str, Any]], List[str], List[VectorStoreSearchResult]]:
+) -> tuple[list[dict[str, Any]], list[str], list[VectorStoreSearchResult], tuple[str, ...]]:
     """Run the vector search for each file_search tool_call and collect results."""
     tool_results: List[Dict[str, Any]] = []
     all_queries: List[str] = []
     all_results: List[VectorStoreSearchResult] = []
+    all_errors: list[str] = []
 
     for tool_call in file_search_calls:
         call_id, raw_args = _extract_tool_call_fields(tool_call, fallback_call_id=file_search_call_id)
@@ -445,12 +487,13 @@ async def _execute_file_search_tool_calls(
         vs_id_arg = args.get("vector_store_id")
         vs_ids_for_call = [vs_id_arg] if vs_id_arg else all_vs_ids
 
-        queries, results = await _run_vector_searches(
+        queries, results, errors = await _run_vector_searches(
             queries=queries_from_call,
             vector_store_ids=vs_ids_for_call,
         )
         all_queries.extend(queries)
         all_results.extend(results)
+        all_errors.extend(errors)
 
         tool_results.append(
             {
@@ -460,7 +503,7 @@ async def _execute_file_search_tool_calls(
             }
         )
 
-    return tool_results, all_queries, all_results
+    return tool_results, all_queries, all_results, tuple(all_errors)
 
 
 def _build_follow_up_input(
@@ -560,7 +603,7 @@ async def aresponses_with_emulated_file_search(
 
     # 4. Execute each file_search tool call
     file_search_call_id = f"fs_{uuid.uuid4().hex[:24]}"
-    tool_results, all_queries, all_results = await _execute_file_search_tool_calls(
+    tool_results, all_queries, all_results, search_errors = await _execute_file_search_tool_calls(
         file_search_calls=file_search_calls,
         all_vs_ids=all_vs_ids,
         input=input,
@@ -600,6 +643,7 @@ async def aresponses_with_emulated_file_search(
             queries=all_queries or [str(input)],
             results=all_results,
             include_search_results=_include_search_results,
+            search_errors=search_errors,
         ),
         message_output=_build_message_output(response_text, all_results),
         first_response=first_response,

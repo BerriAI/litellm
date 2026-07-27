@@ -935,3 +935,160 @@ class TestEmulatedFileSearchHandler:
                 f"Sub-call {i} must run with is_internal_call=True to suppress "
                 "billing callbacks in wrapper_async"
             )
+
+
+# ---------------------------------------------------------------------------
+# Regression: emulated file_search must honour the vector store registry entry
+# (https://github.com/BerriAI/litellm/issues/34768)
+# ---------------------------------------------------------------------------
+
+
+class TestEmulatedFileSearchRegistryResolution:
+    """The emulated handler must search a registered store with its own provider + params."""
+
+    @staticmethod
+    def _s3_vectors_registry(vector_store_id: str = "my-bucket:my-index"):
+        from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+        return VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id=vector_store_id,
+                    custom_llm_provider="s3_vectors",
+                    litellm_params={
+                        "custom_llm_provider": "s3_vectors",
+                        "vector_store_id": vector_store_id,
+                        "vector_bucket_name": "my-bucket",
+                        "index_name": "my-index",
+                        "embedding_model": "bedrock/amazon.titan-embed-text-v2:0",
+                    },
+                )
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_uses_registry_provider_and_params(self):
+        from litellm.responses.file_search.emulated_handler import _run_vector_searches
+
+        search_result = MagicMock()
+        search_result.file_id = "file-1"
+        search_result.filename = "probe.txt"
+        search_result.score = 0.55
+        search_result.content = [{"type": "text", "text": "Premium plan costs 25 dollars"}]
+        search_response = MagicMock()
+        search_response.data = [search_result]
+
+        mock_asearch = AsyncMock(return_value=search_response)
+        with (
+            patch("litellm.vector_store_registry", self._s3_vectors_registry()),
+            patch("litellm.vector_stores.main.asearch", new=mock_asearch),
+        ):
+            _queries, results, errors = await _run_vector_searches(
+                queries=["premium wifi plan price"],
+                vector_store_ids=["my-bucket:my-index"],
+            )
+
+        assert errors == ()
+        assert results == [search_result]
+        call_kwargs = mock_asearch.call_args.kwargs
+        assert call_kwargs["vector_store_id"] == "my-bucket:my-index"
+        assert call_kwargs["custom_llm_provider"] == "s3_vectors"
+        assert call_kwargs["vector_bucket_name"] == "my-bucket"
+        assert call_kwargs["index_name"] == "my-index"
+        assert call_kwargs["embedding_model"] == "bedrock/amazon.titan-embed-text-v2:0"
+
+    @pytest.mark.asyncio
+    async def test_unregistered_store_keeps_default_provider(self):
+        from litellm.responses.file_search.emulated_handler import _run_vector_searches
+
+        search_response = MagicMock()
+        search_response.data = []
+        mock_asearch = AsyncMock(return_value=search_response)
+        with (
+            patch("litellm.vector_store_registry", None),
+            patch("litellm.vector_stores.main.asearch", new=mock_asearch),
+        ):
+            await _run_vector_searches(queries=["q"], vector_store_ids=["vs_openai"])
+
+        assert "custom_llm_provider" not in mock_asearch.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_search_failure_is_surfaced_as_failed_file_search_call(self):
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        first_resp = MagicMock()
+        first_resp.output = [
+            {
+                "type": "function_call",
+                "name": "litellm_file_search",
+                "call_id": "call_fail",
+                "arguments": '{"queries": ["premium wifi plan price"]}',
+            }
+        ]
+        first_resp.id = "resp_fail"
+        first_resp.created_at = 1700000000
+        first_resp.model = "claude-haiku-4-5"
+        first_resp.usage = None
+
+        final_resp = MagicMock()
+        final_resp.output = [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I could not find that."}],
+            }
+        ]
+        final_resp.id = "resp_fail_2"
+        final_resp.created_at = 1700000000
+        final_resp.model = "claude-haiku-4-5"
+        final_resp.usage = None
+
+        with (
+            patch("litellm.vector_store_registry", self._s3_vectors_registry()),
+            patch(
+                "litellm.responses.file_search.emulated_handler._call_aresponses",
+                new=AsyncMock(side_effect=[first_resp, final_resp]),
+            ),
+            patch(
+                "litellm.vector_stores.main.asearch",
+                new=AsyncMock(side_effect=Exception("AccessDeniedException")),
+            ),
+        ):
+            result = await aresponses_with_emulated_file_search(
+                input="how much is the premium wifi plan?",
+                model="anthropic/claude-haiku-4-5",
+                tools=[{"type": "file_search", "vector_store_ids": ["my-bucket:my-index"]}],
+                include=["file_search_call.results"],
+            )
+
+        file_search_call = result.output[0]
+        status = file_search_call["status"] if isinstance(file_search_call, dict) else file_search_call.status
+        assert status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_include_populates_openai_results_field(self):
+        from litellm.responses.file_search.emulated_handler import (
+            _build_file_search_call_output,
+        )
+
+        result = MagicMock()
+        result.file_id = "file-1"
+        result.filename = "probe.txt"
+        result.score = 0.55
+        result.attributes = {}
+        result.content = [{"type": "text", "text": "Premium plan costs 25 dollars"}]
+
+        output = _build_file_search_call_output(
+            call_id="fs_1",
+            queries=["premium wifi plan price"],
+            results=[result],
+            include_search_results=True,
+        )
+
+        assert output["status"] == "completed"
+        assert output["results"] == output["search_results"]
+        assert output["results"][0]["text"] == "Premium plan costs 25 dollars"
+        assert output["results"][0]["score"] == 0.55
