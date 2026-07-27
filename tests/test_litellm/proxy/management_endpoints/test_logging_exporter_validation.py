@@ -50,7 +50,8 @@ def _registry():
                 "access": {"teams": ["ds-team"], "orgs": ["ds-org"]},
             },
         ),
-        # explicit global/default: assignable by anyone via the auto_enable escape.
+        # proxy-wide auto default: access.global makes it visible to every scope,
+        # auto_enable makes it fire without being named.
         CredentialItem(
             credential_name="central-default",
             credential_values={},
@@ -58,6 +59,7 @@ def _registry():
                 "credential_type": "logging",
                 "description": "arize",
                 "auto_enable": True,
+                "access": {"global": True},
             },
         ),
         CredentialItem(
@@ -195,8 +197,8 @@ def test_proxy_admin_can_assign_any_destination(_registry):
 
 
 def test_team_admin_can_assign_auto_enable_default(_registry):
-    """An explicit global/default (auto_enable) is assignable by any admin scope,
-    the way a global destination is."""
+    """A proxy-wide auto default (access.global + auto_enable) is visible to every
+    scope, so a team admin in any team may name it."""
     validate_logging_exporter_assignment(
         _ok(["central-default"]),
         _non_admin(),

@@ -177,6 +177,26 @@ describe("LoggingCallbacksTable", () => {
     expect(screen.getByText("Auto-enabled")).toBeInTheDocument();
   });
 
+  it("renders disabled mode for an auto-enable destination with no access grants", () => {
+    render(
+      <LoggingCallbacksTable
+        callbacks={[
+          {
+            name: "otel-empty",
+            variables: baseVars,
+            credentialName: "otel-empty",
+            access: { global: false, teams: [], orgs: [] },
+            autoEnable: true,
+            resolvedScope: { global: false, teams: [], orgs: [] },
+          },
+        ]}
+        availableCallbacks={{}}
+      />,
+    );
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.queryByText("Auto-enabled")).not.toBeInTheDocument();
+  });
+
   it("a destination row edits access and deletes without exposing callback actions", async () => {
     const user = userEvent.setup();
     const onEditAccess = vi.fn();

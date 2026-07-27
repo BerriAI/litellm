@@ -293,13 +293,13 @@ class TestTeamAdminRevoke:
         assert "team-B" not in d.reason
 
 
-class TestAutoEnableWideningGuard:
-    """Emptying the last grant of an auto_enable destination falls through to
-    the documented empty-grants-means-proxy-wide fallback, so a narrowing edit
-    by a team-admin would widen the destination to every tenant. The decider
-    must refuse to cross that boundary for non-admins."""
+class TestEmptyingGrantsIsAllowed:
+    """Empty access is deny-all (a destination with no grants routes to no one),
+    so a team-admin emptying their own grant merely DISABLES the destination and
+    can never widen it. The decider allows it for every combination; there is no
+    special auto_enable case, because empty access is not proxy-wide."""
 
-    def test_emptying_sole_grant_on_auto_enable_destination_is_denied(self):
+    def test_emptying_sole_own_grant_on_auto_enable_destination_is_allowed(self):
         existing = {
             **_EXISTING_INFO,
             "auto_enable": True,
@@ -309,22 +309,9 @@ class TestAutoEnableWideningGuard:
             existing_info=existing,
             patch_info={"access": {"teams": []}},
         )
-        assert isinstance(d, Deny)
-        assert "proxy-wide" in d.reason
-
-    def test_emptying_teams_with_surviving_org_grant_is_allowed(self):
-        existing = {
-            **_EXISTING_INFO,
-            "auto_enable": True,
-            "access": {"global": False, "teams": ["team-T"], "orgs": ["org-1"]},
-        }
-        d = _decision(
-            existing_info=existing,
-            patch_info={"access": {"teams": []}},
-        )
         assert isinstance(d, Allow)
 
-    def test_emptying_sole_grant_without_auto_enable_is_allowed(self):
+    def test_emptying_sole_own_grant_without_auto_enable_is_allowed(self):
         existing = {
             **_EXISTING_INFO,
             "auto_enable": False,
@@ -336,18 +323,20 @@ class TestAutoEnableWideningGuard:
         )
         assert isinstance(d, Allow)
 
-    def test_proxy_admin_may_empty_sole_grant_on_auto_enable_destination(self):
+    def test_emptying_teams_still_cannot_drop_a_foreign_grant(self):
+        """Allowing empty-out does not weaken the foreign-revoke guard: a team-admin
+        still cannot remove a team they do not administer, auto_enable or not."""
         existing = {
             **_EXISTING_INFO,
             "auto_enable": True,
-            "access": {"global": False, "teams": ["team-T"], "orgs": []},
+            "access": {"global": False, "teams": ["team-T", "team-A"], "orgs": []},
         }
         d = _decision(
-            is_proxy_admin=True,
             existing_info=existing,
-            patch_info={"access": {"teams": []}},
+            patch_info={"access": {"teams": []}},  # drops team-A (foreign) too
         )
-        assert isinstance(d, Allow)
+        assert isinstance(d, Deny)
+        assert "team-A" not in d.reason
 
 
 class TestTeamAdminMultipleTeams:

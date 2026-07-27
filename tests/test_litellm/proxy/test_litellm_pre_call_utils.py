@@ -5442,10 +5442,11 @@ _ARIZE_ENDPOINT = "https://otlp.arize.com/v1"
 
 @pytest.fixture
 def _seeded_logging_credentials_with_access():
-    """``access`` is visibility, not enablement. ``langfuse-eu`` is granted to
-    ``team-eu``/``org-eu`` but never auto-fires; ``arize-global`` carries
-    ``access.global`` to prove global visibility alone STILL does not auto-fire;
-    ``arize-default`` is the explicit ``auto_enable`` global/default."""
+    """``access`` gates enablement. ``langfuse-eu`` is granted to
+    ``team-eu``/``org-eu`` but never auto-fires (not auto_enable, not named);
+    ``arize-global`` carries ``access.global`` to prove global visibility alone
+    STILL does not auto-fire; ``arize-default`` is the proxy-wide auto default
+    (``auto_enable`` + ``access.global``). Empty access would be deny-all."""
     from litellm.models.credentials import CredentialItem
 
     original = litellm.credential_list
@@ -5479,6 +5480,7 @@ def _seeded_logging_credentials_with_access():
                 "credential_type": "logging",
                 "description": "arize",
                 "auto_enable": True,
+                "access": {"global": True},
             },
         ),
     ]
@@ -5533,6 +5535,34 @@ async def test_resolve_name_without_visibility_is_dropped(
 
     # langfuse-eu dropped (not visible to team-other); only auto_enable survives.
     assert {d["endpoint"] for d in destinations} == {_ARIZE_ENDPOINT}
+
+
+@pytest.mark.asyncio
+async def test_resolve_auto_enable_empty_access_is_deny_all(monkeypatch):
+    """The core of the empty-access hardening: an auto_enable destination with no
+    access grants fires for NO ONE (empty access = deny-all, not proxy-wide).
+    Mutating the resolver to treat empty access as proxy-wide re-fires it here."""
+    from litellm.models.credentials import CredentialItem
+    from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
+
+    original = litellm.credential_list
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="arize-empty-auto",
+            credential_values={"arize_space_id": "E", "arize_api_key": "K"},
+            credential_info={
+                "credential_type": "logging",
+                "description": "arize",
+                "auto_enable": True,
+            },
+        ),
+    ]
+    try:
+        for auth in (_auth(team_id="team-x"), _auth(org_id="org-y"), _auth()):
+            destinations, _ = await _resolve_logging_exporters(auth)
+            assert destinations == []
+    finally:
+        litellm.credential_list = original
 
 
 @pytest.mark.asyncio

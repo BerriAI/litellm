@@ -701,15 +701,15 @@ async def _resolve_logging_exporters(
 ) -> "tuple[list, list]":
     """Resolve the destinations this request fans out to, as (destinations, backends).
 
-    ``credential_info.access`` is visibility, not enablement: a granted destination
-    does NOT fire just because the caller can see it. A destination is selected only
-    when it is an explicit global/default (``auto_enable``) OR it is named in the
-    identity chain's ``logging_exporters`` (key + team + org) AND its ``access`` grants
-    the caller. The visibility re-check is defensive: a name that points at a
-    destination no longer visible to this identity is ignored, so a stale or
-    cross-tenant assignment can never route traffic out. Each survivor is built via
-    ``build_destination`` and deduped on (endpoint, headers, resource attributes).
-    Returns ([], []) when nothing is selected (default-deny).
+    ``credential_info.access`` gates every destination: empty access grants no one, so
+    an empty-access destination never fires (proxy-wide requires ``access.global``). A
+    destination is selected when its ``access`` grants the caller AND either it is
+    ``auto_enable`` (fires without being named) or it is named in the identity chain's
+    ``logging_exporters`` (key + team + org). The access check is also the defensive
+    re-check on a named destination, so a stale or cross-tenant assignment can never
+    route traffic out. Each survivor is built via ``build_destination`` and deduped on
+    (endpoint, headers, resource attributes). Returns ([], []) when nothing is selected
+    (default-deny).
     """
     from litellm.integrations.otel.presets.destinations import build_destination
     from litellm.proxy.management_endpoints.logging_exporter_access import (
@@ -727,19 +727,9 @@ async def _resolve_logging_exporters(
         info = parse_credential_info(credential.credential_info)
         if info is None or info.credential_type != "logging":
             return False
-        if info.auto_enable:
-            # auto_enable is scoped by access: if access has explicit grants,
-            # the request identity must fall within them. Empty access = proxy-wide.
-            from litellm.proxy.management_endpoints.logging_exporter_access import (
-                _has_explicit_access_grants,
-            )
-
-            if _has_explicit_access_grants(info.access):
-                return access_grants(info.access, team_ids, org_ids)
-            return True  # no grants = proxy-wide auto
-        if credential.credential_name not in names:
+        if not access_grants(info.access, team_ids, org_ids):
             return False
-        return access_grants(info.access, team_ids, org_ids)
+        return info.auto_enable or credential.credential_name in names
 
     def _build(
         credential: "CredentialItem",

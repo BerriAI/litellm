@@ -55,10 +55,22 @@ function destinationMode(record: AlertingObject) {
     (access?.teams?.length ?? 0) > 0,
     (access?.orgs?.length ?? 0) > 0,
   ].some(Boolean);
-  const tooltip = hasExplicitGrants
-    ? "Exports automatically for all identities within the access scope without requiring explicit assignment."
-    : "No explicit access grants. Treated as proxy-wide automatic export for backward compatibility. Add access.global=true or access.teams/orgs to scope this destination.";
-  return <StatusBadge tone="warning" label="Auto-enabled" tooltip={tooltip} />;
+  if (!hasExplicitGrants) {
+    return (
+      <StatusBadge
+        tone="neutral"
+        label="Disabled"
+        tooltip="No access grants, so this destination receives nothing. Add Access (Global, or specific Teams/Orgs) to enable it."
+      />
+    );
+  }
+  return (
+    <StatusBadge
+      tone="warning"
+      label="Auto-enabled"
+      tooltip="Exports automatically for all identities within the access scope without requiring explicit assignment."
+    />
+  );
 }
 
 function ScopeCell({ callback }: { callback: AlertingObject }) {

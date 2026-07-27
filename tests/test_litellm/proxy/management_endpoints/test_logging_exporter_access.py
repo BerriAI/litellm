@@ -99,29 +99,28 @@ def test_access_grants_not_global_when_false():
     assert access_grants(a, frozenset({"t1"}), frozenset({"o1"})) is False
 
 
-# --- is_destination_visible: auto_enable scoped by access ------------------
+# --- is_destination_visible: decided entirely by access --------------------
 #
-# auto_enable=True means "selected automatically" but the scope of that
-# automatic selection is controlled by access:
-#   - explicit grants (global/teams/orgs) → caller must be within the grant
-#   - empty access (no grants at all)     → proxy-wide fallback (visible to all)
-# This lets admins create a team-scoped auto-exporter without it leaking to
-# every other team on the proxy.
+# Visibility is access-only. auto_enable does not affect it: an empty-access
+# destination is invisible regardless of auto_enable (empty access = deny-all).
+# Proxy-wide visibility must be requested explicitly with access.global=True.
 
 
-def test_visible_auto_enable_empty_access_is_proxy_wide():
-    """auto_enable=True with no access grants is proxy-wide: visible to all admins."""
+def test_visible_empty_access_is_deny_all_even_with_auto_enable():
+    """Empty access grants no one, even when auto_enable=True: not proxy-wide."""
     info = CredentialInfo(credential_type="logging", auto_enable=True)
-    assert is_destination_visible(info, frozenset(), frozenset()) is True
-    assert is_destination_visible(info, frozenset({"any-team"}), frozenset()) is True
-    assert is_destination_visible(info, frozenset(), frozenset({"any-org"})) is True
+    assert is_destination_visible(info, frozenset(), frozenset()) is False
+    assert is_destination_visible(info, frozenset({"any-team"}), frozenset()) is False
+    assert is_destination_visible(info, frozenset(), frozenset({"any-org"})) is False
 
 
-def test_visible_auto_enable_global_access_is_proxy_wide():
-    """auto_enable=True + access.global=True is proxy-wide."""
+def test_visible_global_access_is_proxy_wide():
+    """access.global=True is proxy-wide regardless of auto_enable."""
     info = CredentialInfo(credential_type="logging", auto_enable=True, access=_access(global_=True))
     assert is_destination_visible(info, frozenset({"t1"}), frozenset()) is True
     assert is_destination_visible(info, frozenset(), frozenset()) is True
+    manual = CredentialInfo(credential_type="logging", access=_access(global_=True))
+    assert is_destination_visible(manual, frozenset(), frozenset()) is True
 
 
 def test_visible_auto_enable_team_scoped():

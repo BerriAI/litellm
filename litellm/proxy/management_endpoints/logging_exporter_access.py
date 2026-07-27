@@ -66,17 +66,6 @@ def access_grants(
     return not org_ids.isdisjoint(access.orgs)
 
 
-def _has_explicit_access_grants(access: CredentialAccess | None) -> bool:
-    """True when ``access`` contains at least one explicit grant (global, team, or org).
-
-    Used to distinguish "access intentionally left empty" (proxy-wide fallback) from
-    "access scoped to specific teams or orgs".
-    """
-    if access is None:
-        return False
-    return access.global_ or bool(access.teams) or bool(access.orgs)
-
-
 def is_destination_visible(
     info: CredentialInfo,
     team_ids: frozenset[str],
@@ -85,21 +74,8 @@ def is_destination_visible(
     """Whether a caller admin-scoped to ``team_ids`` / ``org_ids`` may see and assign
     this destination.
 
-    ``auto_enable`` is scoped by ``access``:
-    - If ``access`` has explicit grants (global / teams / orgs), the caller must
-      fall within those grants — even for auto-enabled destinations.
-    - If ``access`` is empty (no grants at all), the destination is treated as
-      proxy-wide and is visible to every admin caller. This preserves backward
-      compatibility for ``auto_enable=True`` destinations created without an
-      ``access`` block.
-
-    A destination with ``auto_enable=False`` follows the same access check; the
-    only difference is that ``auto_enable=True`` without any explicit grants is
-    visible to all admins, while ``auto_enable=False`` without grants is visible
-    to nobody.
+    Visibility is decided entirely by ``access``: empty access grants no one, so an
+    empty-access destination is invisible regardless of ``auto_enable``. Proxy-wide
+    visibility must be requested explicitly with ``access.global = true``.
     """
-    if _has_explicit_access_grants(info.access):
-        return access_grants(info.access, team_ids, org_ids)
-    # No explicit grants: auto_enable=True → proxy-wide (visible to all admins);
-    # auto_enable=False → invisible (no grants = not reachable by any non-admin).
-    return info.auto_enable
+    return access_grants(info.access, team_ids, org_ids)
