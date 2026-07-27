@@ -23,6 +23,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
+import { PROTECTED_MODEL_INFO_KEYS, withNullsForRemovedKeys } from "../utils/modelJsonPatchUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
@@ -82,6 +83,67 @@ interface ComplexityRouterModelData {
     complexity_router_default_model?: string;
   };
 }
+
+const buildModelEditFormValues = (
+  model: {
+    model_name?: string;
+    litellm_model_name?: string;
+    litellm_params?: Record<string, any>;
+    model_info?: Record<string, any>;
+  },
+  isWildcardModel: boolean,
+) => {
+  const litellmParams = model.litellm_params || {};
+  const modelInfo = model.model_info || {};
+  return {
+    model_name: model.model_name,
+    litellm_model_name: model.litellm_model_name,
+    api_base: litellmParams.api_base,
+    custom_llm_provider: litellmParams.custom_llm_provider,
+    organization: litellmParams.organization,
+    tpm: litellmParams.tpm,
+    rpm: litellmParams.rpm,
+    max_retries: litellmParams.max_retries,
+    timeout: litellmParams.timeout,
+    stream_timeout: litellmParams.stream_timeout,
+    input_cost: litellmParams.input_cost_per_token
+      ? litellmParams.input_cost_per_token * 1_000_000
+      : modelInfo.input_cost_per_token * 1_000_000 || null,
+    output_cost: litellmParams.output_cost_per_token
+      ? litellmParams.output_cost_per_token * 1_000_000
+      : modelInfo.output_cost_per_token * 1_000_000 || null,
+    cache_read_cost:
+      litellmParams.cache_read_input_token_cost !== undefined && litellmParams.cache_read_input_token_cost !== null
+        ? litellmParams.cache_read_input_token_cost * 1_000_000
+        : modelInfo.cache_read_input_token_cost !== undefined && modelInfo.cache_read_input_token_cost !== null
+          ? modelInfo.cache_read_input_token_cost * 1_000_000
+          : null,
+    cache_write_cost:
+      litellmParams.cache_creation_input_token_cost !== undefined &&
+      litellmParams.cache_creation_input_token_cost !== null
+        ? litellmParams.cache_creation_input_token_cost * 1_000_000
+        : modelInfo.cache_creation_input_token_cost !== undefined && modelInfo.cache_creation_input_token_cost !== null
+          ? modelInfo.cache_creation_input_token_cost * 1_000_000
+          : null,
+    cache_control: litellmParams.cache_control_injection_points ? true : false,
+    cache_control_injection_points: litellmParams.cache_control_injection_points || [],
+    model_access_group: Array.isArray(modelInfo.access_groups) ? modelInfo.access_groups : [],
+    guardrails: Array.isArray(litellmParams.guardrails) ? litellmParams.guardrails : [],
+    vector_store_ids:
+      Array.isArray(litellmParams.vector_store_ids) && litellmParams.vector_store_ids.length > 0
+        ? litellmParams.vector_store_ids
+        : undefined,
+    tags: Array.isArray(litellmParams.tags) ? litellmParams.tags : [],
+    health_check_model: isWildcardModel ? modelInfo.health_check_model : null,
+    litellm_credential_name: litellmParams.litellm_credential_name || "",
+    litellm_extra_params: JSON.stringify(
+      Object.fromEntries(Object.entries(litellmParams).filter(([key]) => key !== "litellm_credential_name")),
+      null,
+      2,
+    ),
+    model_info: JSON.stringify(modelInfo, null, 2),
+  };
+};
 
 const buildComplexityRouterTestTargets = (
   modelData: ComplexityRouterModelData | null | undefined,
@@ -382,6 +444,8 @@ export default function ModelInfoView({
 
       if (values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      } else if (localModelData.litellm_params?.litellm_credential_name) {
+        updatedLitellmParams.litellm_credential_name = null;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
@@ -404,18 +468,15 @@ export default function ModelInfoView({
         delete updatedLitellmParams.cache_control_injection_points;
       }
 
-      // Parse the model_info from the form values
       let updatedModelInfo;
       try {
         updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
-        // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {
             ...updatedModelInfo,
             access_groups: values.model_access_group,
           };
         }
-        // Override health_check_model from the form
         if (values.health_check_model !== undefined) {
           updatedModelInfo = {
             ...updatedModelInfo,
@@ -427,29 +488,54 @@ export default function ModelInfoView({
         return;
       }
 
-      // Final guard: never PATCH a redacted secret. The /model/info snapshot that
-      // seeds this form masks secrets, and any save re-sends the whole params blob;
-      // without this strip a masked value would be re-encrypted over the real secret.
-      // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
-      const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const previousLitellmParams = (localModelData.litellm_params || {}) as Record<string, unknown>;
+      const skipLitellmNulls = new Set<string>(
+        Object.entries(previousLitellmParams)
+          .filter(
+            ([key, value]) => isMaskedSecret(value) && Object.prototype.hasOwnProperty.call(parsedExtraParams, key),
+          )
+          .map(([key]) => key),
+      );
+
+      const safeLitellmParams = withNullsForRemovedKeys(
+        previousLitellmParams,
+        stripMaskedSecrets(updatedLitellmParams),
+        skipLitellmNulls,
+      );
+
+      const patchedModelInfo = withNullsForRemovedKeys(
+        (localModelData.model_info || {}) as Record<string, unknown>,
+        updatedModelInfo as Record<string, unknown>,
+        PROTECTED_MODEL_INFO_KEYS,
+      );
 
       const updateData = {
         model_name: values.model_name,
         litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        model_info: patchedModelInfo,
       };
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
+
+      const displayLitellmParams = Object.fromEntries(
+        Object.entries(safeLitellmParams).filter(([, value]) => value !== null),
+      );
+      const displayModelInfo = Object.fromEntries(
+        Object.entries(patchedModelInfo).filter(([, value]) => value !== null),
+      );
 
       const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        litellm_params: displayLitellmParams,
+        model_info: displayModelInfo,
       };
 
       setLocalModelData(updatedModelData);
+      form.setFieldsValue(
+        buildModelEditFormValues(updatedModelData, Boolean(values.litellm_model_name?.includes("*"))),
+      );
 
       if (onModelUpdate) {
         onModelUpdate(updatedModelData);
@@ -743,65 +829,7 @@ export default function ModelInfoView({
                 <Form
                   form={form}
                   onFinish={handleModelUpdate}
-                  initialValues={{
-                    model_name: localModelData.model_name,
-                    litellm_model_name: localModelData.litellm_model_name,
-                    api_base: localModelData.litellm_params.api_base,
-                    custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
-                    organization: localModelData.litellm_params.organization,
-                    tpm: localModelData.litellm_params.tpm,
-                    rpm: localModelData.litellm_params.rpm,
-                    max_retries: localModelData.litellm_params.max_retries,
-                    timeout: localModelData.litellm_params.timeout,
-                    stream_timeout: localModelData.litellm_params.stream_timeout,
-                    input_cost: localModelData.litellm_params.input_cost_per_token
-                      ? localModelData.litellm_params.input_cost_per_token * 1_000_000
-                      : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
-                    output_cost: localModelData.litellm_params?.output_cost_per_token
-                      ? localModelData.litellm_params.output_cost_per_token * 1_000_000
-                      : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
-                    cache_read_cost:
-                      localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
-                      localModelData.litellm_params?.cache_read_input_token_cost !== null
-                        ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
-                        : localModelData.model_info?.cache_read_input_token_cost !== undefined &&
-                            localModelData.model_info?.cache_read_input_token_cost !== null
-                          ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
-                          : null,
-                    cache_write_cost:
-                      localModelData.litellm_params?.cache_creation_input_token_cost !== undefined &&
-                      localModelData.litellm_params?.cache_creation_input_token_cost !== null
-                        ? localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000
-                        : localModelData.model_info?.cache_creation_input_token_cost !== undefined &&
-                            localModelData.model_info?.cache_creation_input_token_cost !== null
-                          ? localModelData.model_info.cache_creation_input_token_cost * 1_000_000
-                          : null,
-                    cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
-                    cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
-                    model_access_group: Array.isArray(localModelData.model_info?.access_groups)
-                      ? localModelData.model_info.access_groups
-                      : [],
-                    guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
-                      ? localModelData.litellm_params.guardrails
-                      : [],
-                    vector_store_ids:
-                      Array.isArray(localModelData.litellm_params?.vector_store_ids) &&
-                      localModelData.litellm_params.vector_store_ids.length > 0
-                        ? localModelData.litellm_params.vector_store_ids
-                        : undefined,
-                    tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
-                    health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
-                    litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
-                    litellm_extra_params: JSON.stringify(
-                      Object.fromEntries(
-                        Object.entries(localModelData.litellm_params || {}).filter(
-                          ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
-                        ),
-                      ),
-                      null,
-                      2,
-                    ),
-                  }}
+                  initialValues={buildModelEditFormValues(localModelData, isWildcardModel)}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
                 >
@@ -1320,12 +1348,8 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Model Info</Text>
                         {isEditing ? (
-                          <Form.Item name="model_info" className="mb-0">
-                            <Input.TextArea
-                              rows={4}
-                              placeholder='{"gpt-4": 100, "claude-v1": 200}'
-                              defaultValue={JSON.stringify(modelData.model_info, null, 2)}
-                            />
+                          <Form.Item name="model_info" className="mb-0" rules={[{ validator: formItemValidateJSON }]}>
+                            <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
@@ -1381,7 +1405,7 @@ export default function ModelInfoView({
                         <TremorButton
                           variant="secondary"
                           onClick={() => {
-                            form.resetFields();
+                            form.setFieldsValue(buildModelEditFormValues(localModelData, isWildcardModel));
                             setIsDirty(false);
                             setIsEditing(false);
                           }}

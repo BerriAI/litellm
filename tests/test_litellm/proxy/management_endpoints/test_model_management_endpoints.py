@@ -2644,12 +2644,11 @@ def _build_db_model_with_pricing():
 
 
 class TestUpdateDBModelClearPricing:
-    """Sending an explicit `null` for a pricing field must remove it from both
-    `litellm_params` and `model_info` (SPECIAL_MODEL_INFO_PARAMS are mirrored
-    between the two by Deployment.__init__).
+    """Sending an explicit `null` for a field must remove it from the merged blob.
 
-    Restricted to SPECIAL_MODEL_INFO_PARAMS so non-pricing fields (e.g. team_id)
-    cannot be cleared via this path.
+    Pricing fields (SPECIAL_MODEL_INFO_PARAMS) are mirrored between litellm_params
+    and model_info. Privileged model_info fields (team_id, id, ownership) cannot
+    be cleared via null.
     """
 
     def test_clear_input_cost_removes_from_both_blobs(self):
@@ -2725,11 +2724,8 @@ class TestUpdateDBModelClearPricing:
         assert params["input_cost_per_token"] == 0.000001
         assert params["output_cost_per_token"] == 0.000007
 
-    def test_null_on_non_pricing_field_does_not_clear(self):
-        """Security guard: only SPECIAL_MODEL_INFO_PARAMS can be cleared via null.
-        Privileged or unrelated model_info fields (e.g. team_id) must be unaffected
-        by the null-clearing path so a team admin can't ungate a team-scoped model.
-        """
+    def test_null_clears_non_pricing_litellm_params_key(self):
+        """JSON-editor deletes send null for removed litellm_params keys; those must pop."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             update_db_model,
         )
@@ -2744,25 +2740,83 @@ class TestUpdateDBModelClearPricing:
             model_name="openai/*",
             litellm_params=LiteLLM_Params(
                 model="openai/*",
-                input_cost_per_token=0.000001,
+                api_base="https://example.com",
+                someKey=True,
             ),
             model_info=ModelInfo(id="dep-pricing-1", team_id="team-keep-me"),
         )
 
-        # Patch sends a null for api_base (non-SPECIAL field). Must NOT clear team_id
-        # or any other non-pricing field from the merged dict.
         result = update_db_model(
             db_model=db_model,
             updated_patch=updateDeployment(
-                litellm_params=updateLiteLLMParams(api_base=None)
+                litellm_params=updateLiteLLMParams(api_base=None, someKey=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "api_base" not in params
+        assert "someKey" not in params
+        assert info.get("team_id") == "team-keep-me"
+
+    def test_null_on_protected_model_info_field_does_not_clear(self):
+        """Privileged model_info fields (e.g. team_id) must not be clearable via null."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+            ),
+            model_info=ModelInfo(id="dep-pricing-1", team_id="team-keep-me", someKey=True),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-pricing-1", team_id=None, someKey=None)
             ),
         )
 
         info = json.loads(result["model_info"])
-        # Pricing still present (not part of this patch)
-        assert "input_cost_per_token" in info
-        # team_id must survive
         assert info.get("team_id") == "team-keep-me"
+        assert "someKey" not in info
+        assert "input_cost_per_token" in info
+
+    def test_null_clears_custom_model_info_key(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-1", abc=123, someKey=True),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-1", abc=123, someKey=None)
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info.get("abc") == 123
+        assert "someKey" not in info
 
     def test_clear_survives_model_info_passthrough_with_old_pricing(self):
         """Realistic UI submit shape: the patch carries BOTH blobs. The
