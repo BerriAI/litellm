@@ -508,8 +508,9 @@ class TestMessageSanitization:
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
             {"type": "thinking", "thinking": ""},
             {"type": "unknown_future_block"},
+            {"no_type_key": "malformed"},
         ],
-        ids=["image_url", "unsignable_thinking", "unknown_type"],
+        ids=["image_url", "unsignable_thinking", "unknown_type", "missing_type"],
     )
     def test_empty_text_kept_when_sibling_block_would_not_survive(self, sibling_block):
         """

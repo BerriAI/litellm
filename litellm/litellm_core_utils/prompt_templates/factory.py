@@ -2024,9 +2024,7 @@ def _is_empty_text_block(block: object) -> bool:
 
 
 def _survives_assistant_conversion(block: object) -> bool:
-    if not isinstance(block, dict):
-        return False
-    block_type = block.get("type")
+    block_type = block.get("type") if isinstance(block, dict) else None
     if not isinstance(block_type, str) or block_type == "text":
         return False
     if block_type == "thinking":
