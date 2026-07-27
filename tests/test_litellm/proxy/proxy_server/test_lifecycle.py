@@ -865,3 +865,25 @@ async def test_drain_spend_buffers_propagates_cancellation(monkeypatch):
         await ps._drain_spend_buffers_on_shutdown()
 
     assert deps.tag_spend.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_buffers_stops_scheduler_before_flushing(monkeypatch):
+    order: List[str] = []
+
+    scheduler = MagicMock()
+    scheduler.shutdown.side_effect = lambda **kwargs: order.append("scheduler_stopped")
+
+    async def _flush(*args, **kwargs):
+        order.append("flush")
+
+    _patch_drain_deps(
+        monkeypatch,
+        scheduler=scheduler,
+        update_spend=AsyncMock(side_effect=_flush),
+        update_daily_tag_spend=AsyncMock(side_effect=_flush),
+    )
+
+    await ps._drain_spend_buffers_on_shutdown()
+
+    assert order == ["scheduler_stopped", "flush", "flush"]
