@@ -28,6 +28,8 @@
 -- Usage:
 --   psql "$DATABASE_URL" -v cutover="'2026-07-25T00:00:00Z'" -f db_scripts/backfill_daily_tool_spend.sql
 
+SET TIME ZONE 'UTC';
+
 INSERT INTO "LiteLLM_DailyToolSpend" (date, tool_name, spend, total_tokens, request_count, created_at, updated_at)
 SELECT
     to_char(ti.start_time, 'YYYY-MM-DD') AS date,
