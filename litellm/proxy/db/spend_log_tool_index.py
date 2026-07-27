@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Sequence
 
-import httpx
+from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -144,7 +144,7 @@ async def flush_tool_usage_transactions(
                         },
                     )
             return
-        except httpx.ConnectError:
+        except DB_RETRY_SAFE_ERROR_TYPES:
             if attempt >= n_retry_times:
                 raise
             await asyncio.sleep(2**attempt + random.uniform(0, 1))
