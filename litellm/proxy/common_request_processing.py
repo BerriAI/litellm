@@ -58,6 +58,51 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.utils import ServerToolUse
 
+
+def _dedup_system_messages(messages: list) -> list:
+    """Merge multiple system messages into a single system message.
+
+    Some clients (e.g. Claude Code SDK) send multiple system messages:
+    1. A tool-calling system message (from the generate_ppt tool)
+    2. A SharePoint context system message (from file retrieval)
+
+    vLLM's Qwen model requires the system message to be at the beginning
+    and only accepts one, so we merge all system messages into one.
+
+    Args:
+        messages: List of message dicts with 'role' and 'content' keys
+
+    Returns:
+        Deduplicated messages list with at most one system message at position 0
+    """
+    system_messages = []
+    non_system_messages = []
+
+    for msg in messages:
+        role = msg.get("role", "")
+        if role == "system":
+            content = msg.get("content", "")
+            if content:
+                system_messages.append(str(content))
+        else:
+            non_system_messages.append(msg)
+
+    if not system_messages:
+        return messages
+
+    # If there are system messages, merge them and put at the beginning
+    merged_system = "\n\n---\n\n".join(system_messages)
+    deduped = [{"role": "system", "content": merged_system}]
+    deduped.extend(non_system_messages)
+
+    verbose_proxy_logger.debug(
+        "Merged %d system messages into one (total chars: %d)",
+        len(system_messages),
+        len(merged_system),
+    )
+
+    return deduped
+
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
 StreamChunkSerializer = Callable[[Any], str]
 # Type alias for streaming error serializer (ProxyException -> wire format)
@@ -1295,6 +1340,8 @@ class ProxyBaseLLMRequestProcessing:
                 self.data["router_settings_override"] = router_settings
 
         if "messages" in self.data and self.data["messages"]:
+            # Deduplicate system messages (some clients send multiple)
+            self.data["messages"] = _dedup_system_messages(self.data["messages"])
             logging_obj.update_messages(self.data["messages"])
 
         return self.data, logging_obj
