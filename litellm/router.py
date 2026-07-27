@@ -7702,6 +7702,21 @@ class Router:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
         return litellm_params.model.startswith("auto_router/adaptive_router")
 
+    def _deployment_participates_in_adaptive_routing(self, litellm_params: LiteLLM_Params) -> bool:
+        """True when this deployment owns an `adaptive_routers` entry once finalized:
+        a dedicated adaptive router, or a complexity router whose config enables the
+        adaptive companion. Mirrors the two arms of
+        `_finalize_adaptive_router_if_configured`, which is the registry's only writer."""
+        if self._is_adaptive_router_deployment(litellm_params=litellm_params):
+            return True
+        if not self._is_complexity_router_deployment(litellm_params=litellm_params):
+            return False
+        config = litellm_params.complexity_router_config
+        if not config:
+            return False
+        adaptive_flag: object = config.get("adaptive")
+        return bool(adaptive_flag)
+
     @staticmethod
     def _has_registered_strategy(
         registry: dict[str, list[TaggedPreRoutingStrategy[_PreRoutingStrategyT]]],
@@ -7784,15 +7799,6 @@ class Router:
         build an AdaptiveRouter for each. Safe no-op when none are configured.
         Idempotent: skips any deployment whose (model_name, tags) pair is already
         initialized, so hot-reloads don't rebuild routers that would lose state."""
-        # Drop any adaptive-router hooks left over from a previous Router
-        # instance (e.g. after `/config/reload` replaced `llm_router`). Without
-        # this, stale AdaptiveRouterPostCallHook callbacks from the old Router
-        # remain wired up in `litellm.callbacks` and double-fire signal
-        # recording for every request.
-        from litellm.router_strategy.adaptive_router.hooks import (
-            AdaptiveRouterPostCallHook,
-        )
-
         for entry in self.model_list or []:
             lp = entry.get("litellm_params") if isinstance(entry, dict) else entry.litellm_params
             lp_model = (lp.get("model") if isinstance(lp, dict) else lp.model) if lp else None
@@ -8466,9 +8472,11 @@ class Router:
             # set_model_list() defers until the whole model_list is visible. Re-run that
             # deferred pass so an adaptive router whose slot was just released above is
             # rebuilt rather than left unregistered.
-            if self._is_adaptive_router_deployment(litellm_params=deployment.litellm_params) or (
+            if self._deployment_participates_in_adaptive_routing(litellm_params=deployment.litellm_params) or (
                 _deployment_on_router is not None
-                and self._is_adaptive_router_deployment(litellm_params=_deployment_on_router.litellm_params)
+                and self._deployment_participates_in_adaptive_routing(
+                    litellm_params=_deployment_on_router.litellm_params
+                )
             ):
                 self._finalize_adaptive_router_if_configured()
             return deployment
