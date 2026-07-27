@@ -935,3 +935,92 @@ class TestEmulatedFileSearchHandler:
                 f"Sub-call {i} must run with is_internal_call=True to suppress "
                 "billing callbacks in wrapper_async"
             )
+
+    @pytest.mark.asyncio
+    async def test_H16_stream_true_returns_async_iterable_of_response_events(self):
+        """stream=true must yield Responses API SSE events, not a bare ResponsesAPIResponse.
+
+        Regression for https://github.com/BerriAI/litellm/issues/34767 where the proxy
+        crashed with "'async for' requires an object with __aiter__ method, got
+        ResponsesAPIResponse".
+        """
+        from datetime import datetime
+
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        class _LoggingObj:
+            def __init__(self):
+                self.start_time = datetime.now()
+                self.completion_start_time = None
+                self.model_call_details = {"litellm_params": {}}
+
+            async def dispatch_success_handlers(self, *args, **kwargs):
+                return None
+
+            def success_handler(self, *args, **kwargs):
+                return None
+
+            async def async_success_handler(self, *args, **kwargs):
+                return None
+
+            def _update_completion_start_time(self, completion_start_time):
+                self.completion_start_time = completion_start_time
+
+        first_resp = self._make_mock_responses_api_response(include_function_call=True)
+        final_resp = self._make_mock_responses_api_response(text="Premium wifi is $10.")
+
+        search_result = MagicMock()
+        search_result.file_id = "file-h16"
+        search_result.filename = "plans.pdf"
+        search_result.score = 0.8
+        search_result.content = [{"type": "text", "text": "premium wifi costs $10"}]
+        mock_search_response = MagicMock()
+        mock_search_response.data = [search_result]
+
+        captured_kwargs: List[Dict[str, Any]] = []
+
+        async def _capture(**kwargs):
+            captured_kwargs.append(kwargs)
+            return first_resp if len(captured_kwargs) == 1 else final_resp
+
+        with (
+            patch(
+                "litellm.responses.file_search.emulated_handler._call_aresponses",
+                new=AsyncMock(side_effect=_capture),
+            ),
+            patch(
+                "litellm.vector_stores.main.asearch",
+                new=AsyncMock(return_value=mock_search_response),
+            ),
+        ):
+            result = await aresponses_with_emulated_file_search(
+                input="how much is the premium wifi plan?",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_h16"]}],
+                stream=True,
+                litellm_logging_obj=_LoggingObj(),
+            )
+
+        assert hasattr(result, "__aiter__"), "streaming request must return an async iterable"
+        events = [event async for event in result]
+
+        assert all(sub_kwargs.get("stream") is False for sub_kwargs in captured_kwargs)
+        event_types = [getattr(getattr(event, "type", ""), "value", "") for event in events]
+        assert event_types[0] == "response.created"
+        assert event_types[-1] == "response.completed"
+        assert any(event_type == "response.output_text.delta" for event_type in event_types)
+
+        completed = events[-1].response
+        def _get(item, key):
+            return item[key] if isinstance(item, dict) else getattr(item, key, None)
+
+        assert _get(completed.output[0], "type") == "file_search_call"
+        assert _get(completed.output[1], "type") == "message"
+        streamed_text = "".join(
+            str(getattr(event, "delta", ""))
+            for event in events
+            if getattr(getattr(event, "type", ""), "value", "") == "response.output_text.delta"
+        )
+        assert streamed_text == "Premium wifi is $10."

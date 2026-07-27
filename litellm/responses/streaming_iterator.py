@@ -901,13 +901,17 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
-class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
+class SyntheticResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
+    """Replay an already-materialized ResponsesAPIResponse as Responses-API SSE events."""
+
     def __init__(
         self,
         response: Any,
         logging_obj: LiteLLMLoggingObj,
-        request_data: Optional[Dict[str, Any]] = None,
-        call_type: Optional[str] = None,
+        custom_llm_provider: str | None = None,
+        litellm_metadata: dict[str, Any] | None = None,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
     ):
         BaseResponsesAPIStreamingIterator.__init__(
             self,
@@ -915,13 +919,11 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             model=getattr(response, "model", ""),
             responses_api_provider_config=None,
             logging_obj=logging_obj,
-            litellm_metadata=None,
-            custom_llm_provider="cached_response",
+            litellm_metadata=litellm_metadata,
+            custom_llm_provider=custom_llm_provider,
             request_data=request_data,
             call_type=call_type,
         )
-        self._completed_response_cache_hit = True
-        self._persist_completed_response_before_logging = False
         self._events: List[Any] = []
         self._idx = 0
         self._set_events_from_response(transformed=response, logging_obj=logging_obj)
@@ -966,6 +968,25 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.completed_response = evt
             self._log_completed_response(is_async=False)
         return evt
+
+
+class CachedResponsesAPIStreamingIterator(SyntheticResponsesAPIStreamingIterator):
+    def __init__(
+        self,
+        response: Any,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict[str, Any] | None = None,
+        call_type: str | None = None,
+    ):
+        super().__init__(
+            response=response,
+            logging_obj=logging_obj,
+            custom_llm_provider="cached_response",
+            request_data=request_data,
+            call_type=call_type,
+        )
+        self._completed_response_cache_hit = True
+        self._persist_completed_response_before_logging = False
 
 
 def _dump_response_object(obj: Any) -> Dict[str, Any]:
