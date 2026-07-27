@@ -4,6 +4,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import ProviderMarginTable from "./provider_margin_table";
+import { Providers, providerLogoMap } from "@/components/provider_info_helpers";
 
 vi.mock("@heroicons/react/outline", () => ({
   TrashIcon: function TrashIcon() {
@@ -41,15 +42,6 @@ vi.mock("@tremor/react", () => ({
     const name = IconComponent?.displayName ?? IconComponent?.name ?? "icon";
     return <button onClick={onClick} aria-label={name} />;
   },
-}));
-
-vi.mock("./provider_display_helpers", () => ({
-  getProviderDisplayInfo: vi.fn((providerValue: string) => {
-    if (providerValue === "openai") return { displayName: "OpenAI", logo: "", enumKey: "OpenAI" };
-    if (providerValue === "anthropic") return { displayName: "Anthropic", logo: "", enumKey: "Anthropic" };
-    return { displayName: providerValue, logo: "", enumKey: null };
-  }),
-  handleImageError: vi.fn(),
 }));
 
 describe("ProviderMarginTable", () => {
@@ -93,6 +85,30 @@ describe("ProviderMarginTable", () => {
       />,
     );
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
+  });
+
+  it("should render the provider's bundled logo via the shared Logo component", () => {
+    renderWithProviders(
+      <ProviderMarginTable
+        marginConfig={{ openai: 0.1 }}
+        onMarginChange={onMarginChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    const logo = screen.getByRole("img", { name: `${Providers.OpenAI} logo` });
+    expect(logo.getAttribute("src")).toBe(providerLogoMap[Providers.OpenAI]);
+  });
+
+  it("should fall back to a letter avatar for a provider with no bundled logo", () => {
+    renderWithProviders(
+      <ProviderMarginTable
+        marginConfig={{ "my-custom-provider": 0.1 }}
+        onMarginChange={onMarginChange}
+        onRemoveProvider={onRemoveProvider}
+      />,
+    );
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("m")).toBeInTheDocument();
   });
 
   it("should display the global provider as 'Global (All Providers)'", () => {

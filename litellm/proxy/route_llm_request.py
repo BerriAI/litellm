@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional
 
 import httpx
 from fastapi import HTTPException, status
@@ -143,6 +143,30 @@ class ProxyModelNotFoundError(HTTPException):
             "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         }
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+REQUIRED_BODY_PARAM_BY_ROUTE: Mapping[str, str] = {
+    "acompletion": "messages",
+    "aembedding": "input",
+}
+
+
+class ProxyMissingRequiredParamError(HTTPException):
+    def __init__(self, route: str, param: str):
+        detail = {"error": f"{route}: Missing required parameter: '{param}'."}
+        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+        self.type = "invalid_request_error"
+        self.param = param
+
+
+def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
+    required_param = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
+    if required_param is None or data.get(required_param) is not None:
+        return
+    raise ProxyMissingRequiredParamError(
+        route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+        param=required_param,
+    )
 
 
 def get_team_id_from_data(data: dict) -> Optional[str]:
@@ -353,6 +377,8 @@ async def route_request(
     """
     Common helper to route the request
     """
+    raise_if_required_body_param_missing(route_type=route_type, data=data)
+
     await add_shared_session_to_data(data)
 
     # Strip router-internal mock_testing_* flags. Combined with an

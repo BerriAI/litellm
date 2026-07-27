@@ -75,6 +75,11 @@ class MCPServer(BaseModel):
     # "client_secret_basic" the credentials go in an HTTP Basic Authorization
     # header (omitted from the body); None defaults to "client_secret_post".
     token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod] = None
+    # RFC 8707 resource indicator sent on this server's upstream oauth2 legs (authorize, both
+    # token grants, and the client_credentials fetch). None omits it, which is the default and
+    # today's behavior; "auto" derives the canonical URI from ``url``; any other value is sent
+    # verbatim. Resolved by ``oauth_utils.resolve_upstream_resource``.
+    upstream_resource: str | None = None
     # AWS SigV4 fields
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
@@ -87,6 +92,15 @@ class MCPServer(BaseModel):
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: str = DEFAULT_SUBJECT_TOKEN_TYPE
+    # ID-JAG fields (draft-ietf-oauth-identity-assertion-authz-grant).
+    # Leg 1 reuses token_exchange_endpoint (IdP org-AS), audience (resource-AS
+    # identifier), scopes, subject_token_type, client_id/client_secret. Leg 2
+    # posts the ID-JAG assertion to id_jag_resource_token_endpoint.
+    id_jag_resource_token_endpoint: Optional[str] = None
+    id_jag_resource: Optional[str] = None
+    client_private_key: Optional[str] = None
+    client_private_key_id: Optional[str] = None
+    client_assertion_signing_alg: str = "RS256"
     # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
     # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
     token_exchange_profile: str = "rfc8693"
@@ -153,6 +167,15 @@ class MCPServer(BaseModel):
     allow_sampling: bool = False
     allow_elicitation: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"MCPServer(server_id={self.server_id!r}, name={self.name!r}, "
+            f"transport={self.transport!r}, auth_type={self.auth_type!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     @property
     def has_client_credentials(self) -> bool:
@@ -252,12 +275,3 @@ class MCPServer(BaseModel):
         if self.oauth_passthrough is not True:
             return False
         return any(h.lower() == "authorization" for h in self.extra_headers)
-
-    @property
-    def has_token_exchange_config(self) -> bool:
-        """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
-        return (
-            self.auth_type == MCPAuth.oauth2_token_exchange
-            and bool(self.client_id and self.client_secret)
-            and bool(self.token_exchange_endpoint or self.token_url)
-        )

@@ -1,31 +1,17 @@
-import React from "react";
-import { render, waitFor, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+/* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import React from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import ViewUserDashboard from "./view_users";
+
+const userListCall = vi.fn();
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
-  userListCall: vi.fn().mockResolvedValue({
-    users: [
-      {
-        user_id: "user-1",
-        user_email: "test@example.com",
-        user_role: "Admin",
-        spend: 100.5,
-        max_budget: null,
-        key_count: 2,
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-        sso_user_id: null,
-        budget_duration: null,
-      },
-    ],
-    total: 1,
-    page: 1,
-    page_size: 25,
-    total_pages: 1,
-  }),
+  userListCall: (...args: unknown[]) => userListCall(...args),
   userDeleteCall: vi.fn().mockResolvedValue({}),
   getPossibleUserRoles: vi.fn().mockResolvedValue({
     Admin: { ui_label: "Admin" },
@@ -44,6 +30,13 @@ vi.mock("@/components/networking", () => ({
   getInternalUserSettings: vi.fn().mockResolvedValue({}),
 }));
 
+// The detail view has its own test; stub it so this file covers the parent's swap.
+vi.mock("./view_users/user_info_view", () => ({
+  default: function UserInfoViewMock({ userId, startInEditMode }: { userId: string; startInEditMode?: boolean }) {
+    return <div data-testid="user-info-view">{`detail:${userId}:${String(Boolean(startInEditMode))}`}</div>;
+  },
+}));
+
 // Mock NotificationsManager
 vi.mock("@/components/molecules/notifications_manager", () => ({
   default: {
@@ -51,6 +44,21 @@ vi.mock("@/components/molecules/notifications_manager", () => ({
     fromBackend: vi.fn(),
   },
 }));
+
+const makeUser = (userId: string, email: string) => ({
+  user_id: userId,
+  user_email: email,
+  user_alias: null,
+  user_role: "Admin",
+  spend: 100.5,
+  max_budget: null,
+  models: [],
+  key_count: 2,
+  created_at: "2024-01-01T00:00:00Z",
+  updated_at: "2024-01-01T00:00:00Z",
+  sso_user_id: null,
+  budget_duration: null,
+});
 
 const createQueryClient = () =>
   new QueryClient({
@@ -62,105 +70,194 @@ const createQueryClient = () =>
     },
   });
 
-describe("ViewUserDashboard", () => {
-  const defaultProps = {
-    accessToken: "test-token",
-    token: "test-token",
-    userRole: "Admin",
-    userID: "admin-user-id",
-    teams: [],
-  };
+const defaultProps = {
+  accessToken: "test-token",
+  token: "test-token",
+  userRole: "Admin",
+  userID: "admin-user-id",
+  teams: [],
+};
 
+const renderDashboard = () =>
+  render(
+    <QueryClientProvider client={createQueryClient()}>
+      <ViewUserDashboard {...defaultProps} />
+    </QueryClientProvider>,
+  );
+
+describe("ViewUserDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    userListCall.mockResolvedValue({
+      users: [makeUser("user-1", "test@example.com")],
+      total: 1,
+      page: 1,
+      page_size: 25,
+      total_pages: 1,
+    });
   });
 
   it("should render the ViewUserDashboard component", async () => {
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ViewUserDashboard {...defaultProps} />
-      </QueryClientProvider>,
-    );
+    renderDashboard();
 
-    // Wait for the component to load (it shows "Loading..." initially)
     await waitFor(() => {
       expect(screen.getByText("Users")).toBeInTheDocument();
     });
 
-    // Check if main elements are rendered
-    expect(screen.getByText("Users")).toBeInTheDocument();
-    // Use getAllByText since "Default User Settings" appears multiple times
-    const defaultUserSettingsTabs = screen.getAllByText("Default User Settings");
-    expect(defaultUserSettingsTabs.length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Default User Settings").length).toBeGreaterThan(0);
   });
 
-  it("should show delete modal after clicking delete user button", async () => {
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <ViewUserDashboard {...defaultProps} />
-      </QueryClientProvider>,
-    );
+  it("should show delete modal after choosing delete from the row actions menu", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
 
-    // Wait for the component to load and the table to render
     await waitFor(() => {
-      expect(screen.getByText("Users")).toBeInTheDocument();
+      expect(screen.getByText("test@example.com")).toBeInTheDocument();
     });
 
-    // Wait for the user data to load
-    await waitFor(() => {
-      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
-    });
-
-    // Initially, the delete modal should not be visible
     expect(screen.queryByText("Delete User?")).not.toBeInTheDocument();
 
-    // Find the row containing the user email (use the first one which is in the table)
-    // The email appears in both the table and potentially in modals, so get the first one from the table
-    const userEmailCells = screen.getAllByText("test@example.com");
-    const userEmailCell = userEmailCells[0]; // First occurrence is in the table
-    const userRow = userEmailCell.closest("tr");
-    expect(userRow).toBeInTheDocument();
-
-    // Find clickable elements in the actions column (the last column)
-    const actionCells = userRow?.querySelectorAll("td");
-    const actionsCell = actionCells?.[actionCells.length - 1];
-    expect(actionsCell).toBeInTheDocument();
-
-    // Find the action container div with flex gap-2
-    const actionContainer =
-      actionsCell?.querySelector("div.flex.gap-2") ||
-      Array.from(actionsCell?.querySelectorAll("div") || []).find(
-        (div) => div.className.includes("flex") && div.className.includes("gap"),
-      );
-
-    expect(actionContainer).toBeInTheDocument();
-
-    // Get all direct children of the action container
-    // These should be Tooltip components wrapping Icon components
-    const tooltipWrappers = Array.from(actionContainer!.children);
-    expect(tooltipWrappers.length).toBeGreaterThanOrEqual(2);
-
-    // The delete icon is the second tooltip wrapper (index 1)
-    // Edit=0, Delete=1, Reset=2
-    const deleteTooltipWrapper = tooltipWrappers[1] as HTMLElement;
-    const clickableElement = deleteTooltipWrapper.querySelector("button, [role='button'], svg") as HTMLElement;
-
-    expect(clickableElement).toBeInTheDocument();
-
-    fireEvent.click(clickableElement);
+    await user.click(screen.getByTestId("user-actions-user-1"));
+    await user.click(await screen.findByTestId("user-action-delete"));
 
     await waitFor(() => {
       expect(screen.getByText("Delete User?")).toBeInTheDocument();
     });
-
     expect(
       screen.getByText("Are you sure you want to delete this user? This action cannot be undone."),
     ).toBeInTheDocument();
-    const userIdInstances = screen.getAllByText("user-1");
-    expect(userIdInstances.length).toBeGreaterThan(0);
-    const emailInstances = screen.getAllByText("test@example.com");
-    expect(emailInstances.length).toBeGreaterThan(0);
+    expect(screen.getAllByText("user-1").length).toBeGreaterThan(0);
+  });
+
+  it("should swap to the detail view when the identity cell is clicked", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /user-1/ }));
+
+    expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:false");
+    expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
+  });
+
+  it("should open the detail view in edit mode from the row actions menu", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("user-actions-user-1"));
+    await user.click(await screen.findByTestId("user-action-edit"));
+
+    expect(await screen.findByTestId("user-info-view")).toHaveTextContent("detail:user-1:true");
+  });
+
+  describe("bulk edit selection", () => {
+    beforeEach(() => {
+      userListCall.mockResolvedValue({
+        users: [makeUser("user-1", "ada@example.com"), makeUser("user-2", "grace@example.com")],
+        total: 2,
+        page: 1,
+        page_size: 25,
+        total_pages: 1,
+      });
+    });
+
+    it("reveals selection checkboxes only while selection mode is on", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+      });
+
+      expect(screen.queryByTestId("datatable-select-all")).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      expect(screen.getByTestId("datatable-select-all")).toBeInTheDocument();
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      expect(screen.queryByTestId("datatable-select-all")).not.toBeInTheDocument();
+    });
+
+    it("counts the selected rows in the bulk edit button and enables it once a row is picked", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+
+      const bulkEdit = screen.getByTestId("bulk-edit-users");
+      expect(bulkEdit).toHaveTextContent("Bulk Edit (0 selected)");
+      expect(bulkEdit).toBeDisabled();
+
+      await user.click(screen.getByTestId("datatable-select-row-user-2"));
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
+      expect(screen.getByTestId("bulk-edit-users")).not.toBeDisabled();
+
+      await user.click(screen.getByTestId("datatable-select-all"));
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (2 selected)");
+    });
+
+    it("clears the selection when selection mode is cancelled", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      await user.click(screen.getByTestId("datatable-select-row-user-1"));
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      await user.click(screen.getByTestId("toggle-user-selection"));
+
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (0 selected)");
+    });
+  });
+
+  describe("server-side query wiring", () => {
+    it("requests page 1 with the default created_at desc sort", async () => {
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(userListCall).toHaveBeenCalled();
+      });
+
+      const [, userIds, page, pageSize, , , , , sortBy, sortOrder] = userListCall.mock.calls[0];
+      expect(userIds).toBeNull();
+      expect(page).toBe(1);
+      expect(pageSize).toBe(25);
+      expect(sortBy).toBe("created_at");
+      expect(sortOrder).toBe("desc");
+    });
+
+    it("sends the clicked column as sort_by and resets to the first page", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTestId("sort-header-user_email"));
+
+      await waitFor(() => {
+        const latest = userListCall.mock.calls[userListCall.mock.calls.length - 1];
+        expect(latest[8]).toBe("user_email");
+        expect(latest[9]).toBe("asc");
+        expect(latest[2]).toBe(1);
+      });
+    });
   });
 });

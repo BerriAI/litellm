@@ -98,3 +98,38 @@ class ToolUsageLogsResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ToolSpendEntry(BaseModel):
+    """Total spend attributed to one tool over the requested window."""
+
+    tool_name: str
+    spend: float = Field(
+        0.0,
+        description="Attributed spend: a request that used several tools counts its full spend toward each of them",
+    )
+    call_count: int = 0
+    total_tokens: int = 0
+
+
+class ToolSpendDailyEntry(BaseModel):
+    """Spend attributed to one tool on one UTC day."""
+
+    date: str
+    tool_name: str
+    spend: float = 0.0
+    call_count: int = 0
+
+
+class ToolSpendResponse(BaseModel):
+    by_tool: List[ToolSpendEntry] = Field(default_factory=list)
+    daily: List[ToolSpendDailyEntry] = Field(default_factory=list)
+    total_spend: float = Field(
+        0.0,
+        description=(
+            "Deduplicated spend of every request that called at least one tool in the window; "
+            "less than the sum of per-tool attributed spend whenever multi-tool requests exist"
+        ),
+    )
+    start_date: str | None = None
+    end_date: str | None = None

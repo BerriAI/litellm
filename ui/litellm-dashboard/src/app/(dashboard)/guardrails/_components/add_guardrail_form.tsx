@@ -12,10 +12,10 @@ import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentCo
 import {
   choiceToSkipSystemForCreate,
   choiceToSkipToolForCreate,
+  getGuardrailLogo,
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
-  guardrailLogoMap,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
@@ -23,7 +23,7 @@ import {
   shouldRenderPIIConfigSettings,
   toModeArray,
 } from "./guardrail_info_helpers";
-import { resolveLogoSrc } from "@/lib/assetPaths";
+import { Logo } from "@/components/molecules/logo/Logo";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
@@ -725,53 +725,19 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             dropdownRender={(menu) => menu}
             showSearch={true}
           >
-            {Object.entries(getGuardrailProviders()).map(([key, value]) => (
-              <Option
-                key={key}
-                value={key}
-                label={
-                  <div style={{ display: "flex", alignItems: "center" }}>
-                    {guardrailLogoMap[value] && (
-                      <img
-                        src={resolveLogoSrc(guardrailLogoMap[value])}
-                        alt=""
-                        style={{
-                          height: "20px",
-                          width: "20px",
-                          marginRight: "8px",
-                          objectFit: "contain",
-                        }}
-                        onError={(e) => {
-                          // Hide broken image icon if image fails to load
-                          e.currentTarget.style.display = "none";
-                        }}
-                      />
-                    )}
-                    <span>{value}</span>
-                  </div>
-                }
-              >
+            {Object.entries(getGuardrailProviders()).map(([key, value]) => {
+              const optionContent = (
                 <div style={{ display: "flex", alignItems: "center" }}>
-                  {guardrailLogoMap[value] && (
-                    <img
-                      src={resolveLogoSrc(guardrailLogoMap[value])}
-                      alt=""
-                      style={{
-                        height: "20px",
-                        width: "20px",
-                        marginRight: "8px",
-                        objectFit: "contain",
-                      }}
-                      onError={(e) => {
-                        // Hide broken image icon if image fails to load
-                        e.currentTarget.style.display = "none";
-                      }}
-                    />
-                  )}
+                  <Logo src={getGuardrailLogo(value)} label={value} className="h-5 w-5 mr-2 object-contain shrink-0" />
                   <span>{value}</span>
                 </div>
-              </Option>
-            ))}
+              );
+              return (
+                <Option key={key} value={key} label={optionContent}>
+                  {optionContent}
+                </Option>
+              );
+            })}
           </Select>
         </Form.Item>
 

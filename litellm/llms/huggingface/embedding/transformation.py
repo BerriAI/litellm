@@ -316,25 +316,6 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
         return data
 
-    def get_api_base(self, api_base: Optional[str], model: str) -> str:
-        """
-        Get the API base for the Huggingface API.
-
-        Do not add the chat/embedding/rerank extension here. Let the handler do this.
-        """
-        if "https" in model:
-            completion_url = model
-        elif api_base is not None:
-            completion_url = api_base
-        elif "HF_API_BASE" in os.environ:
-            completion_url = os.getenv("HF_API_BASE", "")
-        elif "HUGGINGFACE_API_BASE" in os.environ:
-            completion_url = os.getenv("HUGGINGFACE_API_BASE", "")
-        else:
-            completion_url = f"https://api-inference.huggingface.co/models/{model}"
-
-        return completion_url
-
     def validate_environment(
         self,
         headers: Dict,

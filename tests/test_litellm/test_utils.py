@@ -17,7 +17,9 @@ from litellm.types.utils import (
     Delta,
     LlmProviders,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
+    Usage,
 )
 from litellm.utils import (
     ProviderConfigManager,
@@ -32,6 +34,57 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_usage_openai_cache_write_tokens_populates_both_names():
+    """OpenAI reports cache-write tokens as prompt_tokens_details.cache_write_tokens.
+    The Usage constructor must expose it under both cache_write_tokens (canonical,
+    OpenAI naming) and cache_creation_tokens (legacy, Anthropic naming)."""
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details={"cached_tokens": 0, "cache_write_tokens": 800},
+    )
+    assert usage.prompt_tokens_details.cache_write_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 800
+
+
+def test_usage_anthropic_cache_creation_maps_to_cache_write_tokens():
+    """Anthropic/Bedrock report the top-level cache_creation_input_tokens field.
+    It must be normalized onto the OpenAI cache_write_tokens name as well as the
+    legacy cache_creation_tokens name."""
+    usage = Usage(
+        prompt_tokens=500,
+        completion_tokens=50,
+        total_tokens=550,
+        cache_creation_input_tokens=300,
+        cache_read_input_tokens=120,
+    )
+    assert usage.prompt_tokens_details.cache_write_tokens == 300
+    assert usage.prompt_tokens_details.cache_creation_tokens == 300
+    assert usage.prompt_tokens_details.cached_tokens == 120
+
+
+def test_prompt_tokens_details_no_cache_write_tokens_when_absent():
+    """A read-only cache hit (no cache write) must not surface cache-write fields."""
+    details = PromptTokensDetailsWrapper(cached_tokens=800)
+    assert details.cached_tokens == 800
+    assert not hasattr(details, "cache_write_tokens")
+    assert not hasattr(details, "cache_creation_tokens")
+
+
+def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment():
+    """Assigning either name after construction must mirror to the other, so a
+    caller that sets only one field can't leave the pair silently out of sync."""
+    details = PromptTokensDetailsWrapper(cache_write_tokens=100)
+    assert details.cache_write_tokens == details.cache_creation_tokens == 100
+
+    details.cache_write_tokens = 250
+    assert details.cache_write_tokens == details.cache_creation_tokens == 250
+
+    details.cache_creation_tokens = 375
+    assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
 
 @pytest.fixture
@@ -4317,7 +4370,7 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/glm-5p2",
         1.4e-06,
         4.4e-06,
-        2.6e-07,
+        1.4e-07,
         1048576,
         131072,
         False,
@@ -4717,6 +4770,55 @@ class TestValidateEnvironmentTencent:
         assert "TENCENT_API_KEY" in result["missing_keys"]
 
 
+class TestVertexEmbeddingEncodingFormat:
+    """vertex_ai/gemini embeddings must accept encoding_format="float" — it's
+    the OpenAI SDK default and float lists are exactly what the vertex API
+    returns. Other values keep the unsupported-param behavior (drop with
+    drop_params, raise otherwise). Issue #33173."""
+
+    def test_encoding_format_float_is_accepted_and_dropped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="vertex_ai",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_float_accepted_for_gemini_provider(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            custom_llm_provider="gemini",
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_encoding_format_base64_still_rejected_without_drop_params(self):
+        with pytest.raises(Exception) as excinfo:
+            litellm.utils.get_optional_params_embeddings(
+                model="gemini-embedding-001",
+                encoding_format="base64",
+                custom_llm_provider="vertex_ai",
+            )
+        assert "encoding_format" in str(excinfo.value)
+
+    def test_encoding_format_base64_dropped_with_drop_params(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="base64",
+            custom_llm_provider="vertex_ai",
+            drop_params=True,
+        )
+        assert "encoding_format" not in optional_params
+
+    def test_dimensions_still_mapped(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="gemini-embedding-001",
+            encoding_format="float",
+            dimensions=256,
+            custom_llm_provider="vertex_ai",
+        )
+        assert optional_params.get("outputDimensionality") == 256
+
 
 @pytest.mark.parametrize(
     "model",
@@ -4814,3 +4916,94 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+
+
+def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression LIT-4392: the success/failure existence guards used isinstance, so a user
+    subclass of a built-in logger already promoted into the callback lists made the guard
+    report the built-in itself as registered and the configured logger was silently skipped.
+    The exact-class assertions must hold alongside the subclass assertions: the guards still
+    have to dedup a second instance of the same class, only a subclass must stop matching."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import (
+        _custom_logger_class_exists_in_failure_callbacks,
+        _custom_logger_class_exists_in_success_callbacks,
+    )
+
+    class BuiltinLogger(CustomLogger):
+        pass
+
+    class UserSubclassLogger(BuiltinLogger):
+        pass
+
+    builtin_instance = BuiltinLogger()
+
+    monkeypatch.setattr(litellm, "success_callback", [UserSubclassLogger()])
+    monkeypatch.setattr(litellm, "failure_callback", [UserSubclassLogger()])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    assert _custom_logger_class_exists_in_success_callbacks(builtin_instance) is False
+    assert _custom_logger_class_exists_in_failure_callbacks(builtin_instance) is False
+
+    monkeypatch.setattr(litellm, "success_callback", [BuiltinLogger()])
+    monkeypatch.setattr(litellm, "failure_callback", [BuiltinLogger()])
+    assert _custom_logger_class_exists_in_success_callbacks(builtin_instance) is True
+    assert _custom_logger_class_exists_in_failure_callbacks(builtin_instance) is True
+
+
+@pytest.mark.asyncio
+async def test_s3_v2_success_callback_registers_alongside_user_subclass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression LIT-4392: with a user S3Logger subclass registered via litellm_settings.callbacks
+    and success_callback ["s3_v2"], the built-in s3_v2 logger was never added and S3 logs were
+    silently dropped while requests kept returning 200."""
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    class UserS3Logger(S3Logger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    user_logger = UserS3Logger()
+    monkeypatch.setattr(litellm, "success_callback", [user_logger, "s3_v2"])
+    monkeypatch.setattr(litellm, "_async_success_callback", [user_logger])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    _add_custom_logger_callback_to_specific_event("s3_v2", "success")
+
+    assert any(type(cb) is S3Logger for cb in litellm.success_callback)
+    assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
+    assert "s3_v2" not in litellm.success_callback
+    assert user_logger in litellm.success_callback
+
+
+@pytest.mark.asyncio
+async def test_builtin_string_callback_registers_when_subclass_already_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression LIT-4392, litellm.callbacks path: the inline dedup in function_setup also
+    matched subclass instances, so a built-in name in litellm.callbacks was dropped whenever a
+    user subclass was already promoted into _async_success_callback."""
+    from litellm.integrations.s3_v2 import S3Logger
+
+    class UserS3Logger(S3Logger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            pass
+
+    user_logger = UserS3Logger()
+    monkeypatch.setattr(litellm, "callbacks", ["s3_v2"])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [user_logger])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [user_logger])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    await litellm.acompletion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ok",
+    )
+
+    assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)

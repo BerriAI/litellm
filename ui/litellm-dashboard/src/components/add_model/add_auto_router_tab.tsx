@@ -14,6 +14,7 @@ import ComplexityRouterConfig, {
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
+import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   buildComplexityRouterConfig,
@@ -52,6 +53,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [semanticMatchingEnabled, setSemanticMatchingEnabled] = useState<boolean>(false);
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
+  const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
 
   // Semantic router config (existing)
@@ -98,6 +100,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       adaptive_weights: adaptiveWeights = DEFAULT_ADAPTIVE_WEIGHTS,
       tier_distance_penalty: tierDistancePenalty = DEFAULT_TIER_DISTANCE_PENALTY,
       adaptive_eligible: adaptiveEligible = "all",
+      return_raw_model_name: returnRawModelName = false,
     } = complexityRouterConfig;
 
     const missingTiersError = getMissingTiersError(tiers);
@@ -141,10 +144,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           semanticMatchingEnabled,
           embeddingModel,
           matchThreshold,
+          escalationKeywords,
           adaptive,
           adaptiveWeights,
           tierDistancePenalty,
           adaptiveEligible,
+          returnRawModelName,
         };
 
         const submitValues = {
@@ -316,6 +321,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
                 onEmbeddingModelChange={setEmbeddingModel}
                 matchThreshold={matchThreshold}
                 onMatchThresholdChange={setMatchThreshold}
+                escalationKeywords={escalationKeywords}
+                onEscalationKeywordsChange={setEscalationKeywords}
                 showValidationErrors={showValidationErrors}
               />
             </div>
