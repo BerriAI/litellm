@@ -59,6 +59,14 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
     "vertex_ai": VertexAIRAGIngestion,
 }
 
+# retrieval_config keys consumed by the query pipeline itself; everything else is
+# forwarded to vector_stores.asearch as provider-specific params (e.g.
+# aws_region_name, embedding_model, vector_bucket_name for S3 Vectors).
+# `filters`/`retrieval_filter` are reserved for the explicit filter param.
+_CONSUMED_RETRIEVAL_CONFIG_KEYS = frozenset(
+    {"vector_store_id", "custom_llm_provider", "top_k", "filters", "retrieval_filter"}
+)
+
 
 def get_ingestion_class(provider: str) -> Type[BaseRAGIngestion]:
     """
@@ -233,13 +241,17 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
+    # Forward provider-specific retrieval_config extras (region, embedding model,
+    # bucket, credentials refs, ...) to the search call; kwargs win on conflict.
+    provider_search_params = {k: v for k, v in retrieval_config.items() if k not in _CONSUMED_RETRIEVAL_CONFIG_KEYS}
     with _suppressed_sub_call_billing():
         search_response = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),
             custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
-            **kwargs,
+            router=router,
+            **{**provider_search_params, **kwargs},
         )
 
     search_provider = retrieval_config.get("custom_llm_provider", "openai")

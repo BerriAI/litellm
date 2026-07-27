@@ -26,6 +26,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
+from litellm.proxy.vector_store_endpoints.endpoints import (
+    _update_request_data_with_litellm_managed_vector_store_registry,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
@@ -651,6 +654,17 @@ async def rag_query(
             payload=retrieval_config,
             user_api_key_dict=user_api_key_dict,
         )
+
+        # Merge litellm-managed vector store params (provider, region, embedding
+        # model, credentials, ...) from the registry — same source the direct
+        # /vector_stores/{id}/search endpoint uses. User-supplied
+        # retrieval_config keys win on conflict.
+        store_data = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={},
+            vector_store_id=retrieval_config["vector_store_id"],
+            user_api_key_dict=user_api_key_dict,
+        )
+        retrieval_config = {**store_data, **retrieval_config}
 
         # Add litellm data
         request_data: Dict[str, Any] = {}

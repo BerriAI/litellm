@@ -8,6 +8,7 @@ from litellm.types.vector_stores import VectorStoreSearchOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.router import Router
 else:
     LiteLLMLoggingObj = Any
 
@@ -80,6 +81,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        router: Optional["Router"] = None,
     ) -> Tuple[str, Dict]:
         encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url = f"{api_base}/{encoded_vector_store_id}/search"

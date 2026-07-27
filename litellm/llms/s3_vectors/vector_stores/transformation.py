@@ -1,8 +1,8 @@
-import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
+from litellm.caching._embedding_router import resolve_embedding_router
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.types.router import GenericLiteLLMParams
@@ -18,6 +18,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.router import Router
 else:
     LiteLLMLoggingObj = Any
 
@@ -58,12 +59,17 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         return headers
 
     def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
-        aws_region_name = litellm_params.get("aws_region_name")
-        if not aws_region_name:
-            raise ValueError("aws_region_name is required for S3 Vectors")
-        if not re.match(r"^[a-z][a-z0-9-]*$", aws_region_name):
-            raise ValueError("Invalid aws_region_name format")
+        # Resolve region the same way the ingestion path does:
+        # dynamic param -> AWS_REGION_NAME -> AWS_REGION -> default (us-west-2)
+        aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(litellm_params.get("aws_region_name"))
         return f"https://s3vectors.{aws_region_name}.api.aws"
+
+    def _resolve_query_embedding_router(self, embedding_model: str, router: Optional["Router"]) -> Optional["Router"]:
+        """Return the router iff it serves ``embedding_model`` as a deployment."""
+        if router is None:
+            return None
+        model_list = [dict(m) for m in (router.get_model_list() or [])]
+        return resolve_embedding_router(embedding_model=embedding_model, llm_router=router, llm_model_list=model_list)
 
     def transform_search_vector_store_request(
         self,
@@ -74,6 +80,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        router: Optional["Router"] = None,
     ) -> Tuple[str, Dict]:
         """Sync version - generates embedding synchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
@@ -99,10 +106,14 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
         # Generate embedding for the query
         embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
+        embedding_router = self._resolve_query_embedding_router(embedding_model=embedding_model, router=router)
 
         import litellm as litellm_module
 
-        embedding_response = litellm_module.embedding(model=embedding_model, input=[query])
+        if embedding_router is not None:
+            embedding_response = embedding_router.embedding(model=embedding_model, input=[query])
+        else:
+            embedding_response = litellm_module.embedding(model=embedding_model, input=[query])
         query_embedding = embedding_response.data[0]["embedding"]
 
         url = f"{api_base}/QueryVectors"
@@ -128,6 +139,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Optional[Dict[str, Any]] = None,
+        router: Optional["Router"] = None,
     ) -> Tuple[str, Dict]:
         """Async version - generates embedding asynchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
@@ -153,10 +165,14 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
         # Generate embedding for the query asynchronously
         embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
+        embedding_router = self._resolve_query_embedding_router(embedding_model=embedding_model, router=router)
 
         import litellm as litellm_module
 
-        embedding_response = await litellm_module.aembedding(model=embedding_model, input=[query])
+        if embedding_router is not None:
+            embedding_response = await embedding_router.aembedding(model=embedding_model, input=[query])
+        else:
+            embedding_response = await litellm_module.aembedding(model=embedding_model, input=[query])
         query_embedding = embedding_response.data[0]["embedding"]
 
         url = f"{api_base}/QueryVectors"

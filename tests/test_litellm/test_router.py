@@ -5936,3 +5936,58 @@ async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
             bedrock_tags=request_tags,
         )
         assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags
+
+
+@pytest.mark.asyncio
+async def test_avector_store_search_injects_router():
+    """
+    Regression: router.avector_store_search must pass the router down to the
+    SDK search call so provider transforms can resolve router-managed
+    embedding models (e.g. S3 Vectors query embeddings).
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    mock_asearch = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    # Router.__init__ binds asearch via a local import, so patch the module
+    # attribute before constructing the Router.
+    with patch("litellm.vector_stores.main.asearch", new=mock_asearch):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+                }
+            ]
+        )
+        await router.avector_store_search(
+            vector_store_id="v", query="q", custom_llm_provider="s3_vectors"
+        )
+
+    mock_asearch.assert_awaited_once()
+    assert mock_asearch.await_args.kwargs["router"] is router
+
+
+@pytest.mark.asyncio
+async def test_avector_store_create_does_not_inject_router():
+    """The router injection is gated on the search call type: the create path
+    must keep calling the SDK without a router kwarg."""
+    mock_acreate = AsyncMock(return_value={"id": "vs_1", "object": "vector_store"})
+    # avector_store_create(model=None) resolves acreate via a local import at
+    # call time, so patching after Router construction works here.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+            }
+        ]
+    )
+    with patch("litellm.vector_stores.main.acreate", new=mock_acreate):
+        await router.avector_store_create(model=None, custom_llm_provider="openai")
+
+    mock_acreate.assert_awaited_once()
+    assert "router" not in mock_acreate.await_args.kwargs
