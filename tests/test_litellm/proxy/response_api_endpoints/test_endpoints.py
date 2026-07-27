@@ -711,3 +711,144 @@ class TestManagedResponsesSameProvider:
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs
+
+
+class TestCursorChatCompletionsInputTransformation:
+    """
+    /cursor/chat/completions receives Chat Completions shaped messages; they must be
+    translated into Responses API input items before hitting the responses code path
+    """
+
+    def _post(self, payload: dict) -> dict:
+        import litellm.proxy.proxy_server as ps
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints import endpoints as cursor_endpoints
+
+        captured: dict = {}
+
+        class FakeProcessor:
+            def __init__(self, data):
+                captured["data"] = data
+                self.data = data
+
+            async def base_process_llm_request(self, **kwargs):
+                from litellm.types.llms.openai import (
+                    ResponseAPIUsage,
+                    ResponsesAPIResponse,
+                )
+
+                return ResponsesAPIResponse(
+                    id="resp_1",
+                    created_at=0,
+                    model="gpt-4o",
+                    object="response",
+                    output=[
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "ok",
+                                    "annotations": [],
+                                }
+                            ],
+                        }
+                    ],
+                    parallel_tool_calls=False,
+                    tool_choice="auto",
+                    tools=[],
+                    status="completed",
+                    usage=ResponseAPIUsage(
+                        input_tokens=0, output_tokens=0, total_tokens=0
+                    ),
+                )
+
+        app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+            token="hashed", user_id="u"
+        )
+        try:
+            with patch.object(
+                cursor_endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor
+            ):
+                TestClient(app).post(
+                    "/cursor/chat/completions",
+                    json=payload,
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+        return captured["data"]
+
+    def test_image_url_block_is_converted_to_input_image(self):
+        data = self._post(
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "what is this?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://example.com/cat.png",
+                                    "detail": "low",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+
+        assert "messages" not in data
+        assert data["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "what is this?"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/cat.png",
+                        "detail": "low",
+                    },
+                ],
+            }
+        ]
+
+    def test_system_message_becomes_instructions(self):
+        data = self._post(
+            {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "be terse"},
+                    {"role": "user", "content": "hi"},
+                ],
+            }
+        )
+
+        assert data["instructions"] == "be terse"
+        assert data["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ]
+
+    def test_responses_api_input_is_left_untouched(self):
+        payload_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ]
+        data = self._post({"model": "gpt-4o", "input": payload_input})
+
+        assert data["input"] == payload_input

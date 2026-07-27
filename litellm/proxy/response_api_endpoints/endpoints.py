@@ -337,7 +337,15 @@ async def cursor_chat_completions(
     # Convert 'messages' to 'input' for Responses API compatibility
     # Cursor sends 'messages' but Responses API expects 'input'
     if "messages" in data and "input" not in data:
-        data["input"] = data.pop("messages")
+        (
+            input_items,
+            instructions,
+        ) = responses_api_bridge.transformation_handler.convert_chat_completion_messages_to_responses_api(
+            data.pop("messages")
+        )
+        data["input"] = input_items
+        if instructions and not data.get("instructions"):
+            data["instructions"] = instructions
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
 
