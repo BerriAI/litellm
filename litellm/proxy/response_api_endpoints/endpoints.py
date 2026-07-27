@@ -43,10 +43,14 @@ def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
     if payload_keys is None:
         return obj
     nested = obj.get(tool_type)
-    source = nested if isinstance(nested, dict) else obj
-    if source is obj and "name" not in obj:
+    nested_source = nested if isinstance(nested, dict) else {}
+    payload = {
+        key: nested_source[key] if key in nested_source else obj[key]
+        for key in payload_keys
+        if key in nested_source or key in obj
+    }
+    if "name" not in payload:
         return obj
-    payload = {key: source[key] for key in payload_keys if key in source}
     if isinstance(payload.get("format"), dict):
         convert = convert_custom_tool_format_to_chat_shape if to_chat else convert_custom_tool_format_to_responses_shape
         payload = {**payload, "format": convert(payload["format"])}

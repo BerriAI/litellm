@@ -1162,12 +1162,16 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+def is_custom_tool_call_dict(tool_call: dict) -> bool:
+    return tool_call.get("type") == "custom" or tool_call.get("custom") is not None
+
+
 def chat_completion_tool_call_from_dict(
     tool_call: dict,
 ) -> "ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall":
-    if tool_call.get("type") == "custom":
+    if is_custom_tool_call_dict(tool_call):
         return ChatCompletionMessageCustomToolCall(
-            **{k: v for k, v in tool_call.items() if not (k == "function" and v is None)}
+            **{k: v for k, v in tool_call.items() if not (k in ("function", "type") and v is None)}
         )
     return ChatCompletionMessageToolCall(**tool_call)
 
@@ -1393,7 +1397,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
                     if tool_call.get("index", None) is None:
                         tool_call["index"] = current_index
                         current_index += 1
-                    if tool_call.get("type") == "custom" or "custom" in tool_call:
+                    if is_custom_tool_call_dict(tool_call):
                         coerced_tool_calls.append(
                             ChatCompletionDeltaCustomToolCall(
                                 **{k: v for k, v in tool_call.items() if not (k == "function" and v is None)}
