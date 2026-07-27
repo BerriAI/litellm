@@ -2023,16 +2023,24 @@ def _is_empty_text_block(block: object) -> bool:
     return not isinstance(text, str) or not text.strip()
 
 
+def _survives_assistant_conversion(block: object) -> bool:
+    if not isinstance(block, dict):
+        return False
+    block_type = block.get("type")
+    if not isinstance(block_type, str) or block_type == "text":
+        return False
+    if block_type == "thinking":
+        return bool(block.get("thinking")) and not _is_unsignable_thinking_block(block)
+    return block_type == "server_tool_use" or block_type.endswith("_tool_result")
+
+
 def _carries_non_text_content(message: AllMessageValues) -> bool:
     if message.get("tool_calls"):
         return True
     content = message.get("content")
     if not isinstance(content, list):
         return False
-    return any(
-        isinstance(block, dict) and isinstance(block.get("type"), str) and block.get("type") != "text"
-        for block in content
-    )
+    return any(_survives_assistant_conversion(block) for block in content)
 
 
 def _with_content(message: AllMessageValues, content: object, action: str) -> AllMessageValues:

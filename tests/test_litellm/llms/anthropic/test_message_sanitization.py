@@ -502,6 +502,37 @@ class TestMessageSanitization:
         assert [b["type"] for b in sanitized["content"]] == ["thinking"]
         assert PLACEHOLDER not in json.dumps(sanitized)
 
+    @pytest.mark.parametrize(
+        "sibling_block",
+        [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk="}},
+            {"type": "thinking", "thinking": ""},
+            {"type": "unknown_future_block"},
+        ],
+        ids=["image_url", "unsignable_thinking", "unknown_type"],
+    )
+    def test_empty_text_kept_when_sibling_block_would_not_survive(self, sibling_block):
+        """
+        Dropping empty text is only safe when something else in the turn actually reaches
+        Anthropic. Blocks the assistant conversion discards (assistant-side images,
+        signature-less thinking, unrecognised types) would leave an empty turn that gets
+        dropped from the request entirely, so the placeholder has to stay.
+        """
+        litellm.modify_params = True
+
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "  "}, sibling_block]},
+            {"role": "user", "content": "and now?"},
+        ]
+
+        result = anthropic_messages_pt(
+            messages=messages, model="claude-haiku-4-5", llm_provider="anthropic"
+        )
+
+        assert [m["role"] for m in result] == ["user", "assistant", "user"]
+        assert PLACEHOLDER in json.dumps(result)
+
     def test_assistant_text_preserved_alongside_tool_calls(self):
         """
         Dropping empty text must not drop real text: an assistant turn that says something
