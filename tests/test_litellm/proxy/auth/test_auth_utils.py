@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import Request
 
+from litellm import Router
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
@@ -498,6 +499,74 @@ def test_get_model_from_request_extracts_unified_file_id_models():
         request_data={"file_id": encoded_unified_file_id},
         route="/v1/files/{file_id}",
     ) == ["model-a", "model-b"]
+
+
+def _managed_batch_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {"model": "bedrock/anthropic.claude-3-haiku-20240307-v1:0"},
+                "model_info": {"access_groups": ["group-a"], "mode": "batch"},
+            }
+        ]
+    )
+
+
+def _unified_batch_id(model_id: str) -> str:
+    raw = f"litellm_proxy;model_id:{model_id};llm_batch_id:provider-batch-id"
+    return base64.b64encode(raw.encode()).decode()
+
+
+def test_get_model_from_request_resolves_managed_batch_model_id_to_model_name():
+    llm_router = _managed_batch_router()
+    model_id = llm_router.model_list[0]["model_info"]["id"]
+
+    assert (
+        get_model_from_request(
+            request_data={"batch_id": _unified_batch_id(model_id)},
+            route="/v1/batches/{batch_id}",
+            llm_router=llm_router,
+        )
+        == "bedrock-batch-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_batch_retrieve_passes_team_access_group_check():
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    llm_router = _managed_batch_router()
+    model_id = llm_router.model_list[0]["model_info"]["id"]
+    model = get_model_from_request(
+        request_data={"batch_id": _unified_batch_id(model_id)},
+        route="/v1/batches/{batch_id}",
+        llm_router=llm_router,
+    )
+    assert model is not None
+
+    assert (
+        await can_team_access_model(
+            model=model,
+            team_object=LiteLLM_TeamTable(team_id="team-1", models=["group-a"]),
+            llm_router=llm_router,
+        )
+        is True
+    )
+
+
+def test_get_model_from_request_keeps_unresolvable_managed_batch_model_id():
+    llm_router = _managed_batch_router()
+
+    assert (
+        get_model_from_request(
+            request_data={"batch_id": _unified_batch_id("unknown-deployment-id")},
+            route="/v1/batches/{batch_id}",
+            llm_router=llm_router,
+        )
+        == "unknown-deployment-id"
+    )
 
 
 def test_get_model_from_request_extracts_eval_completion_model():
