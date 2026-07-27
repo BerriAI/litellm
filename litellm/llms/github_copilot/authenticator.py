@@ -15,6 +15,7 @@ from .common_utils import (
     GetAPIKeyError,
     GetDeviceCodeError,
     RefreshAPIKeyError,
+    get_copilot_default_headers,
 )
 
 # Constants (default values — overridable via environment variables at call time)
@@ -188,30 +189,7 @@ class Authenticator:
             os.makedirs(self.token_dir, exist_ok=True)
 
     def _get_github_headers(self, access_token: str | None = None) -> dict[str, str]:
-        """
-        Generate standard GitHub headers for API requests.
-
-        Args:
-            access_token: Optional access token to include in the headers.
-
-        Returns:
-            Dict[str, str]: Headers for GitHub API requests.
-        """
-        headers: Final = {
-            "accept": "application/json",
-            "editor-version": "vscode/1.85.1",
-            "editor-plugin-version": "copilot/1.155.0",
-            "user-agent": "GithubCopilot/1.155.0",
-            "accept-encoding": "gzip,deflate,br",
-        }
-
-        if access_token:
-            headers["authorization"] = f"token {access_token}"
-
-        if "content-type" not in headers:
-            headers["content-type"] = "application/json"
-
-        return headers
+        return get_copilot_default_headers(access_token=access_token)
 
     def _get_device_code(self) -> dict[str, str]:
         """

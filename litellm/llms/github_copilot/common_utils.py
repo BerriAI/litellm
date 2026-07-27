@@ -2,6 +2,7 @@
 Constants for Copilot integration
 """
 
+import os
 from typing import Final
 from uuid import uuid4
 
@@ -9,12 +10,31 @@ import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-# Constants
 COPILOT_VERSION: Final = "0.26.7"
 EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
 USER_AGENT: Final = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
+DEFAULT_COPILOT_INTEGRATION_ID: Final = "vscode-chat"
+DEFAULT_COPILOT_EDITOR_VERSION: Final = "vscode/1.115.0"
+DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION: Final = EDITOR_PLUGIN_VERSION
+DEFAULT_COPILOT_USER_AGENT: Final = USER_AGENT
+
+_COPILOT_HEADER_CONFIG = (
+    ("accept", "GITHUB_COPILOT_ACCEPT", "application/json"),
+    ("content-type", "GITHUB_COPILOT_CONTENT_TYPE", "application/json"),
+    ("copilot-integration-id", "GITHUB_COPILOT_INTEGRATION_ID", DEFAULT_COPILOT_INTEGRATION_ID),
+    ("editor-version", "GITHUB_COPILOT_EDITOR_VERSION", DEFAULT_COPILOT_EDITOR_VERSION),
+    ("editor-plugin-version", "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION", DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION),
+    ("user-agent", "GITHUB_COPILOT_USER_AGENT", DEFAULT_COPILOT_USER_AGENT),
+    ("openai-intent", "GITHUB_COPILOT_OPENAI_INTENT", None),
+    ("x-github-api-version", "GITHUB_COPILOT_API_VERSION", None),
+    (
+        "x-vscode-user-agent-library-version",
+        "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
+        None,
+    ),
+)
 
 
 class GithubCopilotError(BaseLLMException):
@@ -57,21 +77,23 @@ class GetAPIKeyError(GithubCopilotError):
     pass
 
 
-def get_copilot_default_headers(api_key: str) -> dict:
-    """
-    Get default headers for GitHub Copilot Responses API.
+def _get_copilot_header_value(environment_variable: str, default: str | None) -> str | None:
+    value = os.getenv(environment_variable)
+    if value is None:
+        return default
+    return value or None
 
-    Based on copilot-api's header configuration.
-    """
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "content-type": "application/json",
-        "copilot-integration-id": "vscode-chat",
-        "editor-version": "vscode/1.95.0",  # Fixed version for stability
-        "editor-plugin-version": EDITOR_PLUGIN_VERSION,
-        "user-agent": USER_AGENT,
-        "openai-intent": "conversation-panel",
-        "x-github-api-version": API_VERSION,
-        "x-request-id": str(uuid4()),
-        "x-vscode-user-agent-library-version": "electron-fetch",
+
+def get_copilot_default_headers(
+    api_key: str | None = None,
+    *,
+    access_token: str | None = None,
+) -> dict[str, str]:
+    configured_headers = {
+        header: value
+        for header, environment_variable, default in _COPILOT_HEADER_CONFIG
+        if (value := _get_copilot_header_value(environment_variable, default)) is not None
     }
+    authorization = f"token {access_token}" if access_token else f"Bearer {api_key}" if api_key else None
+    authorization_header = {"Authorization": authorization} if authorization else {}
+    return {**configured_headers, **authorization_header}
