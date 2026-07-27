@@ -6935,8 +6935,8 @@ export interface paths {
          * @description Update an existing API key's parameters.
          *
          *     Parameters:
-         *     - key: str - The key to update
-         *     - key_alias: Optional[str] - User-friendly key alias
+         *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
+         *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
@@ -23478,7 +23478,7 @@ export interface components {
              * @description Default role assigned to new users created
              * @default internal_user_viewer
              */
-            user_role: ("internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer") | null;
+            user_role: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
         /**
          * DefaultTeamSSOParams
@@ -26019,7 +26019,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: number | string | null;
+            stream_timeout?: string | number | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -32442,7 +32442,7 @@ export interface components {
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
-            key: string;
+            key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
             /** Max Budget */
@@ -34115,7 +34115,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: number | string | null;
+            stream_timeout?: string | number | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
