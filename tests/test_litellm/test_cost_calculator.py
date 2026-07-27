@@ -372,6 +372,34 @@ def test_vertex_chirp_3_transcription_cost_from_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_soniox_realtime_transcription_costs_more_than_async():
+    """soniox/stt-rt-v5 bills at $0.12/hr, 20% above the $0.10/hr async models,
+    so it must not fall back to the async rate."""
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 3600.0
+
+    realtime_cost = completion_cost(
+        completion_response=response,
+        model="soniox/stt-rt-v5",
+        custom_llm_provider="soniox",
+        call_type="atranscription",
+    )
+    async_cost = completion_cost(
+        completion_response=response,
+        model="soniox/stt-async-v5",
+        custom_llm_provider="soniox",
+        call_type="atranscription",
+    )
+
+    assert pytest.approx(realtime_cost, rel=1e-4) == 0.12
+    assert pytest.approx(async_cost, rel=1e-4) == 0.10
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
