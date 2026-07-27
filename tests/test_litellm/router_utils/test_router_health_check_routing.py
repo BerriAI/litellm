@@ -19,6 +19,25 @@ def _make_deployment(model_id: str, model_name: str = "gpt-4") -> dict:
     }
 
 
+def _make_router(enable: bool, health_cache: DeploymentHealthCache):
+    """Build a real Router wired to the given health cache and enable flag."""
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("deploy-1", "deploy-2", "deploy-3")
+        ],
+    )
+    router.enable_health_check_routing = enable
+    router.health_state_cache = health_cache
+    return router
+
+
 def _make_health_cache(
     unhealthy_ids: set = None, staleness_threshold: float = 60.0
 ) -> DeploymentHealthCache:
@@ -44,23 +63,8 @@ class TestFilterHealthCheckUnhealthyDeployments:
     """Test the sync filter method."""
 
     def _make_router_like(self, enable: bool, health_cache: DeploymentHealthCache):
-        """Create a minimal object that behaves like Router for filter testing."""
-
-        class FakeRouter:
-            def __init__(self):
-                self.enable_health_check_routing = enable
-                self.health_state_cache = health_cache
-                self.allowed_fails_policy = None
-
-        # Import the actual method and bind it
-        from litellm.router import Router
-
-        fake = FakeRouter()
-        # Use the unbound method
-        fake._filter_health_check_unhealthy_deployments = (
-            Router._filter_health_check_unhealthy_deployments.__get__(fake, FakeRouter)
-        )
-        return fake
+        """Build a real Router wired to the given health cache and flag."""
+        return _make_router(enable=enable, health_cache=health_cache)
 
     def test_filter_removes_unhealthy_deployments(self):
         """Unhealthy deployments should be removed from candidates."""
@@ -120,21 +124,8 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
     """Test the async filter method."""
 
     def _make_router_like(self, enable: bool, health_cache: DeploymentHealthCache):
-        from litellm.router import Router
-
-        class FakeRouter:
-            def __init__(self):
-                self.enable_health_check_routing = enable
-                self.health_state_cache = health_cache
-                self.allowed_fails_policy = None
-
-        fake = FakeRouter()
-        fake._async_filter_health_check_unhealthy_deployments = (
-            Router._async_filter_health_check_unhealthy_deployments.__get__(
-                fake, FakeRouter
-            )
-        )
-        return fake
+        """Build a real Router wired to the given health cache and flag."""
+        return _make_router(enable=enable, health_cache=health_cache)
 
     @pytest.mark.asyncio
     async def test_async_filter_removes_unhealthy(self):

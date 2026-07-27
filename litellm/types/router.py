@@ -47,6 +47,23 @@ class ModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class AllowedFailsPolicy(BaseModel):
+    """
+    Use this to set a custom number of allowed fails/minute before cooling down a deployment
+    If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
+
+    Mapping of Exception type to allowed_fails for each exception
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorAllowedFails: Optional[int] = None
+    AuthenticationErrorAllowedFails: Optional[int] = None
+    TimeoutErrorAllowedFails: Optional[int] = None
+    RateLimitErrorAllowedFails: Optional[int] = None
+    ContentPolicyViolationErrorAllowedFails: Optional[int] = None
+    InternalServerErrorAllowedFails: Optional[int] = None
+
+
 class RoutingGroup(BaseModel):
     """
     A group of models that share a routing strategy.
@@ -56,6 +73,10 @@ class RoutingGroup(BaseModel):
     models: List[str]
     routing_strategy: str
     routing_strategy_args: Optional[dict] = None
+    allowed_fails: Optional[int] = None
+    allowed_fails_policy: Optional[AllowedFailsPolicy] = None
+    cooldown_time: Optional[float] = None
+    enable_health_check_routing: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -509,23 +530,6 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
-
-
-class AllowedFailsPolicy(BaseModel):
-    """
-    Use this to set a custom number of allowed fails/minute before cooling down a deployment
-    If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
-
-    Mapping of Exception type to allowed_fails for each exception
-    https://docs.litellm.ai/docs/exception_mapping
-    """
-
-    BadRequestErrorAllowedFails: Optional[int] = None
-    AuthenticationErrorAllowedFails: Optional[int] = None
-    TimeoutErrorAllowedFails: Optional[int] = None
-    RateLimitErrorAllowedFails: Optional[int] = None
-    ContentPolicyViolationErrorAllowedFails: Optional[int] = None
-    InternalServerErrorAllowedFails: Optional[int] = None
 
 
 class AlertingConfig(BaseModel):
