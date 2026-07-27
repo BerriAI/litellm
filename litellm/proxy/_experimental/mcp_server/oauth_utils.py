@@ -555,6 +555,41 @@ def _raise_trusted_redirect_uri_rejected(
     )
 
 
+def gateway_callback_url(base_url: str) -> str:
+    """The proxy's own MCP OAuth callback, spelled once so the value the relay registers upstream
+    and the value :func:`_raise_if_gateway_callback_redirect` rejects for a client cannot diverge."""
+    return f"{base_url}/callback"
+
+
+def _raise_if_gateway_callback_redirect(redirect_uri: str, proxy_base: str | None) -> None:
+    """Reject a client ``redirect_uri`` that is the gateway's own ``/callback``.
+
+    Such a URI is same-origin, so the trust policy would accept it, and the flow then dies in a
+    way that looks like anything but a redirect loop: ``/callback`` decodes the relay state,
+    redirects the authorization response to the client's redirect_uri, which is itself, and the
+    second hit tries to decrypt the client's opaque ``state`` as a relay handle and surfaces an
+    "Incorrect padding" decrypt error. A DCR client adopts this URI when it holds a registration
+    that echoed the gateway callback back as its own ``redirect_uris``, so the actionable failure
+    belongs here, before the browser leaves for the upstream.
+    """
+    if not proxy_base:
+        return
+    if canonicalize_url_identity(redirect_uri) != canonicalize_url_identity(gateway_callback_url(proxy_base)):
+        return
+    _oauth_invalid_request(
+        "redirect_uri is the proxy's own MCP OAuth callback, so the authorization response "
+        "would be redirected back into the proxy instead of to your client.",
+        hint=(
+            "The client is using the proxy's callback as its own redirect_uri; that happens when it "
+            "still holds a dynamic client registration whose redirect_uris echoed the gateway "
+            "callback. Delete the client's stored registration for this server and register again "
+            "so it sends its own redirect_uri, then add that client's origin to "
+            f"{_TRUSTED_REDIRECT_ORIGINS_ENV} if it is hosted on another host."
+        ),
+        redirect_uri=redirect_uri,
+    )
+
+
 def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     """Accept ``redirect_uri`` when it is (a) same-origin with the
     proxy's own request origin, (b) loopback, (c) listed in the
@@ -583,6 +618,7 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
         return
     redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
     proxy_base = _resolve_proxy_base_for_redirect(request)
+    _raise_if_gateway_callback_redirect(redirect_uri, proxy_base)
     if _trusted_redirect_uri_is_allowed(parsed, redirect_netloc, proxy_base):
         return
     _raise_trusted_redirect_uri_rejected(request, redirect_uri, parsed, redirect_netloc, proxy_base)

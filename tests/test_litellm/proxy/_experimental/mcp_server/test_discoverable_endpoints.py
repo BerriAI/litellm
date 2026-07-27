@@ -975,6 +975,96 @@ async def test_register_client_valid_multi_redirect_uris_all_echoed():
     assert result["redirect_uris"] == client_redirects
 
 
+@pytest.mark.parametrize(
+    "gateway_callback_variant",
+    [
+        "https://proxy.litellm.example/callback",
+        "https://proxy.litellm.example/callback/",
+        "https://proxy.litellm.example:443/callback",
+        "https://PROXY.litellm.example/callback",
+        "https://proxy.litellm.example/callback?client=open-webui",
+    ],
+)
+def test_authorize_rejects_the_gateway_callback_as_a_client_redirect_uri(gateway_callback_variant, monkeypatch):
+    """Regression for the reopened DCR self-redirect loop (#34771, #33699). A DCR client holding a
+    registration that echoed the gateway callback back as its own redirect_uris authorizes with
+    LiteLLM's /callback as its redirect. That URI is same-origin, so the trust policy used to accept
+    it, /callback then redirected the authorization response to itself, and the second hit failed to
+    decrypt the client's opaque state ("Incorrect padding"). The flow must fail at /authorize with an
+    actionable error instead, and must not send the browser upstream."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://proxy.litellm.example")
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server(server_id="atlassian", name="atlassian", server_name="atlassian")
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        response = TestClient(app).get(
+            "/atlassian/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "upstream-issued-client-id",
+                "redirect_uri": gateway_callback_variant,
+                "state": "client-opaque-state",
+                "code_challenge": "c" * 43,
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "invalid_request"
+    assert "own MCP OAuth callback" in detail["error_description"]
+    assert "dynamic client registration" in detail["hint"]
+    assert "MCP_TRUSTED_REDIRECT_ORIGINS" in detail["hint"]
+
+
+def test_callback_refuses_to_redirect_an_authorization_response_to_itself(monkeypatch):
+    """The /callback sink is the second half of the same loop: a state minted before the /authorize
+    guard (they never expire) still carries the gateway callback as the client redirect. Forwarding
+    the code there re-enters this handler with the client's own state and dies in the decrypt path,
+    so the sink must reject it too (#34771)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        encode_state_with_base_url,
+        router,
+    )
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://proxy.litellm.example")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-lit34771")
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit34771", raising=False)
+
+    stale_state = encode_state_with_base_url(
+        base_url="https://proxy.litellm.example/callback",
+        original_state="client-opaque-state",
+        client_redirect_uri="https://proxy.litellm.example/callback",
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    response = TestClient(app).get(
+        "/callback",
+        params={"code": "upstream-code", "state": stale_state},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert "own MCP OAuth callback" in response.json()["detail"]["error_description"]
+
+
 @pytest.mark.asyncio
 async def test_register_client_persists_dcr_client_identity():
     """A dynamic client registration (RFC 7591) must persist the issued client_id /

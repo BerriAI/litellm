@@ -54,6 +54,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
+    gateway_callback_url,
     get_request_base_url,
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
@@ -831,7 +832,7 @@ async def authorize_with_server(
 
     params = {
         "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
-        "redirect_uri": f"{request_base_url}/callback",
+        "redirect_uri": gateway_callback_url(request_base_url),
         "state": relay_state,
         "response_type": response_type or "code",
     }
@@ -983,7 +984,7 @@ async def exchange_token_with_server(
                 ),
             )
         proxy_base_url = get_request_base_url(request)
-        resolved_redirect_uri = redirect_uri if bridge_token_relay else f"{proxy_base_url}/callback"
+        resolved_redirect_uri = redirect_uri if bridge_token_relay else gateway_callback_url(proxy_base_url)
         token_data = {
             "grant_type": "authorization_code",
             "code": code,
@@ -1501,7 +1502,7 @@ async def mint_ephemeral_dcr_client(request: Request, mcp_server: MCPServer) -> 
             return cached_after_wait
         register_data: dict[str, object] = {
             "client_name": mcp_server.server_name or mcp_server.server_id,
-            "redirect_uris": [f"{request_base_url}/callback"],
+            "redirect_uris": [gateway_callback_url(request_base_url)],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
@@ -1576,7 +1577,7 @@ async def register_client_with_server(
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
-    current_redirect_uri = f"{request_base_url}/callback"
+    current_redirect_uri = gateway_callback_url(request_base_url)
     client_facing_redirect_uris = client_redirect_uris or [current_redirect_uri]
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
@@ -2525,7 +2526,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     dummy_return = {
         "client_id": mcp_server_name or "dummy_client",
         "client_secret": "dummy",
-        "redirect_uris": client_redirect_uris or [f"{request_base_url}/callback"],
+        "redirect_uris": client_redirect_uris or [gateway_callback_url(request_base_url)],
     }
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:

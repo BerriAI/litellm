@@ -138,6 +138,7 @@ if MCP_AVAILABLE:
         authorize_with_server,
         client_supplied_redirect_uris,
         exchange_token_with_server,
+        gateway_callback_url,
         get_request_base_url,
         redeem_passthrough_authorization_code,
         register_client_with_server,
@@ -1777,7 +1778,7 @@ if MCP_AVAILABLE:
         resolved_code = sealed_code.upstream_code if sealed_code else code
         # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
         # or plain flow alike), so the exchange must present that binding, not the browser page.
-        resolved_redirect_uri = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
+        resolved_redirect_uri = gateway_callback_url(get_request_base_url(request)) if sealed_code else redirect_uri
         caller_client_id = sealed_code.client_id if sealed_code else client_id
         caller_client_secret = sealed_code.client_secret if sealed_code else client_secret
         resolved_client_id = mcp_server.client_id or caller_client_id or ""
