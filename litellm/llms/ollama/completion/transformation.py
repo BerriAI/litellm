@@ -4,6 +4,7 @@ from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
 
 from httpx._models import Headers, Response
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -17,7 +18,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionUsageBlock,
+)
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
@@ -98,6 +104,8 @@ class OllamaConfig(BaseConfig):
     top_p: Optional[float] = None
     system: Optional[str] = None
     template: Optional[str] = None
+
+    _prompted_tool_names: frozenset[str] = frozenset()
 
     def __init__(
         self,
@@ -376,6 +384,7 @@ class OllamaConfig(BaseConfig):
         format = optional_params.pop("format", None)
         images = optional_params.pop("images", None)
         think = optional_params.pop("think", None)
+        self._prompted_tool_names = _prompted_tool_names(optional_params.pop("prompted_tool_calls", None))
         data = {
             "model": model,
             "prompt": ollama_prompt,
@@ -439,14 +448,89 @@ class OllamaConfig(BaseConfig):
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
+            tool_names=self._prompted_tool_names,
         )
 
 
+def _prompted_tool_names(prompted_tools: object) -> frozenset[str]:
+    """Names of the functions `get_optional_params` rewrote into this request's prompt."""
+    if not isinstance(prompted_tools, list):
+        return frozenset()
+
+    schemas = ((tool.get("function") or tool) for tool in prompted_tools if isinstance(tool, dict))
+    return frozenset(
+        schema["name"] for schema in schemas if isinstance(schema, dict) and isinstance(schema.get("name"), str)
+    )
+
+
+class _OllamaJsonModeToolCall(BaseModel):
+    """
+    The exact object litellm's own tool prompt asks ollama for, in `factory.function_call_prompt`.
+    Extra keys are rejected so a JSON body that merely happens to carry a `name` stays content.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    arguments: dict[str, object]
+
+
+def _build_tool_call(response_text: str, tool_names: frozenset[str]) -> ChatCompletionToolCallChunk | None:
+    """
+    Build a tool call out of a completed response body, but only for a function this request
+    actually offered. This is a stricter test than the one `OllamaConfig.transform_response`
+    applies to the same body, so it never converts anything that path would leave as content.
+    """
+    try:
+        function_call = _OllamaJsonModeToolCall.model_validate_json(response_text)
+    except ValidationError:
+        return None
+
+    if function_call.name not in tool_names:
+        return None
+
+    return ChatCompletionToolCallChunk(
+        id=f"call_{uuid.uuid4()}",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=function_call.name,
+            arguments=json.dumps(function_call.arguments),
+        ),
+        index=0,
+    )
+
+
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
+    def __init__(
+        self,
+        streaming_response,
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+        tool_names: frozenset[str] = frozenset(),
+    ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
+        self.tool_names: frozenset[str] = tool_names
+        self.tool_call_buffer: str | None = "" if tool_names else None
+
+    def _hold_back_or_release(self, content: str) -> str | None:
+        """
+        `/api/generate` returns a tool call as a JSON object inside the response text, so it can
+        only be recognised once that object is complete. Hold text back while it can still turn
+        out to be one, and release everything held as soon as it cannot.
+        """
+        if self.tool_call_buffer is None:
+            return content
+
+        self.tool_call_buffer += content
+        stripped = self.tool_call_buffer.lstrip()
+        if not stripped or stripped.startswith("{"):
+            return None
+
+        released = self.tool_call_buffer
+        self.tool_call_buffer = None
+        return released
 
     def _handle_string_chunk(self, str_line: str) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
@@ -473,8 +557,21 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
                     )
+
+                held_back = self.tool_call_buffer
+                self.tool_call_buffer = None
+                tool_call = _build_tool_call(held_back, self.tool_names) if held_back else None
+                if tool_call is not None:
+                    return GenericStreamingChunk(
+                        text="",
+                        tool_use=tool_call,
+                        is_finished=True,
+                        finish_reason="tool_calls",
+                        usage=usage,
+                    )
+
                 return GenericStreamingChunk(
-                    text=text,
+                    text=held_back or text,
                     is_finished=is_finished,
                     finish_reason=finish_reason,
                     usage=usage,
@@ -494,7 +591,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     if self.started_reasoning_content and not self.finished_reasoning_content:
                         reasoning_content = text
                     else:
-                        content = text
+                        content = self._hold_back_or_release(text)
 
                 return ModelResponseStream(
                     choices=[

@@ -3746,6 +3746,7 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
                     non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
                 elif "functions" in non_default_params:
                     optional_params["functions_unsupported_model"] = non_default_params.pop("functions")
+                optional_params["prompted_tool_calls"] = optional_params.get("functions_unsupported_model") or []
             elif litellm.add_function_to_prompt:  # if user opts to add it to prompt instead
                 optional_params["functions_unsupported_model"] = non_default_params.pop(
                     "tools", non_default_params.pop("functions", None)

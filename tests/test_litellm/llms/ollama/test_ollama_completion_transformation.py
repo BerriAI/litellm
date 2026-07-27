@@ -507,3 +507,320 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+    def test_chunk_parser_streams_tool_call_instead_of_raw_json(self):
+        """A format=json tool call must arrive as tool_calls, not as JSON in the content."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+            tool_names=frozenset({"lookup_account", "lookup"}),
+        )
+
+        fragments = [
+            '{"',
+            "name",
+            '": "',
+            "lookup_account",
+            '", "',
+            "arguments",
+            '": {"',
+            "email",
+            '": "',
+            "maya.iyer@example.com",
+            '"}}',
+        ]
+        streamed_content = ""
+        for fragment in fragments:
+            result = iterator.chunk_parser({"model": "qwen2.5:3b", "response": fragment, "done": False})
+            assert isinstance(result, ModelResponseStream)
+            assert result.choices and result.choices[0].delta is not None
+            streamed_content += result.choices[0].delta.content or ""
+
+        assert streamed_content == ""
+
+        result = iterator.chunk_parser(
+            {
+                "model": "qwen2.5:3b",
+                "response": "",
+                "done": True,
+                "prompt_eval_count": 120,
+                "eval_count": 24,
+            }
+        )
+
+        assert result["text"] == ""
+        assert result["finish_reason"] == "tool_calls"
+        assert result["is_finished"] is True
+        assert result["tool_use"] is not None
+        assert result["tool_use"]["type"] == "function"
+        assert result["tool_use"]["index"] == 0
+        assert result["tool_use"]["id"]
+        assert result["tool_use"]["function"]["name"] == "lookup_account"
+        assert json.loads(result["tool_use"]["function"]["arguments"]) == {"email": "maya.iyer@example.com"}
+
+    def test_chunk_parser_streams_prose_incrementally(self):
+        """Prose must keep streaming fragment by fragment and carry no tool call."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+            tool_names=frozenset({"lookup_account", "lookup"}),
+        )
+
+        fragments = ["I ", "will ", "look ", "that ", "up", "."]
+        deltas = []
+        for fragment in fragments:
+            result = iterator.chunk_parser({"model": "qwen2.5:3b", "response": fragment, "done": False})
+            assert isinstance(result, ModelResponseStream)
+            assert result.choices and result.choices[0].delta is not None
+            deltas.append(result.choices[0].delta.content)
+
+        assert deltas == fragments
+
+        result = iterator.chunk_parser(
+            {
+                "model": "qwen2.5:3b",
+                "response": "",
+                "done": True,
+                "prompt_eval_count": 10,
+                "eval_count": 6,
+            }
+        )
+
+        assert result["text"] == ""
+        assert result["finish_reason"] == "stop"
+        assert result.get("tool_use") is None
+
+    def test_chunk_parser_releases_non_tool_call_json_as_content(self):
+        """A JSON body that is not a tool call must still be delivered as content."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+            tool_names=frozenset({"lookup_account", "lookup"}),
+        )
+
+        fragments = ['{"', "city", '": "', "Chennai", '"}']
+        streamed_content = ""
+        for fragment in fragments:
+            result = iterator.chunk_parser({"model": "qwen2.5:3b", "response": fragment, "done": False})
+            assert isinstance(result, ModelResponseStream)
+            assert result.choices and result.choices[0].delta is not None
+            streamed_content += result.choices[0].delta.content or ""
+
+        result = iterator.chunk_parser(
+            {
+                "model": "qwen2.5:3b",
+                "response": "",
+                "done": True,
+                "prompt_eval_count": 10,
+                "eval_count": 6,
+            }
+        )
+
+        assert streamed_content + result["text"] == '{"city": "Chennai"}'
+        assert result["finish_reason"] == "stop"
+        assert result.get("tool_use") is None
+
+    def test_chunk_parser_leaves_json_carrying_extra_keys_as_content(self):
+        """A JSON body that merely happens to carry a name must not be mistaken for a tool call."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+            tool_names=frozenset({"lookup_account", "lookup"}),
+        )
+
+        body = '{"name": "Chennai", "arguments": {"x": 1}, "population": 7000000}'
+        streamed_content = ""
+        for fragment in [body[i : i + 6] for i in range(0, len(body), 6)]:
+            result = iterator.chunk_parser({"model": "qwen2.5:3b", "response": fragment, "done": False})
+            assert isinstance(result, ModelResponseStream)
+            assert result.choices and result.choices[0].delta is not None
+            streamed_content += result.choices[0].delta.content or ""
+
+        result = iterator.chunk_parser(
+            {"model": "qwen2.5:3b", "response": "", "done": True, "prompt_eval_count": 5, "eval_count": 9}
+        )
+
+        assert streamed_content + result["text"] == body
+        assert result["finish_reason"] == "stop"
+        assert result.get("tool_use") is None
+
+    def test_chunk_parser_leaves_non_object_arguments_as_content(self):
+        """`arguments` must be the object the tool prompt asks for, not any value that happens to be there."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+            json_mode=False,
+            tool_names=frozenset({"lookup_account", "lookup"}),
+        )
+
+        body = '{"name": "lookup", "arguments": "not an object"}'
+        streamed_content = ""
+        for fragment in [body[i : i + 6] for i in range(0, len(body), 6)]:
+            result = iterator.chunk_parser({"model": "qwen2.5:3b", "response": fragment, "done": False})
+            assert isinstance(result, ModelResponseStream)
+            assert result.choices and result.choices[0].delta is not None
+            streamed_content += result.choices[0].delta.content or ""
+
+        result = iterator.chunk_parser(
+            {"model": "qwen2.5:3b", "response": "", "done": True, "prompt_eval_count": 5, "eval_count": 9}
+        )
+
+        assert streamed_content + result["text"] == body
+        assert result["finish_reason"] == "stop"
+        assert result.get("tool_use") is None
+
+
+TOOL_CALL_BODY = '{"name": "lookup_account", "arguments": {"email": "maya.iyer@example.com"}}'
+
+LOOKUP_ACCOUNT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "lookup_account",
+        "description": "Look up a customer account by email address",
+        "parameters": {"type": "object", "properties": {"email": {"type": "string"}}, "required": ["email"]},
+    },
+}
+
+
+def _generate_transport():
+    """Stands in for ollama's /api/generate, fragmenting the body the way it really does."""
+    import httpx
+
+    done = {"model": "qwen2.5:3b", "response": "", "done": True, "prompt_eval_count": 146, "eval_count": 21}
+
+    def handler(request: "httpx.Request") -> "httpx.Response":
+        fragments = [TOOL_CALL_BODY[i : i + 4] for i in range(0, len(TOOL_CALL_BODY), 4)]
+        lines = [json.dumps({"model": "qwen2.5:3b", "response": f, "done": False}) for f in fragments]
+        lines.append(json.dumps(done))
+        return httpx.Response(200, content=("\n".join(lines) + "\n").encode())
+
+    return httpx.MockTransport(handler)
+
+
+class TestOllamaStreamingToolCallsEndToEnd:
+    def test_streamed_tool_call_is_not_delivered_as_content(self):
+        """The reported bug: a streamed tool call reaching the caller as raw JSON in the content."""
+        import httpx
+
+        from litellm import completion
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        client = HTTPHandler(client=httpx.Client(transport=_generate_transport()))
+
+        response = completion(
+            model="ollama/qwen2.5:3b",
+            messages=[{"role": "user", "content": "Cancel the subscription for maya.iyer@example.com"}],
+            tools=[LOOKUP_ACCOUNT_TOOL],
+            api_base="http://localhost:11434",
+            stream=True,
+            client=client,
+        )
+
+        streamed_content = ""
+        tool_calls = []
+        finish_reason = None
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            streamed_content += getattr(delta, "content", None) or ""
+            tool_calls += getattr(delta, "tool_calls", None) or []
+            finish_reason = chunk.choices[0].finish_reason or finish_reason
+
+        assert streamed_content == ""
+        assert finish_reason == "tool_calls"
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == "lookup_account"
+        assert json.loads(tool_calls[0].function.arguments) == {"email": "maya.iyer@example.com"}
+
+    def test_detection_is_off_for_a_request_that_offered_no_tools(self):
+        """No tools were rewritten into a prompt, so a tool-shaped body is just content."""
+        iterator = OllamaTextCompletionResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+
+        streamed_content = ""
+        for fragment in [TOOL_CALL_BODY[i : i + 6] for i in range(0, len(TOOL_CALL_BODY), 6)]:
+            result = iterator.chunk_parser({"model": "qwen2.5:3b", "response": fragment, "done": False})
+            assert isinstance(result, ModelResponseStream)
+            assert result.choices and result.choices[0].delta is not None
+            streamed_content += result.choices[0].delta.content or ""
+
+        result = iterator.chunk_parser(
+            {"model": "qwen2.5:3b", "response": "", "done": True, "prompt_eval_count": 5, "eval_count": 9}
+        )
+
+        assert streamed_content == TOOL_CALL_BODY
+        assert result["finish_reason"] == "stop"
+        assert result.get("tool_use") is None
+
+    def test_detection_is_armed_only_with_the_functions_the_request_offered(self):
+        """`get_optional_params` passes on the functions it rewrote; those are the only ones accepted."""
+        from litellm.utils import get_optional_params
+
+        config = OllamaConfig()
+        base = {
+            "model": "qwen2.5:3b",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_params": {},
+            "headers": {},
+        }
+
+        json_mode_only = get_optional_params(
+            model="qwen2.5:3b",
+            custom_llm_provider="ollama",
+            stream=True,
+            response_format={"type": "json_object"},
+        )
+        assert "prompted_tool_calls" not in json_mode_only
+        config.transform_request(optional_params=json_mode_only, **base)
+        assert config.get_model_response_iterator(iter([]), sync_stream=True).tool_names == frozenset()
+
+        with_tools = get_optional_params(
+            model="qwen2.5:3b",
+            custom_llm_provider="ollama",
+            stream=True,
+            tools=[LOOKUP_ACCOUNT_TOOL],
+        )
+        assert with_tools["prompted_tool_calls"] == [LOOKUP_ACCOUNT_TOOL]
+        config.transform_request(optional_params=with_tools, **base)
+        assert config.get_model_response_iterator(iter([]), sync_stream=True).tool_names == frozenset(
+            {"lookup_account"}
+        )
+
+    def test_a_function_the_request_never_offered_stays_content(self):
+        """A body naming some other function must not be synthesised into a tool call."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False, tool_names=frozenset({"lookup_account"})
+        )
+
+        body = '{"name": "delete_account", "arguments": {"email": "maya.iyer@example.com"}}'
+        streamed_content = ""
+        for fragment in [body[i : i + 6] for i in range(0, len(body), 6)]:
+            result = iterator.chunk_parser({"model": "qwen2.5:3b", "response": fragment, "done": False})
+            assert isinstance(result, ModelResponseStream)
+            assert result.choices and result.choices[0].delta is not None
+            streamed_content += result.choices[0].delta.content or ""
+
+        result = iterator.chunk_parser(
+            {"model": "qwen2.5:3b", "response": "", "done": True, "prompt_eval_count": 5, "eval_count": 9}
+        )
+
+        assert streamed_content + result["text"] == body
+        assert result["finish_reason"] == "stop"
+        assert result.get("tool_use") is None
+
+    def test_prompted_tool_calls_marker_is_not_sent_to_ollama(self):
+        """The marker is litellm-internal; it must not leak into the request body."""
+        config = OllamaConfig()
+
+        data = config.transform_request(
+            model="qwen2.5:3b",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"stream": True, "format": "json", "prompted_tool_calls": True},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "prompted_tool_calls" not in data
+        assert "prompted_tool_calls" not in data["options"]
