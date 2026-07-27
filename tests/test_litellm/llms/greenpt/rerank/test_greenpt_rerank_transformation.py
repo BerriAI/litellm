@@ -1,6 +1,24 @@
+import json
+from pathlib import Path
+
 import pytest
 
+import litellm
+from litellm.cost_calculator import rerank_cost
 from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
+
+
+@pytest.fixture
+def local_model_cost_map():
+    original_model_cost = litellm.model_cost
+    model_cost_path = Path(__file__).resolve().parents[5] / "model_prices_and_context_window.json"
+    litellm.model_cost = json.loads(model_cost_path.read_text(encoding="utf-8"))
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 def test_greenpt_supported_params():
@@ -71,6 +89,16 @@ def test_calculate_rerank_cost():
         model="green-rerank",
         billed_units={"total_tokens": 1000},
         model_info={"input_cost_per_token": 1.36524e-07},
+    )
+    assert prompt_cost == pytest.approx(0.000136524)
+    assert completion_cost == 0.0
+
+
+def test_public_rerank_cost_uses_token_pricing(local_model_cost_map):
+    prompt_cost, completion_cost = rerank_cost(
+        model="greenpt/green-rerank",
+        custom_llm_provider=None,
+        billed_units={"total_tokens": 1000},
     )
     assert prompt_cost == pytest.approx(0.000136524)
     assert completion_cost == 0.0
