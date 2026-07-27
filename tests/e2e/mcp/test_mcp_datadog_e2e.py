@@ -77,12 +77,7 @@ class TestDatadogMcpRoundTrip:
             "within the poll deadline; MCP search would have nothing to find"
         )
 
-        tools = unwrap(client.list_tools(key))
-        tool_name = tools.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
-        assert tool_name is not None, (
-            f"granted key never saw {SEARCH_LOGS_TOOL} on server {server_id}; "
-            f"tools={tools.tool_names_for_server(server_id)}"
-        )
+        tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
 
         call = unwrap(
             client.call_tool(

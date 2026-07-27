@@ -11,12 +11,13 @@ request/response bodies are co-located here because only this suite speaks MCP.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
-from e2e_http import Headers, NoBody, Result, unwrap
+from e2e_http import Headers, NoBody, Result, Success, unwrap
 from models import KeyGenerateBody, ObjectPermission
 from proxy_client import ProxyClient
 
@@ -222,6 +223,31 @@ class McpClient:
             params=NoBody(),
             response_type=McpToolsListResponse,
         )
+
+    def await_tool(self, key: str, server_id: str, needle: str) -> str:
+        """Poll tools/list until `server_id` serves a tool matching `needle`, and
+        return its fully-qualified name. Fails at poll_timeout.
+
+        /v1/mcp/server returns as soon as the DB row is written, but the gateway
+        runs the initialize + tools/list handshake against the upstream lazily on
+        the first request that needs it, and reports a server it has not
+        discovered yet exactly like a dead one: an empty tool list. Waiting is
+        what separates the two.
+        """
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.list_tools(key)
+            if isinstance(result, Success):
+                tool_name = result.data.tool_name_containing(server_id, needle)
+                if tool_name is not None:
+                    return tool_name
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"server {server_id} never served a tool matching {needle!r} within "
+                    f"{self.proxy.poll_timeout}s of registration (upstream unreachable, or "
+                    f"the key's grant was not applied); last tools/list: {result}"
+                )
+            time.sleep(self.proxy.poll_interval)
 
     def register_mcp_content_filter(self, *, name: str, blocked_keyword: str) -> str:
         """Register a default-on content-filter guardrail that runs on the MCP

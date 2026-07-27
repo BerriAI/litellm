@@ -22,7 +22,7 @@ import pytest
 
 from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
-from e2e_http import Result, Success, UnknownApiError, unwrap
+from e2e_http import Result, Success, UnknownApiError
 from lifecycle import ResourceManager
 from mcp_client import McpCallToolResponse, McpClient, McpToolArguments
 
@@ -75,12 +75,7 @@ class TestMcpToolCallGuardrail:
         key = client.generate_key(user_id=f"e2e-mcp-guard-{marker}", mcp_servers=[server_id])
         resources.defer(lambda: client.proxy.delete_key(key))
 
-        tools = unwrap(client.list_tools(key))
-        tool_name = tools.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
-        assert tool_name is not None, (
-            f"granted key never saw {SEARCH_LOGS_TOOL} on server {server_id}; "
-            f"tools={tools.tool_names_for_server(server_id)}"
-        )
+        tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
 
         def search(query: str) -> Result[McpCallToolResponse]:
             arguments: McpToolArguments = {
