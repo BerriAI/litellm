@@ -1,0 +1,40 @@
+# Coverage-registry cells this Playwright suite covers.
+#
+# Every other e2e suite is Python and declares coverage with
+# @pytest.mark.covers("<cell id>"). This suite is TypeScript, so it declares the
+# same thing here and tests/e2e/coverage_registry/collector.py unions these ids
+# into the covered set.
+#
+# To add a row: write the UI test first, then name the registry cell it proves,
+# the spec file it lives in, and the test title. The id must exist in
+# tests/e2e/coverage_registry/*.yaml; a typo lands in the collector's orphan
+# marker list exactly like a typo in a pytest marker, and `--strict` fails on it.
+# Claim a cell only when the spec actually asserts that behavior.
+#
+# `spec` is relative to this file and `test` is the Playwright test title, and
+# the collector resolves both against the tree on every run. Rename or delete
+# that test and the row stops counting and fails `--strict`, so a claim here
+# cannot outlive the test that backs it.
+#
+# Commented-out code does not count as a test, so a row whose test is commented
+# out fails the same way a deleted one does.
+#
+# An interpolated title such as test(`${role} sidebar`) is checked against its
+# literal segments, so write out the title as it renders (e.g. "admin sidebar").
+# The check is per row, never per file: an interpolated title elsewhere in the
+# spec does not exempt your row. A title with no literal text at all, or one
+# assembled from variables, cannot back a row; give that test a title with
+# something literal in it.
+covers:
+  - id: mgmt.key.update.happy_path
+    spec: tests/proxy-admin/keys.spec.ts
+    test: Update key TPM and RPM limits
+
+# Not claimed yet:
+#
+# mgmt.key.generate.happy_path - the registry row scopes this to SSO-driven key
+# generation ("SSO-driven key gen (UI path)", source ui_sso.py). This suite
+# creates keys through the dashboard, but every role logs in with
+# username/password (globalSetup.ts), so no test drives the SSO path. Claim it
+# once a spec exercises SSO login, or retarget the registry row at plain
+# dashboard key creation and claim it then.
