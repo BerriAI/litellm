@@ -518,6 +518,10 @@ def team_model_exclusion_clause(exclude_team_models: bool) -> str:
     exclusion survives a rename of the deployment's mangled `model_name`. `->>` yields NULL
     on an absent key or a non-object `model_info`, which fails open to "included".
 
+    Blank `model_id` is the default for spend rows that never resolved to a router deployment,
+    so it identifies no deployment and must never join; `/global/spend/provider` guards the
+    same column the same way.
+
     Only a literal True opts in, so every existing query stays byte-identical; in-process
     callers that omit the argument leave FastAPI's `Query` default object in place, and that
     object is truthy.
@@ -525,8 +529,9 @@ def team_model_exclusion_clause(exclude_team_models: bool) -> str:
     if exclude_team_models is not True:
         return ""
     return (
-        '\n            AND NOT EXISTS (SELECT 1 FROM "LiteLLM_ProxyModelTable" pm '
-        "WHERE pm.model_id = sl.model_id AND pm.model_info ->> 'team_id' IS NOT NULL)"
+        "\n            AND (sl.model_id IS NULL OR length(sl.model_id) = 0 OR NOT EXISTS ("
+        'SELECT 1 FROM "LiteLLM_ProxyModelTable" pm '
+        "WHERE pm.model_id = sl.model_id AND pm.model_info ->> 'team_id' IS NOT NULL))"
     )
 
 

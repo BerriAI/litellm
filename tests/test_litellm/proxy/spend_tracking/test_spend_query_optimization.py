@@ -507,8 +507,9 @@ async def test_global_spend_report_team_group_forwards_team_id(monkeypatch):
 _OMITTED = object()
 
 _EXCLUSION_PREDICATE = (
-    '\n            AND NOT EXISTS (SELECT 1 FROM "LiteLLM_ProxyModelTable" pm '
-    "WHERE pm.model_id = sl.model_id AND pm.model_info ->> 'team_id' IS NOT NULL)"
+    "\n            AND (sl.model_id IS NULL OR length(sl.model_id) = 0 OR NOT EXISTS ("
+    'SELECT 1 FROM "LiteLLM_ProxyModelTable" pm '
+    "WHERE pm.model_id = sl.model_id AND pm.model_info ->> 'team_id' IS NOT NULL))"
 )
 
 _REPORT_BRANCHES = {
@@ -576,6 +577,24 @@ async def test_global_spend_report_excludes_team_models_when_opted_in(monkeypatc
     )
     assert "NOT EXISTS" in sql and "IN (SELECT" not in sql, (
         f"an anti-join (NOT EXISTS) keeps rows with an empty model_id; a subquery IN would drop them. SQL was:\n{sql}"
+    )
+
+
+@pytest.mark.parametrize("branch", sorted(_REPORT_BRANCHES))
+@pytest.mark.asyncio
+async def test_global_spend_report_never_joins_blank_model_ids(monkeypatch, branch):
+    """
+    LiteLLM_SpendLogs.model_id defaults to '' for rows that never resolved to a deployment, and
+    /model/new honors a caller-supplied model_info.id, so a deployment row can be created whose
+    primary key is ''. Without this guard that single row matches every unresolved spend row and
+    the flag erases most of the report.
+    """
+    sql = await _capture_report_sql(monkeypatch, _REPORT_BRANCHES[branch], exclude_team_models=True)
+
+    guard = "sl.model_id IS NULL OR length(sl.model_id) = 0"
+    assert guard in sql, f"{branch} must short-circuit blank model_ids before the join. SQL was:\n{sql}"
+    assert sql.index(guard) < sql.index('"LiteLLM_ProxyModelTable"'), (
+        f"the blank-id guard must precede the anti-join so a '' deployment row can never match. SQL was:\n{sql}"
     )
 
 
