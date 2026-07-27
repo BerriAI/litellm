@@ -234,6 +234,69 @@ async def test_proxy_shutdown_event_flush_failure_still_disconnects(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_event_scheduler_and_tag_flush_failures_still_disconnect(monkeypatch):
+    """Neither a scheduler that refuses to stop nor a failing tag-spend flush may
+    abort shutdown."""
+    calls: List[str] = []
+
+    fake_prisma = MagicMock()
+
+    async def _disconnect():
+        calls.append("disconnect")
+
+    fake_prisma.disconnect = _disconnect
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    fake_scheduler = MagicMock()
+    fake_scheduler.shutdown = MagicMock(side_effect=RuntimeError("scheduler stuck"))
+    monkeypatch.setattr(ps, "scheduler", fake_scheduler, raising=False)
+    monkeypatch.setattr(ps.spend_logs_queue_monitor, "task", None, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm.proxy.utils as proxy_utils
+
+    async def _update_spend(**kwargs):
+        calls.append("update_spend")
+
+    async def _update_daily_tag_spend(**kwargs):
+        calls.append("update_daily_tag_spend")
+        raise RuntimeError("tag upsert failed")
+
+    monkeypatch.setattr(proxy_utils, "update_spend", _update_spend, raising=False)
+    monkeypatch.setattr(proxy_utils, "update_daily_tag_spend", _update_daily_tag_spend, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls == ["update_spend", "update_daily_tag_spend", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_buffers_on_shutdown_no_prisma_is_noop(monkeypatch):
+    """Without a DB there is nothing to flush; the helper must not import or call
+    the spend jobs."""
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+
+    import litellm.proxy.utils as proxy_utils
+
+    async def _boom(**kwargs):
+        raise AssertionError("should not be called without a prisma client")
+
+    monkeypatch.setattr(proxy_utils, "update_spend", _boom, raising=False)
+    monkeypatch.setattr(proxy_utils, "update_daily_tag_spend", _boom, raising=False)
+
+    await ps._flush_spend_buffers_on_shutdown()
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=RuntimeError("db gone"))
