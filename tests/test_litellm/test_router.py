@@ -6128,6 +6128,22 @@ class TestPreRoutingStrategyRegistryLifecycle:
         assert len(registered) == 1
         assert set(registered[0].strategy.config.available_models) == {"gpt-4o", "gpt-4o-mini"}
 
+    def test_delete_repairs_indices_even_when_strategy_release_fails(self):
+        """Structural removal and strategy release are not equally critical. Once the entry
+        leaves model_list the index maps must be repaired no matter what, so releasing the
+        registry slot runs after that repair and cannot abandon the router half-updated."""
+        router = self._router_with_complexity_router()
+        idx = router.model_id_to_deployment_index_map["router-1"]
+        router.model_list[idx] = {"model_name": "smart-router", "litellm_params": None}
+
+        returned = router.delete_deployment(id="router-1")
+
+        assert returned is not None
+        assert "router-1" not in router.model_id_to_deployment_index_map
+        assert all(entry.get("model_info", {}).get("id") != "router-1" for entry in router.model_list)
+        assert router.get_deployment(model_id="router-1") is None
+        assert "gpt-4o" in self._model_names(router)
+
     def test_delete_of_adaptive_enabled_complexity_router_frees_both_registries(self):
         """A complexity router with adaptive set is registered in BOTH complexity_routers
         and adaptive_routers under the same (model_name, tags). Releasing only the first
