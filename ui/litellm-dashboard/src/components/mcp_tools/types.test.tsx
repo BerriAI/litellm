@@ -108,6 +108,7 @@ describe("constants", () => {
     expect(AUTH_TYPE.NONE).toBe("none");
     expect(AUTH_TYPE.API_KEY).toBe("api_key");
     expect(AUTH_TYPE.BEARER_TOKEN).toBe("bearer_token");
+    expect(AUTH_TYPE.AUTHORIZATION).toBe("authorization");
     expect(AUTH_TYPE.OAUTH2).toBe("oauth2");
   });
 

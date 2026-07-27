@@ -56,7 +56,13 @@ interface CreateMCPServerProps {
   onBackToDiscovery?: () => void;
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
+  AUTH_TYPE.API_KEY,
+  AUTH_TYPE.BEARER_TOKEN,
+  AUTH_TYPE.TOKEN,
+  AUTH_TYPE.BASIC,
+  AUTH_TYPE.AUTHORIZATION,
+];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
   AUTH_TYPE.OAUTH2,
@@ -1071,12 +1077,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     children: (
                       <>
                         <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
-                          <Select placeholder="Select auth type" className="rounded-lg" size="large">
+                          <Select placeholder="Select auth type" className="rounded-lg" size="large" virtual={false}>
                             <Select.Option value="none">None</Select.Option>
                             <Select.Option value="api_key">API Key</Select.Option>
                             <Select.Option value="bearer_token">Bearer Token</Select.Option>
                             <Select.Option value="token">Token</Select.Option>
                             <Select.Option value="basic">Basic Auth</Select.Option>
+                            <Select.Option value="authorization">Authorization (raw header)</Select.Option>
                             <Select.Option value="oauth2">OAuth</Select.Option>
                             <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
                             <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
