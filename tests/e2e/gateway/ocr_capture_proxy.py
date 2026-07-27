@@ -14,11 +14,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Iterator, TextIO, cast
 
-import httpx
 import pytest
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from e2e_http import Headers, NoBody, URL, probe
 from litellm.rust_bridge import native_bridge_available
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -113,12 +113,14 @@ def _free_port() -> int:
 
 def _wait_for_liveness(base_url: str, deadline: float) -> bool:
     while time.monotonic() < deadline:
-        try:
-            resp = httpx.get(f"{base_url}/health/liveliness", timeout=2)
-            if resp.status_code == 200:
-                return True
-        except httpx.HTTPError:
-            pass
+        result = probe(
+            URL(f"{base_url}/health/liveliness"),
+            headers=Headers(),
+            params=NoBody(),
+            timeout=2,
+        )
+        if result.status_code == 200:
+            return True
         time.sleep(_LIVENESS_POLL_SECONDS)
     return False
 

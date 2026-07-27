@@ -1,26 +1,15 @@
-"""
-Gateway E2E smoke for Rust-backed OCR.
-
-Start the proxy with:
-
-litellm --config tests/e2e/gateway/litellm-config.yml --port 4000
-"""
-
 from __future__ import annotations
 
-import json
 import os
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
-import httpx
 import pytest
-import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from e2e_http import AuthHeaders, NoBody, StreamingResponse, URL, get, send, unwrap
 from ocr_capture_proxy import CaptureProxy, capture_proxy
 
 __all__ = ["capture_proxy"]
@@ -99,6 +88,24 @@ class LitellmInternalCanaries(BaseModel):
     original_generic_function: str
 
 
+class BasicOcrRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    document: OcrDocument
+
+
+class MistralOcrRequest(MistralOcrParams):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    document: OcrDocument
+
+
+class CaptureOcrRequest(MistralOcrRequest, LitellmInternalCanaries):
+    model_config = ConfigDict(frozen=True)
+
+
 class MistralOcrUpstreamRequest(MistralOcrParams):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -147,16 +154,17 @@ class ModelInfoResponse(BaseModel):
     data: tuple[ModelInfoEntry, ...]
 
 
-class GatewayConfigEntry(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="allow")
+class ModelCreateRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
     model_name: str
+    litellm_params: dict[str, str]
 
 
-class GatewayConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="allow")
+class ModelDeleteRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-    model_list: tuple[GatewayConfigEntry, ...]
+    id: str
 
 
 TEST_PDF_URL = (
@@ -270,22 +278,21 @@ RUST_OCR_GATEWAY_CASES = [
     ),
 ]
 
-CONFIG_PATH = Path(__file__).with_name("litellm-config.yml")
-
-
-def _wire_payload(
+def _ocr_request(
     model: str,
     document: OcrDocument,
     params: MistralOcrParams | None,
     canaries: LitellmInternalCanaries | None = None,
-) -> str:
-    return json.dumps(
-        {
-            "model": model,
-            "document": document.model_dump(mode="json", exclude_none=True),
-            **(params.model_dump(mode="json", by_alias=True) if params is not None else {}),
-            **(canaries.model_dump(mode="json", by_alias=True) if canaries is not None else {}),
-        }
+) -> BasicOcrRequest | MistralOcrRequest | CaptureOcrRequest:
+    if params is None:
+        return BasicOcrRequest(model=model, document=document)
+    request = MistralOcrRequest.model_validate(
+        {"model": model, "document": document, **params.model_dump(mode="json", by_alias=True)}
+    )
+    if canaries is None:
+        return request
+    return CaptureOcrRequest.model_validate(
+        {**request.model_dump(mode="json", by_alias=True), **canaries.model_dump(mode="json", by_alias=True)}
     )
 
 
@@ -294,17 +301,22 @@ class OcrGateway:
     base_url: str
     master_key: str
 
-    def _client(self) -> httpx.Client:
-        return httpx.Client(timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")))
+    def _headers(self) -> AuthHeaders:
+        return AuthHeaders(authorization=f"Bearer {self.master_key}")
+
+    def _model_info(self) -> ModelInfoResponse:
+        return unwrap(
+            get(
+                URL(f"{self.base_url.rstrip('/')}/model/info"),
+                headers=self._headers(),
+                params=NoBody(),
+                response_type=ModelInfoResponse,
+                timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")),
+            )
+        )
 
     def model_names(self) -> frozenset[str]:
-        with self._client() as client:
-            response = client.get(
-                f"{self.base_url.rstrip('/')}/model/info",
-                headers={"Authorization": f"Bearer {self.master_key}"},
-            )
-        assert response.status_code == 200, response.text
-        parsed = ModelInfoResponse.model_validate_json(response.content)
+        parsed = self._model_info()
         return frozenset(entry.model_name for entry in parsed.data)
 
     def ocr(
@@ -312,41 +324,32 @@ class OcrGateway:
         model: str,
         document: OcrDocument,
         params: MistralOcrParams | None = None,
-    ) -> httpx.Response:
-        with self._client() as client:
-            return client.post(
-                f"{self.base_url.rstrip('/')}/v1/ocr",
-                headers={
-                    "Authorization": f"Bearer {self.master_key}",
-                    "content-type": "application/json",
-                },
-                content=_wire_payload(model, document, params),
-            )
+    ) -> StreamingResponse:
+        return send(
+            URL(f"{self.base_url.rstrip('/')}/v1/ocr"),
+            headers=self._headers(),
+            json=_ocr_request(model, document, params),
+            timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")),
+        )
 
-    def create_model(self, model_name: str, litellm_params: dict[str, str]) -> httpx.Response:
-        with self._client() as client:
-            return client.post(
-                f"{self.base_url.rstrip('/')}/model/new",
-                headers={"Authorization": f"Bearer {self.master_key}"},
-                json={"model_name": model_name, "litellm_params": litellm_params},
-            )
+    def create_model(self, model_name: str, litellm_params: dict[str, str]) -> StreamingResponse:
+        return send(
+            URL(f"{self.base_url.rstrip('/')}/model/new"),
+            headers=self._headers(),
+            json=ModelCreateRequest(model_name=model_name, litellm_params=litellm_params),
+            timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")),
+        )
 
-    def delete_model(self, model_id: str) -> httpx.Response:
-        with self._client() as client:
-            return client.post(
-                f"{self.base_url.rstrip('/')}/model/delete",
-                headers={"Authorization": f"Bearer {self.master_key}"},
-                json={"id": model_id},
-            )
+    def delete_model(self, model_id: str) -> StreamingResponse:
+        return send(
+            URL(f"{self.base_url.rstrip('/')}/model/delete"),
+            headers=self._headers(),
+            json=ModelDeleteRequest(id=model_id),
+            timeout=float(os.getenv("E2E_REQUEST_TIMEOUT", "120")),
+        )
 
     def model_id(self, model_name: str) -> str | None:
-        with self._client() as client:
-            response = client.get(
-                f"{self.base_url.rstrip('/')}/model/info",
-                headers={"Authorization": f"Bearer {self.master_key}"},
-            )
-        assert response.status_code == 200, response.text
-        parsed = ModelInfoResponse.model_validate_json(response.content)
+        parsed = self._model_info()
         for entry in parsed.data:
             if entry.model_name == model_name:
                 return entry.model_info.id
@@ -386,13 +389,6 @@ def resources() -> OcrResources:
 
 
 class TestRustOcrGateway:
-    def test_rust_ocr_models_are_on_gateway_config(self) -> None:
-        config = GatewayConfig.model_validate(cast(object, yaml.safe_load(CONFIG_PATH.read_text())))
-        configured_models = frozenset(entry.model_name for entry in config.model_list)
-
-        expected_models = {str(case.values[0]) for case in RUST_OCR_GATEWAY_CASES}
-        assert expected_models.issubset(configured_models)
-
     def test_running_gateway_loaded_rust_ocr_models(self, resources: OcrResources) -> None:
         expected_models = {str(case.values[0]) for case in RUST_OCR_GATEWAY_CASES}
         assert expected_models.issubset(resources.gateway.model_names())
@@ -401,8 +397,8 @@ class TestRustOcrGateway:
     def test_rust_ocr_model_gateway_response(self, resources: OcrResources, model: str, document: OcrDocument) -> None:
         response = resources.gateway.ocr(model, document)
 
-        assert response.status_code == 200, response.text
-        OcrResponseEnvelope.model_validate_json(response.content)
+        assert response.status_code == 200, response.body
+        OcrResponseEnvelope.model_validate_json(response.body)
 
     @pytest.mark.e2e
     def test_rust_ocr_mistral_live_forwards_supported_params(self, resources: OcrResources) -> None:
@@ -411,8 +407,8 @@ class TestRustOcrGateway:
 
         response = resources.gateway.ocr("rust-ocr-mistral", CAPTURE_DOCUMENT, SUPPORTED_PARAMS)
 
-        assert response.status_code == 200, response.text
-        parsed = OcrResponseEnvelope.model_validate_json(response.content)
+        assert response.status_code == 200, response.body
+        parsed = OcrResponseEnvelope.model_validate_json(response.body)
         assert parsed.pages[0].markdown != ""
         if parsed.usage_info is not None:
             assert parsed.usage_info.pages_processed >= 1
@@ -421,13 +417,10 @@ class TestRustOcrGateway:
 def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
     capture_proxy: CaptureProxy,
 ) -> None:
-    response = httpx.post(
-        f"{capture_proxy.proxy_url}/v1/ocr",
-        headers={
-            "Authorization": f"Bearer {capture_proxy.master_key}",
-            "content-type": "application/json",
-        },
-        content=_wire_payload(
+    response = send(
+        URL(f"{capture_proxy.proxy_url}/v1/ocr"),
+        headers=AuthHeaders(authorization=f"Bearer {capture_proxy.master_key}"),
+        json=_ocr_request(
             "rust-ocr-mistral-capture",
             CAPTURE_DOCUMENT,
             SUPPORTED_PARAMS,
@@ -435,8 +428,8 @@ def test_rust_ocr_proxy_forwards_full_contract_to_capture_endpoint(
         ),
         timeout=60,
     )
-    assert response.status_code == 200, response.text
-    OcrResponseEnvelope.model_validate_json(response.content)
+    assert response.status_code == 200, response.body
+    OcrResponseEnvelope.model_validate_json(response.body)
 
     captured = MistralOcrUpstreamRequest.model_validate_json(capture_proxy.captures.get(timeout=10))
     assert captured == EXPECTED_UPSTREAM
@@ -457,7 +450,7 @@ class TestRustOcrDynamicDeployment:
                 "api_key": "os.environ/MISTRAL_API_KEY",
             },
         )
-        assert create.status_code == 200, create.text
+        assert create.status_code == 200, create.body
 
         try:
             gateway.wait_for_model(model_name)
@@ -466,12 +459,12 @@ class TestRustOcrDynamicDeployment:
                 model_name,
                 OcrDocument(type="document_url", document_url=TEST_PDF_URL),
             )
-            assert response.status_code == 200, response.text
-            OcrResponseEnvelope.model_validate_json(response.content)
-            assert "os.environ/MISTRAL_API_KEY" not in response.text
+            assert response.status_code == 200, response.body
+            OcrResponseEnvelope.model_validate_json(response.body)
+            assert "os.environ/MISTRAL_API_KEY" not in response.body
         finally:
             deployed_id = gateway.model_id(model_name)
             if deployed_id is not None:
                 delete = gateway.delete_model(deployed_id)
-                assert delete.status_code == 200, delete.text
+                assert delete.status_code == 200, delete.body
                 gateway.wait_for_model_absent(model_name)
