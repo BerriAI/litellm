@@ -354,7 +354,7 @@ class ResponsesToCompletionBridgeHandler:
         custom_llm_provider: str,
         logging_obj: "LiteLLMLoggingObj",
         json_mode: bool | None,
-    ) -> Any:
+    ) -> "CustomStreamWrapper":
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
