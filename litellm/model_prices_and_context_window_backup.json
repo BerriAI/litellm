@@ -32896,7 +32896,7 @@
         "supports_tool_choice": true,
         "supports_response_schema": true
     },
-    "replicateopenai/gpt-oss-20b": {
+    "replicate/openai/gpt-oss-20b": {
         "input_cost_per_token": 9e-08,
         "output_cost_per_token": 3.6e-07,
         "litellm_provider": "replicate",
