@@ -224,8 +224,15 @@ export function AllModelsTable({
               </SelectTrigger>
               <SelectContent>
                 {teamOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value} disabled={isLoadingTeams}>
-                    {option.label}
+                  <SelectItem
+                    key={option.value}
+                    value={option.value}
+                    disabled={isLoadingTeams}
+                    className="[&>div]:min-w-0"
+                  >
+                    <span data-slot="select-item-label" className="min-w-0 truncate" title={option.label}>
+                      {option.label}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
