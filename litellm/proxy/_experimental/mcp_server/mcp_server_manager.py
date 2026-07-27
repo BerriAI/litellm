@@ -136,6 +136,9 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,
+)
 from litellm.proxy.utils import ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -611,6 +614,30 @@ def _openapi_forwarded_extra_headers(
         if value is not None:
             forwarded[header_name] = value
     return forwarded or None
+
+
+MCP_PRE_CALL_DATA_KEY = "pre_call_data"
+
+
+async def release_parallel_request_slot(
+    proxy_logging_obj: ProxyLogging | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    pre_call_data: dict[str, Any] | None,
+) -> None:
+    """
+    Release the ``max_parallel_requests`` slot the MCP pre-call hooks acquired.
+
+    The pre-call hooks run against a synthetic request dict that never reaches
+    the litellm success/failure logging callbacks, which is where LLM requests
+    release their slot, so the MCP tool call path owns the release itself. A
+    no-op when no slot was acquired.
+    """
+    if proxy_logging_obj is None or user_api_key_auth is None or pre_call_data is None:
+        return
+    limiter = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+        return
+    await limiter.async_release_max_parallel_requests_slot(user_api_key_auth, pre_call_data)
 
 
 async def _resolve_byok_mcp_auth_header(
@@ -4516,8 +4543,14 @@ class MCPServerManager:
         ) as e:
             # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
+            await release_parallel_request_slot(
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_auth=user_api_key_auth,
+                pre_call_data=synthetic_llm_data,
+            )
             raise e
 
+        hook_result[MCP_PRE_CALL_DATA_KEY] = synthetic_llm_data
         return hook_result
 
     def _create_during_hook_task(
@@ -5120,6 +5153,7 @@ class MCPServerManager:
         # Using standard pre_call_hook
         #########################################################
         hook_result: dict[str, Any] = {}
+        pre_call_data: dict[str, Any] | None = None
         if proxy_logging_obj:
             hook_result = await self.pre_call_tool_check(
                 name=name,
@@ -5130,85 +5164,95 @@ class MCPServerManager:
                 server=mcp_server,
                 raw_headers=raw_headers,
             )
+            pre_call_data = hook_result.pop(MCP_PRE_CALL_DATA_KEY, None)
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]
 
-        # Prepare tasks for during hooks
-        tasks = []
-        if proxy_logging_obj:
-            during_hook_task = self._create_during_hook_task(
-                name=name,
-                arguments=arguments,
-                server_name_from_prefix=server_name,
-                user_api_key_auth=user_api_key_auth,
-                proxy_logging_obj=proxy_logging_obj,
-                start_time=start_time,
+        try:
+            # Prepare tasks for during hooks
+            tasks = []
+            if proxy_logging_obj:
+                during_hook_task = self._create_during_hook_task(
+                    name=name,
+                    arguments=arguments,
+                    server_name_from_prefix=server_name,
+                    user_api_key_auth=user_api_key_auth,
+                    proxy_logging_obj=proxy_logging_obj,
+                    start_time=start_time,
+                )
+                tasks.append(during_hook_task)
+
+            caller_oauth2_headers = oauth2_headers
+            oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(
+                mcp_server, oauth2_headers, user_api_key_auth
             )
-            tasks.append(during_hook_task)
 
-        caller_oauth2_headers = oauth2_headers
-        oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
+            # For OpenAPI servers, call the tool handler directly instead of via MCP client
+            if mcp_server.spec_path:
+                verbose_logger.debug("Calling OpenAPI tool %s directly via HTTP handler", name)
+                if hook_result.get("extra_headers"):
+                    verbose_logger.warning(
+                        "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
+                        "MCP server '%s' — header injection is not supported for "
+                        "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
+                        "transport to enable hook header injection.",
+                        server_name,
+                    )
 
-        # For OpenAPI servers, call the tool handler directly instead of via MCP client
-        if mcp_server.spec_path:
-            verbose_logger.debug("Calling OpenAPI tool %s directly via HTTP handler", name)
-            if hook_result.get("extra_headers"):
-                verbose_logger.warning(
-                    "pre_mcp_call hook returned extra_headers for OpenAPI-backed "
-                    "MCP server '%s' — header injection is not supported for "
-                    "OpenAPI servers; headers will be ignored. Use SSE/HTTP "
-                    "transport to enable hook header injection.",
-                    server_name,
+                auth_header_value = (
+                    _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+                )
+                resolved_auth_headers, forwarded_headers = await self.resolve_openapi_upstream_auth(
+                    mcp_server=mcp_server,
+                    oauth2_headers=caller_oauth2_headers,
+                    raw_headers=raw_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    user_api_key_auth=user_api_key_auth,
+                    forwarded_headers=_openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth),
                 )
 
-            auth_header_value = (
-                _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
-            )
-            resolved_auth_headers, forwarded_headers = await self.resolve_openapi_upstream_auth(
-                mcp_server=mcp_server,
-                oauth2_headers=caller_oauth2_headers,
-                raw_headers=raw_headers,
-                mcp_auth_header=mcp_auth_header,
-                user_api_key_auth=user_api_key_auth,
-                forwarded_headers=_openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth),
-            )
+                async def _call_openapi_via_handler():
+                    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+                        _request_auth_header,
+                        _request_extra_headers,
+                        _request_resolved_auth_headers,
+                    )
 
-            async def _call_openapi_via_handler():
-                from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-                    _request_auth_header,
-                    _request_extra_headers,
-                    _request_resolved_auth_headers,
+                    auth_token = _request_auth_header.set(auth_header_value)
+                    extra_token = _request_extra_headers.set(forwarded_headers)
+                    resolved_token = _request_resolved_auth_headers.set(resolved_auth_headers)
+                    try:
+                        async with self._limit_outbound_concurrency(mcp_server):
+                            return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+                    finally:
+                        _request_auth_header.reset(auth_token)
+                        _request_extra_headers.reset(extra_token)
+                        _request_resolved_auth_headers.reset(resolved_token)
+
+                tasks.append(asyncio.create_task(_call_openapi_via_handler()))
+            else:
+                return await self._call_regular_mcp_tool(
+                    mcp_server=mcp_server,
+                    original_tool_name=name,
+                    arguments=arguments,
+                    tasks=tasks,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    proxy_logging_obj=proxy_logging_obj,
+                    host_progress_callback=host_progress_callback,
+                    hook_extra_headers=hook_result.get("extra_headers"),
+                    user_api_key_auth=user_api_key_auth,
                 )
 
-                auth_token = _request_auth_header.set(auth_header_value)
-                extra_token = _request_extra_headers.set(forwarded_headers)
-                resolved_token = _request_resolved_auth_headers.set(resolved_auth_headers)
-                try:
-                    async with self._limit_outbound_concurrency(mcp_server):
-                        return await self._call_openapi_tool_handler(mcp_server, name, arguments)
-                finally:
-                    _request_auth_header.reset(auth_token)
-                    _request_extra_headers.reset(extra_token)
-                    _request_resolved_auth_headers.reset(resolved_token)
-
-            tasks.append(asyncio.create_task(_call_openapi_via_handler()))
-        else:
-            return await self._call_regular_mcp_tool(
-                mcp_server=mcp_server,
-                original_tool_name=name,
-                arguments=arguments,
-                tasks=tasks,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
+            return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
+        finally:
+            await release_parallel_request_slot(
                 proxy_logging_obj=proxy_logging_obj,
-                host_progress_callback=host_progress_callback,
-                hook_extra_headers=hook_result.get("extra_headers"),
                 user_api_key_auth=user_api_key_auth,
+                pre_call_data=pre_call_data,
             )
-
-        return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
 
     #########################################################
     # End of Methods that call the upstream MCP servers

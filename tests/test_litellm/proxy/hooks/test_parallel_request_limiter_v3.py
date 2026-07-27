@@ -3511,7 +3511,7 @@ async def test_release_max_parallel_requests_on_disconnect_v3():
         await local_cache.async_get_cache(key=counter_key)
     ) == 1
 
-    await handler.async_release_max_parallel_requests_on_disconnect(
+    await handler.async_release_max_parallel_requests_slot(
         user_api_key_dict,
         request_data={
             "metadata": {
@@ -3544,7 +3544,7 @@ async def test_release_on_disconnect_works_when_key_config_changed_v3():
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
     await _seed_max_parallel_requests_slots(local_cache, counter_key, [_TEST_SLOT_ID])
 
-    await handler.async_release_max_parallel_requests_on_disconnect(
+    await handler.async_release_max_parallel_requests_slot(
         UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=None),
         request_data={
             "metadata": {
@@ -3886,12 +3886,12 @@ async def test_release_max_parallel_requests_on_disconnect_noop_v3():
     )
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
-    await handler.async_release_max_parallel_requests_on_disconnect(
+    await handler.async_release_max_parallel_requests_slot(
         UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=None)
     )
     assert await local_cache.async_get_cache(key=counter_key) is None
 
-    await handler.async_release_max_parallel_requests_on_disconnect(
+    await handler.async_release_max_parallel_requests_slot(
         UserAPIKeyAuth(api_key=None, max_parallel_requests=5)
     )
     assert await local_cache.async_get_cache(key=counter_key) is None

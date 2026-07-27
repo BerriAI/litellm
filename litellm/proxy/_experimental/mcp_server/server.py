@@ -428,12 +428,14 @@ if MCP_AVAILABLE:
         outcome_wire_value,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCP_PRE_CALL_DATA_KEY,
         MCPServerManager,
         _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
         _should_strip_caller_authorization,
         _without_authorization,
         global_mcp_server_manager,
+        release_parallel_request_slot,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
@@ -2821,73 +2823,81 @@ if MCP_AVAILABLE:
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
-            if isinstance(hook_result, dict) and "arguments" in hook_result:
+            pre_call_data = hook_result.pop(MCP_PRE_CALL_DATA_KEY, None)
+            if "arguments" in hook_result:
                 arguments = hook_result["arguments"]
 
-            verbose_logger.debug(f"Executing local registry tool: {name}")
-            # For BYOK servers the credential must be injected via a ContextVar
-            # because the tool function has headers baked into its closure.
-            # Pre-format the full Authorization header value using the server's
-            # configured auth_type so the generator doesn't need to know the prefix.
-            auth_header_value: Optional[str] = None
-            if mcp_auth_header:
-                server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
-                if server_auth_type == MCPAuth.api_key:
-                    auth_header_value = f"ApiKey {mcp_auth_header}"
-                elif server_auth_type == MCPAuth.basic:
-                    auth_header_value = f"Basic {mcp_auth_header}"
-                else:
-                    auth_header_value = f"Bearer {mcp_auth_header}"
-
-            # Forward named client headers to OpenAPI tool upstream requests.
-            # MCPServer.extra_headers lists header names to copy from raw_headers.
-            # The strip decision is centralized in _should_strip_caller_authorization so this
-            # OpenAPI/local path agrees with the managed paths: M2M and the resolver-owned modes
-            # (token_exchange's raw subject token, authorization_code's stored token) must never
-            # have the caller's Authorization forwarded verbatim upstream.
-            forwarded_headers: Optional[Dict[str, str]] = None
-            if mcp_server and mcp_server.extra_headers and raw_headers:
-                normalized_raw = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
-                skip_caller_authorization = _should_strip_caller_authorization(
-                    mcp_server=mcp_server,
-                    raw_headers=raw_headers,
-                    user_api_key_auth=user_api_key_auth,
-                )
-                for header_name in mcp_server.extra_headers:
-                    if not isinstance(header_name, str):
-                        continue
-                    if skip_caller_authorization and header_name.lower() == "authorization":
-                        continue
-                    value = normalized_raw.get(header_name.lower())
-                    if value is not None:
-                        if forwarded_headers is None:
-                            forwarded_headers = {}
-                        forwarded_headers[header_name] = value
-
-            resolved_auth_headers: dict[str, str] | None = None
-            if mcp_server:
-                (
-                    resolved_auth_headers,
-                    forwarded_headers,
-                ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
-                    mcp_server=mcp_server,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    mcp_auth_header=mcp_auth_header,
-                    user_api_key_auth=user_api_key_auth,
-                    forwarded_headers=forwarded_headers,
-                )
-
-            _auth_token = _request_auth_header.set(auth_header_value)
-            _extra_token = _request_extra_headers.set(forwarded_headers)
-            _resolved_token = _request_resolved_auth_headers.set(resolved_auth_headers)
             try:
-                local_content = await _handle_local_mcp_tool(name, arguments)
+                verbose_logger.debug(f"Executing local registry tool: {name}")
+                # For BYOK servers the credential must be injected via a ContextVar
+                # because the tool function has headers baked into its closure.
+                # Pre-format the full Authorization header value using the server's
+                # configured auth_type so the generator doesn't need to know the prefix.
+                auth_header_value: str | None = None
+                if mcp_auth_header:
+                    server_auth_type = getattr(mcp_server, "auth_type", None) if mcp_server else None
+                    if server_auth_type == MCPAuth.api_key:
+                        auth_header_value = f"ApiKey {mcp_auth_header}"
+                    elif server_auth_type == MCPAuth.basic:
+                        auth_header_value = f"Basic {mcp_auth_header}"
+                    else:
+                        auth_header_value = f"Bearer {mcp_auth_header}"
+
+                # Forward named client headers to OpenAPI tool upstream requests.
+                # MCPServer.extra_headers lists header names to copy from raw_headers.
+                # The strip decision is centralized in _should_strip_caller_authorization so this
+                # OpenAPI/local path agrees with the managed paths: M2M and the resolver-owned modes
+                # (token_exchange's raw subject token, authorization_code's stored token) must never
+                # have the caller's Authorization forwarded verbatim upstream.
+                forwarded_headers: dict[str, str] | None = None
+                if mcp_server and mcp_server.extra_headers and raw_headers:
+                    normalized_raw = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
+                    skip_caller_authorization = _should_strip_caller_authorization(
+                        mcp_server=mcp_server,
+                        raw_headers=raw_headers,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    for header_name in mcp_server.extra_headers:
+                        if not isinstance(header_name, str):
+                            continue
+                        if skip_caller_authorization and header_name.lower() == "authorization":
+                            continue
+                        value = normalized_raw.get(header_name.lower())
+                        if value is not None:
+                            if forwarded_headers is None:
+                                forwarded_headers = {}
+                            forwarded_headers[header_name] = value
+
+                resolved_auth_headers: dict[str, str] | None = None
+                if mcp_server:
+                    (
+                        resolved_auth_headers,
+                        forwarded_headers,
+                    ) = await global_mcp_server_manager.resolve_openapi_upstream_auth(
+                        mcp_server=mcp_server,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                        mcp_auth_header=mcp_auth_header,
+                        user_api_key_auth=user_api_key_auth,
+                        forwarded_headers=forwarded_headers,
+                    )
+
+                _auth_token = _request_auth_header.set(auth_header_value)
+                _extra_token = _request_extra_headers.set(forwarded_headers)
+                _resolved_token = _request_resolved_auth_headers.set(resolved_auth_headers)
+                try:
+                    local_content = await _handle_local_mcp_tool(name, arguments)
+                finally:
+                    _request_auth_header.reset(_auth_token)
+                    _request_extra_headers.reset(_extra_token)
+                    _request_resolved_auth_headers.reset(_resolved_token)
+                response = CallToolResult(content=cast(Any, local_content), isError=False)
             finally:
-                _request_auth_header.reset(_auth_token)
-                _request_extra_headers.reset(_extra_token)
-                _request_resolved_auth_headers.reset(_resolved_token)
-            response = CallToolResult(content=cast(Any, local_content), isError=False)
+                await release_parallel_request_slot(
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_auth=user_api_key_auth,
+                    pre_call_data=pre_call_data,
+                )
 
         # Try managed MCP server tool (pass the full prefixed name)
         # Primary and recommended way to use external MCP servers

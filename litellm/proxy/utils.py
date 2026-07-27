@@ -2748,7 +2748,7 @@ class ProxyLogging:
         limiter = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
             return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict, request_data)
+        await limiter.async_release_max_parallel_requests_slot(user_api_key_dict, request_data)
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """

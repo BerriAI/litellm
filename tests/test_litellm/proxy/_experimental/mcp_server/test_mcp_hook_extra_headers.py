@@ -17,7 +17,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    MCP_PRE_CALL_DATA_KEY,
+    MCPServerManager,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -118,6 +121,7 @@ class TestPreCallToolCheckReturnsHeaders:
                         server=server,
                     )
 
+        assert result.pop(MCP_PRE_CALL_DATA_KEY) == {"model": "fake"}
         assert result == {}
 
     @pytest.mark.asyncio
@@ -179,6 +183,7 @@ class TestPreCallToolCheckReturnsHeaders:
                         server=server,
                     )
 
+        assert result.pop(MCP_PRE_CALL_DATA_KEY) == {"model": "fake"}
         assert result == {}
 
     @pytest.mark.asyncio
