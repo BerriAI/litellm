@@ -172,6 +172,10 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.Vertex_AI)).toBe("gemini-pro");
     });
 
+    it("should return an scx-ai model placeholder for SCX_AI provider", () => {
+      expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/MiniMax-M2.7");
+    });
+
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
       expect(getPlaceholder(Providers.Anthropic)).toBe("claude-3-opus");
     });

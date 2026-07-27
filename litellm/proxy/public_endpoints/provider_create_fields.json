@@ -2686,7 +2686,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "scx-ai/gpt-oss-120b"
+    "default_model_placeholder": "scx-ai/MiniMax-M2.7"
   },
   {
     "provider": "Snowflake",
