@@ -395,7 +395,7 @@ from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
-from ._logging import _is_debugging_on, verbose_logger
+from ._logging import _is_debugging_on, redact_secrets, verbose_logger
 from .caching.caching import (
     AzureBlobCache,
     Cache,
@@ -492,7 +492,7 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa: T201
+            print(redact_secrets(str(print_statement)))  # noqa: T201
     except Exception:
         pass
 
