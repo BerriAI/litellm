@@ -4,11 +4,13 @@
 #                   https://www.akamai.com/products/firewall-for-ai
 #
 # +-------------------------------------------------------------+
+import json
 import os
 import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     TypedDict,
 )
 
@@ -29,7 +31,6 @@ from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypesLiteral,
-    Choices,
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
@@ -120,14 +121,13 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
 
     @staticmethod
     def _output_text(response: ModelResponse | Any) -> str:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_content_from_model_response,
+        )
+
         if not isinstance(response, ModelResponse):
             return ""
-        fragments = [
-            choice.message.content
-            for choice in response.choices
-            if isinstance(choice, Choices) and isinstance(choice.message.content, str) and choice.message.content
-        ]
-        return "\n".join(fragments)
+        return get_content_from_model_response(response)
 
     async def _detect(
         self,
@@ -233,6 +233,53 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
             return response
         await self._detect(client_request_id=self._client_request_id(data), llm_output=self._output_text(response))
         return response
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[Any, None]:
+        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
+            async for chunk in response:
+                yield chunk
+            return
+
+        from litellm.main import stream_chunk_builder
+
+        chunks = [chunk async for chunk in response]
+        if not chunks:
+            return
+
+        assembled = stream_chunk_builder(chunks=chunks)
+        if not isinstance(assembled, ModelResponse):
+            for chunk in chunks:
+                yield chunk
+            return
+
+        try:
+            await self._detect(
+                client_request_id=self._client_request_id(request_data),
+                llm_output=self._output_text(assembled),
+            )
+        except HTTPException as exc:
+            error_obj = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            error_obj["code"] = exc.status_code
+            yield f"data: {json.dumps({'error': error_obj})}\n\n"
+            return
+        except Exception as exc:
+            verbose_proxy_logger.exception("Akamai Firewall for AI: streaming output scan failed: %s", exc)
+            error_obj = {
+                "message": "Akamai Firewall for AI scan failed; response withheld",
+                "type": "guardrail_scan_error",
+                "code": 500,
+                "guardrail": self.guardrail_name,
+            }
+            yield f"data: {json.dumps({'error': error_obj})}\n\n"
+            return
+
+        for chunk in chunks:
+            yield chunk
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
