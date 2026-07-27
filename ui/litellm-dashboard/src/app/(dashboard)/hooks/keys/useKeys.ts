@@ -32,6 +32,7 @@ export interface KeyListCallOptions {
   agentID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
+  userEmail?: string | null;
   keyHash?: string | null;
   sortBy?: string | null;
   sortOrder?: string | null;
@@ -55,6 +56,7 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
         user_id: options.userID,
+        user_email: options.userEmail,
         page,
         size: pageSize,
         sort_by: options.sortBy,
