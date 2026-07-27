@@ -1,11 +1,11 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrProviderConfig;
-use litellm_core::CoreResult;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
@@ -21,7 +21,7 @@ use litellm_core::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
 };
 
-use super::client::{http_client, safe_fetch_client};
+use crate::client::{http_client, safe_fetch_client};
 use crate::constants::{
     AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS, DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     DEFAULT_OCR_REQUEST_TIMEOUT_SECS, MAX_SAFE_FETCH_REDIRECTS, OCR_ERROR_BODY_MAX_CHARS,

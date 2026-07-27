@@ -25,8 +25,17 @@ vi.mock("@/components/networking", () => ({
 
 // Mock the child components to simplify testing
 vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: () => <div>Activity Metrics</div>,
-  processActivityData: () => ({ data: [], metadata: {} }),
+  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
+    <div>
+      <span>Activity Metrics</span>
+      <span>{`metrics-source:${modelMetrics?.__source ?? "none"}`}</span>
+    </div>
+  ),
+  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
+}));
+
+vi.mock("../EndpointUsage/EndpointUsage", () => ({
+  default: () => <div>Endpoint Usage Panel</div>,
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
@@ -481,6 +490,54 @@ describe("EntityUsage", () => {
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
+  const selectedPanels = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("div.tremor-TabPanel-root")).filter(
+      (panel) => panel.getAttribute("aria-selected") === "true",
+    );
+
+  it.each([
+    ["Cost", "Tag Spend Overview"],
+    ["Model Activity", "metrics-source:models"],
+    ["Key Activity", "metrics-source:api_keys"],
+    ["Endpoint Activity", "Endpoint Usage Panel"],
+  ])("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
+    const { container } = render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText(tabLabel));
+    });
+
+    const selected = selectedPanels(container);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].textContent).toContain(marker);
+  });
+
+  it.each([
+    ["Cost", "Team Spend Overview"],
+    ["Model Activity", "metrics-source:models"],
+    ["Agent Activity", "metrics-source:entities"],
+    ["Key Activity", "metrics-source:api_keys"],
+    ["Endpoint Activity", "Endpoint Usage Panel"],
+  ])("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
+    const { container } = render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+
+    act(() => {
+      fireEvent.click(screen.getByText(tabLabel));
+    });
+
+    const selected = selectedPanels(container);
+    expect(selected).toHaveLength(1);
+    expect(selected[0].textContent).toContain(marker);
+  });
+
   it("should handle empty data gracefully", async () => {
     const emptyData = {
       results: [],
@@ -764,5 +821,38 @@ describe("EntityUsage", () => {
       expect(screen.getByText("spender@example.com")).toBeInTheDocument();
     });
     expect(screen.queryByText(userUuid)).not.toBeInTheDocument();
+  });
+
+  it("renders the provider spend table logo from the bundled provider map", async () => {
+    render(<EntityUsage {...defaultProps} />);
+
+    const logo = await screen.findByAltText("openai logo");
+    expect(logo.getAttribute("src")).toContain("openai_small");
+  });
+
+  it("renders a letter avatar instead of an img for an unknown provider slug", async () => {
+    const spendDataUnknownProvider = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            providers: {
+              "zzz-internal": mockSpendData.results[0].breakdown.providers.openai,
+            },
+          },
+        },
+      ],
+    };
+    mockTagDailyActivityCall.mockResolvedValue(spendDataUnknownProvider);
+
+    render(<EntityUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("zzz-internal").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByAltText("zzz-internal logo")).not.toBeInTheDocument();
+    expect(screen.getByText("z")).toBeInTheDocument();
   });
 });

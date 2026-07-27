@@ -5730,6 +5730,76 @@ class TestRouterRequestTimeoutPropagation:
         )
 
 
+class TestAdvisorSubCallCooldown:
+    """Regression for LIT-4565: an advisor orchestration failure must not cool
+    down the selected (healthy) deployment, which would reject unrelated
+    callers to the same model group."""
+
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "claude-sonnet-5",
+                    "litellm_params": {"model": "bedrock/us.anthropic.claude-opus-4-8"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+        )
+
+    def _kwargs(self, exception):
+        return {
+            "exception": exception,
+            "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}},
+        }
+
+    def _auth_error(self):
+        return litellm.AuthenticationError(
+            message="x-api-key header is required",
+            llm_provider="anthropic",
+            model="claude-opus-4-8",
+        )
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(
+            model_ids=["dep-1"], parent_otel_span=None
+        )
+        return [entry[0] for entry in active]
+
+    @pytest.mark.asyncio
+    async def test_untagged_auth_error_cools_down_deployment(self):
+        from datetime import datetime
+
+        router = self._router()
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                self._kwargs(self._auth_error()), None, now, now
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+    def test_advisor_orchestration_failure_does_not_cool_down_deployment(self):
+        from datetime import datetime
+
+        from litellm.router_utils.cooldown_handlers import (
+            mark_advisor_orchestration_failure,
+        )
+
+        router = self._router()
+        exception = self._auth_error()
+        mark_advisor_orchestration_failure(exception)
+
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                self._kwargs(exception), None, now, now
+            )
+            is False
+        )
+        assert "dep-1" not in self._cooled_down_ids(router)
+
+
 def test_get_configured_token_limits_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
@@ -5806,3 +5876,63 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     )
 
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    deployment_tags = [{"key": "application", "value": "config-level"}]
+    request_tags = [{"key": "application", "value": "request-level"}]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-sonnet-5",
+                    "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
+                    "aws_region_name": "us-west-2",
+                    "bedrock_tags": deployment_tags,
+                },
+            }
+        ]
+    )
+
+    def fake_response():
+        return httpx.Response(
+            status_code=200,
+            json={
+                "jobArn": "arn:aws:bedrock:us-west-2:123:model-invocation-job/abc1234567",
+                "status": "Submitted",
+            },
+        )
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(side_effect=lambda *args, **kwargs: fake_response())
+
+    with patch.object(
+        CommonBatchFilesUtils,
+        "sign_aws_request",
+        return_value=({"Authorization": "signed"}, b"{}"),
+    ) as mock_sign, patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == deployment_tags
+
+        await router.acreate_batch(
+            model="bedrock-batch-model",
+            input_file_id="s3://bucket/input.jsonl",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+            bedrock_tags=request_tags,
+        )
+        assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags

@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from litellm.rust_bridge.responses_websocket import (
         RustResponsesWebSocketConnection,
     )
+    from litellm.rust_bridge.transcription import (
+        RustAtranscription,
+        RustTranscription,
+    )
 
 
 class RustOcrError(Exception):
@@ -80,15 +84,39 @@ def use_litellm_rust(
     messages: RustMessages | None | _Unset = _UNSET,
     amessages: RustAmessages | None | _Unset = _UNSET,
     responses_websocket: type[RustResponsesWebSocketConnection] | None | _Unset = _UNSET,
+    transcription: RustTranscription | None | _Unset = _UNSET,
+    atranscription: RustAtranscription | None | _Unset = _UNSET,
 ) -> None:
     configuring_ocr = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
     configuring_messages = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
     configuring_responses_websocket = not isinstance(responses_websocket, _Unset)
-    if configuring_ocr or (not configuring_messages and not configuring_responses_websocket):
+    configuring_transcription = not isinstance(transcription, _Unset) or not isinstance(atranscription, _Unset)
+    if configuring_ocr or (
+        not configuring_messages and not configuring_responses_websocket and not configuring_transcription
+    ):
         if enabled:
             _set_rust_ocr_bridge(ocr=ocr, aocr=aocr)
         else:
             _set_rust_ocr_bridge(ocr=None, aocr=None)
+    if configuring_transcription:
+        from litellm.rust_bridge.transcription import configure_rust_transcription
+
+        if not isinstance(transcription, _Unset) and not isinstance(atranscription, _Unset):
+            configure_rust_transcription(
+                enabled=enabled,
+                transcription=transcription,
+                atranscription=atranscription,
+            )
+        elif not isinstance(transcription, _Unset):
+            configure_rust_transcription(
+                enabled=enabled,
+                transcription=transcription,
+            )
+        elif not isinstance(atranscription, _Unset):
+            configure_rust_transcription(
+                enabled=enabled,
+                atranscription=atranscription,
+            )
     if not configuring_messages and not configuring_responses_websocket:
         return
     if configuring_messages:

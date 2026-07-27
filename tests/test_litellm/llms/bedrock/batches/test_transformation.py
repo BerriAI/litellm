@@ -258,6 +258,112 @@ def test_create_request_no_timeout_for_non_24h_window(config):
     assert "timeoutDurationInHours" not in mock_sign.call_args.kwargs["data"]
 
 
+def test_create_request_forwards_bedrock_tags_from_litellm_params(config):
+    tags = [
+        {"key": "application", "value": "genai-proxy"},
+        {"key": "team", "value": "ml-platform"},
+    ]
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_tags": tags,
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["tags"] == tags
+
+
+def test_create_request_forwards_bedrock_tags_from_optional_params(config):
+    tags = [{"key": "env", "value": "prod"}]
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"bedrock_tags": tags},
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
+        )
+    assert mock_sign.call_args.kwargs["data"]["tags"] == tags
+
+
+def test_create_request_empty_litellm_params_tags_do_not_fall_through(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={"bedrock_tags": [{"key": "env", "value": "prod"}]},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                "bedrock_tags": [],
+            },
+        )
+    assert mock_sign.call_args.kwargs["data"]["tags"] == []
+
+
+def test_create_request_omits_tags_when_bedrock_tags_absent(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+            optional_params={},
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
+        )
+    assert "tags" not in mock_sign.call_args.kwargs["data"]
+
+
+@pytest.mark.parametrize(
+    "bad_tags",
+    [
+        ["application=genai-proxy"],
+        [{"key": "application"}],
+        [{"value": "genai-proxy"}],
+        [{"key": "application", "value": 42}],
+        {"key": "application", "value": "genai-proxy"},
+        "application=genai-proxy",
+    ],
+)
+def test_create_request_rejects_malformed_bedrock_tags(config, bad_tags):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        with pytest.raises(ValueError, match="Invalid 'bedrock_tags' value"):
+            config.transform_create_batch_request(
+                model="m",
+                create_batch_data={"input_file_id": "s3://b/in.jsonl"},
+                optional_params={},
+                litellm_params={
+                    "aws_batch_role_arn": "arn:aws:iam::1:role/r",
+                    "bedrock_tags": bad_tags,
+                },
+            )
+    mock_sign.assert_not_called()
+
+
 # --------------------------------------------------------------------------- #
 # transform_create_batch_response - status mapping + LiteLLMBatch shape
 # --------------------------------------------------------------------------- #

@@ -102,6 +102,23 @@ class AnthropicMessageBody(BaseModel):
     stream: bool = False
 
 
+class OpenAIChatBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    # Passthrough sends this body to OpenAI untranslated, so it has to satisfy
+    # OpenAI's current contract directly: newer models reject `max_tokens` with
+    # "Unsupported parameter: 'max_tokens' is not supported with this model. Use
+    # 'max_completion_tokens' instead." litellm's drop_params/translation does not
+    # apply on this route.
+    max_completion_tokens: int = 64
+
+
+class VllmChatBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int = 64
+
+
 def _tags_header(tags: list[str] | None) -> str | None:
     return ",".join(tags) if tags else None
 
@@ -183,6 +200,32 @@ class PassthroughClient:
                 stream=stream,
             ),
             stream=stream,
+        )
+
+    def openai_chat(
+        self, key: str, model: str, text: str, *, max_completion_tokens: int = 64
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/openai/v1/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=OpenAIChatBody(
+                model=model,
+                max_completion_tokens=max_completion_tokens,
+                messages=[ChatMessage(role="user", content=text)],
+            ),
+        )
+
+    def vllm_chat(
+        self, key: str, model: str, text: str, *, max_tokens: int = 64
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/vllm/v1/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=VllmChatBody(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[ChatMessage(role="user", content=text)],
+            ),
         )
 
 

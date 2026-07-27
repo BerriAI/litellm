@@ -36,6 +36,7 @@ class McpServerNewBody(BaseModel):
     auth_type: str | None = None
     static_headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
 
 
 class McpServerNewResponse(BaseModel):
@@ -85,6 +86,37 @@ class McpToolsListResponse(BaseModel):
         return None
 
 
+class BlockedWordSpec(BaseModel):
+    keyword: str
+    action: str = "BLOCK"
+
+
+class ContentFilterMcpParams(BaseModel):
+    """litellm_content_filter params scoped to the MCP tool-call hook. mode is
+    pre_mcp_call because a pre_call config silently no-ops on the tools/call path
+    (the event type is rewritten to pre_mcp_call for call_mcp_tool), and default_on
+    is required there because per-key/request guardrail selection is dropped from
+    the synthetic MCP request the hook sees."""
+
+    guardrail: str = "litellm_content_filter"
+    mode: str = "pre_mcp_call"
+    default_on: bool = True
+    blocked_words: list[BlockedWordSpec]
+
+
+class GuardrailSpecBody(BaseModel):
+    guardrail_name: str
+    litellm_params: ContentFilterMcpParams
+
+
+class GuardrailCreateBody(BaseModel):
+    guardrail: GuardrailSpecBody
+
+
+class GuardrailCreateResponse(BaseModel):
+    guardrail_id: str
+
+
 class McpCallToolBody(BaseModel):
     name: str
     arguments: dict[str, McpToolArg]
@@ -124,6 +156,7 @@ class McpClient:
         auth_type: str | None = None,
         static_headers: dict[str, str] | None = None,
         allowed_tools: list[str] | None = None,
+        mcp_access_groups: list[str] | None = None,
     ) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -137,6 +170,7 @@ class McpClient:
                     auth_type=auth_type,
                     static_headers=static_headers,
                     allowed_tools=allowed_tools,
+                    mcp_access_groups=mcp_access_groups,
                 ),
                 response_type=McpServerNewResponse,
             )
@@ -165,10 +199,13 @@ class McpClient:
         *,
         user_id: str,
         mcp_servers: list[str] | None,
+        mcp_access_groups: list[str] | None = None,
         models: list[str] | None = None,
     ) -> str:
         object_permission = (
-            ObjectPermission(mcp_servers=mcp_servers) if mcp_servers is not None else None
+            ObjectPermission(mcp_servers=mcp_servers, mcp_access_groups=mcp_access_groups)
+            if mcp_servers is not None or mcp_access_groups is not None
+            else None
         )
         return self.proxy.generate_key(
             KeyGenerateBody(
@@ -184,6 +221,35 @@ class McpClient:
             headers=ApiKeyHeaders(x_litellm_api_key=key),
             params=NoBody(),
             response_type=McpToolsListResponse,
+        )
+
+    def register_mcp_content_filter(self, *, name: str, blocked_keyword: str) -> str:
+        """Register a default-on content-filter guardrail that runs on the MCP
+        tool-call hook (pre_mcp_call) and blocks a single keyword. The keyword is
+        unique per test, so default_on only ever intercepts this test's own
+        banned tool call on the shared proxy."""
+        return unwrap(
+            self.proxy.transport.post(
+                "/guardrails",
+                headers=self.proxy.transport.master,
+                json=GuardrailCreateBody(
+                    guardrail=GuardrailSpecBody(
+                        guardrail_name=name,
+                        litellm_params=ContentFilterMcpParams(
+                            blocked_words=[BlockedWordSpec(keyword=blocked_keyword)],
+                        ),
+                    )
+                ),
+                response_type=GuardrailCreateResponse,
+            )
+        ).guardrail_id
+
+    def delete_guardrail(self, guardrail_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/guardrails/{guardrail_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
         )
 
     def call_tool(
