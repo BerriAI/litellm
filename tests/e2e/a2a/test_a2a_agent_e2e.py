@@ -32,10 +32,17 @@ from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 
+# No api_key: litellm resolves ANTHROPIC_API_KEY from the proxy's own environment
+# for this provider, which is what the agent-owner flow relies on. Pinning
+# "os.environ/ANTHROPIC_API_KEY" here (#34512) was worse than redundant. The a2a
+# bridge forwards litellm_params to acompletion() without expanding "os.environ/"
+# indirection, so that literal string was sent upstream as x-api-key and every
+# message/send failed with `AnthropicException - invalid x-api-key`. Omitting the
+# key lets the normal provider resolution apply. Verified against a live proxy:
+# omitted -> 200, "os.environ/..." -> 500 invalid x-api-key, literal key -> 200.
 BRIDGE = A2ABridgeParams(
     custom_llm_provider="anthropic",
     model="claude-haiku-4-5",
-    api_key="os.environ/ANTHROPIC_API_KEY",
 )
 
 MOVEHOME_AGENT_CARD_URL = "https://movehome.org/.well-known/agent.json"

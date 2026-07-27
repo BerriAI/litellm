@@ -3356,6 +3356,121 @@ async def test_call_mcp_tool_user_unauthorized_access():
 
 
 @pytest.mark.asyncio
+async def test_call_mcp_tool_unauthorized_403_does_not_leak_server_credentials():
+    """Regression for LIT-4703 / GH #29936.
+
+    Calling a tool on a server the key is not scoped to must 403 with a bare
+    message. The prior code interpolated the caller's allowed ``List[MCPServer]``
+    config objects into the 403 detail, dumping every upstream credential
+    (authentication_token, client_secret, AWS keys, private keys, env,
+    static_headers) in cleartext to the caller.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-basic",
+        object_permission_id="key-permission-123",
+    )
+
+    secret_fields = {
+        "authentication_token": "sk-LEAK-authtok",
+        "client_id": "LEAK-clientid",
+        "client_secret": "sk-LEAK-clientsecret",
+        "aws_access_key_id": "LEAK-akid",
+        "aws_secret_access_key": "LEAK-awssecret",
+        "aws_session_token": "LEAK-awssess",
+        "client_private_key": "LEAK-privkey",
+    }
+    allowed_server_obj = MCPServer(
+        server_id="allowed_server",
+        name="allowed_server",
+        server_name="allowed_server",
+        alias="allowed_server",
+        transport="http",
+        auth_type=MCPAuth.bearer_token,
+        env={"UPSTREAM_API_KEY": "LEAK-env"},
+        static_headers={"X-Upstream-Auth": "LEAK-header"},
+        **secret_fields,
+    )
+
+    def mock_get_server_by_id(server_id):
+        if server_id == "allowed_server":
+            return allowed_server_obj
+        return None
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=["allowed_server"]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
+            side_effect=mock_get_server_by_id,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name="restricted_server-send_email",
+                arguments={"to": "test@example.com"},
+                user_api_key_auth=mock_user_auth,
+                mcp_auth_header="Bearer test_token",
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "User not allowed to call this tool."
+    all_secret_values = list(secret_fields.values()) + ["LEAK-env", "LEAK-header"]
+    detail_text = str(exc_info.value.detail)
+    leaked = [value for value in all_secret_values if value in detail_text]
+    assert leaked == [], f"403 body leaked upstream credentials: {leaked}"
+
+
+def test_mcpserver_repr_and_str_mask_credentials():
+    """Regression for LIT-4703 / GH #29936.
+
+    ``MCPServer.__repr__``/``__str__`` must never render credential fields, so a
+    stray f-string, log line, or list interpolation cannot leak them. Only
+    display is masked; ``model_dump`` serialization is unchanged.
+    """
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    secret_fields = {
+        "authentication_token": "sk-SENTINEL-authtok",
+        "client_id": "SENTINEL-clientid",
+        "client_secret": "sk-SENTINEL-clientsecret",
+        "aws_access_key_id": "SENTINEL-akid",
+        "aws_secret_access_key": "SENTINEL-awssecret",
+        "aws_session_token": "SENTINEL-awssess",
+        "client_private_key": "SENTINEL-privkey",
+        "client_private_key_id": "SENTINEL-privkeyid",
+    }
+    server = MCPServer(
+        server_id="srv1",
+        name="srv1",
+        transport="http",
+        auth_type=MCPAuth.bearer_token,
+        env={"UPSTREAM_API_KEY": "SENTINEL-env"},
+        static_headers={"X-Upstream-Auth": "SENTINEL-header"},
+        env_vars=[{"name": "K", "value": "SENTINEL-envvar"}],
+        **secret_fields,
+    )
+
+    all_secrets = list(secret_fields.values()) + ["SENTINEL-env", "SENTINEL-header", "SENTINEL-envvar"]
+    for text in (repr(server), str(server), repr([server]), f"{server}", f"{[server]}"):
+        leaked = [secret for secret in all_secrets if secret in text]
+        assert leaked == [], f"MCPServer rendering leaked credentials {leaked} in {text!r}"
+
+    assert "srv1" in repr(server)
+    assert server.model_dump()["authentication_token"] == "sk-SENTINEL-authtok"
+    assert server.model_dump()["client_secret"] == "sk-SENTINEL-clientsecret"
+
+
+@pytest.mark.asyncio
 async def test_list_tools_filters_by_key_team_permissions():
     """Test that list_tools filters tools based on key/team mcp_tool_permissions"""
     try:
