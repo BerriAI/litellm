@@ -7,10 +7,12 @@
 import json
 import os
 import uuid
+from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Iterator,
     TypedDict,
 )
 
@@ -29,11 +31,13 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypesLiteral,
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
 )
 
 if TYPE_CHECKING:
@@ -42,6 +46,62 @@ if TYPE_CHECKING:
 
 DEFAULT_API_BASE = "https://aisec.akamai.com"
 BLOCKING_ACTIONS = frozenset({"deny", "block"})
+
+
+def _item_get(item: Any, key: str) -> Any:
+    return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+
+
+def _iter_function_fragments(function: Any) -> Iterator[str]:
+    name = _item_get(function, "name")
+    if isinstance(name, str) and name:
+        yield name
+    for key in ("arguments", "input"):
+        value = _item_get(function, key)
+        if isinstance(value, str) and value:
+            yield value
+
+
+def _iter_request_tool_call_text(data: dict) -> Iterator[str]:
+    """Yield tool-call and legacy function_call names + arguments from a request body.
+
+    ``iter_message_text`` only inspects message *content*, so tool-call
+    arguments carried in prior assistant turns (chat ``tool_calls`` /
+    ``function_call``) or in Responses-API ``input`` ``function_call`` items
+    would otherwise reach the model without being sent to Akamai.
+    """
+    messages = data.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            for tool_call in message.get("tool_calls") or []:
+                yield from _iter_function_fragments(_item_get(tool_call, "function"))
+            yield from _iter_function_fragments(message.get("function_call"))
+
+    input_value = data.get("input")
+    if isinstance(input_value, list):
+        for item in input_value:
+            if _item_get(item, "type") == "function_call":
+                yield from _iter_function_fragments(item)
+
+
+def _iter_responses_api_output_text(response: ResponsesAPIResponse) -> Iterator[str]:
+    """Yield text and function-call arguments from a Responses API result.
+
+    ``/v1/responses`` returns a ``ResponsesAPIResponse`` whose generated text
+    lives in ``output[].content[].text`` and whose tool-call payloads live in
+    ``output[].arguments`` / ``output[].input``; none of it is reachable via
+    the Chat-Completions ``choices`` shape.
+    """
+    for item in response.output or []:
+        content = _item_get(item, "content")
+        if isinstance(content, list):
+            for part in content:
+                text = _item_get(part, "text")
+                if isinstance(text, str) and text:
+                    yield text
+        yield from _iter_function_fragments(item)
 
 
 class AkamaiRuleTriggered(TypedDict, total=False):
@@ -117,7 +177,8 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
 
     @staticmethod
     def _input_text(data: dict) -> str:
-        return "\n".join(fragment for fragment in iter_message_text(data) if fragment)
+        fragments = chain(iter_message_text(data), _iter_request_tool_call_text(data))
+        return "\n".join(fragment for fragment in fragments if fragment)
 
     @staticmethod
     def _output_text(response: ModelResponse | Any) -> str:
@@ -125,9 +186,11 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
             get_content_from_model_response,
         )
 
-        if not isinstance(response, ModelResponse):
-            return ""
-        return get_content_from_model_response(response)
+        if isinstance(response, ModelResponse):
+            return get_content_from_model_response(response)
+        if isinstance(response, ResponsesAPIResponse):
+            return "\n".join(_iter_responses_api_output_text(response))
+        return ""
 
     async def _detect(
         self,
@@ -234,6 +297,28 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
         await self._detect(client_request_id=self._client_request_id(data), llm_output=self._output_text(response))
         return response
 
+    @classmethod
+    def _streaming_output_text(cls, chunks: list) -> str:
+        """Extract inspectable output text from a fully buffered stream.
+
+        Chat streams (``ModelResponse`` / ``ModelResponseStream`` chunks) are
+        assembled with ``stream_chunk_builder``. Responses-API streams instead
+        emit events, the terminal one of which carries the complete
+        ``ResponsesAPIResponse``; reuse ``_output_text`` on it so streamed
+        Responses output and tool calls are inspected as well.
+        """
+        if isinstance(chunks[0], (ModelResponse, ModelResponseStream)):
+            from litellm.main import stream_chunk_builder
+
+            assembled = stream_chunk_builder(chunks=chunks)
+            return cls._output_text(assembled) if isinstance(assembled, ModelResponse) else ""
+
+        for chunk in reversed(chunks):
+            candidate = _item_get(chunk, "response")
+            if isinstance(candidate, ResponsesAPIResponse):
+                return cls._output_text(candidate)
+        return ""
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -245,22 +330,14 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        from litellm.main import stream_chunk_builder
-
         chunks = [chunk async for chunk in response]
         if not chunks:
-            return
-
-        assembled = stream_chunk_builder(chunks=chunks)
-        if not isinstance(assembled, ModelResponse):
-            for chunk in chunks:
-                yield chunk
             return
 
         try:
             await self._detect(
                 client_request_id=self._client_request_id(request_data),
-                llm_output=self._output_text(assembled),
+                llm_output=self._streaming_output_text(chunks),
             )
         except HTTPException as exc:
             error_obj = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
