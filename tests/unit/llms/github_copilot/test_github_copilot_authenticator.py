@@ -58,15 +58,73 @@ class TestGitHubCopilotAuthenticator:
             mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
 
     def test_get_github_headers(self, authenticator):
-        """Test that GitHub headers are correctly generated."""
         headers = authenticator._get_github_headers()
-        assert "accept" in headers
-        assert "editor-version" in headers
-        assert "user-agent" in headers
-        assert "content-type" in headers
+        assert headers == {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "copilot-integration-id": "vscode-chat",
+            "editor-version": "vscode/1.115.0",
+            "editor-plugin-version": "copilot-chat/0.44.0",
+            "user-agent": "GitHubCopilotChat/0.44.0",
+        }
 
         headers_with_token = authenticator._get_github_headers("test-token")
-        assert headers_with_token["authorization"] == "token test-token"
+        assert headers_with_token["Authorization"] == "token test-token"
+
+    def test_auth_requests_use_custom_copilot_headers(self, authenticator, mock_http_client):
+        mock_client, mock_response = mock_http_client
+        mock_response.json.side_effect = (
+            {
+                "device_code": "dc",
+                "user_code": "UC",
+                "verification_uri": "https://example.com",
+            },
+            {"access_token": "access-token"},
+            {"token": "api-token", "expires_at": 9999999999},
+        )
+        environment = {
+            "GITHUB_COPILOT_ACCEPT": "application/vnd.github+json",
+            "GITHUB_COPILOT_CONTENT_TYPE": "application/custom+json",
+            "GITHUB_COPILOT_INTEGRATION_ID": "custom-integration",
+            "GITHUB_COPILOT_EDITOR_VERSION": "custom-editor/1.0",
+            "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION": "custom-plugin/2.0",
+            "GITHUB_COPILOT_USER_AGENT": "CustomAgent/2.0",
+            "GITHUB_COPILOT_OPENAI_INTENT": "custom-intent",
+            "GITHUB_COPILOT_API_VERSION": "2099-01-01",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION": "custom-library",
+        }
+
+        with (
+            patch.dict(os.environ, environment),
+            patch(
+                "litellm.llms.github_copilot.authenticator._get_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(authenticator, "get_access_token", return_value="github-token"),
+        ):
+            authenticator._get_device_code()
+            authenticator._poll_for_access_token("dc")
+            authenticator._refresh_api_key()
+
+        request_headers = (
+            mock_client.post.call_args_list[0].kwargs["headers"],
+            mock_client.post.call_args_list[1].kwargs["headers"],
+            mock_client.get.call_args.kwargs["headers"],
+        )
+        for headers in request_headers:
+            assert headers["accept"] == "application/vnd.github+json"
+            assert headers["content-type"] == "application/custom+json"
+            assert headers["copilot-integration-id"] == "custom-integration"
+            assert headers["editor-version"] == "custom-editor/1.0"
+            assert headers["editor-plugin-version"] == "custom-plugin/2.0"
+            assert headers["user-agent"] == "CustomAgent/2.0"
+            assert headers["openai-intent"] == "custom-intent"
+            assert headers["x-github-api-version"] == "2099-01-01"
+            assert headers["x-vscode-user-agent-library-version"] == "custom-library"
+
+        assert "Authorization" not in request_headers[0]
+        assert "Authorization" not in request_headers[1]
+        assert request_headers[2]["Authorization"] == "token github-token"
 
     def test_get_access_token_from_file(self, authenticator):
         """Test retrieving an access token from a file."""
