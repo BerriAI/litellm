@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 
 import pytest
 
@@ -101,6 +102,27 @@ def _presidio_params(
     )
 
 
+def _poll_until_masked(call: Callable[[], str]) -> str:
+    """Retry a call until the guardrail masks its PII, returning the last content.
+
+    Registering a guardrail is a control-plane write; the data-plane worker that
+    serves /chat/completions only picks it up on its next periodic DB sync (~30s
+    in proxy_server.py), so a call issued the instant after the create runs
+    against a worker that has no guardrail yet and passes the raw value through.
+    That is in-flight propagation, not a masking failure. Polling to the deadline
+    waits it out, so the assertions that follow judge the synced state; if the
+    mask never lands the last unmasked content is returned and they still fail.
+    """
+    deadline = time.monotonic() + POLL_TIMEOUT
+    last = call()
+    while time.monotonic() < deadline:
+        if PLACEHOLDER in last and RAW_EMAIL not in last:
+            return last
+        time.sleep(POLL_INTERVAL)
+        last = call()
+    return last
+
+
 def _require_otel_v2_active(client: GuardrailsClient) -> None:
     details = unwrap(
         client.proxy.transport.get(
@@ -129,8 +151,10 @@ class TestPresidioGuardrail:
         guardrail_id = client.register(name, _presidio_params("pre_call"))
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        echoed = _content(
-            unwrap(client.chat(scoped_key, model, ECHO_REQUEST, guardrails=[name], max_tokens=128))
+        echoed = _poll_until_masked(
+            lambda: _content(
+                unwrap(client.chat(scoped_key, model, ECHO_REQUEST, guardrails=[name], max_tokens=128))
+            )
         )
         assert RAW_EMAIL not in echoed, (
             "pre_call masking must strip the raw email before the model sees it, but the "
@@ -153,8 +177,10 @@ class TestPresidioGuardrail:
         guardrail_id = client.register(name, _presidio_params("post_call", apply_to_output=True))
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        out = _content(
-            unwrap(client.chat(scoped_key, model, EMIT_REQUEST, guardrails=[name], max_tokens=128))
+        out = _poll_until_masked(
+            lambda: _content(
+                unwrap(client.chat(scoped_key, model, EMIT_REQUEST, guardrails=[name], max_tokens=128))
+            )
         )
         assert RAW_EMAIL not in out, (
             "post_call masking must strip PII the model emitted, but the raw email reached the "
@@ -179,21 +205,35 @@ class TestPresidioGuardrail:
         guardrail_id = client.register(name, _presidio_params("logging_only", logging_only=True))
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        outcome = client.proxy.transport.send(
-            "/chat/completions",
-            headers=client.proxy.transport.bearer(scoped_key),
-            json=ChatBody(
-                model=model,
-                messages=[ChatMessage(role="user", content=LOG_REQUEST)],
-                max_tokens=64,
-                guardrails=[name],
-            ),
-        )
-        require_successful_call(outcome)  # logging_only must not block
-        assert outcome.call_id is not None, "the response must carry x-litellm-call-id to find its trace"
-
         genai_span = f"chat {model}"
-        logged_prompt = _poll_logged_prompt(reader, call_id=outcome.call_id, genai_span=genai_span)
+
+        def logged_prompt_for_one_call() -> str | None:
+            outcome = client.proxy.transport.send(
+                "/chat/completions",
+                headers=client.proxy.transport.bearer(scoped_key),
+                json=ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content=LOG_REQUEST)],
+                    max_tokens=64,
+                    guardrails=[name],
+                ),
+            )
+            require_successful_call(outcome)  # logging_only must not block
+            assert outcome.call_id is not None, (
+                "the response must carry x-litellm-call-id to find its trace"
+            )
+            return _poll_logged_prompt(reader, call_id=outcome.call_id, genai_span=genai_span)
+
+        # Unlike the masking checks above, a call made before the guardrail synced
+        # can never produce a masked span, so retry the whole call (not just the
+        # span read) until one lands masked.
+        deadline = time.monotonic() + POLL_TIMEOUT
+        logged_prompt = logged_prompt_for_one_call()
+        while time.monotonic() < deadline:
+            if logged_prompt is not None and PLACEHOLDER in logged_prompt and RAW_EMAIL not in logged_prompt:
+                break
+            time.sleep(POLL_INTERVAL)
+            logged_prompt = logged_prompt_for_one_call()
         assert logged_prompt is not None, (
             f"the gen-AI span {genai_span!r} never recorded {INPUT_MESSAGES_TAG} at the OTEL "
             "destination within the deadline (message-content capture must be on, and the trace "
