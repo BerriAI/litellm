@@ -7,7 +7,10 @@ Handles tiered pricing and prompt caching scenarios.
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import calculate_tiered_cost
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
+    select_tier_for_input,
+    tier_rate,
+)
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -46,21 +49,12 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
 def _calculate_prompt_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
+    tier: Optional[dict],
 ) -> float:
     """Calculate total prompt cost including cached tokens."""
-    if tiered_pricing:
-        text_cost = calculate_tiered_cost(
-            tokens=breakdown.text_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="input_cost_per_token",
-        )
-        cache_cost = calculate_tiered_cost(
-            tokens=breakdown.cached_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="cache_read_input_token_cost",
-            fallback_cost_key="input_cost_per_token",
-        )
+    if tier is not None:
+        text_cost = breakdown.text_tokens * tier_rate(tier, "input_cost_per_token")
+        cache_cost = breakdown.cached_tokens * tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
         return text_cost + cache_cost
 
     input_cost = float(model_info.get("input_cost_per_token") or 0.0)
@@ -78,20 +72,13 @@ def _calculate_prompt_cost(
 def _calculate_completion_cost(
     breakdown: TokenBreakdown,
     model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
+    tier: Optional[dict],
 ) -> float:
     """Calculate total completion cost including reasoning tokens."""
-    if tiered_pricing:
-        completion_cost = calculate_tiered_cost(
-            tokens=breakdown.completion_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_token",
-        )
-        reasoning_cost = calculate_tiered_cost(
-            tokens=breakdown.reasoning_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_reasoning_token",
-            fallback_cost_key="output_cost_per_token",
+    if tier is not None:
+        completion_cost = breakdown.completion_tokens * tier_rate(tier, "output_cost_per_token")
+        reasoning_cost = breakdown.reasoning_tokens * tier_rate(
+            tier, "output_cost_per_reasoning_token", "output_cost_per_token"
         )
         return completion_cost + reasoning_cost
 
@@ -113,6 +100,10 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
 
     Supports both tiered and flat pricing with cached and reasoning tokens.
 
+    Alibaba Model Studio picks one tier from the request's total input token count and
+    bills every token in that request at that tier's rates, so the tier is resolved once
+    here and shared by the prompt and completion legs.
+
     Args:
         model: Model name without provider prefix
         usage: LiteLLM Usage block
@@ -122,11 +113,15 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     model_info = get_model_info(model=model, custom_llm_provider="dashscope")
     breakdown = _extract_token_breakdown(usage)
-    tiered_pricing = model_info.get("tiered_pricing") if isinstance(model_info.get("tiered_pricing"), list) else None
-
-    prompt_cost = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing)
-    completion_cost = _calculate_completion_cost(
-        breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
+    raw_tiered_pricing = model_info.get("tiered_pricing")
+    tiered_pricing: Optional[List[dict]] = raw_tiered_pricing if isinstance(raw_tiered_pricing, list) else None
+    tier = (
+        select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=usage.prompt_tokens or 0)
+        if tiered_pricing
+        else None
     )
+
+    prompt_cost = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tier=tier)
+    completion_cost = _calculate_completion_cost(breakdown=breakdown, model_info=model_info, tier=tier)
 
     return prompt_cost, completion_cost
