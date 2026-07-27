@@ -2332,6 +2332,10 @@ async def _run_centralized_common_checks(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
+            max_budget=user_object.max_budget if user_object is not None else None,
+            budget_duration=user_object.budget_duration if user_object is not None else None,
+            budget_reset_at=user_object.budget_reset_at if user_object is not None else None,
+            user_email=user_object.user_email if user_object is not None else None,
         )
 
     if project_object is not None:

@@ -3234,9 +3234,11 @@ async def test_centralized_common_checks_master_key_admin_overrides_db_user_role
     # with user_role=internal_user (the default for new user rows).
     db_user = LiteLLM_UserTable(
         user_id="default_user_id",
+        user_email="admin@example.com",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
-        spend=1.5,
-        max_budget=None,
+        spend=7.5,
+        max_budget=5.0,
+        budget_duration="24h",
     )
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
@@ -3266,6 +3268,75 @@ async def test_centralized_common_checks_master_key_admin_overrides_db_user_role
             assert forwarded is not None
             assert forwarded.user_role == LitellmUserRoles.PROXY_ADMIN
             assert forwarded.user_id == "default_user_id"
+            assert forwarded.user_email == "admin@example.com"
+            assert forwarded.spend == 7.5
+            assert forwarded.max_budget == 5.0
+            assert forwarded.budget_duration == "24h"
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_enforces_proxy_admin_user_budget():
+    """A PROXY_ADMIN token keeps admin permissions, but DB user budgets still
+    apply. Regression: the admin override previously dropped max_budget, so an
+    over-budget admin user kept making paid calls while spend increased."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(
+        api_key="sk-admin",
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+
+    db_user = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        spend=0.0,
+        max_budget=0.0,
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=db_user,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_global_proxy_spend",
+                new_callable=AsyncMock,
+                return_value=0.0,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.get_current_spend",
+                new_callable=AsyncMock,
+                return_value=0.0,
+            ),
+        ):
+            with pytest.raises(litellm.BudgetExceededError):
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "glm-paid"},
+                    route="/chat/completions",
+                )
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
