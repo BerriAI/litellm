@@ -5,7 +5,7 @@ import * as React from "react";
 import { useFieldArray, type Control } from "react-hook-form";
 
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
+import { ModelSelect, MODEL_SELECT_SPECIAL_VALUES_ARRAY } from "@/components/ModelSelect/ModelSelect";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -36,6 +36,10 @@ const TEAM_ROLE_OPTIONS = [
   { value: "user", label: "User" },
   { value: "admin", label: "Admin" },
 ] as const;
+
+const MODEL_SENTINEL_LABELS: ReadonlyMap<string, string> = new Map(
+  MODEL_SELECT_SPECIAL_VALUES_ARRAY.map(({ value, label }) => [value, label]),
+);
 
 const TEAMS_PAGE_SIZE = 50;
 
@@ -169,13 +173,67 @@ const TeamsField = ({ control }: { control: SettingsControl }) => {
   );
 };
 
+const ViewRow = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div>
+    <p className="text-sm font-medium">{label}</p>
+    <p className="text-sm text-muted-foreground">{children}</p>
+  </div>
+);
+
+interface SettingsViewProps {
+  values: DefaultUserSettingsFormValues;
+  roleOptions: readonly RoleOption[];
+  onEdit: () => void;
+}
+
+const SettingsView = ({ values, roleOptions, onEdit }: SettingsViewProps) => {
+  const roleLabel = roleOptions.find((option) => option.value === values.user_role)?.label ?? values.user_role;
+  const durationValue = values.budget_duration === "" ? NO_RESET : values.budget_duration;
+  const durationLabel =
+    BUDGET_DURATION_OPTIONS.find((option) => option.value === durationValue)?.label ?? values.budget_duration;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <ViewRow label="Default Role">{roleLabel === "" ? "Not set" : roleLabel}</ViewRow>
+      <ViewRow label="Max Budget (USD)">{values.max_budget === "" ? "Not set" : values.max_budget}</ViewRow>
+      <ViewRow label="Reset Budget">{durationLabel}</ViewRow>
+      <ViewRow label="Default Models">
+        {values.models.length === 0
+          ? "Not set"
+          : values.models.map((model) => MODEL_SENTINEL_LABELS.get(model) ?? model).join(", ")}
+      </ViewRow>
+      <div>
+        <p className="text-sm font-medium">Default Teams</p>
+        {values.teams.length === 0 ? (
+          <p className="text-sm text-muted-foreground">None</p>
+        ) : (
+          values.teams.map((team) => (
+            <p key={team.team_id} className="text-sm text-muted-foreground">
+              {team.team_id}
+              {team.max_budget_in_team !== "" && <> · ${team.max_budget_in_team} max budget</>}
+              <> · {team.user_role}</>
+            </p>
+          ))
+        )}
+      </div>
+      <div className="mt-2 flex justify-end">
+        <Button type="button" onClick={onEdit}>
+          Edit Settings
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 interface SettingsFormProps {
   initialValues: DefaultUserSettingsFormValues;
   roleOptions: readonly RoleOption[];
   updateSettings: (body: DefaultInternalUserParams) => Promise<void>;
+  onCancel: () => void;
+  onSaved: () => void;
 }
 
-const SettingsForm = ({ initialValues, roleOptions, updateSettings }: SettingsFormProps) => {
+const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, onSaved }: SettingsFormProps) => {
   const queryClient = useQueryClient();
   const form = useZodForm(defaultUserSettingsSchema, { defaultValues: initialValues });
   const { isDirty } = form.formState;
@@ -186,6 +244,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings }: SettingsFo
       NotificationsManager.success("Default user settings updated successfully");
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
       form.reset(values);
+      onSaved();
     },
     onError: (error: unknown) =>
       NotificationsManager.fromBackend(
@@ -285,8 +344,11 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings }: SettingsFo
         <Button
           type="button"
           variant="outline"
-          onClick={() => form.reset(initialValues)}
-          disabled={!isDirty || mutation.isPending}
+          onClick={() => {
+            form.reset(initialValues);
+            onCancel();
+          }}
+          disabled={mutation.isPending}
         >
           Cancel
         </Button>
@@ -321,6 +383,7 @@ export const DefaultUserSettingsForm = ({
   fetchSettings = defaultFetchSettings,
   updateSettings = defaultUpdateSettings,
 }: DefaultUserSettingsFormProps) => {
+  const [isEditing, setIsEditing] = React.useState(false);
   const { data, isPending, isError } = useQuery({ queryKey: SETTINGS_QUERY_KEY, queryFn: fetchSettings });
 
   const roleOptions = React.useMemo<RoleOption[]>(
@@ -351,7 +414,17 @@ export const DefaultUserSettingsForm = ({
 
   return (
     <SettingsCard>
-      <SettingsForm initialValues={initialValues} roleOptions={roleOptions} updateSettings={updateSettings} />
+      {isEditing ? (
+        <SettingsForm
+          initialValues={initialValues}
+          roleOptions={roleOptions}
+          updateSettings={updateSettings}
+          onCancel={() => setIsEditing(false)}
+          onSaved={() => setIsEditing(false)}
+        />
+      ) : (
+        <SettingsView values={initialValues} roleOptions={roleOptions} onEdit={() => setIsEditing(true)} />
+      )}
     </SettingsCard>
   );
 };
