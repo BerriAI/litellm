@@ -11,15 +11,20 @@ sys.path.insert(
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
+    _aggregate_grouping_sets_records_sync,
     _build_aggregated_sql_query,
     _is_user_agent_tag,
     _record_to_spend_metrics,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
+    update_breakdown_metrics,
     update_metrics,
 )
-from litellm.types.proxy.management_endpoints.common_daily_activity import SpendMetrics
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    BreakdownMetrics,
+    SpendMetrics,
+)
 
 
 @pytest.mark.asyncio
@@ -851,6 +856,138 @@ class TestBuildAggregatedSqlQuery:
         ]
         assert "model = $4" in sql
         assert "api_key = $5" in sql
+
+    def test_includes_model_breakdown_for_model_groups(self):
+        sql, _ = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=None,
+            start_date="2026-05-29",
+            end_date="2026-05-29",
+            model=None,
+            api_key=None,
+        )
+
+        assert "(date, model, model_group)" in sql
+        assert "(date, api_key, model, model_group)" in sql
+
+
+def test_aggregate_grouping_sets_populates_model_group_model_breakdown():
+    record = SimpleNamespace(
+        group_level=39,
+        date="2026-05-29",
+        api_key=None,
+        model="bedrock/claude-opus-4-8",
+        model_group="smart-router",
+        custom_llm_provider=None,
+        mcp_namespaced_tool_name=None,
+        endpoint=None,
+        spend=12.5,
+        prompt_tokens=8000,
+        completion_tokens=2000,
+        cache_read_input_tokens=4000,
+        cache_creation_input_tokens=1000,
+        api_requests=8,
+        successful_requests=8,
+        failed_requests=0,
+    )
+
+    result = _aggregate_grouping_sets_records_sync(records=[record], api_key_metadata={})
+
+    metrics = result["results"][0].breakdown.model_groups["smart-router"].model_breakdown[
+        "bedrock/claude-opus-4-8"
+    ]
+    assert metrics.api_requests == 8
+    assert metrics.total_tokens == 10000
+    assert metrics.cache_read_input_tokens == 4000
+    assert metrics.cache_creation_input_tokens == 1000
+
+
+def test_aggregate_grouping_sets_populates_key_model_group_model_breakdown():
+    model_record = SimpleNamespace(
+        group_level=7,
+        date="2026-05-29",
+        api_key="key-hash",
+        model="bedrock/claude-opus-4-8",
+        model_group="smart-router",
+        custom_llm_provider=None,
+        mcp_namespaced_tool_name=None,
+        endpoint=None,
+        spend=12.5,
+        prompt_tokens=8000,
+        completion_tokens=2000,
+        cache_read_input_tokens=4000,
+        cache_creation_input_tokens=1000,
+        api_requests=8,
+        successful_requests=8,
+        failed_requests=0,
+    )
+    model_group_key_record = SimpleNamespace(
+        **{
+            **model_record.__dict__,
+            "group_level": 23,
+            "model": None,
+        }
+    )
+
+    result = _aggregate_grouping_sets_records_sync(
+        records=[model_record, model_group_key_record],
+        api_key_metadata={},
+    )
+
+    key_metrics = (
+        result["results"][0]
+        .breakdown.model_groups["smart-router"]
+        .api_key_breakdown["key-hash"]
+    )
+    metrics = key_metrics.model_breakdown["bedrock/claude-opus-4-8"]
+    assert key_metrics.metrics.api_requests == 8
+    assert metrics.api_requests == 8
+    assert metrics.total_tokens == 10000
+    assert metrics.cache_read_input_tokens == 4000
+    assert metrics.cache_creation_input_tokens == 1000
+
+
+def test_update_breakdown_metrics_populates_model_group_model_breakdown():
+    record = SimpleNamespace(
+        model="bedrock/claude-sonnet-4-5",
+        model_group="smart-router",
+        api_key="key-hash",
+        custom_llm_provider="bedrock",
+        mcp_namespaced_tool_name=None,
+        endpoint=None,
+        spend=4.5,
+        prompt_tokens=3000,
+        completion_tokens=1000,
+        cache_read_input_tokens=1500,
+        cache_creation_input_tokens=500,
+        api_requests=2,
+        successful_requests=2,
+        failed_requests=0,
+    )
+
+    result = update_breakdown_metrics(
+        breakdown=BreakdownMetrics(),
+        record=record,
+        model_metadata={},
+        provider_metadata={},
+        api_key_metadata={},
+    )
+
+    metrics = result.model_groups["smart-router"].model_breakdown[
+        "bedrock/claude-sonnet-4-5"
+    ]
+    assert metrics.api_requests == 2
+    assert metrics.total_tokens == 4000
+    assert metrics.cache_read_input_tokens == 1500
+    assert metrics.cache_creation_input_tokens == 500
+    key_metrics = result.model_groups["smart-router"].api_key_breakdown["key-hash"].model_breakdown[
+        "bedrock/claude-sonnet-4-5"
+    ]
+    assert key_metrics.api_requests == 2
+    assert key_metrics.total_tokens == 4000
+    assert key_metrics.cache_read_input_tokens == 1500
+    assert key_metrics.cache_creation_input_tokens == 500
 
 
 @pytest.mark.asyncio

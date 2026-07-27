@@ -259,6 +259,41 @@ describe("ActivityMetrics", () => {
     expect(gpt4Index).toBeLessThan(gpt35Index);
   });
 
+  it("should display smart router names before underlying model usage", () => {
+    render(
+      <ActivityMetrics
+        modelMetrics={{
+          "api-key-hash": createMockModelActivityData("key-alias", {
+            top_model_groups: [
+              {
+                model_group: "smart-router",
+                spend: 10,
+                requests: 10,
+                top_models: [
+                  {
+                    model: "bedrock/claude-opus-4-8",
+                    spend: 8,
+                    requests: 8,
+                    request_share: 80,
+                    successful_requests: 8,
+                    failed_requests: 0,
+                    tokens: 8000,
+                    cache_read_input_tokens: 4000,
+                    cache_creation_input_tokens: 1000,
+                  },
+                ],
+              },
+            ],
+          }),
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Smart Router Usage")).toBeInTheDocument();
+    expect(screen.getByText("smart-router")).toBeInTheDocument();
+    expect(screen.getByText("Underlying Model Usage")).toBeInTheDocument();
+  });
+
   it("should display model summary cards with correct values", () => {
     render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
     const requestElements = screen.getAllByText("100");
@@ -1174,16 +1209,21 @@ describe("processActivityData", () => {
     expect(result).toEqual({});
   });
 
-  it("should populate top_models for api_keys when models breakdown contains api_key_breakdown for that key", () => {
+  it("should populate model groups and their underlying models for api keys", () => {
     const dailyActivityWithModelsForKey: { results: DailyData[] } = {
       results: [
         {
           date: "2025-01-01",
           metrics: EMPTY_SPEND_METRICS,
           breakdown: {
-            models: {
-              "gpt-4": {
-                metrics: EMPTY_SPEND_METRICS,
+            models: {},
+            model_groups: {
+              "smart-router": {
+                metrics: {
+                  ...EMPTY_SPEND_METRICS,
+                  spend: 60,
+                  api_requests: 60,
+                },
                 metadata: {},
                 api_key_breakdown: {
                   "api-key-hash-1": {
@@ -1195,15 +1235,36 @@ describe("processActivityData", () => {
                       api_requests: 60,
                       successful_requests: 57,
                       failed_requests: 3,
-                      cache_read_input_tokens: 0,
-                      cache_creation_input_tokens: 0,
+                      cache_read_input_tokens: 6000,
+                      cache_creation_input_tokens: 3000,
                     },
                     metadata: { key_alias: "key-alias-1", team_id: "team1" },
+                    model_breakdown: {
+                      "bedrock/claude-opus-4-8": {
+                        ...EMPTY_SPEND_METRICS,
+                        spend: 48,
+                        api_requests: 48,
+                        total_tokens: 24000,
+                        successful_requests: 46,
+                        failed_requests: 2,
+                        cache_read_input_tokens: 5000,
+                        cache_creation_input_tokens: 2500,
+                      },
+                      "bedrock/claude-sonnet-4-5": {
+                        ...EMPTY_SPEND_METRICS,
+                        spend: 12,
+                        api_requests: 12,
+                        total_tokens: 6000,
+                        successful_requests: 11,
+                        failed_requests: 1,
+                        cache_read_input_tokens: 1000,
+                        cache_creation_input_tokens: 500,
+                      },
+                    },
                   },
                 },
               },
             },
-            model_groups: {},
             mcp_servers: {},
             providers: {},
             api_keys: {
@@ -1230,10 +1291,87 @@ describe("processActivityData", () => {
 
     const result = processActivityData(dailyActivityWithModelsForKey, "api_keys", MOCK_TEAMS);
 
-    expect(result["api-key-hash-1"].top_models).toHaveLength(1);
-    expect(result["api-key-hash-1"].top_models[0].model).toBe("gpt-4");
-    expect(result["api-key-hash-1"].top_models[0].spend).toBe(60.0);
-    expect(result["api-key-hash-1"].top_models[0].requests).toBe(60);
+    const modelGroup = result["api-key-hash-1"].top_model_groups?.[0];
+    const expectedOpusMetrics = {
+      model: "bedrock/claude-opus-4-8",
+      requests: 48,
+      request_share: 80,
+      cache_read_input_tokens: 5000,
+      cache_creation_input_tokens: 2500,
+    };
+    expect(result["api-key-hash-1"].top_models).toEqual([]);
+    expect(modelGroup?.model_group).toBe("smart-router");
+    expect(modelGroup?.requests).toBe(60);
+    expect(modelGroup?.top_models).toEqual([
+      expect.objectContaining(expectedOpusMetrics),
+      expect.objectContaining({
+        model: "bedrock/claude-sonnet-4-5",
+        requests: 12,
+        request_share: 20,
+      }),
+    ]);
+  });
+
+  it("should populate selected model usage for public model groups", () => {
+    const dailyActivity: { results: DailyData[] } = {
+      results: [
+        {
+          date: "2025-01-01",
+          metrics: EMPTY_SPEND_METRICS,
+          breakdown: {
+            ...EMPTY_BREAKDOWN,
+            model_groups: {
+              "smart-router": {
+                metrics: {
+                  ...EMPTY_SPEND_METRICS,
+                  api_requests: 10,
+                  total_tokens: 11000,
+                  cache_read_input_tokens: 4000,
+                  cache_creation_input_tokens: 2000,
+                },
+                metadata: {},
+                api_key_breakdown: {},
+                model_breakdown: {
+                  "bedrock/claude-opus-4-8": {
+                    ...EMPTY_SPEND_METRICS,
+                    api_requests: 8,
+                    total_tokens: 8000,
+                    cache_read_input_tokens: 3000,
+                    cache_creation_input_tokens: 1500,
+                  },
+                  "bedrock/claude-sonnet-4-5": {
+                    ...EMPTY_SPEND_METRICS,
+                    api_requests: 2,
+                    total_tokens: 3000,
+                    cache_read_input_tokens: 1000,
+                    cache_creation_input_tokens: 500,
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = processActivityData(dailyActivity, "model_groups");
+    const expectedOpusMetrics = {
+      model: "bedrock/claude-opus-4-8",
+      requests: 8,
+      request_share: 80,
+      tokens: 8000,
+      cache_read_input_tokens: 3000,
+      cache_creation_input_tokens: 1500,
+    };
+
+    expect(result["smart-router"].top_models).toEqual([
+      expect.objectContaining(expectedOpusMetrics),
+      expect.objectContaining({
+        model: "bedrock/claude-sonnet-4-5",
+        requests: 2,
+        request_share: 20,
+      }),
+    ]);
   });
 
   it("should not process api_key_breakdown when key is api_keys", () => {

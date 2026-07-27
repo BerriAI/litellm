@@ -33,11 +33,13 @@ export interface MetricWithMetadata {
   metrics: SpendMetrics;
   metadata: object;
   api_key_breakdown: { [key: string]: KeyMetricWithMetadata };
+  model_breakdown?: { [key: string]: SpendMetrics };
 }
 
 export interface KeyMetricWithMetadata {
   metrics: SpendMetrics;
   metadata: KeyMetadata;
+  model_breakdown?: { [key: string]: SpendMetrics };
 }
 
 export interface KeyMetadata {
@@ -59,9 +61,19 @@ export interface TopModelData {
   model: string;
   spend: number;
   requests: number;
+  request_share?: number;
   successful_requests: number;
   failed_requests: number;
   tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+export interface ModelGroupUsageData {
+  model_group: string;
+  spend: number;
+  requests: number;
+  top_models: TopModelData[];
 }
 
 export interface ModelActivityData {
@@ -77,6 +89,7 @@ export interface ModelActivityData {
   total_spend: number;
   top_api_keys: TopApiKeyData[];
   top_models: TopModelData[];
+  top_model_groups?: ModelGroupUsageData[];
   daily_data: {
     date: string;
     metrics: {

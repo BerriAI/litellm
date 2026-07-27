@@ -6,13 +6,45 @@ import { Collapse } from "antd";
 import React from "react";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
-import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
+import {
+  DailyData,
+  KeyMetricWithMetadata,
+  ModelGroupUsageData,
+  ModelActivityData,
+  SpendMetrics,
+  TopApiKeyData,
+  TopModelData,
+} from "./UsagePage/types";
 import { valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
   hidePromptCachingMetrics?: boolean;
 }
+
+const KeyModelGroupUsageView = ({ modelGroups }: { modelGroups: ModelGroupUsageData[] }) => (
+  <Card className="mt-4">
+    <Title>Smart Router Usage</Title>
+    <Collapse className="mt-3" defaultActiveKey={modelGroups[0]?.model_group}>
+      {modelGroups.map((modelGroup) => (
+        <Collapse.Panel
+          key={modelGroup.model_group}
+          header={
+            <div className="flex justify-between items-center w-full">
+              <Title>{modelGroup.model_group}</Title>
+              <div className="flex space-x-4 text-sm text-gray-500">
+                <span>${formatNumberWithCommas(modelGroup.spend, 2)}</span>
+                <span>{modelGroup.requests.toLocaleString()} requests</span>
+              </div>
+            </div>
+          }
+        >
+          <KeyModelUsageView topModels={modelGroup.top_models} title="Underlying Model Usage" />
+        </Collapse.Panel>
+      ))}
+    </Collapse>
+  </Card>
+);
 
 const ModelSection = ({
   modelName,
@@ -74,6 +106,10 @@ const ModelSection = ({
       )}
 
       {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
+
+      {metrics.top_model_groups && metrics.top_model_groups.length > 0 && (
+        <KeyModelGroupUsageView modelGroups={metrics.top_model_groups} />
+      )}
 
       {/* Spend per day - Full width card */}
       <Card className="mt-4">
@@ -362,7 +398,7 @@ export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, 
 // Process data function
 export const processActivityData = (
   dailyActivity: { results: DailyData[] },
-  key: "models" | "api_keys" | "mcp_servers" | "entities",
+  key: "models" | "model_groups" | "api_keys" | "mcp_servers" | "entities",
   teams: Team[] = [],
 ): Record<string, ModelActivityData> => {
   const modelMetrics: Record<string, ModelActivityData> = {};
@@ -388,6 +424,7 @@ export const processActivityData = (
           total_cache_creation_input_tokens: 0,
           top_api_keys: [],
           top_models: [],
+          top_model_groups: [],
           daily_data: [],
         };
       }
@@ -455,41 +492,78 @@ export const processActivityData = (
     });
   }
 
-  // Process Model breakdowns for each API key (only when key is 'api_keys')
+  const aggregateModelBreakdown = (modelEntries: [string, SpendMetrics][]): TopModelData[] => {
+    const modelBreakdown = modelEntries.reduce<Record<string, TopModelData>>((totals, [modelName, metrics]) => {
+      const current = totals[modelName] ?? {
+        model: modelName,
+        spend: 0,
+        requests: 0,
+        request_share: 0,
+        successful_requests: 0,
+        failed_requests: 0,
+        tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      };
+
+      return {
+        ...totals,
+        [modelName]: {
+          model: modelName,
+          spend: current.spend + metrics.spend,
+          requests: current.requests + metrics.api_requests,
+          request_share: 0,
+          successful_requests: current.successful_requests + (metrics.successful_requests || 0),
+          failed_requests: current.failed_requests + (metrics.failed_requests || 0),
+          tokens: current.tokens + metrics.total_tokens,
+          cache_read_input_tokens: (current.cache_read_input_tokens ?? 0) + (metrics.cache_read_input_tokens || 0),
+          cache_creation_input_tokens:
+            (current.cache_creation_input_tokens ?? 0) + (metrics.cache_creation_input_tokens || 0),
+        },
+      };
+    }, {});
+    const totalRequests = Object.values(modelBreakdown).reduce((total, model) => total + model.requests, 0);
+
+    return Object.values(modelBreakdown)
+      .map((model) => ({
+        ...model,
+        request_share: totalRequests === 0 ? 0 : (model.requests / totalRequests) * 100,
+      }))
+      .sort((a, b) => b.requests - a.requests);
+  };
+
+  if (key === "model_groups") {
+    Object.entries(modelMetrics).forEach(([metricName]) => {
+      const modelEntries = dailyActivity.results.flatMap((day) =>
+        Object.entries(day.breakdown.model_groups?.[metricName]?.model_breakdown || {}),
+      );
+      modelMetrics[metricName].top_models = aggregateModelBreakdown(modelEntries);
+    });
+  }
+
   if (key === "api_keys") {
-    Object.entries(modelMetrics).forEach(([apiKeyHash, _]) => {
-      const modelBreakdown: Record<string, TopModelData> = {};
+    Object.entries(modelMetrics).forEach(([metricName]) => {
+      const groupRecords = dailyActivity.results.flatMap((day) =>
+        Object.entries(day.breakdown.model_groups || {}).flatMap(([modelGroup, groupData]) => {
+          const keyData = groupData.api_key_breakdown?.[metricName];
+          return keyData ? [{ modelGroup, keyData }] : [];
+        }),
+      );
+      const modelGroupNames = Array.from(new Set(groupRecords.map(({ modelGroup }) => modelGroup)));
 
-      // Aggregate Model data for this key across all days
-      // We need to look in breakdown.models[model].api_key_breakdown[apiKeyHash]
-      dailyActivity.results.forEach((day) => {
-        Object.entries(day.breakdown.models || {}).forEach(([modelName, modelData]) => {
-          if (modelData && "api_key_breakdown" in modelData) {
-            const keyDataForModel = modelData.api_key_breakdown?.[apiKeyHash];
-            if (keyDataForModel) {
-              if (!modelBreakdown[modelName]) {
-                modelBreakdown[modelName] = {
-                  model: modelName,
-                  spend: 0,
-                  requests: 0,
-                  successful_requests: 0,
-                  failed_requests: 0,
-                  tokens: 0,
-                };
-              }
-
-              modelBreakdown[modelName].spend += keyDataForModel.metrics.spend;
-              modelBreakdown[modelName].requests += keyDataForModel.metrics.api_requests;
-              modelBreakdown[modelName].successful_requests += keyDataForModel.metrics.successful_requests || 0;
-              modelBreakdown[modelName].failed_requests += keyDataForModel.metrics.failed_requests || 0;
-              modelBreakdown[modelName].tokens += keyDataForModel.metrics.total_tokens;
-            }
-          }
-        });
-      });
-
-      // Sort by spend
-      modelMetrics[apiKeyHash].top_models = Object.values(modelBreakdown).sort((a, b) => b.spend - a.spend);
+      modelMetrics[metricName].top_model_groups = modelGroupNames
+        .map((modelGroup) => {
+          const records = groupRecords.filter((record) => record.modelGroup === modelGroup);
+          return {
+            model_group: modelGroup,
+            spend: records.reduce((total, { keyData }) => total + keyData.metrics.spend, 0),
+            requests: records.reduce((total, { keyData }) => total + keyData.metrics.api_requests, 0),
+            top_models: aggregateModelBreakdown(
+              records.flatMap(({ keyData }) => Object.entries(keyData.model_breakdown || {})),
+            ),
+          };
+        })
+        .sort((a, b) => b.requests - a.requests);
     });
   }
 

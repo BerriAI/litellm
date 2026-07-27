@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import KeyModelUsageView from "./KeyModelUsageView";
@@ -13,6 +13,9 @@ describe("KeyModelUsageView", () => {
       successful_requests: 100,
       failed_requests: 5,
       tokens: 50000,
+      request_share: 34.4,
+      cache_read_input_tokens: 20000,
+      cache_creation_input_tokens: 10000,
     },
     {
       model: "gpt-3.5-turbo",
@@ -21,6 +24,9 @@ describe("KeyModelUsageView", () => {
       successful_requests: 195,
       failed_requests: 5,
       tokens: 100000,
+      request_share: 65.6,
+      cache_read_input_tokens: 40000,
+      cache_creation_input_tokens: 20000,
     },
   ];
 
@@ -59,9 +65,12 @@ describe("KeyModelUsageView", () => {
     render(<KeyModelUsageView topModels={mockTopModels} />);
     expect(screen.getByText("Model")).toBeInTheDocument();
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
+    expect(screen.getByText("Requests")).toBeInTheDocument();
+    expect(screen.getByText("Total Tokens")).toBeInTheDocument();
     expect(screen.getByText("Successful")).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
-    expect(screen.getByText("Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Cache Read")).toBeInTheDocument();
+    expect(screen.getByText("Cache Write")).toBeInTheDocument();
   });
 
   it("should display model data in table view", () => {
@@ -102,11 +111,24 @@ describe("KeyModelUsageView", () => {
     expect(screen.getByText("$1,234,567.89")).toBeInTheDocument();
   });
 
+  it("should display request counts and request share", () => {
+    render(<KeyModelUsageView topModels={mockTopModels} />);
+    expect(screen.getByText("105 (34.4%)")).toBeInTheDocument();
+    expect(screen.getByText("200 (65.6%)")).toBeInTheDocument();
+  });
+
   it("should display successful requests with green styling", () => {
     render(<KeyModelUsageView topModels={mockTopModels} />);
     const successfulElements = screen.getAllByText("100");
     const greenElement = successfulElements.find((el) => el.closest("span")?.classList.contains("text-green-600"));
     expect(greenElement).toBeDefined();
+  });
+
+  it("should display prompt cache tokens", () => {
+    render(<KeyModelUsageView topModels={mockTopModels} />);
+    expect(screen.getAllByText("20,000")).toHaveLength(2);
+    expect(screen.getByText("10,000")).toBeInTheDocument();
+    expect(screen.getByText("40,000")).toBeInTheDocument();
   });
 
   it("should display failed requests with red styling", () => {
@@ -233,6 +255,22 @@ describe("KeyModelUsageView", () => {
     expect(screen.getByText("model-10")).toBeInTheDocument();
   });
 
+  it("should format request counts with toLocaleString", () => {
+    const modelsWithLargeNumbers: TopModelData[] = [
+      {
+        model: "test-model",
+        spend: 100,
+        requests: 999999,
+        successful_requests: 999999,
+        failed_requests: 1,
+        tokens: 1000,
+        request_share: 100,
+      },
+    ];
+    render(<KeyModelUsageView topModels={modelsWithLargeNumbers} />);
+    expect(screen.getByText("999,999 (100.0%)")).toBeInTheDocument();
+  });
+
   it("should format successful requests with toLocaleString", () => {
     const modelsWithLargeNumbers: TopModelData[] = [
       {
@@ -261,6 +299,39 @@ describe("KeyModelUsageView", () => {
     ];
     render(<KeyModelUsageView topModels={modelsWithLargeNumbers} />);
     expect(screen.getByText("999,999")).toBeInTheDocument();
+  });
+
+  it("should display zero percent for missing request_share", () => {
+    const modelsWithMissingFields: TopModelData[] = [
+      {
+        model: "test-model",
+        spend: 100,
+        requests: 10,
+        successful_requests: 10,
+        failed_requests: 0,
+        tokens: 1000,
+      },
+    ];
+    render(<KeyModelUsageView topModels={modelsWithMissingFields} />);
+    expect(screen.getByText("10 (0.0%)")).toBeInTheDocument();
+  });
+
+  it("should display zero for missing cache token fields", () => {
+    const modelsWithMissingFields: TopModelData[] = [
+      {
+        model: "test-model",
+        spend: 100,
+        requests: 10,
+        successful_requests: 10,
+        failed_requests: 0,
+        tokens: 1000,
+      },
+    ];
+    render(<KeyModelUsageView topModels={modelsWithMissingFields} />);
+    const row = screen.getByText("test-model").closest("tr");
+    const cells = within(row as HTMLTableRowElement).getAllByRole("cell");
+    expect(cells[6]).toHaveTextContent("0");
+    expect(cells[7]).toHaveTextContent("0");
   });
 
   it("should display zero for missing successful_requests", () => {
