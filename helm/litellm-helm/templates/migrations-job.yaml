@@ -87,6 +87,17 @@ spec:
             {{- end }}
             - name: DISABLE_SCHEMA_UPDATE
               value: "false" # always run the migration from the Helm PreSync hook, override the value set
+          {{- if or .Values.environmentSecrets .Values.environmentConfigMaps }}
+          envFrom:
+          {{- range .Values.environmentSecrets }}
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
+          {{- range .Values.environmentConfigMaps }}
+            - configMapRef:
+                name: {{ . }}
+          {{- end }}
+          {{- end }}
           {{- with .Values.volumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}

@@ -1,0 +1,7 @@
+masterkeySecretName: litellm-masterkey
+redis:
+  enabled: true
+db:
+  deployStandalone: true
+migrationJob:
+  enabled: true

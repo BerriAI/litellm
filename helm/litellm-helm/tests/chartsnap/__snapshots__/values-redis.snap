@@ -1,0 +1,1061 @@
+# chartsnap: snapshot_version=v3
+---
+# Source: litellm-helm/charts/postgresql/templates/primary/networkpolicy.yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: chartsnap-postgresql
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 16.2.0
+    helm.sh/chart: postgresql-14.3.1
+    app.kubernetes.io/component: primary
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: chartsnap
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/component: primary
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  - {}
+  ingress:
+  - ports:
+    - port: 5432
+---
+# Source: litellm-helm/charts/redis/templates/networkpolicy.yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: chartsnap-redis
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: chartsnap
+      app.kubernetes.io/name: redis
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  - {}
+  ingress:
+  # Allow inbound connections
+  - ports:
+    - port: 6379
+---
+# Source: litellm-helm/charts/postgresql/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chartsnap-postgresql
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 16.2.0
+    helm.sh/chart: postgresql-14.3.1
+automountServiceAccountToken: false
+---
+# Source: litellm-helm/charts/redis/templates/master/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+automountServiceAccountToken: false
+metadata:
+  name: chartsnap-redis-master
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+---
+# Source: litellm-helm/charts/postgresql/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chartsnap-postgresql
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 16.2.0
+    helm.sh/chart: postgresql-14.3.1
+type: Opaque
+data:
+  postgres-password: "IyMjRFlOQU1JQ19GSUVMRCMjIw=="
+  password: "IyMjRFlOQU1JQ19GSUVMRCMjIw=="
+  # We don't auto-generate LDAP password when it's not provided as we do for other passwords
+---
+# Source: litellm-helm/charts/redis/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chartsnap-redis
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+type: Opaque
+data:
+  redis-password: "IyMjRFlOQU1JQ19GSUVMRCMjIw=="
+---
+# Source: litellm-helm/templates/secret-dbcredentials.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chartsnap-litellm-dbcredentials
+data:
+  # Password for the "postgres" user
+  postgres-password: IyMjRFlOQU1JQ19GSUVMRCMjIw==
+  username: IyMjRFlOQU1JQ19GSUVMRCMjIw==
+  password: IyMjRFlOQU1JQ19GSUVMRCMjIw==
+type: Opaque
+---
+# Source: litellm-helm/charts/redis/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chartsnap-redis-configuration
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+data:
+  redis.conf: |-
+    # User-supplied common configuration:
+    # Enable AOF https://redis.io/topics/persistence#append-only-file
+    appendonly yes
+    # Disable RDB persistence, AOF persistence already enabled.
+    save ""
+    # End of common configuration
+  master.conf: |-
+    dir /data
+    # User-supplied master configuration:
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    # End of master configuration
+  replica.conf: |-
+    dir /data
+    # User-supplied replica configuration:
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    # End of replica configuration
+---
+# Source: litellm-helm/charts/redis/templates/health-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chartsnap-redis-health
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+data:
+  ping_readiness_local.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(< "${REDIS_PASSWORD_FILE}")"
+    [[ -n "$REDIS_PASSWORD" ]] && export REDISCLI_AUTH="$REDIS_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_liveness_local.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(< "${REDIS_PASSWORD_FILE}")"
+    [[ -n "$REDIS_PASSWORD" ]] && export REDISCLI_AUTH="$REDIS_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    responseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')
+    if [ "$response" != "PONG" ] && [ "$responseFirstWord" != "LOADING" ] && [ "$responseFirstWord" != "MASTERDOWN" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_master.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_MASTER_PASSWORD_FILE ]] && export REDIS_MASTER_PASSWORD="$(< "${REDIS_MASTER_PASSWORD_FILE}")"
+    [[ -n "$REDIS_MASTER_PASSWORD" ]] && export REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_liveness_master.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_MASTER_PASSWORD_FILE ]] && export REDIS_MASTER_PASSWORD="$(< "${REDIS_MASTER_PASSWORD_FILE}")"
+    [[ -n "$REDIS_MASTER_PASSWORD" ]] && export REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+    response=$(
+      timeout -s 15 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+    if [ "$?" -eq "124" ]; then
+      echo "Timed out"
+      exit 1
+    fi
+    responseFirstWord=$(echo $response | head -n1 | awk '{print $1;}')
+    if [ "$response" != "PONG" ] && [ "$responseFirstWord" != "LOADING" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_readiness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_readiness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_liveness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_liveness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_liveness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+---
+# Source: litellm-helm/charts/redis/templates/scripts-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chartsnap-redis-scripts
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+data:
+  start-master.sh: |
+    #!/bin/bash
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(< "${REDIS_PASSWORD_FILE}")"
+    if [[ -f /opt/bitnami/redis/mounted-etc/master.conf ]];then
+        cp /opt/bitnami/redis/mounted-etc/master.conf /opt/bitnami/redis/etc/master.conf
+    fi
+    if [[ -f /opt/bitnami/redis/mounted-etc/redis.conf ]];then
+        cp /opt/bitnami/redis/mounted-etc/redis.conf /opt/bitnami/redis/etc/redis.conf
+    fi
+    ARGS=("--port" "${REDIS_PORT}")
+    ARGS+=("--requirepass" "${REDIS_PASSWORD}")
+    ARGS+=("--masterauth" "${REDIS_PASSWORD}")
+    ARGS+=("--include" "/opt/bitnami/redis/etc/redis.conf")
+    ARGS+=("--include" "/opt/bitnami/redis/etc/master.conf")
+    exec redis-server "${ARGS[@]}"
+---
+# Source: litellm-helm/templates/configmap-litellm.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chartsnap-litellm-config
+data:
+  config.yaml: |
+    general_settings:
+      coordination_redis:
+        host: os.environ/REDIS_HOST
+        password: os.environ/REDIS_PASSWORD
+        port: os.environ/REDIS_PORT
+      master_key: os.environ/PROXY_MASTER_KEY
+    model_list:
+    - litellm_params:
+        api_key: eXaMpLeOnLy
+        model: gpt-3.5-turbo
+      model_name: gpt-3.5-turbo
+    - litellm_params:
+        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+        api_key: fake-key
+        model: openai/fake
+      model_name: fake-openai-endpoint
+---
+# Source: litellm-helm/charts/postgresql/templates/primary/svc-headless.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: chartsnap-postgresql-hl
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 16.2.0
+    helm.sh/chart: postgresql-14.3.1
+    app.kubernetes.io/component: primary
+  annotations:
+    # Use this annotation in addition to the actual publishNotReadyAddresses
+    # field below because the annotation will stop being respected soon but the
+    # field is broken in some versions of Kubernetes:
+    # https://github.com/kubernetes/kubernetes/issues/58662
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  # We want all pods in the StatefulSet to have their addresses published for
+  # the sake of the other Postgresql pods even before they're ready, since they
+  # have to be able to talk to each other in order to become ready.
+  publishNotReadyAddresses: true
+  ports:
+  - name: tcp-postgresql
+    port: 5432
+    targetPort: tcp-postgresql
+  selector:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/component: primary
+---
+# Source: litellm-helm/charts/postgresql/templates/primary/svc.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: chartsnap-postgresql
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 16.2.0
+    helm.sh/chart: postgresql-14.3.1
+    app.kubernetes.io/component: primary
+spec:
+  type: ClusterIP
+  sessionAffinity: None
+  ports:
+  - name: tcp-postgresql
+    port: 5432
+    targetPort: tcp-postgresql
+    nodePort: null
+  selector:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/component: primary
+---
+# Source: litellm-helm/charts/redis/templates/headless-svc.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: chartsnap-redis-headless
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: tcp-redis
+    port: 6379
+    targetPort: redis
+  selector:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/name: redis
+---
+# Source: litellm-helm/charts/redis/templates/master/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: chartsnap-redis-master
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+    app.kubernetes.io/component: master
+spec:
+  type: ClusterIP
+  internalTrafficPolicy: Cluster
+  sessionAffinity: None
+  ports:
+  - name: tcp-redis
+    port: 6379
+    targetPort: redis
+    nodePort: null
+  selector:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: master
+---
+# Source: litellm-helm/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: chartsnap-litellm
+  labels:
+    helm.sh/chart: litellm-helm-1.1.0
+    app.kubernetes.io/name: litellm
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/version: "v1.85.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+  - port: 4000
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app.kubernetes.io/name: litellm
+    app.kubernetes.io/instance: chartsnap
+---
+# Source: litellm-helm/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chartsnap-litellm
+  labels:
+    helm.sh/chart: litellm-helm-1.1.0
+    app.kubernetes.io/name: litellm
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/version: "v1.85.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: litellm
+      app.kubernetes.io/instance: chartsnap
+  template:
+    metadata:
+      annotations:
+        checksum/config: e0e9109c2be24e154a36ab34a4b60882b135716f377de812b96b82b96ea7b6fd
+      labels:
+        helm.sh/chart: litellm-helm-1.1.0
+        app.kubernetes.io/name: litellm
+        app.kubernetes.io/instance: chartsnap
+        app.kubernetes.io/version: "v1.85.1"
+        app.kubernetes.io/managed-by: Helm
+    spec:
+      serviceAccountName: default
+      securityContext: {}
+      containers:
+      - name: litellm
+        securityContext: {}
+        image: "ghcr.io/berriai/litellm-database:v1.85.1"
+        imagePullPolicy: Always
+        env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "4000"
+        - name: DATABASE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: chartsnap-litellm-dbcredentials
+              key: username
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: chartsnap-litellm-dbcredentials
+              key: password
+        - name: DATABASE_HOST
+          value: chartsnap-postgresql
+        - name: DATABASE_NAME
+          value: litellm
+        - name: PROXY_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-masterkey
+              key: masterkey
+        - name: REDIS_HOST
+          value: chartsnap-redis-master
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: chartsnap-redis
+              key: redis-password
+        - name: LITELLM_LOG
+          value: "INFO"
+        # Schema updates are owned by the dedicated migrations Job; skip
+        # the proxy's startup `prisma db push` so N replicas don't race
+        # one DB on every rollout. Placed last (after envVars and
+        # extraEnvVars) so this override can't be silently shadowed by a
+        # user-supplied DISABLE_SCHEMA_UPDATE under last-wins duplicate-env
+        # semantics — same pattern the migrations Job uses.
+        - name: DISABLE_SCHEMA_UPDATE
+          value: "true"
+        envFrom:
+        args:
+        - --config
+        - /etc/litellm/config.yaml
+        ports:
+        - name: http
+          containerPort: 4000
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: "/health/liveliness"
+            port: "http"
+          initialDelaySeconds: 0
+          periodSeconds: 15
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: "/health/readiness"
+            port: "http"
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: "/health/readiness"
+            port: "http"
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+        resources: {}
+        volumeMounts:
+        - name: litellm-config
+          mountPath: /etc/litellm/config.yaml
+          subPath: config.yaml
+      volumes:
+      - name: litellm-config
+        configMap:
+          name: chartsnap-litellm-config
+          items:
+          - key: config.yaml
+            path: "config.yaml"
+      terminationGracePeriodSeconds: 90
+---
+# Source: litellm-helm/charts/postgresql/templates/primary/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chartsnap-postgresql
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/version: 16.2.0
+    helm.sh/chart: postgresql-14.3.1
+    app.kubernetes.io/component: primary
+spec:
+  replicas: 1
+  serviceName: chartsnap-postgresql-hl
+  updateStrategy:
+    rollingUpdate: {}
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: chartsnap
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/component: primary
+  template:
+    metadata:
+      name: chartsnap-postgresql
+      labels:
+        app.kubernetes.io/instance: chartsnap
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: postgresql
+        app.kubernetes.io/version: 16.2.0
+        helm.sh/chart: postgresql-14.3.1
+        app.kubernetes.io/component: primary
+      annotations:
+        checksum/secret: '###DYNAMIC_FIELD###'
+    spec:
+      serviceAccountName: chartsnap-postgresql
+      automountServiceAccountToken: false
+      affinity:
+        podAffinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: chartsnap
+                  app.kubernetes.io/name: postgresql
+                  app.kubernetes.io/component: primary
+              topologyKey: kubernetes.io/hostname
+            weight: 1
+        nodeAffinity:
+      securityContext:
+        fsGroup: 1001
+        fsGroupChangePolicy: Always
+        supplementalGroups: []
+        sysctls: []
+      hostNetwork: false
+      hostIPC: false
+      containers:
+      - name: postgresql
+        image: docker.io/bitnami/postgresql:16.2.0-debian-12-r6
+        imagePullPolicy: "IfNotPresent"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: false
+          runAsGroup: 0
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: BITNAMI_DEBUG
+          value: "false"
+        - name: POSTGRESQL_PORT_NUMBER
+          value: "5432"
+        - name: POSTGRESQL_VOLUME_DIR
+          value: "/bitnami/postgresql"
+        - name: PGDATA
+          value: "/bitnami/postgresql/data"
+        # Authentication
+        - name: POSTGRES_USER
+          value: "litellm"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: chartsnap-postgresql
+              key: password
+        - name: POSTGRES_POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: chartsnap-postgresql
+              key: postgres-password
+        - name: POSTGRES_DATABASE
+          value: "litellm"
+        # Replication
+        # Initdb
+        # Standby
+        # LDAP
+        - name: POSTGRESQL_ENABLE_LDAP
+          value: "no"
+        # TLS
+        - name: POSTGRESQL_ENABLE_TLS
+          value: "no"
+        # Audit
+        - name: POSTGRESQL_LOG_HOSTNAME
+          value: "false"
+        - name: POSTGRESQL_LOG_CONNECTIONS
+          value: "false"
+        - name: POSTGRESQL_LOG_DISCONNECTIONS
+          value: "false"
+        - name: POSTGRESQL_PGAUDIT_LOG_CATALOG
+          value: "off"
+        # Others
+        - name: POSTGRESQL_CLIENT_MIN_MESSAGES
+          value: "error"
+        - name: POSTGRESQL_SHARED_PRELOAD_LIBRARIES
+          value: "pgaudit"
+        ports:
+        - name: tcp-postgresql
+          containerPort: 5432
+        livenessProbe:
+          failureThreshold: 6
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -U "litellm" -d "dbname=litellm" -h 127.0.0.1 -p 5432
+        readinessProbe:
+          failureThreshold: 6
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - -e
+            - |
+              exec pg_isready -U "litellm" -d "dbname=litellm" -h 127.0.0.1 -p 5432
+              [ -f /opt/bitnami/postgresql/tmp/.initialized ] || [ -f /bitnami/postgresql/.initialized ]
+        volumeMounts:
+        - name: empty-dir
+          mountPath: /tmp
+          subPath: tmp-dir
+        - name: empty-dir
+          mountPath: /opt/bitnami/postgresql/conf
+          subPath: app-conf-dir
+        - name: empty-dir
+          mountPath: /opt/bitnami/postgresql/tmp
+          subPath: app-tmp-dir
+        - name: empty-dir
+          mountPath: /opt/bitnami/postgresql/logs
+          subPath: app-logs-dir
+        - name: dshm
+          mountPath: /dev/shm
+        - name: data
+          mountPath: /bitnami/postgresql
+      volumes:
+      - name: empty-dir
+        emptyDir: {}
+      - name: dshm
+        emptyDir:
+          medium: Memory
+  volumeClaimTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: data
+    spec:
+      accessModes:
+      - "ReadWriteOnce"
+      resources:
+        requests:
+          storage: "8Gi"
+---
+# Source: litellm-helm/charts/redis/templates/master/application.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chartsnap-redis-master
+  namespace: "default"
+  labels:
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/version: 7.2.4
+    helm.sh/chart: redis-18.19.1
+    app.kubernetes.io/component: master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: chartsnap
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/component: master
+  serviceName: chartsnap-redis-headless
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: chartsnap
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/version: 7.2.4
+        helm.sh/chart: redis-18.19.1
+        app.kubernetes.io/component: master
+      annotations:
+        checksum/configmap: 86bcc953bb473748a3d3dc60b7c11f34e60c93519234d4c37f42e22ada559d47
+        checksum/health: aff24913d801436ea469d8d374b2ddb3ec4c43ee7ab24663d5f8ff1a1b6991a9
+        checksum/scripts: 560c33ff34d845009b51830c332aa05fa211444d1877d3526d3599be7543aaa5
+        checksum/secret: '###DYNAMIC_FIELD###'
+    spec:
+      securityContext:
+        fsGroup: 1001
+        fsGroupChangePolicy: Always
+        supplementalGroups: []
+        sysctls: []
+      serviceAccountName: chartsnap-redis-master
+      automountServiceAccountToken: false
+      affinity:
+        podAffinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: chartsnap
+                  app.kubernetes.io/name: redis
+                  app.kubernetes.io/component: master
+              topologyKey: kubernetes.io/hostname
+            weight: 1
+        nodeAffinity:
+      enableServiceLinks: true
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: redis
+        image: docker.io/bitnami/redis:7.2.4-debian-12-r9
+        imagePullPolicy: "IfNotPresent"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 0
+          runAsNonRoot: true
+          runAsUser: 1001
+          seccompProfile:
+            type: RuntimeDefault
+        command:
+        - /bin/bash
+        args:
+        - -c
+        - /opt/bitnami/scripts/start-scripts/start-master.sh
+        env:
+        - name: BITNAMI_DEBUG
+          value: "false"
+        - name: REDIS_REPLICATION_MODE
+          value: master
+        - name: ALLOW_EMPTY_PASSWORD
+          value: "no"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: chartsnap-redis
+              key: redis-password
+        - name: REDIS_TLS_ENABLED
+          value: "no"
+        - name: REDIS_PORT
+          value: "6379"
+        ports:
+        - name: redis
+          containerPort: 6379
+        livenessProbe:
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          # One second longer than command timeout should prevent generation of zombie processes.
+          timeoutSeconds: 6
+          successThreshold: 1
+          failureThreshold: 5
+          exec:
+            command:
+            - sh
+            - -c
+            - /health/ping_liveness_local.sh 5
+        readinessProbe:
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 2
+          successThreshold: 1
+          failureThreshold: 5
+          exec:
+            command:
+            - sh
+            - -c
+            - /health/ping_readiness_local.sh 1
+        volumeMounts:
+        - name: start-scripts
+          mountPath: /opt/bitnami/scripts/start-scripts
+        - name: health
+          mountPath: /health
+        - name: redis-data
+          mountPath: /data
+        - name: config
+          mountPath: /opt/bitnami/redis/mounted-etc
+        - name: empty-dir
+          mountPath: /opt/bitnami/redis/etc/
+          subPath: app-conf-dir
+        - name: empty-dir
+          mountPath: /tmp
+          subPath: tmp-dir
+      volumes:
+      - name: start-scripts
+        configMap:
+          name: chartsnap-redis-scripts
+          defaultMode: 0755
+      - name: health
+        configMap:
+          name: chartsnap-redis-health
+          defaultMode: 0755
+      - name: config
+        configMap:
+          name: chartsnap-redis-configuration
+      - name: empty-dir
+        emptyDir: {}
+  volumeClaimTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: redis-data
+      labels:
+        app.kubernetes.io/instance: chartsnap
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/component: master
+    spec:
+      accessModes:
+      - "ReadWriteOnce"
+      resources:
+        requests:
+          storage: "8Gi"
+---
+# Source: litellm-helm/templates/migrations-job.yaml
+# This job runs the Prisma migrations for the LiteLLM DB.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chartsnap-litellm-migrations
+  labels:
+    helm.sh/chart: litellm-helm-1.1.0
+    app.kubernetes.io/name: litellm
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/version: "v1.85.1"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    checksum/config: 8af44606bac4f38561d1c9d3cfd5ea6d0acef3168289b632e63bf67ed80f009d
+spec:
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: litellm-helm-1.1.0
+        app.kubernetes.io/name: litellm
+        app.kubernetes.io/instance: chartsnap
+        app.kubernetes.io/version: "v1.85.1"
+        app.kubernetes.io/managed-by: Helm
+      annotations:
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: prisma-migrations
+        image: "ghcr.io/berriai/litellm-database:v1.85.1"
+        imagePullPolicy: Always
+        securityContext: {}
+        command: ["python", "litellm/proxy/prisma_migration.py"]
+        workingDir: "/app"
+        env:
+        - name: DATABASE_URL
+          value: postgresql://litellm:NoTaGrEaTpAsSwOrD@chartsnap-postgresql/litellm
+        - name: DISABLE_SCHEMA_UPDATE
+          value: "false" # always run the migration from the Helm PreSync hook, override the value set
+      restartPolicy: OnFailure
+  ttlSecondsAfterFinished: 120
+  backoffLimit: 4
+---
+# Source: litellm-helm/templates/tests/test-connection.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "chartsnap-litellm-test-connection"
+  labels:
+    helm.sh/chart: litellm-helm-1.1.0
+    app.kubernetes.io/name: litellm
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/version: "v1.85.1"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+  - name: wget
+    image: busybox
+    command: ['sh', '-c']
+    args:
+    - |
+      # Wait for a bit to allow the service to be ready
+      sleep 10
+      # Try multiple times with a delay between attempts
+      for i in $(seq 1 30); do
+        wget -T 5 "chartsnap-litellm:4000/health/readiness" && exit 0
+        echo "Attempt $i failed, waiting..."
+        sleep 2
+      done
+      exit 1
+  restartPolicy: Never
+---
+# Source: litellm-helm/templates/tests/test-env-vars.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "chartsnap-litellm-env-test"
+  labels:
+    helm.sh/chart: litellm-helm-1.1.0
+    app.kubernetes.io/name: litellm
+    app.kubernetes.io/instance: chartsnap
+    app.kubernetes.io/version: "v1.85.1"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ['sh', '-c']
+    args:
+    - |
+      # Test DD_ENV
+      if [ "$DD_ENV" != "dev_helm" ]; then
+        echo "❌ Environment variable DD_ENV mismatch. Expected: dev_helm, Got: $DD_ENV"
+        exit 1
+      fi
+      echo "✅ Environment variable DD_ENV matches expected value: $DD_ENV"
+
+      # Test DD_SERVICE
+      if [ "$DD_SERVICE" != "litellm" ]; then
+        echo "❌ Environment variable DD_SERVICE mismatch. Expected: litellm, Got: $DD_SERVICE"
+        exit 1
+      fi
+      echo "✅ Environment variable DD_SERVICE matches expected value: $DD_SERVICE"
+
+      # Test USE_DDTRACE
+      if [ "$USE_DDTRACE" != "true" ]; then
+        echo "❌ Environment variable USE_DDTRACE mismatch. Expected: true, Got: $USE_DDTRACE"
+        exit 1
+      fi
+      echo "✅ Environment variable USE_DDTRACE matches expected value: $USE_DDTRACE"
+    env:
+    - name: DD_ENV
+      value:
+    - name: DD_SERVICE
+      value:
+    - name: USE_DDTRACE
+      value:
+  restartPolicy: Never

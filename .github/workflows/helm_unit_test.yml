@@ -41,3 +41,21 @@ jobs:
         run: |
           helm unittest -f 'tests/*.yaml' helm/litellm-helm
           helm unittest -f 'tests/*.yaml' helm/litellm
+
+  snapshot-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Run chartsnap check
+        run: make helm-chartsnap
+
+      - name: Fail if snapshots are out of date
+        run: |
+          if ! git diff --exit-code -- helm/litellm-helm/tests/chartsnap/__snapshots__; then
+            echo "::error::Helm chart snapshots are out of date. Run 'make helm-chartsnap-update' and commit the changes."
+            exit 1
+          fi

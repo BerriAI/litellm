@@ -8,7 +8,8 @@
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety pre-commit \
+	install-helm-unittest install-helm-chartsnap helm-chartsnap helm-chartsnap-update \
+	check-circular-imports check-import-safety pre-commit \
 	lint-install lint-fetch-base bootstrap
 
 # Default target
@@ -20,7 +21,10 @@ help:
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
+	@echo "  make install-helm-chartsnap - Install helm chartsnap plugin (local fallback only; docker is preferred)"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
+	@echo "  make helm-chartsnap       - Run helm chartsnap snapshot check (in the pinned image)"
+	@echo "  make helm-chartsnap-update - Update helm chartsnap snapshots (in the pinned image)"
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
 	@echo "  make pre-commit         - Run CI-equivalent lint on staged files (run before committing)"
 	@echo "  make format             - Apply ruff format code formatting"
@@ -100,6 +104,9 @@ install-test-deps: install-proxy-dev
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
+
+install-helm-chartsnap:
+	helm plugin install https://github.com/jlandowner/helm-chartsnap --version v0.6.0 --verify=false || echo "ignore error if plugin exists"
 
 # Install git hooks that enforce Conventional Commits and Conventional Branches.
 # Opt-in: not chained into install-dev.
@@ -284,6 +291,15 @@ test-integration: install-test-deps
 
 test-unit-helm: install-helm-unittest
 	helm unittest -f 'tests/*.yaml' helm/litellm-helm
+
+HELM_CHARTSNAP := helm/litellm-helm/scripts/chartsnap.sh
+HELM_CHARTSNAP_VALUES := helm/litellm-helm/tests/chartsnap
+
+helm-chartsnap:
+	$(HELM_CHARTSNAP) -c $(CURDIR)/helm/litellm-helm -f $(CURDIR)/$(HELM_CHARTSNAP_VALUES)
+
+helm-chartsnap-update:
+	$(HELM_CHARTSNAP) -c $(CURDIR)/helm/litellm-helm -f $(CURDIR)/$(HELM_CHARTSNAP_VALUES) -u
 
 # LLM Translation testing targets
 test-llm-translation: install-test-deps
