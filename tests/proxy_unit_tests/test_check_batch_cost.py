@@ -1221,3 +1221,87 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
 
         assert vertex_result == ("deploy-vertex", "8823717160934178816")
         assert bedrock_result == ("deploy-bedrock", TestUnmanagedBedrockRouting._ARN)
+
+
+class _Job:
+    """Minimal stand-in for a LiteLLM_ManagedObjectTable row with just the identity
+    fields _build_spend_attribution_metadata reads."""
+
+    def __init__(self, created_by=None, api_key=None, team_id=None, request_tags=None):
+        self.created_by = created_by
+        self.api_key = api_key
+        self.team_id = team_id
+        self.request_tags = request_tags
+
+
+class TestSpendAttributionMetadata:
+    """_build_spend_attribution_metadata must carry the create-time identity into the
+    spend-log metadata so the batch-cost SpendLogs row is written and attributed to the
+    creating key/team/tags (issue #33316)."""
+
+    def _instance(self):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
+
+        return CheckBatchCost(
+            proxy_logging_obj=MagicMock(),
+            prisma_client=MagicMock(),
+            llm_router=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_carries_key_team_and_tags_and_resolves_aliases(self):
+        instance = self._instance()
+        job = _Job(
+            created_by="user-1",
+            api_key="hashed-key-abc",
+            team_id="team-1",
+            request_tags=["tag-a", "tag-b"],
+        )
+
+        async def _fake_enrich(metadata):
+            return {
+                **metadata,
+                "user_api_key_alias": "my-key",
+                "user_api_key_team_alias": "my-team",
+            }
+
+        with patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger._enrich_failure_metadata_with_key_info",
+            side_effect=_fake_enrich,
+        ):
+            metadata = await instance._build_spend_attribution_metadata(
+                job=job,
+                creator_user_id="user-1",
+                user_info={"user_api_key_user_email": "u@example.com"},
+            )
+
+        assert metadata["user_api_key"] == "hashed-key-abc"
+        assert metadata["user_api_key_user_id"] == "user-1"
+        assert metadata["user_api_key_team_id"] == "team-1"
+        assert metadata["tags"] == ["tag-a", "tag-b"]
+        assert metadata["user_api_key_alias"] == "my-key"
+        assert metadata["user_api_key_team_alias"] == "my-team"
+        assert metadata["user_api_key_user_email"] == "u@example.com"
+
+    @pytest.mark.asyncio
+    async def test_legacy_row_without_api_key_falls_back(self):
+        """Rows created before api_key was persisted keep the previous created_by/user_info
+        behavior and never invoke key enrichment."""
+        instance = self._instance()
+        job = _Job(created_by="user-1", api_key=None, team_id=None, request_tags=None)
+
+        with patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger._enrich_failure_metadata_with_key_info",
+        ) as mock_enrich:
+            metadata = await instance._build_spend_attribution_metadata(
+                job=job,
+                creator_user_id="user-1",
+                user_info={"user_api_key_user_email": "u@example.com"},
+            )
+
+        mock_enrich.assert_not_called()
+        assert "user_api_key" not in metadata
+        assert metadata["user_api_key_user_id"] == "user-1"
+        assert metadata["user_api_key_user_email"] == "u@example.com"

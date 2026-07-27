@@ -32,6 +32,8 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
     created_by: Optional[str] = None
     team_id: Optional[str] = None
+    api_key: Optional[str] = None
+    request_tags: Optional[list[str]] = None
 
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):

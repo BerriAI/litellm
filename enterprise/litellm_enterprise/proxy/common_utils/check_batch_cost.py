@@ -61,6 +61,45 @@ class CheckBatchCost:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
+    async def _build_spend_attribution_metadata(
+        self,
+        job: "LiteLLM_ManagedObjectTable",
+        creator_user_id: Optional[str],
+        user_info: dict,
+    ) -> dict:
+        """
+        Build spend-log metadata that attributes the batch cost to the virtual key, team,
+        and tags captured at batch-create time. Key and team aliases are resolved via the
+        shared cost-callback enrichment so the row matches a non-batch request's attribution.
+
+        Rows created before api_key was persisted (legacy) fall back to the previous
+        created_by/user_info-only behavior.
+        """
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+        api_key = job.api_key if isinstance(job.api_key, str) and job.api_key else None
+        team_id = job.team_id if isinstance(job.team_id, str) and job.team_id else None
+        request_tags = job.request_tags if isinstance(job.request_tags, list) else None
+
+        if not api_key:
+            return {
+                "user_api_key_user_id": creator_user_id,
+                **user_info,
+            }
+
+        metadata = {
+            "user_api_key_user_id": creator_user_id,
+            "user_api_key": api_key,
+            **({"user_api_key_team_id": team_id} if team_id else {}),
+            **({"tags": request_tags} if request_tags else {}),
+        }
+        metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+
+        user_email = user_info.get("user_api_key_user_email")
+        if user_email is not None and metadata.get("user_api_key_user_email") is None:
+            metadata = {**metadata, "user_api_key_user_email": user_email}
+        return metadata
+
     async def _cleanup_stale_managed_objects(self) -> None:
         """
         Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
@@ -460,6 +499,11 @@ class CheckBatchCost:
 
         creator_user_id = job.created_by
         user_info = await self._get_user_info(batch_id, job.created_by)
+        spend_metadata = await self._build_spend_attribution_metadata(
+            job=job,
+            creator_user_id=creator_user_id,
+            user_info=user_info,
+        )
 
         logging_obj.update_environment_variables(
             litellm_params={
@@ -469,10 +513,7 @@ class CheckBatchCost:
                         "user-agent": CHECK_BATCH_COST_USER_AGENT,
                     }
                 },
-                "metadata": {
-                    "user_api_key_user_id": creator_user_id,
-                    **user_info,
-                },
+                "metadata": spend_metadata,
             },
             optional_params={},
         )

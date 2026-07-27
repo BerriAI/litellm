@@ -803,11 +803,12 @@ class VertexPassthroughLoggingHandler:
 
                 _request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
 
+                _request_tags = _request_metadata.get("tags")
                 user_api_key_dict = UserAPIKeyAuth(
                     user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
-                    api_key="",
+                    api_key=_request_metadata.get("user_api_key") or None,
                     team_id=_request_metadata.get("user_api_key_team_id"),
-                    team_alias=None,
+                    team_alias=_request_metadata.get("user_api_key_team_alias"),
                     user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
                     user_email=None,
                     max_budget=None,
@@ -820,7 +821,7 @@ class VertexPassthroughLoggingHandler:
                     max_parallel_requests=None,
                     allowed_model_region=None,
                     metadata={},  # Set to empty dict instead of None
-                    key_alias=None,
+                    key_alias=_request_metadata.get("user_api_key_alias"),
                     permissions={},  # Set to empty dict instead of None
                     model_max_budget={},  # Set to empty dict instead of None
                     model_spend={},  # Set to empty dict instead of None
@@ -837,6 +838,7 @@ class VertexPassthroughLoggingHandler:
                         model_object_id=model_object_id,
                         file_purpose="batch",
                         user_api_key_dict=user_api_key_dict,
+                        request_tags=_request_tags if isinstance(_request_tags, list) else None,
                     )
                 )
 
