@@ -3605,3 +3605,65 @@ async def test_add_new_user_to_default_team_string_teams_have_no_member_budget(m
 
     assert mock_add.call_args.kwargs["max_budget_in_team"] is None
     assert mock_add.call_args.kwargs["team_id"] == "string-team"
+
+
+@pytest.mark.asyncio
+async def test_add_user_to_team_logs_unknown_team_at_error(mocker, caplog):
+    """A default team that no longer exists makes every membership write 404.
+
+    The failure is swallowed so user creation still succeeds, so the log line is
+    the only signal an operator gets; it must be ERROR and name the team.
+    """
+    import logging
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _add_user_to_team,
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=mocker.AsyncMock,
+        side_effect=HTTPException(status_code=404, detail={"error": "Team not found"}),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await _add_user_to_team(
+            user_id="sso-user",
+            team_id="deleted-team",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1, f"expected exactly one ERROR log, got {errors}"
+    assert "deleted-team" in errors[0]
+    assert "sso-user" in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_add_user_to_team_keeps_already_a_member_quiet(mocker, caplog):
+    """Re-adding an existing member is expected on every login and must not
+    produce an ERROR, otherwise the real failures above are lost in the noise."""
+    import logging
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _add_user_to_team,
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=mocker.AsyncMock,
+        side_effect=HTTPException(status_code=400, detail={"error": "User already exists in team"}),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await _add_user_to_team(
+            user_id="sso-user",
+            team_id="existing-team",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
