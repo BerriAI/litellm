@@ -2772,40 +2772,6 @@ export interface paths {
         patch: operations["cursor_proxy_route_cursor__endpoint__patch"];
         trace?: never;
     };
-    "/customer/aliases": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Customer Aliases
-         * @description List the end users seen in spend logs over a time window, for UI filter dropdowns.
-         *
-         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
-         *     anyone else sees only end users from their own requests or from teams they
-         *     administer (or hold the `/spend/logs` permission on).
-         *
-         *     Reads spend logs rather than LiteLLM_EndUserTable because only spend logs carry
-         *     the team attribution this scoping needs. The window is required and the inner
-         *     scan is capped at SPEND_LOGS_FILTER_SCAN_CAP rows, so the query
-         *     cannot degrade into a full-table scan the way `/global/all_end_users` does.
-         *
-         *     Example curl:
-         *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/aliases?start_date=2026-07-23%2000:00:00&end_date=2026-07-24%2000:00:00&size=50&search=acme'         --header 'Authorization: Bearer sk-1234'
-         *     ```
-         */
-        get: operations["list_customer_aliases_customer_aliases_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/customer/block": {
         parameters: {
             query?: never;
@@ -7213,6 +7179,40 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/spend_logs/end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log End Users
+         * @description The distinct end users appearing in spend logs over a time window, for the logs
+         *     page filter dropdown.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     The window is required and the inner scan is capped at SPEND_LOGS_FACET_SCAN_CAP
+         *     rows, so the query cannot degrade into a full-table scan the way
+         *     `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -23330,29 +23330,6 @@ export interface components {
             };
         };
         /**
-         * CustomerAliasesResponse
-         * @description Paginated, id-only customer listing used by UI filter dropdowns.
-         *
-         *     Deliberately excludes budget/object-permission relations so a proxy with a
-         *     large LiteLLM_EndUserTable can back a search-as-you-type control without
-         *     materializing every row (see /customer/list for the full objects).
-         *
-         *     Reports ``has_more`` rather than a total count on purpose: a total requires
-         *     COUNT(*) over the whole match set on every keystroke, which is the exact
-         *     cost this endpoint exists to avoid. Fetching one row beyond the page is
-         *     enough to drive an infinite-scroll dropdown.
-         */
-        CustomerAliasesResponse: {
-            /** Aliases */
-            aliases: string[];
-            /** Current Page */
-            current_page: number;
-            /** Has More */
-            has_more: boolean;
-            /** Size */
-            size: number;
-        };
-        /**
          * CustomerResponse
          * @description Customer object returned by the /customer read+write endpoints.
          *
@@ -23892,6 +23869,16 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /**
+         * FacetListResponse
+         * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
+         */
+        FacetListResponse: {
+            /** Data */
+            data: string[];
+            links: components["schemas"]["PageLinks"];
+            meta: components["schemas"]["PageMeta"];
         };
         /**
          * FailedKeyUpdate
@@ -28851,6 +28838,30 @@ export interface components {
             soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /**
+         * PageLinks
+         * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
+         */
+        PageLinks: {
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * PageMeta
+         * @description `has_more` rather than `total_count`, which would need a COUNT(*) over the whole match set per keystroke.
+         */
+        PageMeta: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
         };
         /**
          * PaginatedAuditLogResponse
@@ -38457,46 +38468,6 @@ export interface operations {
             };
         };
     };
-    list_customer_aliases_customer_aliases_get: {
-        parameters: {
-            query: {
-                /** @description Window start, 'YYYY-MM-DD HH:MM:SS' (UTC) */
-                start_date: string;
-                /** @description Window end, 'YYYY-MM-DD HH:MM:SS' (UTC) */
-                end_date: string;
-                /** @description Page number */
-                page?: number;
-                /** @description Page size */
-                size?: number;
-                /** @description Case-insensitive partial match on the customer id */
-                search?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CustomerAliasesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     block_user_customer_block_post: {
         parameters: {
             query?: never;
@@ -43420,6 +43391,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_spend_log_end_users_management_v1_spend_logs_end_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the end user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
