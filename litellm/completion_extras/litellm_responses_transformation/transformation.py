@@ -695,7 +695,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         if len(choices) == 0:
             if raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None:
-                raise ValueError(f"{model} unable to complete request: {raw_response.incomplete_details.reason}")
+                # The model hit max_output_tokens (e.g. reasoning/thinking tokens consumed
+                # the whole budget) before producing any output item. This is a normal
+                # truncation, not an error -- return an empty completion with
+                # finish_reason="length" instead of failing the whole request.
+                from litellm.types.utils import Choices, Message
+
+                verbose_logger.warning(
+                    "Responses API returned no output items for model=%s (incomplete_details.reason=%s); "
+                    "returning an empty truncated completion instead of raising.",
+                    model,
+                    raw_response.incomplete_details.reason,
+                )
+                choices = [
+                    Choices(
+                        message=Message(role="assistant", content=""),
+                        finish_reason=self._map_responses_status_to_finish_reason(raw_response.status),
+                        index=0,
+                    )
+                ]
             else:
                 raise ValueError(f"Unknown items in responses API response: {output_items}")
 
