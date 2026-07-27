@@ -69,6 +69,8 @@ from litellm.exceptions import (
 # proxy's metadata sanitizer.
 _PRE_CALL_EXECUTED_TOKEN = secrets.token_hex(16)
 
+_GUARDRAIL_BLOCK_STATUS_CODES = frozenset({400, 403, 422})
+
 _guardrail_self_recorded: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
@@ -1055,8 +1057,15 @@ class CustomGuardrail(CustomLogger):
         - GuardrailRaisedException (generic guardrail API, tool permission)
         - BlockedPiiEntityError (Presidio PII detection)
         - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
-        - HTTPException with status 400 (content policy violation)
+        - HTTPException with a block-signalling status (400, 403, 422)
         - ModifyResponseException (passthrough mode violation)
+
+        Only the statuses guardrails use in-tree to signal a deliberate rejection
+        count as an intervention: 400 (content policy), 403 (e.g. akto) and 422
+        (e.g. llm_as_a_judge). Other 4xx codes are commonly propagated from an
+        upstream guardrail provider response (401 bad key, 408 timeout, 429 rate
+        limit, or a raw upstream status), which are technical failures, not
+        blocks, so they stay guardrail_failed_to_respond.
         """
         if isinstance(e, ModifyResponseException):
             return True
@@ -1069,7 +1078,11 @@ class CustomGuardrail(CustomLogger):
             ),
         ):
             return True
-        if HTTPException is not None and isinstance(e, HTTPException) and e.status_code == 400:
+        if (
+            HTTPException is not None
+            and isinstance(e, HTTPException)
+            and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES
+        ):
             return True
         return False
 
