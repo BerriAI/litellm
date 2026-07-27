@@ -388,6 +388,9 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     assert payload["response"] == json.dumps(
         {"role": "assistant", "content": "Hi there!"}
     )
+    assert json.loads(payload["messages"] or "{}") == [
+        {"role": "user", "content": "Hello!"}
+    ]
     proxy_server_request = json.loads(payload["proxy_server_request"] or "{}")
     assert proxy_server_request["model"] == "gpt-5.5"
     assert proxy_server_request["messages"] == [{"role": "user", "content": "Hello!"}]
