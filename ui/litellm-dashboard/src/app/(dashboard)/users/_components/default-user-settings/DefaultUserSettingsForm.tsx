@@ -12,7 +12,7 @@ import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -183,10 +183,9 @@ const ViewRow = ({ label, children }: { label: string; children: React.ReactNode
 interface SettingsViewProps {
   values: DefaultUserSettingsFormValues;
   roleOptions: readonly RoleOption[];
-  onEdit: () => void;
 }
 
-const SettingsView = ({ values, roleOptions, onEdit }: SettingsViewProps) => {
+const SettingsView = ({ values, roleOptions }: SettingsViewProps) => {
   const roleLabel = roleOptions.find((option) => option.value === values.user_role)?.label ?? values.user_role;
   const durationValue = values.budget_duration === "" ? NO_RESET : values.budget_duration;
   const durationLabel =
@@ -215,11 +214,6 @@ const SettingsView = ({ values, roleOptions, onEdit }: SettingsViewProps) => {
             </p>
           ))
         )}
-      </div>
-      <div className="mt-2 flex justify-end">
-        <Button type="button" onClick={onEdit}>
-          Edit Settings
-        </Button>
       </div>
     </div>
   );
@@ -360,13 +354,14 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
   );
 };
 
-const SettingsCard = ({ children }: { children: React.ReactNode }) => (
+const SettingsCard = ({ action, children }: { action?: React.ReactNode; children: React.ReactNode }) => (
   <Card>
     <CardHeader>
       <CardTitle>Default User Settings</CardTitle>
       <CardDescription>
         Applied to every new internal user created through SSO or the user management APIs.
       </CardDescription>
+      {action !== undefined && <CardAction>{action}</CardAction>}
     </CardHeader>
     <CardContent>{children}</CardContent>
   </Card>
@@ -413,7 +408,15 @@ export const DefaultUserSettingsForm = ({
   }
 
   return (
-    <SettingsCard>
+    <SettingsCard
+      action={
+        isEditing ? undefined : (
+          <Button type="button" onClick={() => setIsEditing(true)}>
+            Edit Settings
+          </Button>
+        )
+      }
+    >
       {isEditing ? (
         <SettingsForm
           initialValues={initialValues}
@@ -423,7 +426,7 @@ export const DefaultUserSettingsForm = ({
           onSaved={() => setIsEditing(false)}
         />
       ) : (
-        <SettingsView values={initialValues} roleOptions={roleOptions} onEdit={() => setIsEditing(true)} />
+        <SettingsView values={initialValues} roleOptions={roleOptions} />
       )}
     </SettingsCard>
   );
