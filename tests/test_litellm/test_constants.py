@@ -71,3 +71,22 @@ def _build_constant_env_var_map() -> dict[str, str]:
             env_var_map[constant_name] = env_var_name
 
     return env_var_map
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [("0", 0.1), ("-5", 0.1), ("0.05", 0.1), ("30", 30.0), (None, 10.0)],
+)
+def test_proxy_shutdown_spend_drain_timeout_is_clamped_positive(env_value, expected):
+    with mock.patch.dict(
+        os.environ,
+        {} if env_value is None else {"PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS": env_value},
+        clear=False,
+    ):
+        if env_value is None:
+            os.environ.pop("PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS", None)
+        reloaded = importlib.reload(constants)
+        try:
+            assert reloaded.PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS == expected
+        finally:
+            importlib.reload(constants)
