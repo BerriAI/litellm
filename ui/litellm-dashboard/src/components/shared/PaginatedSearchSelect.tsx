@@ -34,6 +34,9 @@ interface PaginatedSearchSelectProps {
   loadingText?: string;
   disabled?: boolean;
   className?: string;
+  inputId?: string;
+  "aria-invalid"?: true | undefined;
+  "aria-describedby"?: string;
 }
 
 export function PaginatedSearchSelect({
@@ -50,6 +53,9 @@ export function PaginatedSearchSelect({
   loadingText = "Loading…",
   disabled = false,
   className,
+  inputId,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
 }: PaginatedSearchSelectProps) {
   const selected = useMemo<SearchSelectOption | null>(() => {
     if (value === undefined || value === "") return null;
@@ -90,6 +96,9 @@ export function PaginatedSearchSelect({
       disabled={disabled}
     >
       <ComboboxInput
+        id={inputId}
+        aria-invalid={ariaInvalid}
+        aria-describedby={ariaDescribedBy}
         placeholder={placeholder}
         showClear={value !== undefined && value !== ""}
         className={`w-full ${className ?? ""}`}

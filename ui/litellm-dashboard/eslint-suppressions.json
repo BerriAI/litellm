@@ -1867,11 +1867,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/users/_components/DefaultUserSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/users/_components/edit_user.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3353,10 +3348,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 154
+      "count": 153
     },
     "prefer-const": {
-      "count": 33
+      "count": 32
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -4318,11 +4313,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/lib/http/client.ts": {
-    "no-nested-ternary": {
       "count": 1
     }
   },

@@ -258,10 +258,12 @@ async def _add_user_to_team(
                 )
             )
         else:
-            verbose_proxy_logger.debug(
-                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
-                    str(e)
-                )
+            verbose_proxy_logger.error(
+                "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team(): "
+                "failed to add user %s to team %s - %s",
+                user_id,
+                team_id,
+                str(e),
             )
     except Exception as e:
         if "already exists" in str(e) or "doesn't exist" in str(e):
@@ -277,6 +279,13 @@ async def _add_user_to_team(
                 )
             )
         else:
+            verbose_proxy_logger.error(
+                "litellm.proxy.management_endpoints.internal_user_endpoints._add_user_to_team(): "
+                "failed to add user %s to team %s - %s",
+                user_id,
+                team_id,
+                str(e),
+            )
             raise e
 
 
