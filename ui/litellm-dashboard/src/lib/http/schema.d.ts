@@ -7219,6 +7219,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        get: operations["aggregate_mcp_route_mcp_get"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        put: operations["aggregate_mcp_route_mcp_put"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        post: operations["aggregate_mcp_route_mcp_post"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        delete: operations["aggregate_mcp_route_mcp_delete"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        options: operations["aggregate_mcp_route_mcp_options"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        head: operations["aggregate_mcp_route_mcp_head"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        patch: operations["aggregate_mcp_route_mcp_patch"];
+        trace?: never;
+    };
     "/mcp-rest/test/connection": {
         parameters: {
             query?: never;
@@ -43431,6 +43489,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

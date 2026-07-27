@@ -16447,6 +16447,29 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
 ########################################################
 
 
+@app.api_route(
+    BASE_MCP_ROUTE,
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def aggregate_mcp_route(request: Request):
+    """Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+    ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+    MCP clients behind TLS-terminating proxies."""
+    from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+
+    if not is_mcp_available():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_mcp,
+    )
+
+    scope = dict(request.scope)
+    scope["_original_path"] = scope.get("path", "")
+    scope["path"] = BASE_MCP_ROUTE
+    return await _stream_mcp_asgi_response(handle_streamable_http_mcp, scope, request.receive)
+
+
 # Toolset-namespaced MCP routes - handle /toolset/{toolset_name}/mcp
 # Must be declared BEFORE /{mcp_server_name}/mcp to avoid being swallowed by the catchall.
 @app.api_route(
