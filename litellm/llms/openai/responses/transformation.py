@@ -30,6 +30,23 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _with_typed_response_payload(parsed_chunk: dict[str, Any]) -> dict[str, Any]:
+    """Build the nested ``ResponsesAPIResponse`` so ``model_construct`` doesn't leave it a raw dict."""
+    from litellm.responses.utils import normalize_response_api_usage
+
+    response_payload = parsed_chunk.get("response")
+    if not isinstance(response_payload, dict):
+        return parsed_chunk
+    try:
+        response = ResponsesAPIResponse(**response_payload)
+    except ValidationError:
+        response = ResponsesAPIResponse.model_construct(**response_payload)
+        normalized_usage = normalize_response_api_usage(response.usage)
+        if normalized_usage is not None:
+            response.usage = normalized_usage
+    return {**parsed_chunk, "response": response}
+
+
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -349,7 +366,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 event_pydantic_model.__name__,
                 parsed_chunk,
             )
-            return event_pydantic_model.model_construct(**parsed_chunk)
+            return event_pydantic_model.model_construct(**_with_typed_response_payload(parsed_chunk))
 
     @staticmethod
     def get_event_model_class(event_type: str) -> Any:

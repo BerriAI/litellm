@@ -1075,6 +1075,40 @@ def test_response_completed_with_function_calls_emits_tool_calls_finish_reason()
     ), "response.completed with function_call output should emit finish_reason='tool_calls'"
 
 
+def test_response_completed_with_null_output_emits_stop_finish_reason():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34754
+
+    Upstream providers may send `response.output: null` on response.completed; iterating that
+    None used to raise `TypeError`/`AttributeError` while bridging /responses back to
+    /chat/completions.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_123",
+            "status": "completed",
+            "output": None,
+            "usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert result.choices[0].finish_reason == "stop"
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 5
+    assert result.usage.completion_tokens == 3
+
+
 def test_response_completed_with_message_only_emits_stop_finish_reason():
     """
     Test that response.completed with only message output (no function_call) emits finish_reason='stop'.

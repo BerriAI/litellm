@@ -288,6 +288,36 @@ class TestOpenAIResponsesAPIConfig:
             assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
             assert result.response.id == "resp_123"
 
+    def test_transform_streaming_response_invalid_payload_keeps_typed_response(self):
+        """Regression test for https://github.com/BerriAI/litellm/issues/34754
+
+        A response payload that fails validation falls back to model_construct; the nested
+        response must still be a ResponsesAPIResponse so `event.response.usage` works.
+        """
+        completed_chunk = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_123",
+                "status": "completed",
+                "output": [],
+                "usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 4,
+                    "total_tokens": 16,
+                },
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model,
+            parsed_chunk=completed_chunk,
+            logging_obj=self.logging_obj,
+        )
+
+        assert isinstance(result, ResponseCompletedEvent)
+        assert isinstance(result.response, ResponsesAPIResponse)
+        assert result.response.usage.input_tokens == 12
+
     @pytest.mark.serial
     def test_validate_environment(self):
         """Test that validate_environment correctly sets the Authorization header"""

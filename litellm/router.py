@@ -2242,7 +2242,9 @@ class Router:
             completed,
             (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
         ):
-            return completed.response.usage
+            from litellm.responses.utils import get_response_api_usage
+
+            return get_response_api_usage(completed.response)
         return None
 
     @staticmethod
@@ -2264,6 +2266,10 @@ class Router:
         and produce a clean ResponseAPIUsage — no token-naming split, no
         setattr bypass.
         """
+        from litellm.responses.utils import (
+            get_response_api_usage,
+            set_response_api_usage,
+        )
         from litellm.types.llms.openai import (
             ResponseAPIUsage,
             ResponseCompletedEvent,
@@ -2276,15 +2282,17 @@ class Router:
             (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
         ):
             return
-        response = fallback_item.response
-        if response.usage is None:
+        fb = get_response_api_usage(fallback_item.response)
+        if fb is None:
             return
 
-        fb = response.usage
-        response.usage = ResponseAPIUsage(
-            input_tokens=(partial_usage.input_tokens or 0) + (fb.input_tokens or 0),
-            output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
-            total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
+        set_response_api_usage(
+            fallback_item.response,
+            ResponseAPIUsage(
+                input_tokens=(partial_usage.input_tokens or 0) + (fb.input_tokens or 0),
+                output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
+                total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
+            ),
         )
 
     @staticmethod

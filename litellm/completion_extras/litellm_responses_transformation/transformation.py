@@ -1311,8 +1311,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
             # Check if response contains function_call items in output
             # to determine correct finish_reason
-            response_data = parsed_chunk.get("response", {})
-            output_items = response_data.get("output", []) if response_data else []
+            response_payload = parsed_chunk.get("response")
+            response_data: dict[str, Any] = response_payload if isinstance(response_payload, dict) else {}
+            output_items = response_data.get("output") or []
 
             has_function_calls = any(
                 item.get("type") == "function_call" for item in output_items if isinstance(item, dict)
