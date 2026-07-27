@@ -133,6 +133,7 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    AKAMAI_FIREWALL_FOR_AI = "akamai_firewall_for_ai"
 
 
 class Role(Enum):

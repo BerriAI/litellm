@@ -240,6 +240,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  akamai_firewall_for_ai: {
+    provider: "Akamai Firewall for AI",
+    guardrailNameSuggestion: "Akamai Firewall for AI",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   prompt_security: {
     provider: "PromptSecurity",
     guardrailNameSuggestion: "Prompt Security",
