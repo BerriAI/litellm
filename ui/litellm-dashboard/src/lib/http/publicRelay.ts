@@ -12,7 +12,9 @@ export type Account = {
   account_id: string;
   user_id: string;
   email: string;
-  status: "ACTIVE" | "FROZEN" | "CLOSED";
+  company_name: string;
+  notes: string | null;
+  status: "INVITED" | "ACTIVE" | "FROZEN" | "CLOSED";
   created_at: string;
 };
 

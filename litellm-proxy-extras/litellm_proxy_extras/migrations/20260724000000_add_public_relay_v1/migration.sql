@@ -1,31 +1,16 @@
-CREATE TYPE "PublicRelayAccountStatus" AS ENUM ('ACTIVE', 'FROZEN', 'CLOSED');
-CREATE TYPE "PublicRelayLedgerEntryType" AS ENUM (
-    'DEPOSIT',
-    'RESERVE',
-    'RELEASE',
-    'USAGE',
-    'REFUND',
-    'ADJUSTMENT',
-    'CHARGEBACK'
-);
+CREATE TYPE "PublicRelayAccountStatus" AS ENUM ('INVITED', 'ACTIVE', 'FROZEN', 'CLOSED');
+CREATE TYPE "PublicRelayLedgerEntryType" AS ENUM ('RESERVE', 'RELEASE', 'USAGE', 'ADJUSTMENT');
 CREATE TYPE "PublicRelayReservationStatus" AS ENUM ('OPEN', 'FINALIZED', 'RELEASED');
-CREATE TYPE "PublicRelayPaymentStatus" AS ENUM (
-    'PENDING',
-    'PAID',
-    'REFUND_PENDING',
-    'PARTIALLY_REFUNDED',
-    'REFUNDED',
-    'FAILED',
-    'DISPUTED'
-);
-CREATE TYPE "PublicRelayRefundStatus" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED');
+CREATE TYPE "PublicRelayAuthTokenPurpose" AS ENUM ('ACTIVATION', 'PASSWORD_RESET');
 
 CREATE TABLE "LiteLLM_PublicRelayAccount" (
     "account_id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "normalized_email" TEXT NOT NULL,
-    "status" "PublicRelayAccountStatus" NOT NULL DEFAULT 'ACTIVE',
-    "email_verified_at" TIMESTAMP(3) NOT NULL,
+    "company_name" TEXT NOT NULL,
+    "notes" TEXT,
+    "status" "PublicRelayAccountStatus" NOT NULL DEFAULT 'INVITED',
+    "activated_at" TIMESTAMP(3),
     "session_version" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -38,13 +23,12 @@ CREATE TABLE "LiteLLM_PublicRelayWallet" (
     "currency" TEXT NOT NULL DEFAULT 'USD',
     "available_micros" BIGINT NOT NULL DEFAULT 0,
     "reserved_micros" BIGINT NOT NULL DEFAULT 0,
-    "debt_micros" BIGINT NOT NULL DEFAULT 0,
     "version" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "LiteLLM_PublicRelayWallet_pkey" PRIMARY KEY ("wallet_id"),
     CONSTRAINT "LiteLLM_PublicRelayWallet_nonnegative" CHECK (
-        "available_micros" >= 0 AND "reserved_micros" >= 0 AND "debt_micros" >= 0
+        "available_micros" >= 0 AND "reserved_micros" >= 0
     )
 );
 
@@ -55,10 +39,8 @@ CREATE TABLE "LiteLLM_PublicRelayLedgerEntry" (
     "amount_micros" BIGINT NOT NULL,
     "available_after_micros" BIGINT NOT NULL,
     "reserved_after_micros" BIGINT NOT NULL,
-    "debt_after_micros" BIGINT NOT NULL,
     "idempotency_key" TEXT NOT NULL,
     "request_id" TEXT,
-    "payment_id" TEXT,
     "metadata" JSONB NOT NULL DEFAULT '{}',
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "LiteLLM_PublicRelayLedgerEntry_pkey" PRIMARY KEY ("entry_id")
@@ -102,10 +84,7 @@ CREATE TABLE "LiteLLM_PublicRelayReservation" (
     "expires_at" TIMESTAMP(3) NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "LiteLLM_PublicRelayReservation_pkey" PRIMARY KEY ("reservation_id"),
-    CONSTRAINT "LiteLLM_PublicRelayReservation_nonnegative" CHECK (
-        "reserved_micros" >= 0 AND "input_tokens" >= 0 AND "max_output_tokens" >= 0
-    )
+    CONSTRAINT "LiteLLM_PublicRelayReservation_pkey" PRIMARY KEY ("reservation_id")
 );
 
 CREATE TABLE "LiteLLM_PublicRelayRequestCharge" (
@@ -122,52 +101,39 @@ CREATE TABLE "LiteLLM_PublicRelayRequestCharge" (
     CONSTRAINT "LiteLLM_PublicRelayRequestCharge_pkey" PRIMARY KEY ("charge_id")
 );
 
-CREATE TABLE "LiteLLM_PublicRelayPayment" (
-    "payment_id" TEXT NOT NULL,
+CREATE TABLE "LiteLLM_PublicRelaySession" (
+    "session_id" TEXT NOT NULL,
+    "token_hash" TEXT NOT NULL,
     "account_id" TEXT NOT NULL,
-    "wallet_id" TEXT NOT NULL,
-    "amount_micros" BIGINT NOT NULL,
-    "refunded_micros" BIGINT NOT NULL DEFAULT 0,
-    "currency" TEXT NOT NULL DEFAULT 'USD',
-    "status" "PublicRelayPaymentStatus" NOT NULL DEFAULT 'PENDING',
-    "stripe_checkout_session" TEXT,
-    "stripe_payment_intent" TEXT,
-    "idempotency_key" TEXT NOT NULL,
+    "user_id" TEXT NOT NULL,
+    "normalized_email" TEXT NOT NULL,
+    "session_version" INTEGER NOT NULL,
+    "csrf_token" TEXT NOT NULL,
+    "expires_at" TIMESTAMP(3) NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "LiteLLM_PublicRelayPayment_pkey" PRIMARY KEY ("payment_id"),
-    CONSTRAINT "LiteLLM_PublicRelayPayment_nonnegative" CHECK (
-        "amount_micros" > 0
-        AND "refunded_micros" >= 0
-        AND "refunded_micros" <= "amount_micros"
-    )
+    CONSTRAINT "LiteLLM_PublicRelaySession_pkey" PRIMARY KEY ("session_id")
 );
 
-CREATE TABLE "LiteLLM_PublicRelayStripeEvent" (
-    "event_id" TEXT NOT NULL,
-    "event_type" TEXT NOT NULL,
-    "livemode" BOOLEAN NOT NULL,
-    "payload" JSONB NOT NULL,
-    "processed_at" TIMESTAMP(3),
-    "error" TEXT,
+CREATE TABLE "LiteLLM_PublicRelayAuthToken" (
+    "auth_token_id" TEXT NOT NULL,
+    "token_hash" TEXT NOT NULL,
+    "account_id" TEXT NOT NULL,
+    "purpose" "PublicRelayAuthTokenPurpose" NOT NULL,
+    "expires_at" TIMESTAMP(3) NOT NULL,
+    "consumed_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "LiteLLM_PublicRelayStripeEvent_pkey" PRIMARY KEY ("event_id")
+    CONSTRAINT "LiteLLM_PublicRelayAuthToken_pkey" PRIMARY KEY ("auth_token_id")
 );
 
-CREATE TABLE "LiteLLM_PublicRelayRefund" (
-    "refund_id" TEXT NOT NULL,
-    "payment_id" TEXT NOT NULL,
-    "wallet_id" TEXT NOT NULL,
-    "amount_micros" BIGINT NOT NULL,
-    "status" "PublicRelayRefundStatus" NOT NULL DEFAULT 'PENDING',
-    "stripe_refund_id" TEXT,
-    "idempotency_key" TEXT NOT NULL,
-    "reason" TEXT NOT NULL,
-    "error" TEXT,
+CREATE TABLE "LiteLLM_PublicRelayRateLimit" (
+    "rate_limit_id" TEXT NOT NULL,
+    "key_hash" TEXT NOT NULL,
+    "window_started_at" TIMESTAMP(3) NOT NULL,
+    "window_seconds" INTEGER NOT NULL,
+    "count" INTEGER NOT NULL DEFAULT 1,
+    "expires_at" TIMESTAMP(3) NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "LiteLLM_PublicRelayRefund_pkey" PRIMARY KEY ("refund_id"),
-    CONSTRAINT "LiteLLM_PublicRelayRefund_amount_check" CHECK ("amount_micros" > 0)
+    CONSTRAINT "LiteLLM_PublicRelayRateLimit_pkey" PRIMARY KEY ("rate_limit_id")
 );
 
 CREATE TABLE "LiteLLM_PublicRelayRequestContent" (
@@ -190,71 +156,33 @@ CREATE UNIQUE INDEX "LiteLLM_PublicRelayWallet_account_id_key" ON "LiteLLM_Publi
 CREATE UNIQUE INDEX "LiteLLM_PublicRelayLedgerEntry_idempotency_key_key" ON "LiteLLM_PublicRelayLedgerEntry"("idempotency_key");
 CREATE INDEX "LiteLLM_PublicRelayLedgerEntry_wallet_id_created_at_idx" ON "LiteLLM_PublicRelayLedgerEntry"("wallet_id", "created_at");
 CREATE INDEX "LiteLLM_PublicRelayLedgerEntry_request_id_idx" ON "LiteLLM_PublicRelayLedgerEntry"("request_id");
-CREATE INDEX "LiteLLM_PublicRelayLedgerEntry_payment_id_idx" ON "LiteLLM_PublicRelayLedgerEntry"("payment_id");
 CREATE UNIQUE INDEX "LiteLLM_PublicRelayModelPrice_model_name_version_key" ON "LiteLLM_PublicRelayModelPrice"("model_name", "version");
-CREATE INDEX "LiteLLM_PublicRelayModelPrice_model_name_enabled_effective_at_idx" ON "LiteLLM_PublicRelayModelPrice"("model_name", "enabled", "effective_at");
+CREATE INDEX "LiteLLM_PublicRelayModelPrice_model_name_enabled_effective_idx" ON "LiteLLM_PublicRelayModelPrice"("model_name", "enabled", "effective_at");
 CREATE UNIQUE INDEX "LiteLLM_PublicRelayReservation_request_id_key" ON "LiteLLM_PublicRelayReservation"("request_id");
 CREATE INDEX "LiteLLM_PublicRelayReservation_status_expires_at_idx" ON "LiteLLM_PublicRelayReservation"("status", "expires_at");
 CREATE INDEX "LiteLLM_PublicRelayReservation_account_id_created_at_idx" ON "LiteLLM_PublicRelayReservation"("account_id", "created_at");
 CREATE UNIQUE INDEX "LiteLLM_PublicRelayRequestCharge_request_id_key" ON "LiteLLM_PublicRelayRequestCharge"("request_id");
 CREATE INDEX "LiteLLM_PublicRelayRequestCharge_account_id_created_at_idx" ON "LiteLLM_PublicRelayRequestCharge"("account_id", "created_at");
-CREATE UNIQUE INDEX "LiteLLM_PublicRelayPayment_stripe_checkout_session_key" ON "LiteLLM_PublicRelayPayment"("stripe_checkout_session");
-CREATE UNIQUE INDEX "LiteLLM_PublicRelayPayment_stripe_payment_intent_key" ON "LiteLLM_PublicRelayPayment"("stripe_payment_intent");
-CREATE UNIQUE INDEX "LiteLLM_PublicRelayPayment_idempotency_key_key" ON "LiteLLM_PublicRelayPayment"("idempotency_key");
-CREATE INDEX "LiteLLM_PublicRelayPayment_account_id_created_at_idx" ON "LiteLLM_PublicRelayPayment"("account_id", "created_at");
-CREATE INDEX "LiteLLM_PublicRelayPayment_status_idx" ON "LiteLLM_PublicRelayPayment"("status");
-CREATE UNIQUE INDEX "LiteLLM_PublicRelayRefund_stripe_refund_id_key" ON "LiteLLM_PublicRelayRefund"("stripe_refund_id");
-CREATE UNIQUE INDEX "LiteLLM_PublicRelayRefund_idempotency_key_key" ON "LiteLLM_PublicRelayRefund"("idempotency_key");
-CREATE INDEX "LiteLLM_PublicRelayRefund_payment_id_created_at_idx" ON "LiteLLM_PublicRelayRefund"("payment_id", "created_at");
-CREATE INDEX "LiteLLM_PublicRelayRefund_status_updated_at_idx" ON "LiteLLM_PublicRelayRefund"("status", "updated_at");
-CREATE INDEX "LiteLLM_PublicRelayStripeEvent_event_type_created_at_idx" ON "LiteLLM_PublicRelayStripeEvent"("event_type", "created_at");
+CREATE UNIQUE INDEX "LiteLLM_PublicRelaySession_token_hash_key" ON "LiteLLM_PublicRelaySession"("token_hash");
+CREATE INDEX "LiteLLM_PublicRelaySession_account_id_expires_at_idx" ON "LiteLLM_PublicRelaySession"("account_id", "expires_at");
+CREATE INDEX "LiteLLM_PublicRelaySession_expires_at_idx" ON "LiteLLM_PublicRelaySession"("expires_at");
+CREATE UNIQUE INDEX "LiteLLM_PublicRelayAuthToken_token_hash_key" ON "LiteLLM_PublicRelayAuthToken"("token_hash");
+CREATE INDEX "LiteLLM_PublicRelayAuthToken_account_id_purpose_consumed_idx" ON "LiteLLM_PublicRelayAuthToken"("account_id", "purpose", "consumed_at");
+CREATE INDEX "LiteLLM_PublicRelayAuthToken_expires_at_idx" ON "LiteLLM_PublicRelayAuthToken"("expires_at");
+CREATE UNIQUE INDEX "LiteLLM_PublicRelayRateLimit_window_key" ON "LiteLLM_PublicRelayRateLimit"("key_hash", "window_started_at", "window_seconds");
+CREATE INDEX "LiteLLM_PublicRelayRateLimit_expires_at_idx" ON "LiteLLM_PublicRelayRateLimit"("expires_at");
 CREATE UNIQUE INDEX "LiteLLM_PublicRelayRequestContent_request_id_key" ON "LiteLLM_PublicRelayRequestContent"("request_id");
 CREATE INDEX "LiteLLM_PublicRelayRequestContent_expires_at_idx" ON "LiteLLM_PublicRelayRequestContent"("expires_at");
 CREATE INDEX "LiteLLM_PublicRelayRequestContent_account_id_created_at_idx" ON "LiteLLM_PublicRelayRequestContent"("account_id", "created_at");
 
-ALTER TABLE "LiteLLM_PublicRelayAccount"
-ADD CONSTRAINT "LiteLLM_PublicRelayAccount_user_id_fkey"
-FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE CASCADE ON UPDATE CASCADE;
-
-ALTER TABLE "LiteLLM_PublicRelayWallet"
-ADD CONSTRAINT "LiteLLM_PublicRelayWallet_account_id_fkey"
-FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE CASCADE ON UPDATE CASCADE;
-
-ALTER TABLE "LiteLLM_PublicRelayLedgerEntry"
-ADD CONSTRAINT "LiteLLM_PublicRelayLedgerEntry_wallet_id_fkey"
-FOREIGN KEY ("wallet_id") REFERENCES "LiteLLM_PublicRelayWallet"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "LiteLLM_PublicRelayReservation"
-ADD CONSTRAINT "LiteLLM_PublicRelayReservation_account_id_fkey"
-FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "LiteLLM_PublicRelayReservation"
-ADD CONSTRAINT "LiteLLM_PublicRelayReservation_wallet_id_fkey"
-FOREIGN KEY ("wallet_id") REFERENCES "LiteLLM_PublicRelayWallet"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "LiteLLM_PublicRelayReservation"
-ADD CONSTRAINT "LiteLLM_PublicRelayReservation_price_id_fkey"
-FOREIGN KEY ("price_id") REFERENCES "LiteLLM_PublicRelayModelPrice"("price_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "LiteLLM_PublicRelayRequestCharge"
-ADD CONSTRAINT "LiteLLM_PublicRelayRequestCharge_account_id_fkey"
-FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "LiteLLM_PublicRelayRequestCharge"
-ADD CONSTRAINT "LiteLLM_PublicRelayRequestCharge_price_id_fkey"
-FOREIGN KEY ("price_id") REFERENCES "LiteLLM_PublicRelayModelPrice"("price_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "LiteLLM_PublicRelayPayment"
-ADD CONSTRAINT "LiteLLM_PublicRelayPayment_account_id_fkey"
-FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "LiteLLM_PublicRelayPayment"
-ADD CONSTRAINT "LiteLLM_PublicRelayPayment_wallet_id_fkey"
-FOREIGN KEY ("wallet_id") REFERENCES "LiteLLM_PublicRelayWallet"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "LiteLLM_PublicRelayRefund"
-ADD CONSTRAINT "LiteLLM_PublicRelayRefund_payment_id_fkey"
-FOREIGN KEY ("payment_id") REFERENCES "LiteLLM_PublicRelayPayment"("payment_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "LiteLLM_PublicRelayRefund"
-ADD CONSTRAINT "LiteLLM_PublicRelayRefund_wallet_id_fkey"
-FOREIGN KEY ("wallet_id") REFERENCES "LiteLLM_PublicRelayWallet"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "LiteLLM_PublicRelayRequestContent"
-ADD CONSTRAINT "LiteLLM_PublicRelayRequestContent_account_id_fkey"
-FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayAccount" ADD CONSTRAINT "LiteLLM_PublicRelayAccount_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "LiteLLM_UserTable"("user_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayWallet" ADD CONSTRAINT "LiteLLM_PublicRelayWallet_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayLedgerEntry" ADD CONSTRAINT "LiteLLM_PublicRelayLedgerEntry_wallet_id_fkey" FOREIGN KEY ("wallet_id") REFERENCES "LiteLLM_PublicRelayWallet"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayReservation" ADD CONSTRAINT "LiteLLM_PublicRelayReservation_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayReservation" ADD CONSTRAINT "LiteLLM_PublicRelayReservation_wallet_id_fkey" FOREIGN KEY ("wallet_id") REFERENCES "LiteLLM_PublicRelayWallet"("wallet_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayReservation" ADD CONSTRAINT "LiteLLM_PublicRelayReservation_price_id_fkey" FOREIGN KEY ("price_id") REFERENCES "LiteLLM_PublicRelayModelPrice"("price_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayRequestCharge" ADD CONSTRAINT "LiteLLM_PublicRelayRequestCharge_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayRequestCharge" ADD CONSTRAINT "LiteLLM_PublicRelayRequestCharge_price_id_fkey" FOREIGN KEY ("price_id") REFERENCES "LiteLLM_PublicRelayModelPrice"("price_id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelaySession" ADD CONSTRAINT "LiteLLM_PublicRelaySession_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayAuthToken" ADD CONSTRAINT "LiteLLM_PublicRelayAuthToken_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "LiteLLM_PublicRelayRequestContent" ADD CONSTRAINT "LiteLLM_PublicRelayRequestContent_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "LiteLLM_PublicRelayAccount"("account_id") ON DELETE RESTRICT ON UPDATE CASCADE;

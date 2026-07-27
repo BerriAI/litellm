@@ -58,15 +58,3 @@ def display_usd(amount_micros: int) -> str:
     absolute = abs(amount_micros)
     dollars, micros = divmod(absolute, MICROS_PER_DOLLAR)
     return f"{sign}${dollars}.{micros:06d}".rstrip("0").rstrip(".")
-
-
-def maximum_refund_micros(
-    payment_amount_micros: int,
-    already_refunded_micros: int,
-    available_micros: int,
-) -> int:
-    if min(payment_amount_micros, already_refunded_micros, available_micros) < 0:
-        raise ValueError("refund balances must be non-negative")
-    if already_refunded_micros > payment_amount_micros:
-        raise ValueError("refunded amount exceeds payment")
-    return min(payment_amount_micros - already_refunded_micros, available_micros)

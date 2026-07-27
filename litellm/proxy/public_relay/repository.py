@@ -16,13 +16,11 @@ from litellm.proxy.public_relay.api_types import ModelPriceCreateRequest
 from litellm.proxy.public_relay.db_types import (
     AccountRow,
     AdminAccountRow,
-    AdminPaymentRow,
+    AuthTokenRow,
     KeyRow,
     LedgerRow,
     MarginSummaryRow,
-    PaymentRow,
     PriceRow,
-    RefundRow,
     RequestLogRow,
     ReservationRow,
     ReservationSettlementRow,
@@ -33,7 +31,6 @@ from litellm.proxy.public_relay.money import (
     PriceQuote,
     UsageQuantity,
     calculate_usage_charge,
-    maximum_refund_micros,
 )
 from litellm.proxy.utils import PrismaClient
 
@@ -65,8 +62,7 @@ class DatabaseProtocol(TransactionProtocol, Protocol):
 @dataclass(frozen=True, slots=True)
 class CreatedAccount:
     account: AccountRow
-    raw_key: str
-    key_id: str
+    wallet: WalletRow
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,18 +78,10 @@ class ReservationResult:
 
 
 @dataclass(frozen=True, slots=True)
-class CheckoutOrder:
-    payment_id: str
-    account_id: str
-    wallet_id: str
-    amount_micros: int
-    idempotency_key: str
-
-
-@dataclass(frozen=True, slots=True)
-class RefundOperation:
-    refund: RefundRow
-    payment_intent_id: str
+class ActivatedAccount:
+    account: AccountRow
+    raw_key: str
+    key_id: str
 
 
 async def get_account_by_email(prisma_client: PrismaClient, normalized_email: str) -> AccountRow | None:
@@ -124,46 +112,41 @@ async def get_account_by_id(prisma_client: PrismaClient, account_id: str) -> Acc
     return _first(rows, AccountRow)
 
 
-async def create_account(
+async def create_enterprise(
     prisma_client: PrismaClient,
     normalized_email: str,
-    password_hash: str,
+    company_name: str,
+    notes: str | None,
+    initial_credit_micros: int,
+    idempotency_key: str,
+    activation_token_hash: str,
+    activation_expires_at: datetime,
 ) -> CreatedAccount:
     account_id = str(uuid.uuid4())
     user_id = str(uuid.uuid4())
     wallet_id = str(uuid.uuid4())
-    raw_key = f"sk-{secrets.token_urlsafe(32)}"
-    key_id = hash_token(raw_key)
-    access_group_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
-    metadata = json.dumps(
-        {
-            "public_relay_account_id": account_id,
-            "public_relay": True,
-            "public_relay_log_content": True,
-        },
-        separators=(",", ":"),
-    )
     async with _database(prisma_client).tx() as tx:
         await tx.execute_raw(
             """
             INSERT INTO "LiteLLM_UserTable"
                 ("user_id", "user_email", "password", "user_role", "models", "metadata")
-            VALUES ($1, $2, $3, 'internal_user', ARRAY['no-default-models']::TEXT[], '{}'::JSONB)
+            VALUES ($1, $2, NULL, 'internal_user', ARRAY['no-default-models']::TEXT[], '{}'::JSONB)
             """,
             user_id,
             normalized_email,
-            password_hash,
         )
         await tx.execute_raw(
             """
             INSERT INTO "LiteLLM_PublicRelayAccount"
-                ("account_id", "user_id", "normalized_email", "email_verified_at", "created_at", "updated_at")
-            VALUES ($1, $2, $3, $4, $4, $4)
+                ("account_id", "user_id", "normalized_email", "company_name", "notes", "created_at", "updated_at")
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
             """,
             account_id,
             user_id,
             normalized_email,
+            company_name,
+            notes,
             now,
         )
         await tx.execute_raw(
@@ -175,71 +158,215 @@ async def create_account(
             account_id,
             now,
         )
-        access_group_rows = await tx.query_raw(
-            """
-            INSERT INTO "LiteLLM_AccessGroupTable"
-                ("access_group_id", "access_group_name", "description", "created_at", "updated_at")
-            VALUES ($1, $2, $3, $4, $4)
-            ON CONFLICT ("access_group_name")
-            DO UPDATE SET "updated_at" = EXCLUDED."updated_at"
-            RETURNING "access_group_id"
-            """,
-            access_group_id,
-            PUBLIC_ACCESS_GROUP_NAME,
-            "Models with an active public relay price",
-            now,
-        )
-        resolved_access_group_id = _single_string(access_group_rows, "access_group_id")
+        if initial_credit_micros > 0:
+            await tx.execute_raw(
+                """
+                UPDATE "LiteLLM_PublicRelayWallet"
+                SET "available_micros" = $1, "version" = 1, "updated_at" = $2
+                WHERE "wallet_id" = $3
+                """,
+                initial_credit_micros,
+                now,
+                wallet_id,
+            )
+            await tx.execute_raw(
+                """
+                INSERT INTO "LiteLLM_PublicRelayLedgerEntry"
+                    (
+                        "entry_id",
+                        "wallet_id",
+                        "entry_type",
+                        "amount_micros",
+                        "available_after_micros",
+                        "reserved_after_micros",
+                        "idempotency_key",
+                        "metadata"
+                    )
+                VALUES ($1, $2, 'ADJUSTMENT', $3, $3, 0, $4, $5::JSONB)
+                """,
+                str(uuid.uuid4()),
+                wallet_id,
+                initial_credit_micros,
+                idempotency_key,
+                json.dumps({"reason": "Initial enterprise credit"}, separators=(",", ":")),
+            )
         await tx.execute_raw(
             """
-            INSERT INTO "LiteLLM_VerificationToken"
-                (
-                    "token",
-                    "key_name",
-                    "key_alias",
-                    "models",
-                    "user_id",
-                    "metadata",
-                    "allowed_routes",
-                    "access_group_ids",
-                    "created_by",
-                    "updated_by",
-                    "created_at",
-                    "updated_at"
-                )
-            VALUES (
-                $1,
-                $2,
-                'Default',
-                ARRAY['no-default-models']::TEXT[],
-                $3,
-                $4::JSONB,
-                $5::TEXT[],
-                ARRAY[$6]::TEXT[],
-                $3,
-                $3,
-                $7,
-                $7
-            )
+            INSERT INTO "LiteLLM_PublicRelayAuthToken"
+                ("auth_token_id", "token_hash", "account_id", "purpose", "expires_at")
+            VALUES ($1, $2, $3, 'ACTIVATION', $4)
             """,
-            key_id,
-            abbreviate_api_key(raw_key),
-            user_id,
-            metadata,
-            list(PUBLIC_ALLOWED_ROUTES),
-            resolved_access_group_id,
-            now,
+            str(uuid.uuid4()),
+            activation_token_hash,
+            account_id,
+            activation_expires_at,
         )
     account = AccountRow(
         account_id=account_id,
         user_id=user_id,
         normalized_email=normalized_email,
-        status="ACTIVE",
-        password=password_hash,
+        company_name=company_name,
+        notes=notes,
+        status="INVITED",
+        password=None,
         session_version=0,
         created_at=now,
     )
-    return CreatedAccount(account=account, raw_key=raw_key, key_id=key_id)
+    wallet = WalletRow(
+        wallet_id=wallet_id,
+        account_id=account_id,
+        available_micros=initial_credit_micros,
+        reserved_micros=0,
+    )
+    return CreatedAccount(account=account, wallet=wallet)
+
+
+async def create_auth_token(
+    prisma_client: PrismaClient,
+    account_id: str,
+    token_hash: str,
+    purpose: str,
+    expires_at: datetime,
+) -> AuthTokenRow:
+    auth_token_id = str(uuid.uuid4())
+    async with _database(prisma_client).tx() as tx:
+        await tx.execute_raw(
+            """
+            UPDATE "LiteLLM_PublicRelayAuthToken"
+            SET "consumed_at" = CURRENT_TIMESTAMP
+            WHERE "account_id" = $1 AND "purpose" = $2::"PublicRelayAuthTokenPurpose" AND "consumed_at" IS NULL
+            """,
+            account_id,
+            purpose,
+        )
+        rows = await tx.query_raw(
+            """
+            INSERT INTO "LiteLLM_PublicRelayAuthToken"
+                ("auth_token_id", "token_hash", "account_id", "purpose", "expires_at")
+            VALUES ($1, $2, $3, $4::"PublicRelayAuthTokenPurpose", $5)
+            RETURNING *
+            """,
+            auth_token_id,
+            token_hash,
+            account_id,
+            purpose,
+            expires_at,
+        )
+    return _required_first(rows, AuthTokenRow)
+
+
+async def activate_account(
+    prisma_client: PrismaClient,
+    token_hash: str,
+    password_hash: str,
+) -> ActivatedAccount:
+    raw_key = f"sk-{secrets.token_urlsafe(32)}"
+    key_id = hash_token(raw_key)
+    now = datetime.now(timezone.utc)
+    async with _database(prisma_client).tx() as tx:
+        token_rows = await tx.query_raw(
+            """
+            SELECT t.*, a."user_id"
+            FROM "LiteLLM_PublicRelayAuthToken" t
+            JOIN "LiteLLM_PublicRelayAccount" a ON a."account_id" = t."account_id"
+            WHERE t."token_hash" = $1
+              AND t."purpose" = 'ACTIVATION'
+              AND t."consumed_at" IS NULL
+              AND t."expires_at" > CURRENT_TIMESTAMP
+              AND a."status" = 'INVITED'
+            FOR UPDATE OF t, a
+            """,
+            token_hash,
+        )
+        if not isinstance(token_rows, list) or not token_rows:
+            raise PermissionError("invalid or expired activation token")
+        token_mapping = _required_mapping(token_rows[0])
+        account_id = _required_string(token_mapping, "account_id")
+        user_id = _required_string(token_mapping, "user_id")
+        await tx.execute_raw(
+            'UPDATE "LiteLLM_UserTable" SET "password" = $1 WHERE "user_id" = $2',
+            password_hash,
+            user_id,
+        )
+        await tx.execute_raw(
+            """
+            UPDATE "LiteLLM_PublicRelayAccount"
+            SET "status" = 'ACTIVE', "activated_at" = $1, "updated_at" = $1
+            WHERE "account_id" = $2
+            """,
+            now,
+            account_id,
+        )
+        await tx.execute_raw(
+            """
+            UPDATE "LiteLLM_PublicRelayAuthToken"
+            SET "consumed_at" = $1
+            WHERE "auth_token_id" = $2
+            """,
+            now,
+            _required_string(token_mapping, "auth_token_id"),
+        )
+        await _insert_api_key(tx, account_id, user_id, key_id, raw_key, "Default", False, now)
+        account_rows = await tx.query_raw(
+            """
+            SELECT a.*, u."password"
+            FROM "LiteLLM_PublicRelayAccount" a
+            JOIN "LiteLLM_UserTable" u ON u."user_id" = a."user_id"
+            WHERE a."account_id" = $1
+            """,
+            account_id,
+        )
+    return ActivatedAccount(
+        account=_required_first(account_rows, AccountRow),
+        raw_key=raw_key,
+        key_id=key_id,
+    )
+
+
+async def reset_password_with_token(
+    prisma_client: PrismaClient,
+    token_hash: str,
+    password_hash: str,
+) -> None:
+    async with _database(prisma_client).tx() as tx:
+        rows = await tx.query_raw(
+            """
+            SELECT t."auth_token_id", a."account_id", a."user_id"
+            FROM "LiteLLM_PublicRelayAuthToken" t
+            JOIN "LiteLLM_PublicRelayAccount" a ON a."account_id" = t."account_id"
+            WHERE t."token_hash" = $1
+              AND t."purpose" = 'PASSWORD_RESET'
+              AND t."consumed_at" IS NULL
+              AND t."expires_at" > CURRENT_TIMESTAMP
+              AND a."status" = 'ACTIVE'
+            FOR UPDATE OF t, a
+            """,
+            token_hash,
+        )
+        if not isinstance(rows, list) or not rows:
+            raise PermissionError("invalid or expired password reset token")
+        value = _required_mapping(rows[0])
+        await tx.execute_raw(
+            'UPDATE "LiteLLM_UserTable" SET "password" = $1 WHERE "user_id" = $2',
+            password_hash,
+            _required_string(value, "user_id"),
+        )
+        await tx.execute_raw(
+            """
+            UPDATE "LiteLLM_PublicRelayAccount"
+            SET "session_version" = "session_version" + 1, "updated_at" = CURRENT_TIMESTAMP
+            WHERE "account_id" = $1
+            """,
+            _required_string(value, "account_id"),
+        )
+        await tx.execute_raw(
+            'UPDATE "LiteLLM_PublicRelayAuthToken" SET "consumed_at" = CURRENT_TIMESTAMP WHERE "auth_token_id" = $1',
+            _required_string(value, "auth_token_id"),
+        )
+        await tx.execute_raw(
+            'DELETE FROM "LiteLLM_PublicRelaySession" WHERE "account_id" = $1',
+            _required_string(value, "account_id"),
+        )
 
 
 async def update_password(prisma_client: PrismaClient, account: AccountRow, password_hash: str) -> None:
@@ -397,14 +524,6 @@ async def create_api_key(
     raw_key = f"sk-{secrets.token_urlsafe(32)}"
     key_id = hash_token(raw_key)
     now = datetime.now(timezone.utc)
-    metadata = json.dumps(
-        {
-            "public_relay_account_id": account.account_id,
-            "public_relay": True,
-            "public_relay_log_content": log_content,
-        },
-        separators=(",", ":"),
-    )
     async with _database(prisma_client).tx() as tx:
         await tx.execute_raw("SELECT pg_advisory_xact_lock(hashtext($1))", f"public-relay-keys:{account.account_id}")
         count_rows = await tx.query_raw(
@@ -418,53 +537,74 @@ async def create_api_key(
         )
         if _single_int(count_rows, "count") >= max_keys:
             raise PermissionError("API key limit reached")
-        group_rows = await tx.query_raw(
-            'SELECT "access_group_id" FROM "LiteLLM_AccessGroupTable" WHERE "access_group_name" = $1',
-            PUBLIC_ACCESS_GROUP_NAME,
-        )
-        group_id = _single_string(group_rows, "access_group_id")
-        await tx.execute_raw(
-            """
-            INSERT INTO "LiteLLM_VerificationToken"
-                (
-                    "token",
-                    "key_name",
-                    "key_alias",
-                    "models",
-                    "user_id",
-                    "metadata",
-                    "allowed_routes",
-                    "access_group_ids",
-                    "created_by",
-                    "updated_by",
-                    "created_at",
-                    "updated_at"
-                )
-            VALUES (
-                $1,
-                $2,
-                $3,
-                ARRAY['no-default-models']::TEXT[],
-                $4,
-                $5::JSONB,
-                $6::TEXT[],
-                ARRAY[$7]::TEXT[],
-                $4,
-                $4,
-                $8,
-                $8
-            )
-            """,
-            key_id,
-            abbreviate_api_key(raw_key),
-            alias,
-            account.user_id,
-            metadata,
-            list(PUBLIC_ALLOWED_ROUTES),
-            group_id,
-            now,
-        )
+        await _insert_api_key(tx, account.account_id, account.user_id, key_id, raw_key, alias, log_content, now)
     return CreatedKey(raw_key=raw_key, key_id=key_id)
+
+
+async def _insert_api_key(
+    tx: TransactionProtocol,
+    account_id: str,
+    user_id: str,
+    key_id: str,
+    raw_key: str,
+    alias: str,
+    log_content: bool,
+    now: datetime,
+) -> None:
+    metadata = json.dumps(
+        {
+            "public_relay_account_id": account_id,
+            "public_relay": True,
+            "public_relay_log_content": log_content,
+        },
+        separators=(",", ":"),
+    )
+    group_rows = await tx.query_raw(
+        'SELECT "access_group_id" FROM "LiteLLM_AccessGroupTable" WHERE "access_group_name" = $1',
+        PUBLIC_ACCESS_GROUP_NAME,
+    )
+    group_id = _single_string(group_rows, "access_group_id")
+    await tx.execute_raw(
+        """
+        INSERT INTO "LiteLLM_VerificationToken"
+            (
+                "token",
+                "key_name",
+                "key_alias",
+                "models",
+                "user_id",
+                "metadata",
+                "allowed_routes",
+                "access_group_ids",
+                "created_by",
+                "updated_by",
+                "created_at",
+                "updated_at"
+            )
+        VALUES (
+            $1,
+            $2,
+            $3,
+            ARRAY['no-default-models']::TEXT[],
+            $4,
+            $5::JSONB,
+            $6::TEXT[],
+            ARRAY[$7]::TEXT[],
+            $4,
+            $4,
+            $8,
+            $8
+        )
+        """,
+        key_id,
+        abbreviate_api_key(raw_key),
+        alias,
+        user_id,
+        metadata,
+        list(PUBLIC_ALLOWED_ROUTES),
+        group_id,
+        now,
+    )
 
 
 async def delete_api_key(prisma_client: PrismaClient, account: AccountRow, key_id: str) -> bool:
@@ -528,7 +668,7 @@ async def reserve_request(
         wallet = _first(wallet_rows, WalletRow)
         if wallet is None:
             raise PermissionError("public relay account is not active")
-        if wallet.debt_micros > 0 or wallet.available_micros < reserved_micros:
+        if wallet.available_micros < reserved_micros:
             raise ArithmeticError("insufficient balance")
         await tx.execute_raw(
             """
@@ -580,18 +720,16 @@ async def reserve_request(
                     "amount_micros",
                     "available_after_micros",
                     "reserved_after_micros",
-                    "debt_after_micros",
                     "idempotency_key",
                     "request_id",
                     "metadata"
                 )
-            VALUES ($1, $2, 'RESERVE', 0, $3, $4, $5, $6, $7, $8::JSONB)
+            VALUES ($1, $2, 'RESERVE', 0, $3, $4, $5, $6, $7::JSONB)
             """,
             str(uuid.uuid4()),
             wallet.wallet_id,
             wallet.available_micros - reserved_micros,
             wallet.reserved_micros + reserved_micros,
-            wallet.debt_micros,
             f"reserve:{request_id}",
             request_id,
             json.dumps({"reserved_micros": reserved_micros}, separators=(",", ":")),
@@ -682,18 +820,16 @@ async def settle_request(
                         "amount_micros",
                         "available_after_micros",
                         "reserved_after_micros",
-                        "debt_after_micros",
                         "idempotency_key",
                         "request_id",
                         "metadata"
                     )
-                VALUES ($1, $2, 'RELEASE', 0, $3, $4, $5, $6, $7, $8::JSONB)
+                VALUES ($1, $2, 'RELEASE', 0, $3, $4, $5, $6, $7::JSONB)
                 """,
                 str(uuid.uuid4()),
                 wallet.wallet_id,
                 available_after,
                 reserved_after,
-                wallet.debt_micros,
                 f"release:{request_id}",
                 request_id,
                 json.dumps({"released_micros": released_micros}, separators=(",", ":")),
@@ -734,18 +870,16 @@ async def settle_request(
                     "amount_micros",
                     "available_after_micros",
                     "reserved_after_micros",
-                    "debt_after_micros",
                     "idempotency_key",
                     "request_id"
                 )
-            VALUES ($1, $2, 'USAGE', $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, 'USAGE', $3, $4, $5, $6, $7)
             """,
             str(uuid.uuid4()),
             wallet.wallet_id,
             -charged_micros,
             available_after,
             reserved_after,
-            wallet.debt_micros,
             f"usage:{request_id}",
             request_id,
         )
@@ -797,98 +931,20 @@ async def release_request(prisma_client: PrismaClient, request_id: str) -> None:
                     "amount_micros",
                     "available_after_micros",
                     "reserved_after_micros",
-                    "debt_after_micros",
                     "idempotency_key",
                     "request_id",
                     "metadata"
                 )
-            VALUES ($1, $2, 'RELEASE', 0, $3, $4, $5, $6, $7, $8::JSONB)
+            VALUES ($1, $2, 'RELEASE', 0, $3, $4, $5, $6, $7::JSONB)
             """,
             str(uuid.uuid4()),
             wallet.wallet_id,
             wallet.available_micros + reservation.reserved_micros,
             wallet.reserved_micros - reservation.reserved_micros,
-            wallet.debt_micros,
             f"release:{request_id}",
             request_id,
             json.dumps({"released_micros": reservation.reserved_micros}, separators=(",", ":")),
         )
-
-
-async def create_checkout_order(
-    prisma_client: PrismaClient,
-    account_id: str,
-    amount_micros: int,
-) -> CheckoutOrder:
-    wallet = await get_wallet(prisma_client, account_id)
-    if wallet is None:
-        raise LookupError("wallet not found")
-    payment_id = str(uuid.uuid4())
-    idempotency_key = f"checkout:{payment_id}"
-    await _database(prisma_client).execute_raw(
-        """
-        INSERT INTO "LiteLLM_PublicRelayPayment"
-            ("payment_id", "account_id", "wallet_id", "amount_micros", "idempotency_key")
-        VALUES ($1, $2, $3, $4, $5)
-        """,
-        payment_id,
-        account_id,
-        wallet.wallet_id,
-        amount_micros,
-        idempotency_key,
-    )
-    return CheckoutOrder(
-        payment_id=payment_id,
-        account_id=account_id,
-        wallet_id=wallet.wallet_id,
-        amount_micros=amount_micros,
-        idempotency_key=idempotency_key,
-    )
-
-
-async def attach_checkout_session(prisma_client: PrismaClient, payment_id: str, session_id: str) -> None:
-    await _database(prisma_client).execute_raw(
-        """
-        UPDATE "LiteLLM_PublicRelayPayment"
-        SET "stripe_checkout_session" = $1, "updated_at" = CURRENT_TIMESTAMP
-        WHERE "payment_id" = $2 AND "status" = 'PENDING'
-        """,
-        session_id,
-        payment_id,
-    )
-
-
-async def fail_checkout_creation(prisma_client: PrismaClient, payment_id: str) -> None:
-    await _database(prisma_client).execute_raw(
-        """
-        UPDATE "LiteLLM_PublicRelayPayment"
-        SET "status" = 'FAILED', "updated_at" = CURRENT_TIMESTAMP
-        WHERE "payment_id" = $1 AND "status" = 'PENDING'
-        """,
-        payment_id,
-    )
-
-
-async def list_payments(
-    prisma_client: PrismaClient,
-    account_id: str,
-    cursor: datetime | None,
-    limit: int,
-) -> tuple[PaymentRow, ...]:
-    rows = await _database(prisma_client).query_raw(
-        """
-        SELECT *
-        FROM "LiteLLM_PublicRelayPayment"
-        WHERE "account_id" = $1
-          AND ($2::TIMESTAMP IS NULL OR "created_at" < $2)
-        ORDER BY "created_at" DESC, "payment_id" DESC
-        LIMIT $3
-        """,
-        account_id,
-        cursor,
-        limit,
-    )
-    return tuple(TypeAdapter(list[PaymentRow]).validate_python(rows))
 
 
 async def get_usage_summary(prisma_client: PrismaClient, account_id: str) -> UsageSummaryRow:
@@ -916,7 +972,7 @@ async def list_admin_accounts(
 ) -> tuple[AdminAccountRow, ...]:
     rows = await _database(prisma_client).query_raw(
         """
-        SELECT a.*, w."wallet_id", w."available_micros", w."reserved_micros", w."debt_micros"
+        SELECT a.*, w."wallet_id", w."available_micros", w."reserved_micros"
         FROM "LiteLLM_PublicRelayAccount" a
         JOIN "LiteLLM_PublicRelayWallet" w ON w."account_id" = a."account_id"
         WHERE ($1::TIMESTAMP IS NULL OR a."created_at" < $1)
@@ -927,26 +983,6 @@ async def list_admin_accounts(
         limit,
     )
     return tuple(TypeAdapter(list[AdminAccountRow]).validate_python(rows))
-
-
-async def list_admin_payments(
-    prisma_client: PrismaClient,
-    cursor: datetime | None,
-    limit: int,
-) -> tuple[AdminPaymentRow, ...]:
-    rows = await _database(prisma_client).query_raw(
-        """
-        SELECT p.*, a."normalized_email"
-        FROM "LiteLLM_PublicRelayPayment" p
-        JOIN "LiteLLM_PublicRelayAccount" a ON a."account_id" = p."account_id"
-        WHERE ($1::TIMESTAMP IS NULL OR p."created_at" < $1)
-        ORDER BY p."created_at" DESC, p."payment_id" DESC
-        LIMIT $2
-        """,
-        cursor,
-        limit,
-    )
-    return tuple(TypeAdapter(list[AdminPaymentRow]).validate_python(rows))
 
 
 async def get_margin_summary(prisma_client: PrismaClient) -> MarginSummaryRow:
@@ -1058,595 +1094,6 @@ async def delete_expired_request_metadata(prisma_client: PrismaClient, retention
     return int(deleted_charges) + int(deleted_reservations)
 
 
-async def credit_checkout(
-    prisma_client: PrismaClient,
-    event_id: str,
-    event_type: str,
-    livemode: bool,
-    payload: str,
-    checkout_session_id: str,
-    payment_intent_id: str,
-    amount_micros: int,
-    account_id: str,
-    currency: str,
-    payment_id: str,
-) -> bool:
-    async with _database(prisma_client).tx() as tx:
-        inserted = await tx.execute_raw(
-            """
-            INSERT INTO "LiteLLM_PublicRelayStripeEvent" ("event_id", "event_type", "livemode", "payload")
-            VALUES ($1, $2, $3, $4::JSONB)
-            ON CONFLICT ("event_id") DO NOTHING
-            """,
-            event_id,
-            event_type,
-            livemode,
-            payload,
-        )
-        if int(inserted) == 0:
-            return False
-        payment_rows = await tx.query_raw(
-            """
-            SELECT *
-            FROM "LiteLLM_PublicRelayPayment"
-            WHERE "stripe_checkout_session" = $1
-            FOR UPDATE
-            """,
-            checkout_session_id,
-        )
-        payment = _required_first(payment_rows, PaymentRow)
-        if (
-            payment.amount_micros != amount_micros
-            or payment.account_id != account_id
-            or payment.payment_id != payment_id
-            or payment.status != "PENDING"
-            or currency.upper() != "USD"
-        ):
-            raise ValueError("Stripe checkout does not match the pending payment")
-        wallet_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayWallet" WHERE "wallet_id" = $1 FOR UPDATE',
-            payment.wallet_id,
-        )
-        wallet = _required_first(wallet_rows, WalletRow)
-        available_after = wallet.available_micros + amount_micros
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayWallet"
-            SET
-                "available_micros" = $1,
-                "version" = "version" + 1,
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "wallet_id" = $2
-            """,
-            available_after,
-            wallet.wallet_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayPayment"
-            SET
-                "status" = 'PAID',
-                "stripe_payment_intent" = $1,
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "payment_id" = $2
-            """,
-            payment_intent_id,
-            payment.payment_id,
-        )
-        await tx.execute_raw(
-            """
-            INSERT INTO "LiteLLM_PublicRelayLedgerEntry"
-                (
-                    "entry_id",
-                    "wallet_id",
-                    "entry_type",
-                    "amount_micros",
-                    "available_after_micros",
-                    "reserved_after_micros",
-                    "debt_after_micros",
-                    "idempotency_key",
-                    "payment_id"
-                )
-            VALUES ($1, $2, 'DEPOSIT', $3, $4, $5, $6, $7, $8)
-            """,
-            str(uuid.uuid4()),
-            wallet.wallet_id,
-            amount_micros,
-            available_after,
-            wallet.reserved_micros,
-            wallet.debt_micros,
-            f"stripe-deposit:{event_id}",
-            payment.payment_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayStripeEvent"
-            SET "processed_at" = CURRENT_TIMESTAMP
-            WHERE "event_id" = $1
-            """,
-            event_id,
-        )
-    return True
-
-
-async def fail_checkout(
-    prisma_client: PrismaClient,
-    event_id: str,
-    event_type: str,
-    livemode: bool,
-    payload: str,
-    checkout_session_id: str,
-) -> bool:
-    async with _database(prisma_client).tx() as tx:
-        inserted = await tx.execute_raw(
-            """
-            INSERT INTO "LiteLLM_PublicRelayStripeEvent" ("event_id", "event_type", "livemode", "payload")
-            VALUES ($1, $2, $3, $4::JSONB)
-            ON CONFLICT ("event_id") DO NOTHING
-            """,
-            event_id,
-            event_type,
-            livemode,
-            payload,
-        )
-        if int(inserted) == 0:
-            return False
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayPayment"
-            SET "status" = 'FAILED', "updated_at" = CURRENT_TIMESTAMP
-            WHERE "stripe_checkout_session" = $1 AND "status" = 'PENDING'
-            """,
-            checkout_session_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayStripeEvent"
-            SET "processed_at" = CURRENT_TIMESTAMP
-            WHERE "event_id" = $1
-            """,
-            event_id,
-        )
-    return True
-
-
-async def apply_dispute(
-    prisma_client: PrismaClient,
-    event_id: str,
-    event_type: str,
-    livemode: bool,
-    payload: str,
-    payment_intent_id: str,
-    amount_micros: int,
-) -> bool:
-    async with _database(prisma_client).tx() as tx:
-        inserted = await tx.execute_raw(
-            """
-            INSERT INTO "LiteLLM_PublicRelayStripeEvent" ("event_id", "event_type", "livemode", "payload")
-            VALUES ($1, $2, $3, $4::JSONB)
-            ON CONFLICT ("event_id") DO NOTHING
-            """,
-            event_id,
-            event_type,
-            livemode,
-            payload,
-        )
-        if int(inserted) == 0:
-            return False
-        payment_rows = await tx.query_raw(
-            """
-            SELECT *
-            FROM "LiteLLM_PublicRelayPayment"
-            WHERE "stripe_payment_intent" = $1
-            FOR UPDATE
-            """,
-            payment_intent_id,
-        )
-        payment = _required_first(payment_rows, PaymentRow)
-        wallet_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayWallet" WHERE "wallet_id" = $1 FOR UPDATE',
-            payment.wallet_id,
-        )
-        wallet = _required_first(wallet_rows, WalletRow)
-        recovered = min(wallet.available_micros, amount_micros)
-        available_after = wallet.available_micros - recovered
-        debt_after = wallet.debt_micros + amount_micros - recovered
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayWallet"
-            SET
-                "available_micros" = $1,
-                "debt_micros" = $2,
-                "version" = "version" + 1,
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "wallet_id" = $3
-            """,
-            available_after,
-            debt_after,
-            wallet.wallet_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayPayment"
-            SET "status" = 'DISPUTED', "updated_at" = CURRENT_TIMESTAMP
-            WHERE "payment_id" = $1
-            """,
-            payment.payment_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayAccount"
-            SET "status" = 'FROZEN', "session_version" = "session_version" + 1,
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "account_id" = $1
-            """,
-            payment.account_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_VerificationToken"
-            SET "blocked" = true, "updated_at" = CURRENT_TIMESTAMP
-            WHERE "user_id" = (
-                SELECT "user_id" FROM "LiteLLM_PublicRelayAccount" WHERE "account_id" = $1
-            )
-              AND COALESCE(("metadata"->>'public_relay')::BOOLEAN, false) = true
-            """,
-            payment.account_id,
-        )
-        await tx.execute_raw(
-            """
-            INSERT INTO "LiteLLM_PublicRelayLedgerEntry"
-                (
-                    "entry_id",
-                    "wallet_id",
-                    "entry_type",
-                    "amount_micros",
-                    "available_after_micros",
-                    "reserved_after_micros",
-                    "debt_after_micros",
-                    "idempotency_key",
-                    "payment_id"
-                )
-            VALUES ($1, $2, 'CHARGEBACK', $3, $4, $5, $6, $7, $8)
-            """,
-            str(uuid.uuid4()),
-            wallet.wallet_id,
-            -amount_micros,
-            available_after,
-            wallet.reserved_micros,
-            debt_after,
-            f"chargeback:{event_id}",
-            payment.payment_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayStripeEvent"
-            SET "processed_at" = CURRENT_TIMESTAMP
-            WHERE "event_id" = $1
-            """,
-            event_id,
-        )
-    return True
-
-
-async def record_stripe_event(
-    prisma_client: PrismaClient,
-    event_id: str,
-    event_type: str,
-    livemode: bool,
-    payload: str,
-) -> bool:
-    inserted = await _database(prisma_client).execute_raw(
-        """
-        INSERT INTO "LiteLLM_PublicRelayStripeEvent"
-            ("event_id", "event_type", "livemode", "payload", "processed_at")
-        VALUES ($1, $2, $3, $4::JSONB, CURRENT_TIMESTAMP)
-        ON CONFLICT ("event_id") DO NOTHING
-        """,
-        event_id,
-        event_type,
-        livemode,
-        payload,
-    )
-    return int(inserted) == 1
-
-
-async def begin_refund(
-    prisma_client: PrismaClient,
-    payment_id: str,
-    amount_micros: int,
-    reason: str,
-    idempotency_key: str,
-) -> RefundOperation:
-    async with _database(prisma_client).tx() as tx:
-        existing_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayRefund" WHERE "idempotency_key" = $1',
-            idempotency_key,
-        )
-        existing = _first(existing_rows, RefundRow)
-        if existing is not None:
-            payment_rows = await tx.query_raw(
-                'SELECT * FROM "LiteLLM_PublicRelayPayment" WHERE "payment_id" = $1 FOR UPDATE',
-                existing.payment_id,
-            )
-            payment = _required_first(payment_rows, PaymentRow)
-            if payment.stripe_payment_intent is None:
-                raise RuntimeError("payment intent is missing")
-            if existing.status == "FAILED":
-                wallet_rows = await tx.query_raw(
-                    'SELECT * FROM "LiteLLM_PublicRelayWallet" WHERE "wallet_id" = $1 FOR UPDATE',
-                    existing.wallet_id,
-                )
-                wallet = _required_first(wallet_rows, WalletRow)
-                if wallet.available_micros < existing.amount_micros:
-                    raise ArithmeticError("refund exceeds the refundable balance")
-                await tx.execute_raw(
-                    """
-                    UPDATE "LiteLLM_PublicRelayWallet"
-                    SET
-                        "available_micros" = "available_micros" - $1,
-                        "reserved_micros" = "reserved_micros" + $1,
-                        "version" = "version" + 1,
-                        "updated_at" = CURRENT_TIMESTAMP
-                    WHERE "wallet_id" = $2
-                    """,
-                    existing.amount_micros,
-                    existing.wallet_id,
-                )
-                updated_rows = await tx.query_raw(
-                    """
-                    UPDATE "LiteLLM_PublicRelayRefund"
-                    SET "status" = 'PENDING', "error" = NULL, "updated_at" = CURRENT_TIMESTAMP
-                    WHERE "refund_id" = $1
-                    RETURNING *
-                    """,
-                    existing.refund_id,
-                )
-                await tx.execute_raw(
-                    """
-                    UPDATE "LiteLLM_PublicRelayPayment"
-                    SET "status" = 'REFUND_PENDING', "updated_at" = CURRENT_TIMESTAMP
-                    WHERE "payment_id" = $1
-                    """,
-                    existing.payment_id,
-                )
-                existing = _required_first(updated_rows, RefundRow)
-            return RefundOperation(refund=existing, payment_intent_id=payment.stripe_payment_intent)
-        payment_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayPayment" WHERE "payment_id" = $1 FOR UPDATE',
-            payment_id,
-        )
-        payment = _required_first(payment_rows, PaymentRow)
-        if payment.status not in {"PAID", "PARTIALLY_REFUNDED"}:
-            raise ValueError("payment is not refundable")
-        if payment.stripe_payment_intent is None:
-            raise RuntimeError("payment intent is missing")
-        wallet_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayWallet" WHERE "wallet_id" = $1 FOR UPDATE',
-            payment.wallet_id,
-        )
-        wallet = _required_first(wallet_rows, WalletRow)
-        maximum_refund = maximum_refund_micros(
-            payment.amount_micros,
-            payment.refunded_micros,
-            wallet.available_micros,
-        )
-        if amount_micros <= 0 or amount_micros > maximum_refund:
-            raise ArithmeticError("refund exceeds the refundable balance")
-        refund_id = str(uuid.uuid4())
-        refund_rows = await tx.query_raw(
-            """
-            INSERT INTO "LiteLLM_PublicRelayRefund"
-                (
-                    "refund_id",
-                    "payment_id",
-                    "wallet_id",
-                    "amount_micros",
-                    "idempotency_key",
-                    "reason"
-                )
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
-            """,
-            refund_id,
-            payment.payment_id,
-            payment.wallet_id,
-            amount_micros,
-            idempotency_key,
-            reason,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayWallet"
-            SET
-                "available_micros" = "available_micros" - $1,
-                "reserved_micros" = "reserved_micros" + $1,
-                "version" = "version" + 1,
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "wallet_id" = $2
-            """,
-            amount_micros,
-            payment.wallet_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayPayment"
-            SET "status" = 'REFUND_PENDING', "updated_at" = CURRENT_TIMESTAMP
-            WHERE "payment_id" = $1
-            """,
-            payment.payment_id,
-        )
-    return RefundOperation(
-        refund=_required_first(refund_rows, RefundRow),
-        payment_intent_id=payment.stripe_payment_intent,
-    )
-
-
-async def attach_refund_submission(prisma_client: PrismaClient, refund_id: str, stripe_refund_id: str) -> RefundRow:
-    rows = await _database(prisma_client).query_raw(
-        """
-        UPDATE "LiteLLM_PublicRelayRefund"
-        SET "stripe_refund_id" = $1, "updated_at" = CURRENT_TIMESTAMP
-        WHERE "refund_id" = $2 AND "status" = 'PENDING'
-        RETURNING *
-        """,
-        stripe_refund_id,
-        refund_id,
-    )
-    return _required_first(rows, RefundRow)
-
-
-async def get_refund_by_stripe_id(prisma_client: PrismaClient, stripe_refund_id: str) -> RefundRow | None:
-    rows = await _database(prisma_client).query_raw(
-        'SELECT * FROM "LiteLLM_PublicRelayRefund" WHERE "stripe_refund_id" = $1',
-        stripe_refund_id,
-    )
-    return _first(rows, RefundRow)
-
-
-async def get_refund_by_id(prisma_client: PrismaClient, refund_id: str) -> RefundRow | None:
-    rows = await _database(prisma_client).query_raw(
-        'SELECT * FROM "LiteLLM_PublicRelayRefund" WHERE "refund_id" = $1',
-        refund_id,
-    )
-    return _first(rows, RefundRow)
-
-
-async def complete_refund(prisma_client: PrismaClient, refund_id: str, stripe_refund_id: str) -> RefundRow:
-    async with _database(prisma_client).tx() as tx:
-        refund_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayRefund" WHERE "refund_id" = $1 FOR UPDATE',
-            refund_id,
-        )
-        refund = _required_first(refund_rows, RefundRow)
-        if refund.status == "SUCCEEDED":
-            return refund
-        if refund.status != "PENDING":
-            raise ValueError("refund is not pending")
-        payment_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayPayment" WHERE "payment_id" = $1 FOR UPDATE',
-            refund.payment_id,
-        )
-        payment = _required_first(payment_rows, PaymentRow)
-        wallet_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayWallet" WHERE "wallet_id" = $1 FOR UPDATE',
-            refund.wallet_id,
-        )
-        wallet = _required_first(wallet_rows, WalletRow)
-        refunded_after = payment.refunded_micros + refund.amount_micros
-        reserved_after = wallet.reserved_micros - refund.amount_micros
-        payment_status = "REFUNDED" if refunded_after == payment.amount_micros else "PARTIALLY_REFUNDED"
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayWallet"
-            SET
-                "reserved_micros" = $1,
-                "version" = "version" + 1,
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "wallet_id" = $2
-            """,
-            reserved_after,
-            wallet.wallet_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayPayment"
-            SET "refunded_micros" = $1, "status" = $2::"PublicRelayPaymentStatus",
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "payment_id" = $3
-            """,
-            refunded_after,
-            payment_status,
-            payment.payment_id,
-        )
-        updated_rows = await tx.query_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayRefund"
-            SET "status" = 'SUCCEEDED', "stripe_refund_id" = $1, "updated_at" = CURRENT_TIMESTAMP
-            WHERE "refund_id" = $2
-            RETURNING *
-            """,
-            stripe_refund_id,
-            refund.refund_id,
-        )
-        await tx.execute_raw(
-            """
-            INSERT INTO "LiteLLM_PublicRelayLedgerEntry"
-                (
-                    "entry_id",
-                    "wallet_id",
-                    "entry_type",
-                    "amount_micros",
-                    "available_after_micros",
-                    "reserved_after_micros",
-                    "debt_after_micros",
-                    "idempotency_key",
-                    "payment_id",
-                    "metadata"
-                )
-            VALUES ($1, $2, 'REFUND', $3, $4, $5, $6, $7, $8, $9::JSONB)
-            """,
-            str(uuid.uuid4()),
-            wallet.wallet_id,
-            -refund.amount_micros,
-            wallet.available_micros,
-            reserved_after,
-            wallet.debt_micros,
-            f"refund:{refund.refund_id}",
-            payment.payment_id,
-            json.dumps({"stripe_refund_id": stripe_refund_id}, separators=(",", ":")),
-        )
-    return _required_first(updated_rows, RefundRow)
-
-
-async def fail_refund(prisma_client: PrismaClient, refund_id: str, error: str) -> None:
-    async with _database(prisma_client).tx() as tx:
-        refund_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayRefund" WHERE "refund_id" = $1 FOR UPDATE',
-            refund_id,
-        )
-        refund = _required_first(refund_rows, RefundRow)
-        if refund.status != "PENDING":
-            return
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayWallet"
-            SET
-                "available_micros" = "available_micros" + $1,
-                "reserved_micros" = "reserved_micros" - $1,
-                "version" = "version" + 1,
-                "updated_at" = CURRENT_TIMESTAMP
-            WHERE "wallet_id" = $2
-            """,
-            refund.amount_micros,
-            refund.wallet_id,
-        )
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayRefund"
-            SET "status" = 'FAILED', "error" = $1, "updated_at" = CURRENT_TIMESTAMP
-            WHERE "refund_id" = $2
-            """,
-            error[:1000],
-            refund.refund_id,
-        )
-        payment_rows = await tx.query_raw(
-            'SELECT * FROM "LiteLLM_PublicRelayPayment" WHERE "payment_id" = $1',
-            refund.payment_id,
-        )
-        payment = _required_first(payment_rows, PaymentRow)
-        restored_status = "PAID" if payment.refunded_micros == 0 else "PARTIALLY_REFUNDED"
-        await tx.execute_raw(
-            """
-            UPDATE "LiteLLM_PublicRelayPayment"
-            SET "status" = $1::"PublicRelayPaymentStatus", "updated_at" = CURRENT_TIMESTAMP
-            WHERE "payment_id" = $2
-            """,
-            restored_status,
-            payment.payment_id,
-        )
-
-
 async def adjust_wallet(
     prisma_client: PrismaClient,
     wallet_id: str,
@@ -1699,14 +1146,13 @@ async def adjust_wallet(
                     "idempotency_key",
                     "metadata"
                 )
-            VALUES ($1, $2, 'ADJUSTMENT', $3, $4, $5, $6, $7, $8::JSONB)
+            VALUES ($1, $2, 'ADJUSTMENT', $3, $4, $5, $6, $7::JSONB)
             """,
             str(uuid.uuid4()),
             wallet.wallet_id,
             amount_micros,
             available_after,
             wallet.reserved_micros,
-            wallet.debt_micros,
             idempotency_key,
             json.dumps({"reason": reason}, separators=(",", ":")),
         )
@@ -1715,7 +1161,6 @@ async def adjust_wallet(
         account_id=wallet.account_id,
         available_micros=available_after,
         reserved_micros=wallet.reserved_micros,
-        debt_micros=wallet.debt_micros,
     )
 
 
@@ -1836,6 +1281,13 @@ def _required_mapping(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise TypeError("database row must be a mapping")
     return cast(dict[str, object], value)  # cast-ok: isinstance validates the Prisma JSON mapping boundary.
+
+
+def _required_string(value: dict[str, object], key: str) -> str:
+    result = value.get(key)
+    if not isinstance(result, str):
+        raise TypeError(f"{key} must be a string")
+    return result
 
 
 def _single_string(rows: object, key: str) -> str:

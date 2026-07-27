@@ -57,18 +57,8 @@ def verify_account_password(password: str, password_hash: str | None) -> bool:
     return password_hash is not None and matches
 
 
-def new_verification_code() -> str:
-    return f"{secrets.randbelow(1_000_000):06d}"
-
-
-def hash_verification_code(secret: bytes, purpose: str, email: str, code: str) -> str:
-    message = f"{purpose}:{email}:{code}".encode()
-    return hmac.new(secret, message, hashlib.sha256).hexdigest()
-
-
-def verification_code_matches(secret: bytes, purpose: str, email: str, code: str, expected: str) -> bool:
-    actual = hash_verification_code(secret=secret, purpose=purpose, email=email, code=code)
-    return hmac.compare_digest(actual, expected)
+def new_auth_token() -> str:
+    return secrets.token_urlsafe(48)
 
 
 def new_session_credentials() -> SessionCredentials:
@@ -77,3 +67,11 @@ def new_session_credentials() -> SessionCredentials:
 
 def hash_session_token(secret: bytes, token: str) -> str:
     return hmac.new(secret, token.encode(), hashlib.sha256).hexdigest()
+
+
+def hash_auth_token(secret: bytes, token: str) -> str:
+    return hmac.new(secret, f"auth:{token}".encode(), hashlib.sha256).hexdigest()
+
+
+def hash_rate_limit_key(secret: bytes, key: str) -> str:
+    return hmac.new(secret, f"limit:{key}".encode(), hashlib.sha256).hexdigest()

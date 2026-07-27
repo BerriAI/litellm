@@ -17,7 +17,7 @@ const PortalContext = createContext<PortalValue | null>(null);
 const navigation = [
   ["portal", "Overview"],
   ["portal/keys", "API keys"],
-  ["portal/billing", "Balance & billing"],
+  ["portal/credit", "额度与账目"],
   ["portal/usage", "Usage"],
   ["portal/logs", "Request logs"],
   ["portal/security", "Security"],

@@ -12,29 +12,19 @@ class MoneyResponse(BaseModel):
     display: str
 
 
-class VerificationCodeRequest(BaseModel):
-    email: str
-    turnstile_token: str = Field(min_length=1, max_length=4096)
-
-
-class RegisterRequest(BaseModel):
-    email: str
-    code: str = Field(pattern=r"^\d{6}$")
+class ActivateRequest(BaseModel):
+    token: str = Field(min_length=32, max_length=512)
     password: str
-    turnstile_token: str = Field(min_length=1, max_length=4096)
 
 
 class LoginRequest(BaseModel):
     email: str
     password: str
-    turnstile_token: str = Field(min_length=1, max_length=4096)
 
 
 class PasswordResetRequest(BaseModel):
-    email: str
-    code: str = Field(pattern=r"^\d{6}$")
+    token: str = Field(min_length=32, max_length=512)
     password: str
-    turnstile_token: str = Field(min_length=1, max_length=4096)
 
 
 class MessageResponse(BaseModel):
@@ -50,14 +40,15 @@ class AccountResponse(BaseModel):
     account_id: str
     user_id: str
     email: str
-    status: Literal["ACTIVE", "FROZEN", "CLOSED"]
+    company_name: str
+    notes: str | None
+    status: Literal["INVITED", "ACTIVE", "FROZEN", "CLOSED"]
     created_at: datetime
 
 
 class WalletResponse(BaseModel):
     available: MoneyResponse
     reserved: MoneyResponse
-    debt: MoneyResponse
 
 
 class LedgerEntryResponse(BaseModel):
@@ -68,7 +59,6 @@ class LedgerEntryResponse(BaseModel):
     reserved_after: MoneyResponse
     created_at: datetime
     request_id: str | None = None
-    payment_id: str | None = None
 
 
 class LedgerListResponse(BaseModel):
@@ -110,7 +100,7 @@ class PricingResponse(BaseModel):
 
 class ApiKeyCreateRequest(BaseModel):
     alias: str = Field(min_length=1, max_length=128)
-    log_content: bool = True
+    log_content: bool = False
 
 
 class ApiKeyResponse(BaseModel):
@@ -129,29 +119,6 @@ class SessionResponse(BaseModel):
     account: AccountResponse
     csrf_token: str
     default_key: ApiKeyResponse | None = None
-
-
-class CheckoutRequest(BaseModel):
-    amount_cents: int
-    turnstile_token: str = Field(min_length=1, max_length=4096)
-
-
-class CheckoutResponse(BaseModel):
-    payment_id: str
-    checkout_url: str
-
-
-class PaymentResponse(BaseModel):
-    payment_id: str
-    amount: MoneyResponse
-    refunded: MoneyResponse
-    status: str
-    created_at: datetime
-
-
-class PaymentListResponse(BaseModel):
-    data: tuple[PaymentResponse, ...]
-    next_cursor: str | None = None
 
 
 class UsageResponse(BaseModel):
@@ -185,42 +152,37 @@ class WalletAdjustmentRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
-class RefundRequest(BaseModel):
-    amount_micros: int = Field(gt=0, multiple_of=10_000)
-    reason: str = Field(min_length=1, max_length=500)
+class EnterpriseCreateRequest(BaseModel):
+    company_name: str = Field(min_length=1, max_length=200)
+    admin_email: str
+    initial_credit_micros: int = Field(default=0, ge=0)
+    notes: str | None = Field(default=None, max_length=2000)
 
 
 class AccountStatusRequest(BaseModel):
     status: Literal["ACTIVE", "FROZEN", "CLOSED"]
 
 
-class RefundResponse(BaseModel):
-    refund_id: str
-    payment_id: str
-    amount: MoneyResponse
-    status: str
+class AuthLinkResponse(BaseModel):
+    account_id: str
+    expires_at: datetime
+    url: str
+
+
+class EnterpriseCreateResponse(BaseModel):
+    account: AccountResponse
+    wallet: WalletResponse
+    activation: AuthLinkResponse
 
 
 class AdminAccountResponse(AccountResponse):
     wallet_id: str
     available: MoneyResponse
     reserved: MoneyResponse
-    debt: MoneyResponse
 
 
 class AdminAccountListResponse(BaseModel):
     data: tuple[AdminAccountResponse, ...]
-    next_cursor: str | None = None
-
-
-class AdminPaymentResponse(PaymentResponse):
-    account_id: str
-    wallet_id: str
-    email: str
-
-
-class AdminPaymentListResponse(BaseModel):
-    data: tuple[AdminPaymentResponse, ...]
     next_cursor: str | None = None
 
 

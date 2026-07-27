@@ -5,17 +5,17 @@ export default function DocsPage() {
       <h1 className="mt-5 text-5xl font-semibold tracking-[-0.045em]">Your first request.</h1>
       <div className="mt-12 grid gap-8 lg:grid-cols-[.65fr_1.35fr]">
         <ol className="space-y-5 text-sm leading-6 text-black/65">
-          <li>1. Create an account and verify your email.</li>
-          <li>2. Add prepaid balance with Stripe Checkout.</li>
-          <li>3. Copy a relay key once and keep it server-side.</li>
-          <li>4. Call models listed by GET /v1/models.</li>
+          <li>1. 由管理员创建企业账户并取得一次性激活链接。</li>
+          <li>2. 激活账户，设置密码并保存首次展示的默认 Key。</li>
+          <li>3. 由管理员线下授予企业额度。</li>
+          <li>4. 调用 GET /v1/models 中已发布的模型。</li>
         </ol>
         <pre className="overflow-x-auto rounded-3xl bg-[#171713] p-7 text-sm leading-7 text-white/80">
           <code>{`from openai import OpenAI
 
 client = OpenAI(
     api_key=os.environ["RELAY_API_KEY"],
-    base_url="https://api.example.com/v1",
+    base_url="https://47.236.187.190/v1",
 )
 
 response = client.responses.create(

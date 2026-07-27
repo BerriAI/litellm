@@ -8311,19 +8311,22 @@ class ProxyStartupEvent:
         if public_relay_settings.enabled and prisma_client is not None:
             public_relay_jobs = PublicRelayBackgroundJobs(
                 prisma_client=prisma_client,
-                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
             )
             scheduler.add_job(
                 public_relay_jobs.reconcile,
                 "interval",
                 seconds=60,
                 id="public_relay_reconcile",
+                max_instances=1,
+                coalesce=True,
             )
             scheduler.add_job(
                 public_relay_jobs.cleanup_retained_data,
                 "interval",
                 hours=1,
                 id="public_relay_content_cleanup",
+                max_instances=1,
+                coalesce=True,
             )
 
         await cls._initialize_expired_ui_session_key_cleanup_background_job(scheduler=scheduler)

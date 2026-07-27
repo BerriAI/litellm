@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from litellm.proxy.public_relay.api_types import ModelPriceCreateRequest
+from litellm.proxy.public_relay.api_types import ApiKeyCreateRequest, ModelPriceCreateRequest
 
 
 def test_price_requires_a_billable_output_kind() -> None:
@@ -18,3 +18,7 @@ def test_price_output_default_cannot_exceed_maximum() -> None:
             default_max_output_tokens=4097,
             max_output_tokens=4096,
         )
+
+
+def test_content_logging_is_opt_in() -> None:
+    assert ApiKeyCreateRequest(alias="production").log_content is False

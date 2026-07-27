@@ -5,7 +5,6 @@ from litellm.proxy.public_relay.money import (
     UsageQuantity,
     calculate_usage_charge,
     display_usd,
-    maximum_refund_micros,
     token_charge_micros,
 )
 
@@ -72,20 +71,3 @@ def test_embedding_uses_embedding_rate_only() -> None:
 )
 def test_display_usd(amount: int, expected: str) -> None:
     assert display_usd(amount) == expected
-
-
-@pytest.mark.parametrize(
-    ("payment", "refunded", "available", "expected"),
-    [
-        (10_000_000, 0, 3_000_000, 3_000_000),
-        (10_000_000, 4_000_000, 20_000_000, 6_000_000),
-        (10_000_000, 10_000_000, 20_000_000, 0),
-    ],
-)
-def test_refund_limit_uses_payment_remainder_and_available_balance(
-    payment: int,
-    refunded: int,
-    available: int,
-    expected: int,
-) -> None:
-    assert maximum_refund_micros(payment, refunded, available) == expected

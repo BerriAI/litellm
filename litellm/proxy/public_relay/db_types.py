@@ -14,7 +14,9 @@ class AccountRow(DatabaseModel):
     account_id: str
     user_id: str
     normalized_email: str
-    status: Literal["ACTIVE", "FROZEN", "CLOSED"]
+    company_name: str
+    notes: str | None
+    status: Literal["INVITED", "ACTIVE", "FROZEN", "CLOSED"]
     password: str | None = None
     session_version: int
     created_at: datetime
@@ -25,7 +27,6 @@ class WalletRow(DatabaseModel):
     account_id: str
     available_micros: int
     reserved_micros: int
-    debt_micros: int
 
 
 class PriceRow(DatabaseModel):
@@ -63,46 +64,30 @@ class ReservationSettlementRow(ReservationRow):
 
 class LedgerRow(DatabaseModel):
     entry_id: str
-    entry_type: Literal["DEPOSIT", "RESERVE", "RELEASE", "USAGE", "REFUND", "ADJUSTMENT", "CHARGEBACK"]
+    entry_type: Literal["RESERVE", "RELEASE", "USAGE", "ADJUSTMENT"]
     amount_micros: int
     available_after_micros: int
     reserved_after_micros: int
     request_id: str | None
-    payment_id: str | None
     created_at: datetime
 
 
-class PaymentRow(DatabaseModel):
-    payment_id: str
+class PortalSessionRow(DatabaseModel):
+    session_id: str
     account_id: str
-    wallet_id: str
-    amount_micros: int
-    refunded_micros: int
-    status: Literal[
-        "PENDING",
-        "PAID",
-        "REFUND_PENDING",
-        "PARTIALLY_REFUNDED",
-        "REFUNDED",
-        "FAILED",
-        "DISPUTED",
-    ]
-    stripe_checkout_session: str | None
-    stripe_payment_intent: str | None
-    created_at: datetime
+    user_id: str
+    normalized_email: str
+    session_version: int
+    csrf_token: str
+    expires_at: datetime
 
 
-class RefundRow(DatabaseModel):
-    refund_id: str
-    payment_id: str
-    wallet_id: str
-    amount_micros: int
-    status: Literal["PENDING", "SUCCEEDED", "FAILED"]
-    stripe_refund_id: str | None
-    idempotency_key: str
-    reason: str
-    error: str | None
-    created_at: datetime
+class AuthTokenRow(DatabaseModel):
+    auth_token_id: str
+    account_id: str
+    purpose: Literal["ACTIVATION", "PASSWORD_RESET"]
+    expires_at: datetime
+    consumed_at: datetime | None
 
 
 class KeyRow(DatabaseModel):
@@ -142,11 +127,6 @@ class AdminAccountRow(AccountRow):
     wallet_id: str
     available_micros: int
     reserved_micros: int
-    debt_micros: int
-
-
-class AdminPaymentRow(PaymentRow):
-    normalized_email: str
 
 
 class MarginSummaryRow(DatabaseModel):

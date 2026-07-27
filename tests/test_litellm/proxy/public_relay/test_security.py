@@ -1,10 +1,10 @@
 import pytest
 
 from litellm.proxy.public_relay.security import (
+    hash_auth_token,
     hash_password,
-    hash_verification_code,
+    hash_rate_limit_key,
     normalize_email,
-    verification_code_matches,
     verify_account_password,
     verify_password,
 )
@@ -32,9 +32,7 @@ def test_missing_account_password_runs_dummy_verification() -> None:
     assert verify_account_password("AnyPassword123", None) is False
 
 
-def test_verification_hash_binds_purpose_and_email() -> None:
+def test_auth_and_rate_limit_hashes_are_domain_separated() -> None:
     secret = b"x" * 32
-    expected = hash_verification_code(secret, "register", "person@example.com", "123456")
-
-    assert verification_code_matches(secret, "register", "person@example.com", "123456", expected)
-    assert not verification_code_matches(secret, "password-reset", "person@example.com", "123456", expected)
+    assert hash_auth_token(secret, "same-value") != hash_rate_limit_key(secret, "same-value")
+    assert hash_auth_token(secret, "same-value") == hash_auth_token(secret, "same-value")

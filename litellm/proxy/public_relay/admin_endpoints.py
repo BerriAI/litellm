@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import urlencode
 
-import stripe
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -12,38 +12,95 @@ from litellm.proxy.public_relay.api_types import (
     AccountStatusRequest,
     AdminAccountListResponse,
     AdminAccountResponse,
-    AdminPaymentListResponse,
-    AdminPaymentResponse,
+    AuthLinkResponse,
+    EnterpriseCreateRequest,
+    EnterpriseCreateResponse,
     MarginResponse,
     MessageResponse,
     ModelPriceCreateRequest,
     ModelPriceResponse,
     PricingResponse,
-    RefundRequest,
-    RefundResponse,
     WalletAdjustmentRequest,
     WalletResponse,
 )
-from litellm.proxy.public_relay.db_types import PriceRow, RefundRow
+from litellm.proxy.public_relay.db_types import PriceRow
 from litellm.proxy.public_relay.repository import (
     adjust_wallet,
-    attach_refund_submission,
-    begin_refund,
-    complete_refund,
-    fail_refund,
+    create_auth_token,
+    create_enterprise,
     get_account_by_id,
     get_margin_summary,
     list_active_prices,
     list_admin_accounts,
-    list_admin_payments,
     list_api_keys,
     publish_price,
     set_account_status,
 )
-from litellm.proxy.public_relay.runtime import database, money_response, settings, wallet_response
-from litellm.proxy.public_relay.stripe_client import StripeSdkGateway
+from litellm.proxy.public_relay.runtime import (
+    account_response,
+    database,
+    money_response,
+    settings,
+    wallet_response,
+)
+from litellm.proxy.public_relay.security import hash_auth_token, new_auth_token, normalize_email
 
 router = APIRouter(prefix="/v1/admin/relay", tags=["public relay administration"])
+
+
+@router.post("/accounts", response_model=EnterpriseCreateResponse)
+async def create_account(
+    payload: EnterpriseCreateRequest,
+    idempotency_key: Annotated[str, Header(alias="idempotency-key", min_length=8, max_length=255)],
+    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> EnterpriseCreateResponse:
+    _require_admin(user)
+    value = settings()
+    raw_token = new_auth_token()
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=72)
+    try:
+        normalized_email = normalize_email(payload.admin_email)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid enterprise details") from exc
+    created = await create_enterprise(
+        database(),
+        normalized_email,
+        payload.company_name.strip(),
+        payload.notes,
+        payload.initial_credit_micros,
+        idempotency_key,
+        hash_auth_token(value.session_secret, raw_token),
+        expires_at,
+    )
+    return EnterpriseCreateResponse(
+        account=account_response(created.account),
+        wallet=wallet_response(created.wallet),
+        activation=_auth_link(created.account.account_id, raw_token, "activate", expires_at),
+    )
+
+
+@router.post("/accounts/{account_id}/activation-link", response_model=AuthLinkResponse)
+async def activation_link(
+    account_id: str,
+    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> AuthLinkResponse:
+    _require_admin(user)
+    account = await get_account_by_id(database(), account_id)
+    if account is None or account.status != "INVITED":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account is not awaiting activation")
+    return await _new_auth_link(account_id, "ACTIVATION", "activate", timedelta(hours=72))
+
+
+@router.post("/accounts/{account_id}/password-reset-link", response_model=AuthLinkResponse)
+async def password_reset_link(
+    account_id: str,
+    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> AuthLinkResponse:
+    _require_admin(user)
+    account = await get_account_by_id(database(), account_id)
+    if account is None or account.status != "ACTIVE":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account is not active")
+    return await _new_auth_link(account_id, "PASSWORD_RESET", "password-reset", timedelta(minutes=30))
 
 
 @router.get("/accounts", response_model=AdminAccountListResponse)
@@ -60,12 +117,13 @@ async def accounts(
             account_id=value.account_id,
             user_id=value.user_id,
             email=value.normalized_email,
+            company_name=value.company_name,
+            notes=value.notes,
             status=value.status,
             created_at=value.created_at,
             wallet_id=value.wallet_id,
             available=money_response(value.available_micros),
             reserved=money_response(value.reserved_micros),
-            debt=money_response(value.debt_micros),
         )
         for value in values
     )
@@ -73,36 +131,8 @@ async def accounts(
     return AdminAccountListResponse(data=data, next_cursor=next_cursor)
 
 
-@router.get("/payments", response_model=AdminPaymentListResponse)
-async def admin_payments(
-    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    cursor: datetime | None = None,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> AdminPaymentListResponse:
-    _require_admin(user)
-    settings()
-    values = await list_admin_payments(database(), cursor, limit)
-    data = tuple(
-        AdminPaymentResponse(
-            payment_id=value.payment_id,
-            account_id=value.account_id,
-            wallet_id=value.wallet_id,
-            email=value.normalized_email,
-            amount=money_response(value.amount_micros),
-            refunded=money_response(value.refunded_micros),
-            status=value.status,
-            created_at=value.created_at,
-        )
-        for value in values
-    )
-    next_cursor = values[-1].created_at.isoformat() if len(values) == limit else None
-    return AdminPaymentListResponse(data=data, next_cursor=next_cursor)
-
-
 @router.get("/margin", response_model=MarginResponse)
-async def margin(
-    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> MarginResponse:
+async def margin(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> MarginResponse:
     _require_admin(user)
     settings()
     value = await get_margin_summary(database())
@@ -114,9 +144,7 @@ async def margin(
 
 
 @router.get("/prices", response_model=PricingResponse)
-async def admin_prices(
-    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> PricingResponse:
+async def admin_prices(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> PricingResponse:
     _require_admin(user)
     settings()
     values = await list_active_prices(database())
@@ -130,8 +158,6 @@ async def create_price(
 ) -> ModelPriceResponse:
     _require_admin(user)
     settings()
-    if payload.default_max_output_tokens > payload.max_output_tokens:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Default output limit exceeds maximum")
     created = await publish_price(database(), payload, user.user_id or "proxy-admin")
     return _price_response(created)
 
@@ -172,55 +198,30 @@ async def wallet_adjustment(
     return wallet_response(value)
 
 
-@router.post("/payments/{payment_id}/refund", response_model=RefundResponse)
-async def refund_payment(
-    payment_id: str,
-    payload: RefundRequest,
-    idempotency_key: Annotated[str, Header(alias="idempotency-key", min_length=8, max_length=255)],
-    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> RefundResponse:
-    _require_admin(user)
+async def _new_auth_link(
+    account_id: str,
+    purpose: str,
+    page: str,
+    lifetime: timedelta,
+) -> AuthLinkResponse:
     value = settings()
-    try:
-        operation = await begin_refund(
-            database(),
-            payment_id,
-            payload.amount_micros,
-            payload.reason,
-            idempotency_key,
-        )
-    except (ArithmeticError, LookupError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    if operation.refund.status == "SUCCEEDED":
-        return _refund_response(operation.refund)
-    gateway = StripeSdkGateway(
-        secret_key=value.stripe_secret_key or "",
-        success_url=value.checkout_success_url or "",
-        cancel_url=value.checkout_cancel_url or "",
-    )
-    try:
-        stripe_refund = await gateway.create_refund(
-            operation.refund.refund_id,
-            operation.payment_intent_id,
-            operation.refund.amount_micros,
-            operation.refund.idempotency_key,
-            operation.refund.reason,
-        )
-    except stripe.StripeError as exc:
-        await fail_refund(database(), operation.refund.refund_id, str(exc))
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Stripe refund failed") from exc
-    submitted = await attach_refund_submission(
+    raw_token = new_auth_token()
+    expires_at = datetime.now(timezone.utc) + lifetime
+    await create_auth_token(
         database(),
-        operation.refund.refund_id,
-        stripe_refund.refund_id,
+        account_id,
+        hash_auth_token(value.session_secret, raw_token),
+        purpose,
+        expires_at,
     )
-    if stripe_refund.status == "failed":
-        await fail_refund(database(), operation.refund.refund_id, "Stripe marked the refund as failed")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Stripe refund failed")
-    if stripe_refund.status != "succeeded":
-        return _refund_response(submitted)
-    completed = await complete_refund(database(), operation.refund.refund_id, stripe_refund.refund_id)
-    return _refund_response(completed)
+    return _auth_link(account_id, raw_token, page, expires_at)
+
+
+def _auth_link(account_id: str, raw_token: str, page: str, expires_at: datetime) -> AuthLinkResponse:
+    value = settings()
+    base_url = (value.base_url or "").rstrip("/")
+    url = f"{base_url}/{page}?{urlencode({'token': raw_token})}"
+    return AuthLinkResponse(account_id=account_id, expires_at=expires_at, url=url)
 
 
 def _require_admin(user: UserAPIKeyAuth) -> None:
@@ -241,13 +242,4 @@ def _price_response(value: PriceRow) -> ModelPriceResponse:
         max_output_tokens=value.max_output_tokens,
         enabled=value.enabled,
         effective_at=value.effective_at,
-    )
-
-
-def _refund_response(value: RefundRow) -> RefundResponse:
-    return RefundResponse(
-        refund_id=value.refund_id,
-        payment_id=value.payment_id,
-        amount=money_response(value.amount_micros),
-        status=value.status,
     )

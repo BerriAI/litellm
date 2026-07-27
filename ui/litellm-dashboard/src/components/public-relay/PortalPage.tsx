@@ -3,13 +3,12 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import Turnstile from "./Turnstile";
 import { ApiKey, Money, relayFetch } from "@/lib/http/publicRelay";
 import { usePortal } from "./PortalContext";
 import { migratedHref } from "@/utils/migratedPages";
 
-type Section = "overview" | "keys" | "billing" | "usage" | "logs" | "security";
-type Wallet = { available: Money; reserved: Money; debt: Money };
+type Section = "overview" | "keys" | "credit" | "usage" | "logs" | "security";
+type Wallet = { available: Money; reserved: Money };
 type Usage = {
   request_count: number;
   input_tokens: number;
@@ -18,7 +17,13 @@ type Usage = {
   charged: Money;
   upstream_cost: Money;
 };
-type Payment = { payment_id: string; amount: Money; refunded: Money; status: string; created_at: string };
+type LedgerEntry = { entry_id: string; entry_type: string; amount: Money; created_at: string };
+type Price = {
+  price_id: string;
+  model_name: string;
+  input_micros_per_million: number;
+  output_micros_per_million: number | null;
+};
 type RequestLog = {
   request_id: string;
   model: string;
@@ -33,7 +38,7 @@ type RequestLog = {
 const titles: Record<Section, [string, string]> = {
   overview: ["Overview", "Your balance and relay activity at a glance."],
   keys: ["API keys", "Create up to five scoped keys. Full values appear only once."],
-  billing: ["Balance & billing", "Add prepaid USD balance through Stripe Hosted Checkout."],
+  credit: ["额度与账目", "企业额度由管理员线下授予，永久有效。"],
   usage: ["Usage", "Token consumption and customer charges across your account."],
   logs: ["Request logs", "Seven days of request metadata without plaintext prompts."],
   security: ["Account security", "Manage the portal session connected to your verified email."],
@@ -49,7 +54,7 @@ export default function PortalPage({ section }: { section: Section }) {
       <div className="mt-9">
         {section === "overview" && <Overview />}
         {section === "keys" && <Keys />}
-        {section === "billing" && <Billing />}
+        {section === "credit" && <Credit />}
         {section === "usage" && <UsageView />}
         {section === "logs" && <Logs />}
         {section === "security" && <Security />}
@@ -79,7 +84,7 @@ function Overview() {
       <div className="rounded-3xl border border-black/10 bg-white p-6 md:col-span-3">
         <p className="text-sm text-black/45">Getting started</p>
         <p className="mt-3 max-w-2xl text-lg leading-8">
-          Add balance, create a server-side API key, then use the published model names from{" "}
+          联系管理员授予额度，创建服务端 API Key，然后从{" "}
           <code className="rounded bg-black/5 px-1.5 py-1 text-sm">GET /v1/models</code>.
         </p>
       </div>
@@ -91,7 +96,7 @@ function Keys() {
   const { csrfToken } = usePortal();
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [alias, setAlias] = useState("");
-  const [logContent, setLogContent] = useState(true);
+  const [logContent, setLogContent] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [error, setError] = useState("");
 
@@ -183,77 +188,51 @@ function Keys() {
   );
 }
 
-function Billing() {
-  const { csrfToken } = usePortal();
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [amount, setAmount] = useState(20);
-  const [turnstileToken, setTurnstileToken] = useState("");
-  const [resetKey, setResetKey] = useState(0);
-  const [error, setError] = useState("");
-  const handleToken = useCallback((token: string) => setTurnstileToken(token), []);
-
+function Credit() {
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+  const [prices, setPrices] = useState<Price[]>([]);
   useEffect(() => {
-    relayFetch<{ data: Payment[] }>("/v1/portal/billing/payments").then(({ data }) => setPayments(data.data));
+    Promise.all([
+      relayFetch<Wallet>("/v1/portal/wallet"),
+      relayFetch<{ data: LedgerEntry[] }>("/v1/portal/ledger"),
+      relayFetch<{ models: Price[] }>("/v1/portal/pricing"),
+    ]).then(([walletResult, ledgerResult, priceResult]) => {
+      setWallet(walletResult.data);
+      setLedger(ledgerResult.data.data);
+      setPrices(priceResult.data.models);
+    });
   }, []);
-
-  async function checkout(event: FormEvent) {
-    event.preventDefault();
-    try {
-      const { data } = await relayFetch<{ checkout_url: string }>(
-        "/v1/portal/billing/checkout",
-        {
-          method: "POST",
-          body: JSON.stringify({ amount_cents: Math.round(amount * 100), turnstile_token: turnstileToken }),
-        },
-        csrfToken,
-      );
-      window.location.assign(data.checkout_url);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Unable to start checkout");
-      setResetKey((value) => value + 1);
-    }
-  }
-
   return (
-    <div className="grid gap-6 lg:grid-cols-[.75fr_1.25fr]">
-      <form onSubmit={checkout} className="rounded-3xl border border-black/10 bg-white p-6">
-        <h2 className="text-lg font-semibold">Add balance</h2>
-        <label className="mt-5 block text-sm">
-          Amount in USD
-          <input
-            type="number"
-            min={5}
-            max={500}
-            step={1}
-            value={amount}
-            onChange={(event) => setAmount(Number(event.target.value))}
-            className="mt-2 w-full rounded-xl border-black/15"
-          />
-        </label>
-        <div className="mt-5">
-          <Turnstile onToken={handleToken} resetKey={resetKey} />
-        </div>
-        <button
-          disabled={!turnstileToken}
-          className="mt-5 rounded-full bg-[#ff4f2e] px-5 py-2.5 text-sm text-white disabled:opacity-40"
-        >
-          Continue to Stripe
-        </button>
-        {error && <p className="mt-3 text-sm text-red-700">{error}</p>}
-      </form>
+    <div className="grid gap-6 lg:grid-cols-2">
       <div className="rounded-3xl border border-black/10 bg-white p-6">
-        <h2 className="text-lg font-semibold">Payment history</h2>
+        <h2 className="text-lg font-semibold">当前额度</h2>
+        <p className="mt-5 text-4xl font-semibold">{wallet?.available.display ?? "—"}</p>
+        <p className="mt-2 text-sm text-black/45">预留 {wallet?.reserved.display ?? "—"}</p>
+      </div>
+      <div className="rounded-3xl border border-black/10 bg-white p-6">
+        <h2 className="text-lg font-semibold">统一价格</h2>
         <div className="mt-5 divide-y divide-black/10">
-          {payments.map((payment) => (
-            <div key={payment.payment_id} className="flex justify-between py-4 text-sm">
-              <div>
-                <p>{payment.amount.display}</p>
-                <p className="mt-1 text-xs text-black/40">{new Date(payment.created_at).toLocaleDateString()}</p>
-              </div>
-              <span className="text-black/55">{payment.status.replaceAll("_", " ")}</span>
+          {prices.map((price) => (
+            <div key={price.price_id} className="flex justify-between py-4 text-sm">
+              <span>{price.model_name}</span>
+              <span className="font-mono text-xs text-black/55">
+                {price.input_micros_per_million} / {price.output_micros_per_million ?? "—"} μUSD
+              </span>
             </div>
           ))}
-          {!payments.length && <p className="py-8 text-sm text-black/45">No payments yet.</p>}
+        </div>
+      </div>
+      <div className="rounded-3xl border border-black/10 bg-white p-6 lg:col-span-2">
+        <h2 className="text-lg font-semibold">额度账目</h2>
+        <div className="mt-5 divide-y divide-black/10">
+          {ledger.map((entry) => (
+            <div key={entry.entry_id} className="flex justify-between py-4 text-sm">
+              <span>{entry.entry_type}</span>
+              <span>{entry.amount.display}</span>
+            </div>
+          ))}
+          {!ledger.length && <p className="py-8 text-sm text-black/45">暂无账目。</p>}
         </div>
       </div>
     </div>

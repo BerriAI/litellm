@@ -1,0 +1,59 @@
+services:
+  database:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    env_file:
+      - /opt/litellm-relay/.env
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - max_connections=30
+      - -c
+      - shared_buffers=128MB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - /opt/litellm-relay/backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
+
+  gateway:
+    image: litellm-tob-relay:local
+    restart: unless-stopped
+    env_file:
+      - /opt/litellm-relay/.env
+    environment:
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@database:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+    command:
+      - --config
+      - /app/config.yaml
+      - --port
+      - "4000"
+      - --num_workers
+      - "1"
+      - --use_v2_migration_resolver
+    ports:
+      - 127.0.0.1:4000:4000
+    volumes:
+      - /opt/litellm-relay/config.yaml:/app/config.yaml:ro
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    mem_limit: 3g
+
+volumes:
+  postgres_data:

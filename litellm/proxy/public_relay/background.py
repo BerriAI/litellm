@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from dataclasses import field
 from typing import cast  # noqa: TID251, RUF100  # Prisma JSON values require runtime boundary narrowing.
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.public_relay.money import UsageQuantity
 from litellm.proxy.public_relay.repository import (
     database_handle,
@@ -29,16 +30,15 @@ class ExpiredReservationRow(BaseModel):
     call_type: str | None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class PublicRelayBackgroundJobs:
     prisma_client: PrismaClient
-    pod_lock_manager: PodLockManager
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def reconcile(self) -> None:
-        lock_name = "public-relay-reconcile"
-        if await self.pod_lock_manager.acquire_lock(lock_name, ttl=240) is not True:
+        if self.lock.locked():
             return
-        try:
+        async with self.lock:
             rows = await database_handle(self.prisma_client).query_raw(
                 """
                 SELECT
@@ -59,21 +59,26 @@ class PublicRelayBackgroundJobs:
             for reservation in reservations:
                 await self._reconcile_one(reservation)
             await self._check_wallet_invariants()
-        finally:
-            await self.pod_lock_manager.release_lock(lock_name)
 
     async def cleanup_retained_data(self) -> None:
-        lock_name = "public-relay-retention-cleanup"
-        if await self.pod_lock_manager.acquire_lock(lock_name, ttl=240) is not True:
+        if self.lock.locked():
             return
-        try:
+        async with self.lock:
             await delete_expired_request_content(self.prisma_client)
             from litellm.proxy.public_relay.config import PublicRelaySettings
 
             value = PublicRelaySettings.from_env()
             await delete_expired_request_metadata(self.prisma_client, value.metadata_retention_days)
-        finally:
-            await self.pod_lock_manager.release_lock(lock_name)
+            database = database_handle(self.prisma_client)
+            await database.execute_raw(
+                'DELETE FROM "LiteLLM_PublicRelaySession" WHERE "expires_at" < CURRENT_TIMESTAMP'
+            )
+            await database.execute_raw(
+                'DELETE FROM "LiteLLM_PublicRelayAuthToken" WHERE "expires_at" < CURRENT_TIMESTAMP'
+            )
+            await database.execute_raw(
+                'DELETE FROM "LiteLLM_PublicRelayRateLimit" WHERE "expires_at" < CURRENT_TIMESTAMP'
+            )
 
     async def _reconcile_one(self, reservation: ExpiredReservationRow) -> None:
         if reservation.prompt_tokens is None:
@@ -106,13 +111,7 @@ class PublicRelayBackgroundJobs:
                 WHERE "status" = 'OPEN'
                 GROUP BY "wallet_id"
             ) r ON r."wallet_id" = w."wallet_id"
-            LEFT JOIN (
-                SELECT "wallet_id", COALESCE(SUM("amount_micros"), 0) AS "refund_reserved"
-                FROM "LiteLLM_PublicRelayRefund"
-                WHERE "status" = 'PENDING'
-                GROUP BY "wallet_id"
-            ) f ON f."wallet_id" = w."wallet_id"
-            WHERE w."reserved_micros" != COALESCE(r."request_reserved", 0) + COALESCE(f."refund_reserved", 0)
+            WHERE w."reserved_micros" != COALESCE(r."request_reserved", 0)
             LIMIT 20
             """
         )

@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import json
+import uuid
 from dataclasses import dataclass
-from typing import Protocol, TypeVar, cast  # noqa: TID251, RUF100  # DualCache returns backend clients dynamically.
+from datetime import datetime, timedelta, timezone
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
-from litellm.caching import DualCache
 from litellm.proxy.public_relay.config import PublicRelaySettings
-from litellm.proxy.public_relay.security import hash_session_token
-
-
-class VerificationRecord(BaseModel):
-    code_hash: str
-    purpose: str
-    email: str
+from litellm.proxy.public_relay.security import hash_rate_limit_key, hash_session_token
+from litellm.proxy.utils import PrismaClient
 
 
 class PortalSession(BaseModel):
@@ -25,85 +19,92 @@ class PortalSession(BaseModel):
     csrf_token: str
 
 
-CachedModel = TypeVar("CachedModel", bound=BaseModel)
-
-
-class RelayRedis(Protocol):
-    async def async_increment(self, *, key: str, value: float, ttl: int) -> float: ...
-
-    async def async_set_cache(self, *, key: str, value: str, ttl: int) -> bool | None: ...
-
-    async def async_get_cache(self, *, key: str) -> object: ...
-
-    async def async_delete_cache(self, *, key: str) -> bool: ...
-
-
 @dataclass(frozen=True, slots=True)
-class RelayCache:
-    cache: DualCache
+class RelayStore:
+    prisma_client: PrismaClient
     settings: PublicRelaySettings
 
-    def require_redis(self) -> None:
-        if self.cache.redis_cache is None:
-            raise RuntimeError("public relay requires a shared Redis connection")
+    async def enforce_limit(self, key: str, limit: int, window_seconds: int) -> None:
+        from litellm.proxy.public_relay.repository import database_handle
 
-    def redis(self) -> RelayRedis:
-        self.require_redis()
-        value = self.cache.redis_cache
-        if value is None:
-            raise RuntimeError("public relay requires a shared Redis connection")
-        return cast(RelayRedis, value)  # cast-ok: the callable Redis methods are checked before use.
-
-    async def enforce_limit(self, key: str, limit: int, ttl_seconds: int) -> None:
-        count = await self.redis().async_increment(key=key, value=1, ttl=ttl_seconds)
-        if int(count) > limit:
+        now = datetime.now(timezone.utc)
+        window_started_at = datetime.fromtimestamp(
+            int(now.timestamp()) // window_seconds * window_seconds,
+            timezone.utc,
+        )
+        expires_at = window_started_at + timedelta(seconds=window_seconds)
+        rows = await database_handle(self.prisma_client).query_raw(
+            """
+            INSERT INTO "LiteLLM_PublicRelayRateLimit"
+                ("rate_limit_id", "key_hash", "window_started_at", "window_seconds", "count", "expires_at")
+            VALUES ($1, $2, $3, $4, 1, $5)
+            ON CONFLICT ("key_hash", "window_started_at", "window_seconds")
+            DO UPDATE SET "count" = "LiteLLM_PublicRelayRateLimit"."count" + 1
+            RETURNING "count"
+            """,
+            str(uuid.uuid4()),
+            hash_rate_limit_key(self.settings.session_secret, key),
+            window_started_at,
+            window_seconds,
+            expires_at,
+        )
+        count = TypeAdapter(list[dict[str, int]]).validate_python(rows)[0]["count"]
+        if count > limit:
             raise PermissionError("rate limit exceeded")
 
-    async def put_verification(self, record: VerificationRecord) -> None:
-        await self.redis().async_set_cache(
-            key=_verification_key(record.purpose, record.email),
-            value=record.model_dump_json(),
-            ttl=self.settings.verification_ttl_seconds,
-        )
-
-    async def get_verification(self, purpose: str, email: str) -> VerificationRecord | None:
-        raw = await self.redis().async_get_cache(key=_verification_key(purpose, email))
-        return _validate_cached(raw, VerificationRecord)
-
-    async def delete_verification(self, purpose: str, email: str) -> None:
-        await self.redis().async_delete_cache(key=_verification_key(purpose, email))
-
     async def create_session(self, token: str, session: PortalSession) -> None:
-        token_hash = hash_session_token(self.settings.session_secret, token)
-        await self.redis().async_set_cache(
-            key=f"public-relay:session:{token_hash}",
-            value=session.model_dump_json(),
-            ttl=self.settings.session_ttl_seconds,
+        from litellm.proxy.public_relay.repository import database_handle
+
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=self.settings.session_ttl_seconds)
+        await database_handle(self.prisma_client).execute_raw(
+            """
+            INSERT INTO "LiteLLM_PublicRelaySession"
+                (
+                    "session_id",
+                    "token_hash",
+                    "account_id",
+                    "user_id",
+                    "normalized_email",
+                    "session_version",
+                    "csrf_token",
+                    "expires_at"
+                )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            str(uuid.uuid4()),
+            hash_session_token(self.settings.session_secret, token),
+            session.account_id,
+            session.user_id,
+            session.email,
+            session.session_version,
+            session.csrf_token,
+            expires_at,
         )
 
     async def get_session(self, token: str) -> PortalSession | None:
-        token_hash = hash_session_token(self.settings.session_secret, token)
-        raw = await self.redis().async_get_cache(key=f"public-relay:session:{token_hash}")
-        return _validate_cached(raw, PortalSession)
+        from litellm.proxy.public_relay.repository import database_handle
+
+        rows = await database_handle(self.prisma_client).query_raw(
+            """
+            SELECT
+                "account_id",
+                "user_id",
+                "normalized_email" AS "email",
+                "session_version",
+                "csrf_token"
+            FROM "LiteLLM_PublicRelaySession"
+            WHERE "token_hash" = $1 AND "expires_at" > CURRENT_TIMESTAMP
+            LIMIT 1
+            """,
+            hash_session_token(self.settings.session_secret, token),
+        )
+        values = TypeAdapter(list[PortalSession]).validate_python(rows)
+        return values[0] if values else None
 
     async def delete_session(self, token: str) -> None:
-        token_hash = hash_session_token(self.settings.session_secret, token)
-        await self.redis().async_delete_cache(key=f"public-relay:session:{token_hash}")
+        from litellm.proxy.public_relay.repository import database_handle
 
-
-def _verification_key(purpose: str, email: str) -> str:
-    return f"public-relay:verification:{purpose}:{email}"
-
-
-def _validate_cached(raw: object, model: type[CachedModel]) -> CachedModel | None:
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        return model.model_validate_json(raw)
-    if isinstance(raw, bytes):
-        return model.model_validate_json(raw.decode())
-    if isinstance(raw, dict):
-        return model.model_validate(raw)
-    if isinstance(raw, (int, float, bool)):
-        return model.model_validate(json.loads(str(raw)))
-    return None
+        await database_handle(self.prisma_client).execute_raw(
+            'DELETE FROM "LiteLLM_PublicRelaySession" WHERE "token_hash" = $1',
+            hash_session_token(self.settings.session_secret, token),
+        )

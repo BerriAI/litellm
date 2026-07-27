@@ -3,35 +3,30 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-import stripe
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from litellm.proxy.public_relay.api_types import (
     AccountResponse,
     ApiKeyCreateRequest,
     ApiKeyListResponse,
     ApiKeyResponse,
-    CheckoutRequest,
-    CheckoutResponse,
     LedgerListResponse,
     MessageResponse,
-    PaymentListResponse,
+    PricingResponse,
+    ModelPriceResponse,
     RequestLogListResponse,
     RequestLogResponse,
     UsageResponse,
     WalletResponse,
 )
 from litellm.proxy.public_relay.repository import (
-    attach_checkout_session,
     create_api_key,
-    create_checkout_order,
     delete_api_key,
-    fail_checkout_creation,
     get_usage_summary,
     get_wallet,
     list_api_keys,
     list_ledger,
-    list_payments,
+    list_active_prices,
     list_request_logs,
 )
 from litellm.proxy.public_relay.runtime import (
@@ -41,16 +36,12 @@ from litellm.proxy.public_relay.runtime import (
     key_response,
     ledger_response,
     money_response,
-    payment_response,
-    relay_cache,
-    remote_ip,
     require_portal,
     require_portal_write,
     settings,
     wallet_response,
 )
-from litellm.proxy.public_relay.stripe_client import StripeSdkGateway
-from litellm.proxy.public_relay.turnstile import TurnstileVerifier
+from litellm.proxy.public_relay.db_types import PriceRow
 
 router = APIRouter(prefix="/v1/portal", tags=["public relay portal"])
 
@@ -70,6 +61,12 @@ async def wallet(context: Annotated[PortalContext, Depends(require_portal)]) -> 
     if value is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Wallet not found")
     return wallet_response(value)
+
+
+@router.get("/pricing", response_model=PricingResponse)
+async def pricing(context: Annotated[PortalContext, Depends(require_portal)]) -> PricingResponse:
+    values = await list_active_prices(database())
+    return PricingResponse(models=tuple(_price_response(value) for value in values))
 
 
 @router.get("/ledger", response_model=LedgerListResponse)
@@ -168,55 +165,17 @@ async def remove_key(
     return MessageResponse(message="API key deleted")
 
 
-@router.post("/billing/checkout", response_model=CheckoutResponse)
-async def checkout(
-    payload: CheckoutRequest,
-    request: Request,
-    context: Annotated[PortalContext, Depends(require_portal_write)],
-) -> CheckoutResponse:
-    value = settings()
-    if payload.amount_cents < value.min_checkout_cents or payload.amount_cents > value.max_checkout_cents:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": {"message": "Checkout amount is outside the allowed range", "type": "invalid_request_error"}
-            },
-        )
-    ip_address = remote_ip(request)
-    if value.turnstile_verify_url is None or not await TurnstileVerifier(value.turnstile_verify_url).verify(
-        payload.turnstile_token,
-        ip_address,
-    ):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Human verification failed")
-    cache = relay_cache(value)
-    try:
-        await cache.enforce_limit(f"public-relay:checkout:{context.account.account_id}", 10, 3600)
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many requests") from exc
-    order = await create_checkout_order(database(), context.account.account_id, payload.amount_cents * 10_000)
-    gateway = StripeSdkGateway(
-        secret_key=value.stripe_secret_key or "",
-        success_url=value.checkout_success_url or "",
-        cancel_url=value.checkout_cancel_url or "",
-    )
-    try:
-        session = await gateway.create_checkout(order, context.account.normalized_email)
-    except (stripe.StripeError, RuntimeError) as exc:
-        await fail_checkout_creation(database(), order.payment_id)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to start Stripe Checkout") from exc
-    await attach_checkout_session(database(), order.payment_id, session.session_id)
-    return CheckoutResponse(payment_id=order.payment_id, checkout_url=session.url)
-
-
-@router.get("/billing/payments", response_model=PaymentListResponse)
-async def payments(
-    context: Annotated[PortalContext, Depends(require_portal)],
-    cursor: datetime | None = None,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> PaymentListResponse:
-    values = await list_payments(database(), context.account.account_id, cursor, limit)
-    next_cursor = values[-1].created_at.isoformat() if len(values) == limit else None
-    return PaymentListResponse(
-        data=tuple(payment_response(value) for value in values),
-        next_cursor=next_cursor,
+def _price_response(value: PriceRow) -> ModelPriceResponse:
+    return ModelPriceResponse(
+        price_id=value.price_id,
+        model_name=value.model_name,
+        version=value.version,
+        input_micros_per_million=value.input_micros_per_million,
+        cached_input_micros_per_million=value.cached_input_micros_per_million,
+        output_micros_per_million=value.output_micros_per_million,
+        embedding_micros_per_million=value.embedding_micros_per_million,
+        default_max_output_tokens=value.default_max_output_tokens,
+        max_output_tokens=value.max_output_tokens,
+        enabled=value.enabled,
+        effective_at=value.effective_at,
     )

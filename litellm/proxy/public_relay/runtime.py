@@ -10,13 +10,12 @@ from litellm.proxy.public_relay.api_types import (
     ApiKeyResponse,
     LedgerEntryResponse,
     MoneyResponse,
-    PaymentResponse,
     WalletResponse,
 )
 from litellm.proxy.public_relay.config import PublicRelaySettings
-from litellm.proxy.public_relay.db_types import AccountRow, KeyRow, LedgerRow, PaymentRow, WalletRow
+from litellm.proxy.public_relay.db_types import AccountRow, KeyRow, LedgerRow, WalletRow
 from litellm.proxy.public_relay.money import display_usd
-from litellm.proxy.public_relay.session_store import PortalSession, RelayCache
+from litellm.proxy.public_relay.session_store import PortalSession, RelayStore
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
 
 SESSION_COOKIE = "public_relay_session"
@@ -45,18 +44,8 @@ def database() -> PrismaClient:
     return get_prisma_client_or_throw("Public relay requires a database")
 
 
-def relay_cache(value: PublicRelaySettings) -> RelayCache:
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    cache = RelayCache(cache=user_api_key_cache, settings=value)
-    try:
-        cache.require_redis()
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": {"message": str(exc), "type": "service_unavailable"}},
-        ) from exc
-    return cache
+def relay_store(value: PublicRelaySettings) -> RelayStore:
+    return RelayStore(prisma_client=database(), settings=value)
 
 
 async def require_portal(request: Request) -> PortalContext:
@@ -66,7 +55,7 @@ async def require_portal(request: Request) -> PortalContext:
     token = request.cookies.get(SESSION_COOKIE)
     if token is None:
         raise _unauthorized()
-    session = await relay_cache(value).get_session(token)
+    session = await relay_store(value).get_session(token)
     if session is None:
         raise _unauthorized()
     account = await get_account_by_id(database(), session.account_id)
@@ -102,6 +91,8 @@ def account_response(account: AccountRow) -> AccountResponse:
         account_id=account.account_id,
         user_id=account.user_id,
         email=account.normalized_email,
+        company_name=account.company_name,
+        notes=account.notes,
         status=account.status,
         created_at=account.created_at,
     )
@@ -115,7 +106,6 @@ def wallet_response(wallet: WalletRow) -> WalletResponse:
     return WalletResponse(
         available=money_response(wallet.available_micros),
         reserved=money_response(wallet.reserved_micros),
-        debt=money_response(wallet.debt_micros),
     )
 
 
@@ -127,18 +117,7 @@ def ledger_response(entry: LedgerRow) -> LedgerEntryResponse:
         available_after=money_response(entry.available_after_micros),
         reserved_after=money_response(entry.reserved_after_micros),
         request_id=entry.request_id,
-        payment_id=entry.payment_id,
         created_at=entry.created_at,
-    )
-
-
-def payment_response(payment: PaymentRow) -> PaymentResponse:
-    return PaymentResponse(
-        payment_id=payment.payment_id,
-        amount=money_response(payment.amount_micros),
-        refunded=money_response(payment.refunded_micros),
-        status=payment.status,
-        created_at=payment.created_at,
     )
 
 
@@ -153,7 +132,7 @@ def key_response(key: KeyRow, raw_key: str | None = None) -> ApiKeyResponse:
         alias=key.key_alias,
         key=raw_key,
         created_at=key.created_at,
-        log_content=metadata.get("public_relay_log_content") is not False,
+        log_content=metadata.get("public_relay_log_content") is True,
     )
 
 

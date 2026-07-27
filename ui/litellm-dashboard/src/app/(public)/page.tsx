@@ -5,8 +5,8 @@ import { migratedHref } from "@/utils/migratedPages";
 
 const features = [
   ["One API", "Use familiar OpenAI SDKs for chat, responses, and embeddings."],
-  ["Clear pricing", "Every request is charged against an immutable price snapshot."],
-  ["Prepaid control", "No surprise invoices. Requests stop when your balance reaches zero."],
+  ["统一价格", "每次请求按不可变价格快照精确结算。"],
+  ["企业额度", "管理员线下授信，额度不足时请求立即停止。"],
 ];
 
 export default function RelayHome() {
@@ -15,20 +15,19 @@ export default function RelayHome() {
       <section className="overflow-hidden border-b border-black/10">
         <div className="mx-auto grid max-w-7xl gap-16 px-5 py-20 lg:grid-cols-[1.15fr_.85fr] lg:px-8 lg:py-28">
           <div>
-            <p className="mb-6 font-mono text-xs uppercase tracking-[0.24em] text-[#d83a20]">The public AI gateway</p>
+            <p className="mb-6 font-mono text-xs uppercase tracking-[0.24em] text-[#d83a20]">Enterprise AI gateway</p>
             <h1 className="max-w-4xl text-5xl font-semibold leading-[0.96] tracking-[-0.055em] sm:text-7xl">
-              Ship with the models you need. Keep one clean API.
+              一个稳定入口，连接企业需要的模型。
             </h1>
             <p className="mt-8 max-w-2xl text-lg leading-8 text-black/65">
-              A prepaid, OpenAI-compatible relay built on LiteLLM. Create a key, add balance, and move between published
-              models without rebuilding your stack.
+              基于 LiteLLM 的封闭企业中转站。管理员开通账户并授予额度，企业通过统一 API Key 使用已发布模型。
             </p>
             <div className="mt-10 flex flex-wrap gap-3">
               <Link
-                href={migratedHref("register")}
+                href={migratedHref("relay-login")}
                 className="rounded-full bg-[#ff4f2e] px-6 py-3 font-medium text-white"
               >
-                Create free account
+                企业账户登录
               </Link>
               <Link href={migratedHref("docs")} className="rounded-full border border-black/20 px-6 py-3 font-medium">
                 Read the quickstart
