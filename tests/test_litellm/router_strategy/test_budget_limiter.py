@@ -55,6 +55,25 @@ class FakeRedisCacheWithAtomicScripts:
         return run_script
 
 
+class FakeRedisCacheWithFailingScripts:
+    """Stand-in for RedisCache whose scripts always fail, e.g. Lua disabled on the server."""
+
+    def async_register_script(self, script: str):
+        async def run_script(keys: Sequence[str], args: Sequence[Any], client: Optional[Any] = None) -> List[bytes]:
+            raise ConnectionError("script execution unavailable")
+
+        return run_script
+
+    async def async_get_cache(self, key, parent_otel_span=None, **kwargs) -> None:
+        return None
+
+    async def async_set_cache(self, key, value, **kwargs) -> None:
+        return None
+
+    async def async_increment(self, key, value, **kwargs) -> None:
+        return None
+
+
 @pytest.fixture
 def disable_budget_sync(monkeypatch):
     async def noop(*args, **kwargs):
@@ -138,6 +157,40 @@ async def test_concurrent_expired_window_resets_keep_every_response_cost_with_re
 
     in_memory_spend = await budget_limiter.dual_cache.in_memory_cache.async_get_cache(spend_key)
     assert float(in_memory_spend) == pytest.approx(sum(costs))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_expired_window_resets_keep_every_response_cost_when_script_fails(disable_budget_sync):
+    """When the atomic script cannot run, the local fallback still has to keep every cost."""
+    budget_limiter = RouterBudgetLimiting(
+        dual_cache=YieldingDualCache(redis_cache=FakeRedisCacheWithFailingScripts()),
+        provider_budget_config={"openai": BudgetConfig(budget_duration="1d", max_budget=100)},
+    )
+    spend_key = "provider_spend:openai:1d"
+    start_time_key = "provider_budget_start_time:openai"
+    now = 1_000_000.0
+
+    await budget_limiter.dual_cache.in_memory_cache.async_set_cache(
+        key=start_time_key, value=now - (2 * TTL_SECONDS), ttl=10 * TTL_SECONDS
+    )
+    await budget_limiter.dual_cache.in_memory_cache.async_set_cache(key=spend_key, value=7.0, ttl=10 * TTL_SECONDS)
+
+    costs = (0.5, 0.25, 0.125)
+    await asyncio.gather(
+        *[
+            budget_limiter._handle_new_budget_window(
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                current_time=now,
+                response_cost=cost,
+                ttl_seconds=TTL_SECONDS,
+            )
+            for cost in costs
+        ]
+    )
+
+    spend = await budget_limiter.dual_cache.in_memory_cache.async_get_cache(spend_key)
+    assert float(spend) == pytest.approx(sum(costs))
 
 
 @pytest.mark.asyncio
