@@ -93,7 +93,9 @@ def _resolve_input(
             raise click.UsageError(f"--file {file!r} does not exist.") from exc
         except OSError as exc:
             raise click.UsageError(f"--file {file!r} could not be read: {exc}") from exc
-    return "messages", _resolve_messages_payload(messages)  # type: ignore[arg-type]
+    # by this point `provided` contains "messages" and text/file are None
+    assert messages is not None
+    return "messages", _resolve_messages_payload(messages)
 
 
 def count_tokens(
