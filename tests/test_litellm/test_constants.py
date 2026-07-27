@@ -84,6 +84,10 @@ def _build_constant_env_var_map() -> dict[str, str]:
         ("", 10.0),
         ("abc", 10.0),
         ("10s", 10.0),
+        ("inf", 10.0),
+        ("Infinity", 10.0),
+        ("1e400", 10.0),
+        ("nan", 10.0),
         (None, 10.0),
     ],
 )
@@ -113,6 +117,10 @@ def test_proxy_shutdown_spend_drain_timeout_is_clamped_positive(env_value, expec
         ("2.5", 2.5),
         (" 2.5 ", 2.5),
         ("-1", -1.0),
+        ("inf", 7.5),
+        ("-inf", 7.5),
+        ("nan", 7.5),
+        ("1e400", 7.5),
     ],
 )
 def test_get_env_float_falls_back_on_unusable_values(raw, expected):

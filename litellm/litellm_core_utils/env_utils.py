@@ -2,6 +2,7 @@
 Utility helpers for reading and parsing environment variables.
 """
 
+import math
 import os
 
 
@@ -22,19 +23,22 @@ def get_env_int(env_var: str, default: int) -> int:
 
 
 def get_env_float(env_var: str, default: float) -> float:
-    """Parse an environment variable as a float, falling back to default on invalid values.
+    """Parse an environment variable as a finite float, falling back to default on invalid values.
 
-    Handles empty strings, whitespace, and non-numeric values gracefully
-    so that misconfiguration doesn't crash the process at import time.
+    Handles empty strings, whitespace, non-numeric values, and the non-finite
+    literals float() accepts (``inf``, ``-inf``, ``nan``, overflowing exponents)
+    so that misconfiguration doesn't crash the process at import time or turn a
+    bounded value into an unbounded one.
     """
     raw = os.getenv(env_var)
     if raw is None:
         return default
     raw = raw.strip()
     try:
-        return float(raw)
+        parsed = float(raw)
     except (ValueError, TypeError):
         return default
+    return parsed if math.isfinite(parsed) else default
 
 
 def get_env_int_or_none(env_var: str) -> int | None:
