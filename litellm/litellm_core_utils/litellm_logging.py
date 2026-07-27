@@ -1878,7 +1878,14 @@ class Logging(LiteLLMLoggingBaseClass):
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = standard_logging_object
             else:
-                self.model_call_details["response_cost"] = None
+                # Streaming reaches here before its cost is known, so the cost
+                # is seeded to None, but only when nothing has already
+                # established one. A stream that assembles into a response
+                # object recomputes the cost right after this; a pass-through
+                # stream cannot (its body is opaque) and carries the cost its
+                # upstream reported in the response headers, which an
+                # unconditional reset would discard.
+                self.model_call_details.setdefault("response_cost", None)
 
             result = self._transform_usage_objects(result=result)
 

@@ -107,47 +107,67 @@ def reset_mcp_message_trace_carrier(token: "Token[Mapping[str, str] | None]") ->
     _mcp_message_trace_carrier.reset(token)
 
 
-# The transport span of the HTTP request carrying the CURRENT MCP message, as a
-# plain ``SpanContext`` so it can cross a task boundary.
+# The transport span of the HTTP request carrying the CURRENT MCP message.
 #
 # ``_request_root_span`` above cannot be used for MCP: a *stateful* streamable-HTTP
 # session runs every message on the single task spawned by that session's
 # ``initialize`` POST, so the ContextVar the ASGI request task writes at auth time
 # is frozen at ``initialize`` there and never sees the later ``tools/call`` POSTs.
-# Reading it from the message handler would parent every tool call in the session
-# to the first request's (already ended) server span. The gateway instead resolves
-# the current message's transport span on the request task and hands it over the
-# same way it hands over per-request auth, and the handler publishes it here for
-# the span emitter to pick up.
-_mcp_message_transport_span_context: "ContextVar[SpanContext | None]" = ContextVar(
-    "litellm_otel_mcp_message_transport_span_context", default=None
+# Reading it from the message handler parents every tool call in the session to the
+# first request's server span and aims that call's ``error.*`` at it — a span that
+# ended long ago, so the SDK drops the write and the failure reaches no request at
+# all. The gateway instead resolves the current message's transport span on the
+# request task and hands it over the same way it hands over per-request auth, and
+# the handler publishes it here for the span emitter and the failure hook.
+_mcp_message_transport_span: "ContextVar[Span | None]" = ContextVar(
+    "litellm_otel_mcp_message_transport_span", default=None
 )
 
 
-def set_mcp_message_transport_span_context(
-    span_context: "SpanContext | None",
-) -> "Token[SpanContext | None]":
+def set_mcp_message_transport_span(span: object) -> "Token[Span | None]":
     """Publish the transport span of the request carrying the current MCP message.
+
+    Also re-anchors the request root, so everything else the message emits or stamps
+    — the identity attributes seeded onto the server span, a guardrail span, a
+    proxy-level failure — lands on this request instead of on the one that opened
+    the session. The MCP SDK dispatches each message on its own task, so the anchor
+    is scoped to this message; the handler re-publishes it for the next one either
+    way. Only a transport still open for writes is anchored: replacing the anchor
+    with a request that already answered would just move the dropped writes from one
+    finished span to another.
+
+    Takes ``object`` because the gateway reads it back out of the ASGI scope, whose
+    values are untyped; anything that is not a usable span is stored as ``None``
+    rather than trusted.
 
     Returns the reset token; the caller must reset it once the message is handled
     so the transport never leaks to the next message on the same session task.
     """
-    return _mcp_message_transport_span_context.set(span_context)
+    transport = span if isinstance(span, Span) and is_recordable_span(span) else None
+    if transport is not None and transport.is_recording():
+        set_request_root_span(transport)
+    return _mcp_message_transport_span.set(transport)
 
 
-def reset_mcp_message_transport_span_context(token: "Token[SpanContext | None]") -> None:
-    _mcp_message_transport_span_context.reset(token)
+def reset_mcp_message_transport_span(token: "Token[Span | None]") -> None:
+    _mcp_message_transport_span.reset(token)
 
 
-def request_root_span_context() -> "SpanContext | None":
-    """The anchored request root span's context, safe to hand to another task.
+def mcp_message_transport_span() -> "Span | None":
+    """The published transport span, only while it is still open for writes.
 
-    A ``SpanContext`` is an immutable value, unlike the live ``Span``, so passing it
-    across the MCP session-task boundary cannot keep a finished span alive or invite
-    writes to it from the wrong request.
+    Recording — not merely valid — is the bar here because this span is the target
+    of ``error.*`` stamping from another task, and the publisher's validity check
+    cannot speak for a span that has since ended. A finished span keeps a valid
+    context forever, so it would otherwise be handed back for a write the SDK then
+    refuses. The POST carrying a ``tools/call`` stays open until the result is
+    written, so it is recording for the life of the call; a notification POST can
+    answer first, and this returns ``None`` for it rather than writing into the void.
     """
-    span = request_root_span()
-    return span.get_span_context() if span is not None else None
+    span = _mcp_message_transport_span.get()
+    if span is None or not span.is_recording():
+        return None
+    return span
 
 
 def _mcp_transport_span_context() -> "SpanContext | None":
@@ -155,12 +175,16 @@ def _mcp_transport_span_context() -> "SpanContext | None":
 
     Prefers the transport the gateway published for this specific message; falls
     back to the ambient request anchor for paths that emit an MCP span on the
-    request task itself (the REST MCP endpoints, the SDK).
+    request task itself (the REST MCP endpoints, the SDK). Parenting and linking
+    only need the immutable context, and unlike ``mcp_message_transport_span`` they
+    stay correct against a transport that has already finished, so this does not
+    require the span to still be recording.
     """
-    published = _mcp_message_transport_span_context.get()
-    if published is not None and published.is_valid:
-        return published
-    return request_root_span_context()
+    published = _mcp_message_transport_span.get()
+    if published is not None:
+        return published.get_span_context()
+    span = request_root_span()
+    return span.get_span_context() if span is not None else None
 
 
 def set_request_baggage(values: Mapping[str, str], context: Context | None = None) -> Context:

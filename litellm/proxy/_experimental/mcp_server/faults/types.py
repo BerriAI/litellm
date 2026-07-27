@@ -25,9 +25,10 @@ gateway presented its own stored credentials, these are gateway-side faults the 
 when the caller supplied the credentials, they are the caller's to fix."""
 
 GATEWAY_CAPABILITY_CODES: frozenset[str] = frozenset({"invalid_target"})
-"""Codes that indict a gateway capability regardless of whose credentials were presented:
-``invalid_target`` means the upstream wants RFC 8707 resource indicators, which the gateway does not
-send yet (LIT-4339). Never the caller's fault."""
+"""Codes that indict gateway configuration regardless of whose credentials were presented:
+``invalid_target`` means the upstream did not accept the RFC 8707 resource indicator the server
+sent, or requires one it was not configured to send (``upstream_resource``). Never the caller's
+fault."""
 
 UPSTREAM_FAULT_CODES: frozenset[str] = frozenset({"server_error", "temporarily_unavailable"})
 """Codes by which the upstream blames itself. Relaying them as caller faults would invert blame, so

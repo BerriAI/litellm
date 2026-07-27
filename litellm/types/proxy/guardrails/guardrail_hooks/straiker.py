@@ -4,9 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
-from litellm.types.utils import ChatCompletionMessageToolCall
-
 from .base import GuardrailConfigModel
 
 StraikerWebhookEventType = Literal["pre_call", "post_call"]
@@ -32,9 +29,9 @@ class StraikerWebhookContent(BaseModel):
 
     texts: list[str] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
-    structured_messages: list[AllMessageValues] | None = None
+    structured_messages: list[dict[str, object]] | None = None
     tools: list[dict[str, object]] | None = None
-    tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None
+    tool_calls: list[dict[str, object]] | None = None
     finish_reason: str | None = None
 
 
@@ -45,6 +42,7 @@ class StraikerWebhookUsage(BaseModel):
 
 class StraikerWebhookContext(BaseModel):
     call_surface: str
+    mode: list[str] | None = None
     model: str | None = None
     model_provider: str | None = None
     destination: str | None = None

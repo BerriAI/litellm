@@ -17,6 +17,7 @@ from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
+    mcp_message_transport_span,
     request_root_span,
     resolve_mcp_span_context,
     resolve_parent_context,
@@ -728,8 +729,14 @@ class OpenTelemetryV2(CustomLogger):
         endpoint, auth failure), so the failed request carries the same error keys
         a failed LLM call does. v1's ``OpenTelemetry`` implemented this same hook;
         v2 lost it when it stopped subclassing ``OpenTelemetry``, which is the
-        LIT-4179 regression for pre-call failures."""
-        span = request_root_span() or user_api_key_dict.parent_otel_span
+        LIT-4179 regression for pre-call failures.
+
+        An MCP message is handled on the session's task, where the request-root
+        anchor is whatever request opened the session, so prefer the transport the
+        gateway published for this specific message. Without that, a failed tool
+        call aimed its error at the ``initialize`` request's finished span and the
+        SDK dropped it, leaving the POST that actually failed unmarked."""
+        span = mcp_message_transport_span() or request_root_span() or user_api_key_dict.parent_otel_span
         if span is None or not is_recordable_span(span):
             return None
         stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))

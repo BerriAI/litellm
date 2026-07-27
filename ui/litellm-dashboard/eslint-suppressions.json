@@ -982,9 +982,6 @@
     "max-lines": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 2
     },
@@ -1061,7 +1058,17 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/layout.tsx": {
+  "src/app/(dashboard)/models-and-endpoints/page.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2959,11 +2966,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/TableHeaderSortDropdown/TableHeaderSortDropdown.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/budget_duration_dropdown.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -3562,11 +3564,6 @@
   "src/components/routing_groups/RoutingGroupModal.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/components/routing_groups/RoutingGroupsTable.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/routing_groups/index.tsx": {
