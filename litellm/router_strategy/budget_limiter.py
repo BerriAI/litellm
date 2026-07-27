@@ -124,11 +124,10 @@ class RouterBudgetLimiting(CustomLogger):
         model_list: Optional[List[Union[DeploymentTypedDict, Dict[str, Any]]]] = None,
     ):
         self.dual_cache = dual_cache
-        self._budget_window_reset_script: Callable[..., Awaitable[Any]] | None = (
-            dual_cache.redis_cache.async_register_script(BUDGET_WINDOW_RESET_SCRIPT)
-            if dual_cache.redis_cache is not None
-            else None
-        )
+        redis_cache = dual_cache.redis_cache
+        script = BUDGET_WINDOW_RESET_SCRIPT
+        reset_script = redis_cache.async_register_script(script) if redis_cache is not None else None
+        self._budget_window_reset_script: Callable[..., Awaitable[Any]] | None = reset_script
         self._local_budget_window_lock = asyncio.Lock()
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
@@ -390,40 +389,21 @@ class RouterBudgetLimiting(CustomLogger):
         ttl_seconds: int,
     ) -> float:
         """
-        Start a new budget window, or join one another caller just started.
-
-        Enters this when the budget window has expired, which several concurrent
-        responses can observe at the same time. Only the first of them may reset
-        the spend to its own cost; the others have to add their cost on top, else
-        every reset would drop the spend written by the resets racing with it.
-
-        Redis does the window check, reset and increment in one atomic script so
-        the winner is decided server-side, and the resulting window is mirrored
-        into the in-memory cache. Without Redis a local lock is enough, since
-        there is a single instance reading and writing the spend.
-
-        Returns the start time of the window this spend was recorded against.
+        Start a new budget window, or join one a concurrent caller just started, and return its start time.
+        Only the first caller may reset the spend to its own cost, else each reset drops the spend racing with it.
         """
+        in_memory_cache = self.dual_cache.in_memory_cache
         if self._budget_window_reset_script is not None:
             try:
-                raw_window_start, raw_spend = await self._budget_window_reset_script(
-                    keys=[start_time_key, spend_key],
-                    args=[str(current_time), str(response_cost), ttl_seconds],
-                )
-                window_start = _as_float(raw_window_start)
-                await self.dual_cache.in_memory_cache.async_set_cache(
-                    key=start_time_key, value=window_start, ttl=ttl_seconds
-                )
-                await self.dual_cache.in_memory_cache.async_set_cache(
-                    key=spend_key, value=_as_float(raw_spend), ttl=ttl_seconds
-                )
+                keys = [start_time_key, spend_key]
+                args = [str(current_time), str(response_cost), ttl_seconds]
+                raw_start, raw_spend = await self._budget_window_reset_script(keys=keys, args=args)
+                window_start = _as_float(raw_start)
+                await in_memory_cache.async_set_cache(key=start_time_key, value=window_start, ttl=ttl_seconds)
+                await in_memory_cache.async_set_cache(key=spend_key, value=_as_float(raw_spend), ttl=ttl_seconds)
                 return window_start
             except Exception as e:
-                verbose_router_logger.warning(
-                    "Atomic budget window reset failed for %s, falling back to local reset: %s",
-                    spend_key,
-                    str(e),
-                )
+                verbose_router_logger.warning(f"Atomic budget window reset failed for {spend_key}: {str(e)}")
 
         async with self._local_budget_window_lock:
             existing_start = await self.dual_cache.async_get_cache(start_time_key)
