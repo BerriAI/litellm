@@ -9,7 +9,7 @@ def _has_cache_control(v: str | dict | list) -> bool:
     if isinstance(v, dict):
         return v.get("cache_control") is not None
     if isinstance(v, list):
-        return any(_has_cache_control(item) for item in v)
+        return any(isinstance(item, dict) and item.get("cache_control") is not None for item in v)
     return False
 
 
