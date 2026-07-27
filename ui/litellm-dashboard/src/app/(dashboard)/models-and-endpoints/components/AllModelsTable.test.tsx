@@ -367,6 +367,30 @@ describe("AllModelsTable", () => {
       expect(onTeamChange).toHaveBeenCalledWith("team-1");
     });
 
+    it("truncates long team options instead of clipping them at the popup edge", async () => {
+      const user = userEvent.setup();
+      const longLabel = "db29687d-0ca2-4bbe-a0f1-9c5f0f7c2a11";
+      render(
+        <AllModelsTable
+          {...baseProps}
+          teamOptions={[
+            { value: "personal", label: "Personal" },
+            { value: "team-long", label: longLabel },
+          ]}
+        />,
+      );
+
+      await user.click(screen.getByTestId("models-team-select"));
+
+      const option = await screen.findByRole("option", { name: longLabel });
+      const label = option.querySelector("[data-slot='select-item-label']");
+
+      expect(label).not.toBeNull();
+      expect(label).toHaveClass("truncate");
+      expect(label).toHaveAttribute("title", longLabel);
+      expect(option).toHaveClass("[&>div]:min-w-0");
+    });
+
     it("runs the full reset from the filter drawer", async () => {
       const user = userEvent.setup();
       const onResetFilters = vi.fn();
