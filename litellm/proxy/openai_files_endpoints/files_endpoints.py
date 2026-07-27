@@ -1310,11 +1310,11 @@ async def list_files(
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            data.update(credentials)  # type: ignore
+            prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(
-                custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
+                custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
-                **data,  # type: ignore
+                **data,
             )
 
             verbose_proxy_logger.debug(f"Listed files using model: {model_used}")
