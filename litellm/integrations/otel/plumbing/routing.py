@@ -44,9 +44,9 @@ _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 
 # Cap on distinct destination-scoped providers held at once. Destinations are
 # admin-owned (one per key/team), so this is resource hygiene rather than an
-# anti-abuse bound: it keeps the working set of active tenants resident while
-# flushing and shutting down evicted providers so their exporter threads are
-# reclaimed.
+# anti-abuse bound: it keeps the working set of active tenants resident. Evicted
+# providers are dropped without a synchronous shutdown (see _evict_if_full); their
+# exporter threads drain on their own and are reclaimed at process exit.
 _MAX_CACHED_PROVIDERS = 256
 
 
