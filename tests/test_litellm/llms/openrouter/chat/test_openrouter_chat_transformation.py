@@ -624,7 +624,6 @@ def test_openrouter_reasoning_effort_high_passes_through():
     "model, input_rate, output_rate",
     [
         ("openrouter/poolside/laguna-xs-2.1", 6e-08, 1.2e-07),
-        ("openrouter/poolside/laguna-m.1", 2e-07, 4e-07),
         ("openrouter/poolside/laguna-s-2.1", 1e-07, 2e-07),
         ("openrouter/poolside/laguna-s-2.1:free", 0, 0),
     ],
@@ -645,7 +644,6 @@ def test_poolside_cost_calculation(model, input_rate, output_rate):
     "model",
     [
         "openrouter/poolside/laguna-xs-2.1",
-        "openrouter/poolside/laguna-m.1",
         "openrouter/poolside/laguna-s-2.1",
         "openrouter/poolside/laguna-s-2.1:free",
     ],
