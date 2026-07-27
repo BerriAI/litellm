@@ -16,6 +16,7 @@ from litellm.integrations.otel.mappers.utils import (
     json_if,
     message_content,
     output_messages,
+    tool_definition_attrs,
 )
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
@@ -110,10 +111,8 @@ class OpenInferenceMapper:
 
     @classmethod
     def _tools(cls, data: LLMCallSpanData) -> AttributeMap:
-        return drop_none(
-            {
-                f"llm.tools.{idx}.{suffix}": extract(tool)
-                for idx, tool in enumerate(data.tools)
-                for suffix, extract in cls._TOOL_ATTRS.items()
-            }
+        return tool_definition_attrs(
+            lambda idx, suffix: f"llm.tools.{idx}.{suffix}",
+            data.tools,
+            cls._TOOL_ATTRS,
         )

@@ -370,3 +370,32 @@ def test_tool_definitions_kept_in_full_below_the_cap():
         assert a[f"gen_ai.tool.{idx}.description"] == f"description for tool {idx}"
         assert a[f"gen_ai.tool.{idx}.parameters"]
         assert a[f"llm.request.functions.{idx}.name"] == f"tool_{idx}"
+
+
+def test_many_tools_do_not_evict_core_attributes_with_vendor_mappers():
+    """The cap has to hold for every vocabulary that emits tool definitions.
+
+    Arize and Phoenix layer the OpenInference vocabulary on top of the default
+    two, so its own per-tool family would otherwise reintroduce the eviction
+    that the cap exists to prevent.
+    """
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=True,
+        mapper_names=["genai", "openinference"],
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    engine.emit(
+        SpanRole.LLM_CALL,
+        LLMCallSpanData.from_standard_logging_payload(_tools_payload(127)),
+    )
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+    assert span.dropped_attributes == 0
+    assert a["llm.tools.0.tool.name"] == "tool_0"
+    assert "llm.tools.126.tool.name" not in a
