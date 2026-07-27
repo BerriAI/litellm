@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+import json
 from typing import AsyncGenerator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,6 +32,7 @@ from litellm.proxy.common_request_processing import (
     _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
     create_response,
+    SSE_KEEPALIVE_FRAME,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.utils import ProxyLogging
@@ -1588,6 +1590,156 @@ class TestCommonRequestProcessingHelpers:
             # Since JSONResponse is returned instead of StreamingResponse, streaming tracing should not be triggered
             # tracer.trace should not be called
             assert mock_tracer.trace.call_count == 0
+
+
+@pytest.mark.asyncio
+class TestSSEKeepaliveDuringTimeToFirstToken:
+    """Regression coverage for #34819: with SSE_KEEPALIVE_INTERVAL_SECONDS set,
+    a stream whose time-to-first-token is long must put bytes on the wire before
+    an intermediary's idle timeout (AWS ALB and nginx default to 60s) reaps it.
+    """
+
+    @staticmethod
+    def _connected_request() -> Request:
+        async def receive():
+            await asyncio.Event().wait()
+
+        return Request({"type": "http", "method": "POST", "path": "/", "headers": []}, receive)
+
+    async def test_keepalive_frames_are_sent_while_first_token_is_pending(self):
+        first_token = asyncio.Event()
+
+        async def slow_generator():
+            await first_token.wait()
+            yield 'data: {"content": "hi"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        response = await asyncio.wait_for(
+            create_response(
+                slow_generator(),
+                "text/event-stream",
+                {},
+                request=self._connected_request(),
+                keepalive_interval_seconds=0.01,
+            ),
+            timeout=5,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+
+        body = response.body_iterator.__aiter__()
+        keepalives = [await asyncio.wait_for(body.__anext__(), timeout=5) for _ in range(3)]
+        assert keepalives == [SSE_KEEPALIVE_FRAME] * 3
+
+        first_token.set()
+        remaining = [chunk async for chunk in body]
+        assert remaining == ['data: {"content": "hi"}\n\n', "data: [DONE]\n\n"]
+
+    async def test_no_keepalive_frames_when_interval_is_disabled(self):
+        async def slow_generator():
+            await asyncio.sleep(0.05)
+            yield 'data: {"content": "hi"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        response = await asyncio.wait_for(
+            create_response(
+                slow_generator(),
+                "text/event-stream",
+                {},
+                request=self._connected_request(),
+            ),
+            timeout=5,
+        )
+        chunks = [chunk async for chunk in response.body_iterator]
+        assert chunks == ['data: {"content": "hi"}\n\n', "data: [DONE]\n\n"]
+
+    async def test_error_only_stream_still_returns_json_when_first_chunk_is_fast(self):
+        async def error_generator():
+            yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+
+        response = await asyncio.wait_for(
+            create_response(
+                error_generator(),
+                "text/event-stream",
+                {},
+                request=self._connected_request(),
+                keepalive_interval_seconds=5,
+            ),
+            timeout=5,
+        )
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    async def test_error_raised_after_keepalives_is_delivered_as_sse_error_frame(self):
+        release = asyncio.Event()
+
+        async def failing_generator():
+            await release.wait()
+            raise HTTPException(status_code=429, detail="rate limited")
+            yield "unreachable"
+
+        response = await asyncio.wait_for(
+            create_response(
+                failing_generator(),
+                "text/event-stream",
+                {},
+                request=self._connected_request(),
+                keepalive_interval_seconds=0.01,
+            ),
+            timeout=5,
+        )
+        # Status and headers are already committed once keepalives start, so the
+        # failure can only be reported inside the stream.
+        assert response.status_code == status.HTTP_200_OK
+
+        body = response.body_iterator.__aiter__()
+        assert await asyncio.wait_for(body.__anext__(), timeout=5) == SSE_KEEPALIVE_FRAME
+
+        release.set()
+        remaining = [chunk async for chunk in body]
+        assert remaining[-1] == "data: [DONE]\n\n"
+        error = json.loads(remaining[0][len("data: ") :])["error"]
+        assert error["message"] == "rate limited"
+        assert error["code"] == "429"
+
+    async def test_client_disconnect_during_keepalives_closes_upstream_stream(self):
+        upstream_closed = asyncio.Event()
+
+        async def never_first_token():
+            try:
+                await asyncio.Event().wait()
+                yield "unreachable"
+            finally:
+                upstream_closed.set()
+
+        response = await asyncio.wait_for(
+            create_response(
+                never_first_token(),
+                "text/event-stream",
+                {},
+                request=self._connected_request(),
+                keepalive_interval_seconds=0.01,
+            ),
+            timeout=5,
+        )
+
+        disconnected = asyncio.Event()
+        keepalives_sent = 0
+
+        async def receive():
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            nonlocal keepalives_sent
+            if message["type"] == "http.response.body" and message.get("body"):
+                keepalives_sent += 1
+                disconnected.set()
+
+        await asyncio.wait_for(response({"type": "http"}, receive, send), timeout=5)
+
+        assert keepalives_sent >= 1
+        assert upstream_closed.is_set()
 
 
 class TestExtractErrorFromSSEChunk:

@@ -34,6 +34,7 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SSE_KEEPALIVE_INTERVAL_SECONDS,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -83,6 +84,11 @@ from litellm.types.utils import (
 # the per-chunk hot path can skip the context manager entirely when tracing
 # is off (the default).
 _DD_STREAMING_TRACE_ENABLED = not isinstance(tracer, NullTracer)
+
+
+# SSE comment frame: every compliant SSE client discards it, so it is a safe way
+# to put bytes on the wire while a stream has produced no tokens yet.
+SSE_KEEPALIVE_FRAME = ": litellm-keepalive\n\n"
 
 
 _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation = {
@@ -460,7 +466,8 @@ async def _wait_for_http_disconnect(request: Request) -> None:
 async def _buffer_first_chunk_honoring_disconnect(
     generator: AsyncGenerator[str, None],
     request: Optional[Request],
-) -> str:
+    keepalive_interval_seconds: float = 0.0,
+) -> str | asyncio.Task[str]:
     """Fetch the first streamed chunk, cancelling the upstream LLM call if the
     client disconnects before it arrives.
 
@@ -471,28 +478,42 @@ async def _buffer_first_chunk_honoring_disconnect(
     until the request timeout (LIT-3568). Cancelling the fetch propagates into
     async_streaming_data_generator, whose finally block records the 499 and
     closes the upstream stream.
+
+    With keepalive_interval_seconds set, buffering is bounded by that interval:
+    the still-pending fetch is handed back to the caller so it can start the SSE
+    response and write keepalive frames instead of staying silent on the wire.
     """
-    if request is None:
+    if request is None and keepalive_interval_seconds <= 0:
         return await generator.__anext__()
 
     chunk_task: asyncio.Task[str] = asyncio.ensure_future(generator.__anext__())
-    disconnect_task: asyncio.Task[None] = asyncio.ensure_future(_wait_for_http_disconnect(request))
+    disconnect_task: asyncio.Task[None] | None = (
+        asyncio.ensure_future(_wait_for_http_disconnect(request)) if request is not None else None
+    )
     try:
-        await asyncio.wait({chunk_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait(
+            tuple(task for task in (chunk_task, disconnect_task) if task is not None),
+            timeout=keepalive_interval_seconds if keepalive_interval_seconds > 0 else None,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
         # A completed disconnect_task has already consumed the http.disconnect
         # message, so Starlette's later listen_for_disconnect would never see it.
         # Take the cancellation path whenever a disconnect was observed, even if
         # the first chunk landed in the same scheduler turn.
-        disconnect_observed = disconnect_task.done()
+        disconnect_observed = disconnect_task is not None and disconnect_task.done()
     finally:
-        disconnect_task.cancel()
-        try:
-            await disconnect_task
-        except BaseException:  # noqa: BLE001
-            pass
+        if disconnect_task is not None:
+            disconnect_task.cancel()
+            try:
+                await disconnect_task
+            except BaseException:  # noqa: BLE001
+                pass
 
-    if not disconnect_observed and chunk_task.done() and not chunk_task.cancelled():
-        return chunk_task.result()
+    if not disconnect_observed:
+        if chunk_task.done() and not chunk_task.cancelled():
+            return chunk_task.result()
+        if keepalive_interval_seconds > 0:
+            return chunk_task
 
     chunk_task.cancel()
     with anyio.CancelScope(shield=True):
@@ -508,12 +529,95 @@ async def _buffer_first_chunk_honoring_disconnect(
     raise _ClientDisconnectedBeforeFirstChunk()
 
 
+def _build_stream_error_payload(e: Exception) -> tuple[int, dict[str, Any]]:
+    """Map an exception raised while starting a stream to (status code, error
+    object matching ProxyException.to_dict()), so streaming and non-streaming
+    error frames are byte-identical.
+    """
+    error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    raw_detail = getattr(e, "detail", "Error processing stream start")
+    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+
+    existing_fields = getattr(e, "provider_specific_fields", None) or {}
+    merged_fields = {**existing_fields, **structured_fields} if structured_fields else existing_fields
+
+    error_obj: dict[str, Any] = {
+        "message": message,
+        "type": getattr(e, "type", "None"),
+        "param": getattr(e, "param", "None"),
+        "code": str(error_status),
+        **({"provider_specific_fields": merged_fields} if merged_fields else {}),
+    }
+    return error_status, error_obj
+
+
+async def _stream_chunks(
+    first_chunk_value: str | None,
+    generator: AsyncGenerator[str, None],
+) -> AsyncGenerator[str, None]:
+    if not _DD_STREAMING_TRACE_ENABLED:
+        # Fast path: no per-chunk span object / context-manager overhead.
+        if first_chunk_value is not None:
+            yield first_chunk_value
+        async for chunk in generator:
+            yield chunk
+        return
+    if first_chunk_value is not None:
+        with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+            yield first_chunk_value
+    async for chunk in generator:
+        with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+            yield chunk
+
+
+async def _keepalive_until_first_chunk(
+    chunk_task: asyncio.Task[str],
+    generator: AsyncGenerator[str, None],
+    keepalive_interval_seconds: float,
+) -> AsyncGenerator[str, None]:
+    """Stream SSE comment frames until the first chunk lands, then the response.
+
+    Comment frames are ignored by every SSE client but are real bytes on the
+    wire, so idle watchdogs between the client and the proxy stop reaping
+    healthy slow-TTFT streams. The response status and headers are already
+    committed by the time the first chunk arrives, so an error-only stream is
+    delivered as an SSE error frame rather than the JSON body create_response
+    returns when it manages to buffer the first chunk in time.
+    """
+    try:
+        while not chunk_task.done():
+            await asyncio.wait((chunk_task,), timeout=keepalive_interval_seconds)
+            if not chunk_task.done():
+                yield SSE_KEEPALIVE_FRAME
+        try:
+            first_chunk_value = chunk_task.result()
+        except StopAsyncIteration:
+            return
+        except Exception as e:  # noqa: BLE001
+            verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
+            _, error_obj = _build_stream_error_payload(e)
+            yield f"data: {json.dumps({'error': error_obj})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        async for chunk in _stream_chunks(first_chunk_value, generator):
+            yield chunk
+    finally:
+        if not chunk_task.done():
+            chunk_task.cancel()
+            with anyio.CancelScope(shield=True):
+                try:
+                    await chunk_task
+                except BaseException:  # noqa: BLE001
+                    pass
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
     default_status_code: int = status.HTTP_200_OK,
     request: Optional[Request] = None,
+    keepalive_interval_seconds: float = SSE_KEEPALIVE_INTERVAL_SECONDS,
 ) -> Union[StreamingResponse, JSONResponse]:
     """
     Create streaming response, checking if the first chunk is an error.
@@ -536,7 +640,20 @@ async def create_response(
             generator = await generator
 
         # Now get the first chunk from the actual generator
-        first_chunk_value = await _buffer_first_chunk_honoring_disconnect(generator, request)
+        buffered = await _buffer_first_chunk_honoring_disconnect(generator, request, keepalive_interval_seconds)
+
+        if isinstance(buffered, asyncio.Task):
+            # Time-to-first-token exceeded the keepalive interval; start the SSE
+            # response now and heartbeat until the model produces something.
+            return _UpstreamClosingStreamingResponse(
+                _keepalive_until_first_chunk(buffered, generator, keepalive_interval_seconds),
+                media_type=media_type,
+                headers=streaming_headers,
+                status_code=default_status_code,
+                upstream_generator=generator,
+            )
+
+        first_chunk_value = buffered
 
         if first_chunk_value is not None:
             try:
@@ -599,26 +716,7 @@ async def create_response(
         verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
-        error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
-        raw_detail = getattr(e, "detail", "Error processing stream start")
-        message, structured_fields = _serialize_http_exception_detail(raw_detail)
-
-        existing_fields = getattr(e, "provider_specific_fields", None) or {}
-        if structured_fields:
-            merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
-        else:
-            merged_fields = existing_fields or None
-
-        # Match ProxyException.to_dict() shape so streaming and non-streaming
-        # error frames are byte-identical.
-        error_obj: Dict[str, Any] = {
-            "message": message,
-            "type": getattr(e, "type", "None"),
-            "param": getattr(e, "param", "None"),
-            "code": str(error_status),
-        }
-        if merged_fields:
-            error_obj["provider_specific_fields"] = merged_fields
+        error_status, error_obj = _build_stream_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
@@ -631,23 +729,8 @@ async def create_response(
             status_code=error_status,
         )
 
-    async def combined_generator() -> AsyncGenerator[str, None]:
-        if not _DD_STREAMING_TRACE_ENABLED:
-            # Fast path: no per-chunk span object / context-manager overhead.
-            if first_chunk_value is not None:
-                yield first_chunk_value
-            async for chunk in generator:
-                yield chunk
-            return
-        if first_chunk_value is not None:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield first_chunk_value
-        async for chunk in generator:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield chunk
-
     return _UpstreamClosingStreamingResponse(
-        combined_generator(),
+        _stream_chunks(first_chunk_value, generator),
         media_type=media_type,
         headers=streaming_headers,
         status_code=final_status_code,
