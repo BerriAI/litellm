@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS, PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.litellm_core_utils.cache_control_utils import parse_cache_control_header
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     iter_client_callback_metadata_dicts,
@@ -116,17 +117,7 @@ else:
 
 
 def parse_cache_control(cache_control):
-    cache_dict = {}
-    directives = cache_control.split(", ")
-
-    for directive in directives:
-        if "=" in directive:
-            key, value = directive.split("=")
-            cache_dict[key] = value
-        else:
-            cache_dict[directive] = True
-
-    return cache_dict
+    return parse_cache_control_header(cache_control)
 
 
 LITELLM_METADATA_ROUTES = (
@@ -1490,10 +1481,16 @@ async def add_litellm_data_to_request(
     add_provider_specific_headers_to_request(data=data, headers=_headers)
 
     ## Cache Controls
-    cache_control_header = _headers.get("Cache-Control", None)
+    cache_control_header = _headers.get("Cache-Control", None) or _headers.get("cache-control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
-        data["ttl"] = cache_dict.get("s-maxage")
+        data["ttl"] = cache_dict.get("s-maxage") or cache_dict.get("ttl")
+        if "cache" not in data or not isinstance(data["cache"], dict):
+            data["cache"] = cache_dict
+        else:
+            merged_cache = parse_cache_control(cache_control_header)
+            merged_cache.update(data["cache"])
+            data["cache"] = merged_cache
 
     verbose_proxy_logger.debug("receiving data: %s", data)
 

@@ -64,10 +64,30 @@ else:
     LiteLLMLoggingObj = Any
 
 
+from litellm.litellm_core_utils.cache_control_utils import parse_cache_control_header
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+
+def _enrich_kwargs_with_cache_control_headers(kwargs: dict[str, Any]) -> None:
+    headers = kwargs.get("headers") or kwargs.get("extra_headers")
+    if not isinstance(headers, dict):
+        return
+    header_val = headers.get("Cache-Control") or headers.get("cache-control")
+    if not header_val or not isinstance(header_val, str):
+        return
+    parsed_directives = parse_cache_control_header(header_val)
+    if not parsed_directives:
+        return
+    existing_cache = kwargs.get("cache")
+    if not isinstance(existing_cache, dict):
+        kwargs["cache"] = parsed_directives
+    else:
+        merged = parsed_directives.copy()
+        merged.update(existing_cache)
+        kwargs["cache"] = merged
 
 
 class CachingHandlerResponse(BaseModel):
@@ -177,6 +197,7 @@ class LLMCachingHandler:
         Raises:
             None
         """
+        _enrich_kwargs_with_cache_control_headers(kwargs)
         # Check if caching should be performed BEFORE doing expensive operations
         if (
             (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
@@ -298,6 +319,7 @@ class LLMCachingHandler:
     ) -> CachingHandlerResponse:
         cached_result: Optional[Any] = None
 
+        _enrich_kwargs_with_cache_control_headers(kwargs)
         # Check if caching should be performed BEFORE doing expensive kwargs copy
         if litellm.cache is not None and self._is_call_type_supported_by_cache(original_function=original_function):
             args = args or ()
@@ -1037,6 +1059,7 @@ class LLMCachingHandler:
         Returns:
             bool: True if the result should be stored in the cache, False otherwise.
         """
+        _enrich_kwargs_with_cache_control_headers(kwargs)
         return (
             (litellm.cache is not None)
             and litellm.cache.supported_call_types is not None
