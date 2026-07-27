@@ -41,6 +41,7 @@ from litellm.constants import (
 )
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
@@ -5337,7 +5338,7 @@ class ProxyUpdateSpend:
                             )
 
                 break
-            except DB_CONNECTION_ERROR_TYPES as e:
+            except DB_RETRY_SAFE_ERROR_TYPES as e:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj

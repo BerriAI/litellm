@@ -308,6 +308,84 @@ async def test_update_daily_spend_with_null_entity_id():
     assert create_data["failed_requests"] == 0
 
 
+def _daily_txn(user_id: str = "user1") -> dict:
+    return {
+        "user_id": user_id,
+        "date": "2024-01-01",
+        "api_key": "test-api-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "spend": 0.1,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_does_not_retry_post_send_ambiguous_errors():
+    # Regression for the double-apply hazard: a ReadTimeout means the batch was
+    # sent and its outcome is unknown; the engine can leave the transaction open
+    # on the pooled connection, so retrying stacks a second set of increments
+    # into it and one commit applies both. Post-send failures must drop the
+    # batch (loudly), never retry it.
+    import httpx
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.batch_ = MagicMock(side_effect=httpx.ReadTimeout("ambiguous"))
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(httpx.ReadTimeout):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=3,
+            prisma_client=mock_prisma_client,
+            proxy_logging_obj=proxy_logging,
+            daily_spend_transactions={"k1": _daily_txn()},
+            entity_type="user",
+            entity_id_field="user_id",
+            table_name="litellm_dailyuserspend",
+            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        )
+
+    mock_prisma_client.db.batch_.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_retries_connect_errors(monkeypatch):
+    # ConnectError proves the statements never reached the database, so it is
+    # the one failure the writer may retry.
+    import httpx
+
+    mock_batcher = MagicMock()
+    good_ctx = MagicMock()
+    good_ctx.__aenter__ = AsyncMock(return_value=mock_batcher)
+    good_ctx.__aexit__ = AsyncMock(return_value=None)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.batch_ = MagicMock(side_effect=[httpx.ConnectError("down"), good_ctx])
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", fake_sleep)
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=3,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=proxy_logging,
+        daily_spend_transactions={"k1": _daily_txn()},
+        entity_type="user",
+        entity_id_field="user_id",
+        table_name="litellm_dailyuserspend",
+        unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+    )
+
+    assert mock_prisma_client.db.batch_.call_count == 2
+
+
 @pytest.mark.asyncio
 async def test_update_daily_spend_sorting():
     """

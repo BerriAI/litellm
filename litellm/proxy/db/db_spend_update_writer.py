@@ -34,7 +34,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
+    DB_RETRY_SAFE_ERROR_TYPES,
     BaseDailySpendTransaction,
     DailyAgentSpendTransaction,
     DailyEndUserSpendTransaction,
@@ -1121,7 +1121,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1164,7 +1164,7 @@ class DBSpendUpdateWriter:
                                     },
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1197,7 +1197,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1244,7 +1244,7 @@ class DBSpendUpdateWriter:
                                 )
                     # Transaction succeeded, break out of retry loop
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1286,7 +1286,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:  # If we've reached the maximum number of retries
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1372,7 +1372,7 @@ class DBSpendUpdateWriter:
                                     data={"spend": {"increment": response_cost}},
                                 )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
+                except DB_RETRY_SAFE_ERROR_TYPES as e:
                     if i >= n_retry_times:
                         _raise_failed_update_spend_exception(
                             e=e,
@@ -1669,7 +1669,7 @@ class DBSpendUpdateWriter:
 
                         break
 
-                    except DB_CONNECTION_ERROR_TYPES as e:
+                    except DB_RETRY_SAFE_ERROR_TYPES as e:
                         if i >= n_retry_times:
                             _raise_failed_update_spend_exception(
                                 e=e,
