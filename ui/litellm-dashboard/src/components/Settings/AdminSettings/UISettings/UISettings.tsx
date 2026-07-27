@@ -27,6 +27,7 @@ export default function UISettings() {
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
+  const allowUserTeamCreationProperty = schema?.properties?.allow_user_team_creation;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -217,6 +218,20 @@ export default function UISettings() {
   const handleToggleDisableCustomApiKeys = (checked: boolean) => {
     updateSettings(
       { disable_custom_api_keys: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleAllowUserTeamCreation = (checked: boolean) => {
+    updateSettings(
+      { allow_user_team_creation: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -478,6 +493,25 @@ export default function UISettings() {
               <Typography.Text type="secondary">
                 {disableCustomApiKeysProperty?.description ??
                   "If true, users cannot specify custom key values. All keys must be auto-generated."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          <Divider />
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.allow_user_team_creation)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleAllowUserTeamCreation}
+              aria-label={allowUserTeamCreationProperty?.description ?? "Allow internal users to create teams"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Allow internal users to create teams</Typography.Text>
+              <Typography.Text type="secondary">
+                {allowUserTeamCreationProperty?.description ??
+                  "If true, internal users can create their own standalone teams. The creating user is automatically added as the team's admin."}
               </Typography.Text>
             </Space>
           </Space>

@@ -288,6 +288,13 @@ class RouteChecks:
                 request_data=request_data,
                 request=request,
             )
+        elif (
+            _user_role == LitellmUserRoles.INTERNAL_USER.value
+            and route == "/team/new"
+            and request_data.get("organization_id") is None
+            and RouteChecks._user_team_creation_enabled()
+        ):
+            pass
         elif _user_role == LitellmUserRoles.INTERNAL_USER.value and RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
         ):
@@ -325,6 +332,12 @@ class RouteChecks:
                 RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
         else:
             RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
+
+    @staticmethod
+    def _user_team_creation_enabled() -> bool:
+        from litellm.proxy.proxy_server import general_settings
+
+        return general_settings.get("allow_user_team_creation", False) is True
 
     @staticmethod
     def custom_admin_only_route_check(route: str):

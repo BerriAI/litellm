@@ -163,3 +163,75 @@ describe("UISettings", () => {
     expect(NotificationManager.success).toHaveBeenCalledWith("UI settings updated successfully");
   });
 });
+
+describe("UISettings - allow_user_team_creation (LIT-3254)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
+    mockUseUISettings.mockReturnValue(buildSettingsResponse());
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+  });
+
+  it("toggles self-serve team creation on and calls update with the right key", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Allow internal users to create teams" });
+    expect(toggle).not.toBeChecked();
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { allow_user_team_creation: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(NotificationManager.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("toggles self-serve team creation off when currently enabled", () => {
+    const mutateMock = vi.fn();
+
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          field_schema: { description: "UI settings description", properties: {} },
+          values: { allow_user_team_creation: true },
+        },
+      }),
+    );
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Allow internal users to create teams" });
+    expect(toggle).toBeChecked();
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith({ allow_user_team_creation: false }, expect.anything());
+  });
+});
