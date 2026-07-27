@@ -230,7 +230,9 @@ from litellm.constants import (
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
+    GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
+    LITELLM_PROXY_BUDGET_NAME,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
     PROXY_BATCH_POLLING_ENABLED,
     PROXY_BATCH_POLLING_INTERVAL,
@@ -391,6 +393,16 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.management_endpoints.customer_endpoints import (
     router as customer_router,
 )
+from litellm.proxy.management_endpoints.management_v1 import (
+    router as management_v1_router,
+)
+from litellm.proxy.management_endpoints.management_v1.common import (
+    MANAGEMENT_V1_PREFIX,
+    PROBLEM_TYPE_BASE,
+    ManagementProblem,
+    problem_response,
+)
+from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     router as fallback_management_router,
 )
@@ -1054,10 +1066,9 @@ async def proxy_startup_event(app: FastAPI):
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
     if prisma_client is not None and litellm.max_budget > 0:
-        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name=litellm_proxy_admin_name)
+        ProxyStartupEvent._add_proxy_budget_to_db()
         asyncio.create_task(
             ProxyStartupEvent._warm_global_spend_cache(
-                litellm_proxy_admin_name=litellm_proxy_admin_name,
                 user_api_key_cache=user_api_key_cache,
                 prisma_client=prisma_client,
             )
@@ -1437,8 +1448,27 @@ def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Op
             request.state.parent_otel_span = None
 
 
+@app.exception_handler(ManagementProblem)
+async def management_problem_exception_handler(request: Request, exc: ManagementProblem):
+    _close_dangling_otel_server_span(request, exc.problem.status, exc=exc)
+    return problem_response(exc.problem)
+
+
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
+        _close_dangling_otel_server_span(request, 400, exc=exc)
+        return problem_response(
+            ProblemDetail(
+                type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
+                title="Invalid query parameter",
+                status=400,
+                detail="; ".join(
+                    f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in exc.errors()
+                )
+                or "The request query parameters are invalid.",
+            )
+        )
     _close_dangling_otel_server_span(request, 422, exc=exc)
     return JSONResponse(
         status_code=422,
@@ -2002,7 +2032,7 @@ health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
 background_health_check_loop_active = False
 background_health_check_cycle_seq = 0
 queue: List = []
-litellm_proxy_budget_name = "litellm-proxy-budget"
+litellm_proxy_budget_name = LITELLM_PROXY_BUDGET_NAME
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Union[Literal["admin", "all"], Dict] = "all"
 proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
@@ -2871,15 +2901,13 @@ async def update_cache(
                     )
                 )
             ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend = await user_api_key_cache.async_get_cache(
-                key="{}:spend".format(litellm_proxy_admin_name)
-            )
+            global_proxy_spend = await user_api_key_cache.async_get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
             if global_proxy_spend is None:
                 # do nothing if not in cache
                 return
             elif response_cost is not None and global_proxy_spend is not None:
                 increment = global_proxy_spend + response_cost
-                values_to_update_in_cache.append(("{}:spend".format(litellm_proxy_admin_name), increment))
+                values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update user spend in cache. "
@@ -3040,7 +3068,7 @@ async def update_cache(
     if tags is not None:
         await _update_tag_cache()
 
-    global_proxy_spend_key = "{}:spend".format(litellm_proxy_admin_name)
+    global_proxy_spend_key = GLOBAL_PROXY_SPEND_CACHE_KEY
     local_object_updates = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
     shared_scalar_updates = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
 
@@ -7772,29 +7800,32 @@ class ProxyStartupEvent:
         )
 
     @classmethod
-    def _add_proxy_budget_to_db(cls, litellm_proxy_budget_name: str):
+    def _add_proxy_budget_to_db(cls):
         """Adds a global proxy budget to db"""
         if litellm.budget_duration is None:
             raise Exception("budget_duration not set on Proxy. budget_duration is required to use max_budget.")
 
-        asyncio.create_task(cls._upsert_proxy_budget_with_reset_at_backfill(litellm_proxy_budget_name))
+        asyncio.create_task(cls._upsert_proxy_budget_with_reset_at_backfill())
 
     @classmethod
-    async def _upsert_proxy_budget_with_reset_at_backfill(cls, litellm_proxy_budget_name: str) -> None:
+    async def _upsert_proxy_budget_with_reset_at_backfill(cls) -> None:
         """
-        Upsert the proxy admin user row with the configured max_budget /
-        budget_duration, then backfill budget_reset_at if currently NULL.
+        Upsert the proxy budget aggregate user row with the configured
+        max_budget / budget_duration, then backfill budget_reset_at if
+        currently NULL.
 
         The backfill uses `WHERE budget_reset_at IS NULL` so it only fires
         when the row pre-existed without a reset schedule (e.g. row created
         via a different path before the proxy budget was configured). On
         subsequent restarts it no-ops, so an active reset window is never
-        slid forward.
+        slid forward. It also zeroes spend at that moment: a row that was
+        never on a reset schedule holds lifetime accrual, which must not
+        gate the first duration window.
         """
         await generate_key_helper_fn(  # type: ignore
             request_type="user",
             table_name="user",
-            user_id=litellm_proxy_budget_name,
+            user_id=LITELLM_PROXY_BUDGET_NAME,
             duration=None,
             models=[],
             aliases={},
@@ -7817,10 +7848,13 @@ class ProxyStartupEvent:
             try:
                 await UserRepository(prisma_client).table.update_many(
                     where={
-                        "user_id": litellm_proxy_budget_name,
+                        "user_id": LITELLM_PROXY_BUDGET_NAME,
                         "budget_reset_at": None,
                     },
-                    data={"budget_reset_at": get_budget_reset_time(budget_duration=litellm.budget_duration)},
+                    data={
+                        "budget_reset_at": get_budget_reset_time(budget_duration=litellm.budget_duration),
+                        "spend": 0,
+                    },
                 )
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to backfill budget_reset_at on proxy admin row: %s", e)
@@ -7828,13 +7862,12 @@ class ProxyStartupEvent:
     @classmethod
     async def _warm_global_spend_cache(
         cls,
-        litellm_proxy_admin_name: str,
         user_api_key_cache: UserApiKeyCache,
         prisma_client: PrismaClient,
     ) -> None:
         """Warm global spend cache once at startup to reduce impact of first wave of requests."""
         try:
-            cache_key = "{}:spend".format(litellm_proxy_admin_name)
+            cache_key = GLOBAL_PROXY_SPEND_CACHE_KEY
             await _fetch_global_spend_with_event_coordination(
                 cache_key=cache_key,
                 user_api_key_cache=user_api_key_cache,
@@ -16302,6 +16335,7 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
+app.include_router(management_v1_router)
 app.include_router(spend_management_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)

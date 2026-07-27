@@ -140,7 +140,17 @@ class GuardrailsClient:
         *,
         identifier: str,
         version: str,
+        default_on: bool = False,
     ) -> str:
+        """Register a Bedrock guardrail, opted out of `default_on` by default.
+
+        `default_on=True` applies the guardrail to every request the proxy serves,
+        not just this test's. When the upstream ApplyGuardrail call fails (a missing
+        bedrock:ApplyGuardrail permission answers 403), that failure is returned to
+        unrelated traffic as `403 Bedrock guardrail request failed`, so one guardrail
+        test takes out whatever else is running. Callers select the guardrail
+        per-request instead, which keeps the blast radius to the test that wants it.
+        """
         return unwrap(
             self.proxy.transport.post(
                 "/guardrails",
@@ -150,12 +160,9 @@ class GuardrailsClient:
                         guardrail_name=name,
                         litellm_params=BedrockGuardrailParamsBody(
                             mode="pre_call",
-                            default_on=True,
+                            default_on=default_on,
                             guardrailIdentifier=identifier,
                             guardrailVersion=version,
-                            aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
-                            aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
-                            aws_region_name="os.environ/AWS_REGION",
                         ),
                     )
                 ),

@@ -1,3 +1,9 @@
+export const UI_BASE_URL = (
+  process.env.E2E_UI_BASE_URL ||
+  process.env.LITELLM_PROXY_URL ||
+  "http://localhost:4000"
+).replace(/\/+$/, "");
+
 // Storage state paths for each role
 export const ADMIN_STORAGE_PATH = "admin.storageState.json";
 export const ADMIN_VIEWER_STORAGE_PATH = "adminViewer.storageState.json";

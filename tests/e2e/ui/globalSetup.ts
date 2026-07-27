@@ -1,5 +1,6 @@
 import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
+import { UI_BASE_URL } from "./constants";
 import * as fs from "fs";
 
 async function globalSetup() {
@@ -12,7 +13,7 @@ async function globalSetup() {
   // the admin UI toggle does; the projects migration smoke needs the link.
   const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
   const api = await request.newContext();
-  const settingsRes = await api.patch(`http://localhost:4000${rootPath}/update/ui_settings`, {
+  const settingsRes = await api.patch(`${UI_BASE_URL}${rootPath}/update/ui_settings`, {
     headers: { Authorization: `Bearer ${masterKey}` },
     data: { enable_projects_ui: true },
   });
@@ -26,7 +27,7 @@ async function globalSetup() {
     const storagePath = STORAGE_PATHS[role];
     const page = await browser.newPage();
     try {
-      await page.goto(`http://localhost:4000${rootPath}/ui/login`);
+      await page.goto(`${UI_BASE_URL}${rootPath}/ui/login`);
       await page.getByPlaceholder("Enter your username").fill(email);
       await page.getByPlaceholder("Enter your password").fill(password);
       await page.getByRole("button", { name: "Login", exact: true }).click();

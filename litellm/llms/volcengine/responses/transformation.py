@@ -1,11 +1,9 @@
+from collections.abc import Callable, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
     Literal,
-    Optional,
-    Tuple,
+    Protocol,
     Union,
     get_args,
     get_origin,
@@ -17,10 +15,10 @@ from pydantic import fields as pyd_fields
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -47,8 +45,15 @@ else:
     LiteLLMLoggingObj = Any
 
 
+class _EventModelClass(Protocol):
+    @property
+    def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
+
+    def model_validate(self, obj: Mapping[str, object]) -> ResponsesAPIStreamingResponse: ...
+
+
 class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    _SUPPORTED_OPTIONAL_PARAMS: List[str] = [
+    _SUPPORTED_OPTIONAL_PARAMS: list[str] = [
         # Doc-listed knobs
         "instructions",
         "max_output_tokens",
@@ -89,9 +94,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             supported.remove("metadata")
         return supported
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> VolcEngineError:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> VolcEngineError:
         typed_headers: httpx.Headers = headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
         return VolcEngineError(
             status_code=status_code,
@@ -99,14 +102,14 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             headers=typed_headers,
         )
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Build auth headers for Volcengine Responses API.
         """
         if litellm_params is None:
             litellm_params = GenericLiteLLMParams()
         elif isinstance(litellm_params, dict):
-            litellm_params = GenericLiteLLMParams(**litellm_params)
+            litellm_params = GenericLiteLLMParams.model_validate(litellm_params)
 
         api_key = (
             litellm_params.api_key
@@ -122,7 +125,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -149,7 +152,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """
         Volcengine Responses API aligns with OpenAI parameters.
         Remove parameters not supported by the public docs.
@@ -173,11 +176,11 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_responses_api_request(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         Volcengine rejects any undocumented fields (including extra_body). Fail fast
         with clear errors and re-filter with the documented whitelist before delegating
@@ -210,7 +213,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_streaming_response(
         self,
         model: str,
-        parsed_chunk: dict,
+        parsed_chunk: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
         """
@@ -222,18 +225,19 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if isinstance(chunk, dict):
             resp = chunk.get("response")
             if isinstance(resp, dict) and "output" not in resp:
+                resp_items: Mapping[str, object] = resp
                 patched_chunk = dict(chunk)
-                patched_resp = dict(resp)
+                patched_resp = dict(resp_items)
                 patched_resp["output"] = []
                 patched_chunk["response"] = patched_resp
                 chunk = patched_chunk
 
         event_type = str(chunk.get("type")) if isinstance(chunk, dict) else None
-        event_pydantic_model = OpenAIResponsesAPIConfig.get_event_model_class(event_type=event_type)
+        event_pydantic_model: _EventModelClass = OpenAIResponsesAPIConfig.get_event_model_class(event_type=event_type)
 
         patched_chunk = self._fill_missing_fields(chunk, event_pydantic_model)
 
-        return event_pydantic_model(**patched_chunk)
+        return event_pydantic_model.model_validate(patched_chunk)
 
     def transform_response_api_response(
         self,
@@ -246,7 +250,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json = raw_response.json()
+            raw_response_json = self._parsed_response_body(raw_response)
             if "created_at" in raw_response_json:
                 raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
@@ -256,10 +260,11 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         processed_headers = process_response_headers(raw_response_headers)
 
         try:
-            response = ResponsesAPIResponse(**raw_response_json)
+            response = ResponsesAPIResponse.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug("Volcengine Responses API: falling back to model_construct for response parsing.")
-            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+            construct_response: Callable[..., ResponsesAPIResponse] = ResponsesAPIResponse.model_construct
+            response = construct_response(**raw_response_json)
 
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
@@ -274,10 +279,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
         url = f"{api_base}/{encoded_response_id}"
-        data: Dict = {}
+        data: dict = {}
         return url, data
 
     def transform_delete_response_api_response(
@@ -286,16 +291,17 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteResponseResult:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json = self._parsed_response_body(raw_response)
         except Exception:
             raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
         try:
-            return DeleteResponseResult(**raw_response_json)
+            return DeleteResponseResult.model_validate(raw_response_json)
         except Exception:
             verbose_logger.debug(
                 "Volcengine Responses API: falling back to model_construct for delete response parsing."
             )
-            return DeleteResponseResult.model_construct(**raw_response_json)
+            construct_delete_result: Callable[..., DeleteResponseResult] = DeleteResponseResult.model_construct
+            return construct_delete_result(**raw_response_json)
 
     #########################################################
     ########## GET RESPONSE API TRANSFORMATION ###############
@@ -306,10 +312,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
         url = f"{api_base}/{encoded_response_id}"
-        data: Dict = {}
+        data: dict = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -318,14 +324,14 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json = self._parsed_response_body(raw_response)
         except Exception:
             raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
 
-        response = ResponsesAPIResponse(**raw_response_json)
+        response = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
         return response
@@ -339,15 +345,15 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        before: Optional[str] = None,
-        include: Optional[List[str]] = None,
+        after: str | None = None,
+        before: str | None = None,
+        include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
         url = f"{api_base}/{encoded_response_id}/input_items"
-        params: Dict[str, Any] = {}
+        params: dict[str, str | int] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -364,9 +370,9 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
+    ) -> dict:
         try:
-            return raw_response.json()
+            return self._parsed_response_body(raw_response)
         except Exception:
             raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -379,10 +385,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         encoded_response_id = encode_url_path_segment(response_id, field_name="response_id")
         url = f"{api_base}/{encoded_response_id}/cancel"
-        data: Dict = {}
+        data: dict = {}
         return url, data
 
     def transform_cancel_response_api_response(
@@ -391,23 +397,23 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json = self._parsed_response_body(raw_response)
         except Exception:
             raise VolcEngineError(message=raw_response.text, status_code=raw_response.status_code)
 
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
 
-        response = ResponsesAPIResponse(**raw_response_json)
+        response = ResponsesAPIResponse.model_validate(raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
         return response
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         Volcengine Responses API supports native streaming; never fall back to fake stream.
@@ -415,7 +421,24 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return False
 
     @staticmethod
-    def _fill_missing_fields(chunk: Any, event_model: Any) -> Dict[str, Any]:
+    def _parsed_response_body(raw_response: httpx.Response) -> dict[str, object]:
+        return raw_response.json()
+
+    @staticmethod
+    def _annotation_origin(annotation: object) -> object:
+        return get_origin(annotation)
+
+    @staticmethod
+    def _annotation_args(annotation: object) -> tuple[object, ...]:
+        return get_args(annotation)
+
+    @staticmethod
+    def _field_annotation(field: pyd_fields.FieldInfo) -> object:
+        annotation: object = field.annotation
+        return annotation
+
+    @staticmethod
+    def _fill_missing_fields(chunk: Mapping[str, object], event_model: object | None) -> Mapping[str, object]:
         """
         Heuristically fill missing required fields with safe defaults based on the
         event model's field annotations. This keeps parsing tolerant of providers that
@@ -424,31 +447,37 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not isinstance(chunk, dict) or event_model is None:
             return chunk
 
-        patched: Dict[str, Any] = dict(chunk)
-        fields_map = getattr(event_model, "model_fields", {}) or {}
+        patched = dict(chunk)
+        fields_map: Mapping[str, pyd_fields.FieldInfo] = getattr(event_model, "model_fields", {}) or {}
 
         for name, field in fields_map.items():
             if name in patched:
-                patched[name] = VolcEngineResponsesAPIConfig._maybe_fill_nested(patched[name], field.annotation)
+                patched[name] = VolcEngineResponsesAPIConfig._maybe_fill_nested(
+                    patched[name], VolcEngineResponsesAPIConfig._field_annotation(field)
+                )
                 continue
 
             # Explicit default or factory
-            if field.default is not pyd_fields.PydanticUndefined and field.default is not None:
-                patched[name] = field.default
+            field_default: object = field.default
+            if field_default is not pyd_fields.PydanticUndefined and field_default is not None:
+                patched[name] = field_default
                 continue
-            if field.default_factory is not None and field.default_factory is not pyd_fields.PydanticUndefined:
-                patched[name] = field.default_factory()
+            default_factory: Callable[..., object] | None = field.default_factory
+            if default_factory is not None and default_factory is not pyd_fields.PydanticUndefined:
+                patched[name] = default_factory()
                 continue
 
             # Heuristic defaults for missing required fields
-            patched[name] = VolcEngineResponsesAPIConfig._default_for_annotation(field.annotation)
+            patched[name] = VolcEngineResponsesAPIConfig._default_for_annotation(
+                VolcEngineResponsesAPIConfig._field_annotation(field)
+            )
 
         return patched
 
     @staticmethod
-    def _default_for_annotation(annotation: Any) -> Any:
-        origin = get_origin(annotation)
-        args = get_args(annotation)
+    def _default_for_annotation(annotation: object) -> object:
+        origin = VolcEngineResponsesAPIConfig._annotation_origin(annotation)
+        args = VolcEngineResponsesAPIConfig._annotation_args(annotation)
 
         if annotation is int:
             return 0
@@ -456,7 +485,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return []
         if origin is Union:
             # Prefer empty list when any option is a list
-            if any((arg is list or get_origin(arg) is list) for arg in args):
+            if any((arg is list or VolcEngineResponsesAPIConfig._annotation_origin(arg) is list) for arg in args):
                 return []
             if type(None) in args:
                 return None
@@ -467,53 +496,51 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return None
 
     @staticmethod
-    def _maybe_fill_nested(value: Any, annotation: Any) -> Any:
+    def _maybe_fill_nested(value: object, annotation: object) -> object:
         """
         Recursively fill nested dict/list structures based on the annotated model.
         """
         model_cls = VolcEngineResponsesAPIConfig._pick_model_class(annotation, value)
-        args = get_args(annotation)
+        args = VolcEngineResponsesAPIConfig._annotation_args(annotation)
 
         if isinstance(value, dict) and model_cls is not None:
-            return VolcEngineResponsesAPIConfig._fill_missing_fields(value, model_cls)
+            nested_items: Mapping[str, object] = value
+            return VolcEngineResponsesAPIConfig._fill_missing_fields(nested_items, model_cls)
 
         if isinstance(value, list):
             # Attempt to fill list elements if we know the element annotation
-            elem_ann: Any = args[0] if args else None
+            elem_ann: object = args[0] if args else None
             if elem_ann is not None:
-                return [VolcEngineResponsesAPIConfig._maybe_fill_nested(v, elem_ann) for v in value]
+                nested_elements: Sequence[object] = value
+                return [VolcEngineResponsesAPIConfig._maybe_fill_nested(v, elem_ann) for v in nested_elements]
 
         return value
 
     @staticmethod
-    def _pick_model_class(annotation: Any, value: Any) -> Optional[Any]:
+    def _pick_model_class(annotation: object, value: object) -> object | None:
         """
         Choose the best-matching Pydantic model class for a nested dict.
         """
-        candidates: List[Any] = []
-        origin = get_origin(annotation)
-
-        if hasattr(annotation, "model_fields"):
-            candidates.append(annotation)
-        if origin is Union:
-            for arg in get_args(annotation):
-                if hasattr(arg, "model_fields"):
-                    candidates.append(arg)
+        origin = VolcEngineResponsesAPIConfig._annotation_origin(annotation)
+        union_args = VolcEngineResponsesAPIConfig._annotation_args(annotation) if origin is Union else ()
+        candidates = tuple(candidate for candidate in (annotation, *union_args) if hasattr(candidate, "model_fields"))
 
         if not candidates:
             return None
 
         # Try to match by literal "type" field when available
         if isinstance(value, dict):
-            v_type = value.get("type")
+            value_items: Mapping[str, object] = value
+            v_type = value_items.get("type")
             for candidate in candidates:
                 try:
-                    type_field = candidate.model_fields.get("type")
+                    candidate_fields: Mapping[str, pyd_fields.FieldInfo] = getattr(candidate, "model_fields")
+                    type_field = candidate_fields.get("type")
                     if type_field is None:
                         continue
-                    literal_ann = type_field.annotation
-                    if get_origin(literal_ann) is Literal:
-                        literal_values = get_args(literal_ann)
+                    literal_ann = VolcEngineResponsesAPIConfig._field_annotation(type_field)
+                    if VolcEngineResponsesAPIConfig._annotation_origin(literal_ann) is Literal:
+                        literal_values = VolcEngineResponsesAPIConfig._annotation_args(literal_ann)
                         if v_type in literal_values:
                             return candidate
                 except Exception:

@@ -72,7 +72,7 @@ class TestEmbeddingsEndpoint:
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="vertex_ai/gemini-embedding-2",
+                model="vertex_ai/text-embedding-005",
                 vertex_project="os.environ/VERTEXAI_PROJECT",
                 vertex_location="us-central1",
             ),

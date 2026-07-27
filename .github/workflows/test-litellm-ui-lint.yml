@@ -29,7 +29,15 @@ jobs:
         id: changed
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # base.sha is the base branch tip from when the PR was opened, while
+          # actions/checkout leaves HEAD on a merge of the PR into the *current*
+          # base tip. "$BASE_SHA"...HEAD therefore spans every base-branch commit
+          # landed since, so a PR that touches no UI file still gets linted
+          # against hundreds of other people's files. Diff the PR head against its
+          # own merge base instead, which is exactly what this PR changed.
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           : > "$RUNNER_TEMP/prettier_files.txt"
           : > "$RUNNER_TEMP/eslint_files.txt"
           while IFS= read -r f; do
@@ -41,7 +49,7 @@ jobs:
               *.json | *.css | *.scss | *.md | *.mdx | *.yml | *.yaml | *.html)
                 printf '%s\n' "$f" >> "$RUNNER_TEMP/prettier_files.txt" ;;
             esac
-          done < <(git diff --name-only --diff-filter=ACMR --relative "$BASE_SHA"...HEAD -- .)
+          done < <(git diff --name-only --diff-filter=ACMR --relative "$merge_base" "$HEAD_SHA" -- .)
           if [ -s "$RUNNER_TEMP/prettier_files.txt" ] || [ -s "$RUNNER_TEMP/eslint_files.txt" ]; then
             echo "has_files=true" >> "$GITHUB_OUTPUT"
           else
