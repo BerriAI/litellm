@@ -780,6 +780,7 @@ async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=MagicMock(object_permission_id=None)
     )
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock()
 
     captured_key_data = {}
 
@@ -830,6 +831,7 @@ async def test_generate_key_helper_fn_with_budget_fallbacks(monkeypatch):
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=MagicMock(object_permission_id=None)
     )
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock()
 
     captured_key_data = {}
 
@@ -6256,6 +6258,62 @@ def test_build_key_filter_conditions_agent_id_narrows_visibility():
 
 
 @pytest.mark.asyncio
+async def test_ensure_user_row_for_key_write_create_only_upsert():
+    """
+    The FK on LiteLLM_VerificationToken.user_id means key writes must
+    provision the referenced user row: create it when missing, never touch
+    an existing one, and no-op for empty or non-string user ids.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _ensure_user_row_for_key_write,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_upsert = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.upsert = mock_upsert
+
+    await _ensure_user_row_for_key_write(mock_prisma_client, "ghost-user")
+    mock_upsert.assert_called_once_with(
+        where={"user_id": "ghost-user"},
+        data={"create": {"user_id": "ghost-user"}, "update": {}},
+    )
+
+    mock_upsert.reset_mock()
+    await _ensure_user_row_for_key_write(mock_prisma_client, None)
+    await _ensure_user_row_for_key_write(mock_prisma_client, "")
+    await _ensure_user_row_for_key_write(mock_prisma_client, 42)
+    mock_upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_fn_table_name_key_provisions_user_row():
+    """
+    Regression for the FK on user_id: table_name="key" minting (admin
+    /key/generate with an arbitrary user_id, JWT auto-register) skips the
+    user-creation branch, so the helper must provision the user row before
+    inserting the key or the insert violates the constraint.
+    """
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(token="hashed-token", litellm_budget_table=None, created_at=None, updated_at=None)
+    )
+    mock_upsert = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.upsert = mock_upsert
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await generate_key_helper_fn(
+            request_type="key",
+            user_id="ghost-user",
+            table_name="key",
+        )
+
+    assert mock_upsert.call_args.kwargs["where"] == {"user_id": "ghost-user"}
+    insert_tables = [c.kwargs.get("table_name") for c in mock_prisma_client.insert_data.call_args_list]
+    assert "user" not in insert_tables, "table_name='key' must not run the full user-creation branch"
+    assert "key" in insert_tables
+
+
+@pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
     Test that GenerateKeyRequest model allows negative max_budget values.
@@ -8274,6 +8332,7 @@ async def test_default_key_generate_params_object_permission_not_rejected_for_no
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=MagicMock(object_permission_id="objperm-4")
     )
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock()
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 

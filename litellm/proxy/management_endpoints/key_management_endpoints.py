@@ -2179,6 +2179,7 @@ async def _process_single_key_update(
             detail={"error": "Database not connected"},
         )
 
+    await _ensure_user_row_for_key_write(prisma_client, non_default_values.get("user_id"), existing_key_row.user_id)
     _data = {**non_default_values, "token": update_key_request.key}
     response = await prisma_client.update_data(token=update_key_request.key, data=_data)
 
@@ -2648,6 +2649,7 @@ async def update_key_fn(
         _data = {**non_default_values, "token": key}
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+        await _ensure_user_row_for_key_write(prisma_client, non_default_values.get("user_id"), existing_key_row.user_id)
         response = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
@@ -3531,6 +3533,24 @@ def _check_model_access_group(
     return True
 
 
+async def _ensure_user_row_for_key_write(
+    prisma_client: PrismaClient, user_id: object, existing_user_id: str | None = None
+) -> None:
+    """Key rows carry a foreign key to LiteLLM_UserTable, so every write path
+    that sets user_id without provisioning the user (table_name="key" minting
+    such as JWT auto-register, admin user_id rebinds on update/regenerate)
+    must create the referenced user row first. Create-only upsert: an existing
+    user is never modified, and a user_id unchanged from existing_user_id is
+    already satisfied by the constraint so no lookup is made.
+    """
+    if not user_id or not isinstance(user_id, str) or user_id == existing_user_id:
+        return
+    await prisma_client.db.litellm_usertable.upsert(
+        where={"user_id": user_id},
+        data={"create": {"user_id": user_id}, "update": {}},
+    )
+
+
 async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: Optional[str] = None,
@@ -3793,6 +3813,8 @@ async def generate_key_helper_fn(
                 "prisma_client: Creating Key= %s",
                 {**key_data, "token": hash_token(token=token)},
             )
+            if table_name == "key":
+                await _ensure_user_row_for_key_write(prisma_client, key_data.get("user_id"))
             create_key_response = await prisma_client.insert_data(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
@@ -4520,6 +4542,7 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
+    await _ensure_user_row_for_key_write(prisma_client, update_data.get("user_id"), key_in_db.user_id)
     updated_token = await VerificationTokenRepository(prisma_client).table.update(
         where={"token": hashed_api_key},
         data=update_data,  # type: ignore
