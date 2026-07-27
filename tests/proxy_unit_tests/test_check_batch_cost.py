@@ -1221,3 +1221,126 @@ class TestUnmanagedBatchCostFlagIsGeneralized:
 
         assert vertex_result == ("deploy-vertex", "8823717160934178816")
         assert bedrock_result == ("deploy-bedrock", TestUnmanagedBedrockRouting._ARN)
+
+
+class TestBatchCostAttribution:
+    """A batch-cost spend log must be attributed to the creating key/team/tags the same
+    way a non-batch request is. Regression for batches created by keys with no user_id,
+    where the row was previously dropped and identity was blank."""
+
+    def _instance(self):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
+
+        instance = CheckBatchCost(
+            proxy_logging_obj=MagicMock(),
+            prisma_client=MagicMock(),
+            llm_router=MagicMock(),
+        )
+        instance.prisma_client.db = MagicMock()
+        return instance
+
+    @pytest.mark.asyncio
+    async def test_get_user_info_skips_query_when_user_id_none(self):
+        """find_unique(where={"user_id": None}) raises "A value is required but not set";
+        the None user_id case (team/service-account keys) must short-circuit instead."""
+        instance = self._instance()
+        instance.prisma_client.db.litellm_usertable.find_unique = AsyncMock()
+
+        result = await instance._get_user_info("batch-1", None)
+
+        assert result == {}
+        instance.prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_attribution_metadata_replays_key_team_and_tags(self):
+        from types import SimpleNamespace
+
+        instance = self._instance()
+        instance.prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=SimpleNamespace(user_email="creator@example.test")
+        )
+        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+            return_value=SimpleNamespace(key_alias="prod-batch-key")
+        )
+        instance.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=SimpleNamespace(team_alias="growth-team")
+        )
+        job = SimpleNamespace(
+            created_by="user-1",
+            team_id="team-1",
+            user_api_key="hashed-key-abc",
+            request_tags=["env:prod", "team:growth"],
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["user_api_key"] == "hashed-key-abc"
+        assert metadata["user_api_key_user_id"] == "user-1"
+        assert metadata["user_api_key_team_id"] == "team-1"
+        assert metadata["user_api_key_alias"] == "prod-batch-key"
+        assert metadata["user_api_key_team_alias"] == "growth-team"
+        assert metadata["user_api_key_user_email"] == "creator@example.test"
+        assert metadata["tags"] == ["env:prod", "team:growth"]
+
+    @pytest.mark.asyncio
+    async def test_attribution_metadata_keeps_key_when_no_user_id(self):
+        """A team/service-account key has no created_by. The persisted key hash and
+        team_id must still flow through so _should_track_cost_callback writes the row."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import (
+            _should_track_cost_callback,
+        )
+
+        instance = self._instance()
+        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+            return_value=None
+        )
+        instance.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=None
+        )
+        job = SimpleNamespace(
+            created_by=None,
+            team_id="team-1",
+            user_api_key="hashed-key-abc",
+            request_tags=None,
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["user_api_key"] == "hashed-key-abc"
+        assert metadata["user_api_key_user_id"] is None
+        assert "tags" not in metadata
+        assert (
+            _should_track_cost_callback(
+                user_api_key=metadata["user_api_key"],
+                user_id=metadata.get("user_api_key_user_id"),
+                team_id=metadata.get("user_api_key_team_id"),
+                end_user_id=None,
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_attribution_metadata_tolerates_legacy_rows(self):
+        """Older managed-object rows predate user_api_key/request_tags. Attribution must
+        still fall back to created_by/team_id without raising."""
+        from types import SimpleNamespace
+
+        instance = self._instance()
+        instance.prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+        instance.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=None
+        )
+        job = SimpleNamespace(created_by="user-1", team_id="team-1")
+
+        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+
+        assert metadata["user_api_key"] is None
+        assert metadata["user_api_key_user_id"] == "user-1"
+        assert metadata["user_api_key_team_id"] == "team-1"
+        assert "tags" not in metadata

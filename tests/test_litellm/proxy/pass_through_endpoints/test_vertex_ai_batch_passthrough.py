@@ -315,6 +315,43 @@ class TestVertexAIBatchPassthroughHandler:
             assert call_kwargs["user_api_key_dict"].user_id == expected_user_id
             assert call_kwargs["user_api_key_dict"].team_id == expected_team_id
 
+    def test_store_batch_managed_object_persists_key_hash_and_tags(
+        self, mock_logging_obj, mock_managed_files_hook
+    ):
+        """The creating key hash and request tags must be persisted so CheckBatchCost
+        can later attribute the batch-cost spend log. Regression: previously api_key
+        was hardcoded to "" and tags were never forwarded. The metadata already carries
+        the hashed token, so it must survive the UserAPIKeyAuth round-trip unchanged."""
+        hashed_key = "a" * 64
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+
+            VertexPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object={"id": "b1", "object": "batch", "status": "validating"},
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                litellm_params={
+                    "metadata": {
+                        "user_api_key": hashed_key,
+                        "user_api_key_team_id": "team-456",
+                        "user_api_key_alias": "prod-batch-key",
+                        "tags": ["env:prod", "team:growth"],
+                    }
+                },
+            )
+
+            mock_managed_files_hook.store_unified_object_id.assert_called_once()
+            call_kwargs = mock_managed_files_hook.store_unified_object_id.call_args[1]
+            assert call_kwargs["user_api_key_dict"].api_key == hashed_key
+            assert call_kwargs["user_api_key_dict"].key_alias == "prod-batch-key"
+            assert call_kwargs["request_tags"] == ["env:prod", "team:growth"]
+
     def test_batch_cost_calculation_integration(self):
         """Single Vertex AI response → non-zero cost with correct token counts."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage
