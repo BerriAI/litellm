@@ -11,6 +11,11 @@ import pytest
 
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
+    get_azure_credential,
+    infer_credential_type_from_environment,
+)
+from litellm.types.secret_managers.get_azure_ad_token_provider import (
+    AzureCredentialType,
 )
 
 
@@ -243,3 +248,146 @@ class TestGetAzureAdTokenProvider:
         # Test that the returned callable works
         token = result()
         assert token == "mock-default-token"
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "test-client-id",
+            "AZURE_TENANT_ID": "test-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+            "AZURE_SCOPE": "https://cognitiveservices.azure.com/.default",
+            "AZURE_CREDENTIAL": "WorkloadIdentityCredential",
+        },
+    )
+    @patch("azure.identity.get_bearer_token_provider")
+    @patch("azure.identity.WorkloadIdentityCredential")
+    def test_get_azure_ad_token_provider_workload_identity_credential(
+        self, mock_workload_identity_credential, mock_get_bearer_token_provider
+    ):
+        """Test get_azure_ad_token_provider with WorkloadIdentityCredential (AKS federation)."""
+        mock_credential_instance = MagicMock()
+        mock_workload_identity_credential.return_value = mock_credential_instance
+
+        mock_token_provider = MagicMock(return_value="mock-workload-identity-token")
+        mock_get_bearer_token_provider.return_value = mock_token_provider
+
+        result = get_azure_ad_token_provider()
+
+        assert callable(result)
+        mock_workload_identity_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            token_file_path="/var/run/secrets/azure/tokens/azure-identity-token",
+        )
+        mock_get_bearer_token_provider.assert_called_once_with(
+            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+        )
+
+        token = result()
+        assert token == "mock-workload-identity-token"
+
+
+class TestInferCredentialTypeFromEnvironment:
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "test-client-id",
+            "AZURE_TENANT_ID": "test-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+        },
+        clear=True,
+    )
+    def test_infers_workload_identity_from_federated_token_file(self):
+        """A federated token file plus client/tenant id (and no client secret) implies
+        workload identity, not managed identity."""
+        assert (
+            infer_credential_type_from_environment()
+            == AzureCredentialType.WorkloadIdentityCredential
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "test-client-id",
+            "AZURE_CLIENT_SECRET": "test-client-secret",
+            "AZURE_TENANT_ID": "test-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+        },
+        clear=True,
+    )
+    def test_client_secret_takes_precedence_over_workload_identity(self):
+        """When a client secret is present, keep using the service-principal flow."""
+        assert (
+            infer_credential_type_from_environment()
+            == AzureCredentialType.ClientSecretCredential
+        )
+
+    @patch.dict(
+        os.environ,
+        {"AZURE_CLIENT_ID": "test-client-id"},
+        clear=True,
+    )
+    def test_client_id_only_infers_managed_identity(self):
+        assert (
+            infer_credential_type_from_environment()
+            == AzureCredentialType.ManagedIdentityCredential
+        )
+
+
+class TestGetAzureCredential:
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "test-client-id",
+            "AZURE_TENANT_ID": "test-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+        },
+        clear=True,
+    )
+    @patch("azure.identity.WorkloadIdentityCredential")
+    def test_returns_workload_identity_credential_object(
+        self, mock_workload_identity_credential
+    ):
+        """get_azure_credential returns the credential object (used by the Key Vault
+        loader), inferring workload identity from the environment."""
+        mock_credential_instance = MagicMock()
+        mock_workload_identity_credential.return_value = mock_credential_instance
+
+        credential = get_azure_credential()
+
+        assert credential is mock_credential_instance
+        mock_workload_identity_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            token_file_path="/var/run/secrets/azure/tokens/azure-identity-token",
+        )
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch("azure.identity.DefaultAzureCredential")
+    def test_explicit_argument_overrides_environment(
+        self, mock_default_azure_credential
+    ):
+        mock_credential_instance = MagicMock()
+        mock_default_azure_credential.return_value = mock_credential_instance
+
+        credential = get_azure_credential(
+            azure_credential=AzureCredentialType.DefaultAzureCredential
+        )
+
+        assert credential is mock_credential_instance
+        mock_default_azure_credential.assert_called_once_with()
+
+    @patch.dict(os.environ, {"AZURE_CREDENTIAL": "AzureCliCredential"}, clear=True)
+    @patch("azure.identity.AzureCliCredential")
+    def test_unknown_credential_name_falls_back_to_azure_identity_class(
+        self, mock_azure_cli_credential
+    ):
+        """An AZURE_CREDENTIAL value that isn't in AzureCredentialType is resolved
+        as a class name on azure.identity."""
+        mock_credential_instance = MagicMock()
+        mock_azure_cli_credential.return_value = mock_credential_instance
+
+        credential = get_azure_credential()
+
+        assert credential is mock_credential_instance
+        mock_azure_cli_credential.assert_called_once_with()
