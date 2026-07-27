@@ -48,6 +48,15 @@ def captured_body(monkeypatch):
         ),
     )
     _capture(
+        "update_eval_handler",
+        litellm.types.llms.openai_evals.Eval(
+            id="eval-123",
+            created_at=0,
+            data_source_config=_DATA_SOURCE_CONFIG,
+            testing_criteria=_TESTING_CRITERIA,
+        ),
+    )
+    _capture(
         "create_run_handler",
         litellm.types.llms.openai_evals.Run(
             id="run-123",
@@ -199,3 +208,26 @@ def test_prefix_filter_covers_everything_the_old_denylist_did():
 
     missed = sorted(k for k in _PREVIOUS_DENYLIST if not _is_internal_metadata_key(k))
     assert not missed, f"prefix filter no longer strips {missed}"
+
+
+def test_update_eval_filtering_is_unchanged(captured_body):
+    """Hoisting the filter out of update_eval must not change what update_eval does.
+
+    This is the path that already worked before the PR, so it is the one most at risk
+    from the refactor.
+    """
+    litellm.update_eval(
+        eval_id="eval-123",
+        metadata={"team": "search", "user_api_key_hash": "leaked", "user_api_key_token": "leaked"},
+        api_key="sk-test",
+    )
+    assert captured_body["request_body"]["metadata"] == {"team": "search"}
+
+
+def test_update_eval_omits_metadata_when_only_internal_keys(captured_body):
+    litellm.update_eval(
+        eval_id="eval-123",
+        metadata={"user_api_key_hash": "leaked"},
+        api_key="sk-test",
+    )
+    assert "metadata" not in captured_body["request_body"]
