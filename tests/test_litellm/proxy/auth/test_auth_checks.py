@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -745,6 +745,51 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("has_budget_duration", [True, False])
+async def test_get_user_object_upsert_sets_budget_reset_at(monkeypatch, has_budget_duration):
+    """The JWT first-login upsert must compute budget_reset_at when
+    default_internal_user_params carries a budget_duration; otherwise the row
+    lands with budget_reset_at=NULL and shows a null reset time until the next
+    reset sweep heals it. Without a budget_duration, no reset time is written."""
+    default_params = {"max_budget": 300.0}
+    if has_budget_duration:
+        default_params["budget_duration"] = "24h"
+    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=MagicMock(organization_memberships=[]))
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    user_id = f"jwt_upsert_reset_at_{has_budget_duration}"
+    try:
+        await get_user_object(
+            user_id=user_id,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+    except Exception as e:
+        print(e)
+
+    mock_prisma_client.db.litellm_usertable.create.assert_called_once()
+    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
+
+    if has_budget_duration:
+        reset_at = creation_args.get("budget_reset_at")
+        assert isinstance(reset_at, datetime), f"expected a computed budget_reset_at, got {creation_args!r}"
+        assert reset_at > datetime.now(timezone.utc)
+    else:
+        assert "budget_reset_at" not in creation_args
+
+
+@pytest.mark.asyncio
 async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context():
     """Pin get_user_object's exception contract: it catches every DB failure in a broad except and
     re-raises a bare ValueError, so a real outage survives only as __context__ rather than as the
@@ -835,6 +880,61 @@ async def test_get_user_object_upsert_includes_user_email():
     ), "user_email should be included when upserting a new user"
     assert creation_args["user_email"] == "test@example.com"
     assert creation_args["user_id"] == "new_test_user"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_routes_default_team_to_membership(monkeypatch):
+    """Regression for LIT-4324: a configured default team (list of NewUserRequestTeam
+    dicts) must not be written into the Prisma create payload (teams is a String[] column
+    that rejects dicts). Instead it must be routed through add_new_user_to_default_team so
+    the JWT-provisioned user gets a real team membership."""
+    default_params = {
+        "user_role": "internal_user",
+        "teams": [{"team_id": "default-team", "user_role": "user"}],
+    }
+    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    mock_user = MagicMock()
+    mock_user.organization_memberships = []
+    mock_prisma_client.db.litellm_usertable.create = AsyncMock(return_value=mock_user)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.add_new_user_to_default_team",
+        new_callable=AsyncMock,
+    ) as mock_add_to_team:
+        try:
+            await get_user_object(
+                user_id="new_jwt_user",
+                prisma_client=mock_prisma_client,
+                user_api_key_cache=mock_cache,
+                user_id_upsert=True,
+                proxy_logging_obj=None,
+            )
+        except Exception as e:
+            # mock_user is a MagicMock, so the post-create LiteLLM_UserTable(**dict(...))
+            # conversion raises; irrelevant to what we assert.
+            print(e)
+
+    creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
+    assert "teams" not in creation_args, "teams must be popped before the Prisma create"
+    assert creation_args["user_role"] == "internal_user"
+
+    mock_add_to_team.assert_awaited_once()
+    passed_teams = mock_add_to_team.await_args[1]["teams"]
+    assert [team.team_id for team in passed_teams] == ["default-team"]
+    assert (
+        mock_add_to_team.await_args[1]["user_api_key_dict"].user_role
+        == LitellmUserRoles.PROXY_ADMIN
+    )
 
 
 def test_log_budget_lookup_failure_dry_run():

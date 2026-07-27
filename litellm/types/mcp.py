@@ -38,6 +38,7 @@ class MCPAuth(str, enum.Enum):
     aws_sigv4 = "aws_sigv4"
     token = "token"
     oauth2_token_exchange = "oauth2_token_exchange"
+    oauth2_id_jag = "oauth2_id_jag"
     true_passthrough = "true_passthrough"
     oauth_delegate = "oauth_delegate"
 
@@ -62,6 +63,7 @@ MCPAuthType = Optional[
         MCPAuth.aws_sigv4,
         MCPAuth.token,
         MCPAuth.oauth2_token_exchange,
+        MCPAuth.oauth2_id_jag,
         MCPAuth.true_passthrough,
         MCPAuth.oauth_delegate,
     ]
@@ -159,6 +161,40 @@ class MCPCredentials(TypedDict, total=False):
     the top-level request field.
     """
 
+    id_jag_resource_token_endpoint: Optional[str]
+    """
+    Resource authorization server JWT-bearer (RFC 7523) endpoint for ID-JAG leg 2
+    """
+
+    id_jag_resource: Optional[str]
+    """
+    Optional RFC 8707 resource indicator sent on ID-JAG leg 1
+    """
+
+    upstream_resource: str | None
+    """
+    Optional RFC 8707 resource indicator sent on the upstream oauth2 legs (authorize, both token
+    grants, and the client_credentials fetch). Omitted when unset, which is the default; "auto"
+    derives the canonical URI from the server's url; any other value is sent verbatim.
+    Distinct from ``id_jag_resource``, which is the same parameter on the ID-JAG exchange, and from
+    ``audience``, which is the RFC 8693 token-exchange parameter.
+    """
+
+    client_private_key: Optional[str]
+    """
+    PEM private key used to sign the private-key-JWT client_assertion (RFC 7523)
+    """
+
+    client_private_key_id: Optional[str]
+    """
+    Key id (kid) advertised in the client_assertion JWT header
+    """
+
+    client_assertion_signing_alg: Optional[str]
+    """
+    Signing algorithm for the client_assertion JWT. Default: RS256
+    """
+
     token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod]
     """
     How the gateway authenticates to the upstream token endpoint. "client_secret_basic"
@@ -184,6 +220,11 @@ class MCPCredentials(TypedDict, total=False):
     write and stripped from the stored blob; the column is authoritative. Prefer the
     top-level request field.
     """
+
+
+MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: tuple[str, ...] = ("upstream_resource",)
+"""Non-secret credential keys returned on read so the admin form can show and clear them. Mirrors
+``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
 
 
 class MCPServerCostInfo(TypedDict, total=False):

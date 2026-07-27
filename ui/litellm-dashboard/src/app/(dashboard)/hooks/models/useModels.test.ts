@@ -3,13 +3,17 @@ import { renderHook, waitFor } from "@testing-library/react";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  isAutoRouterDeployment,
+  selectAutoRouterModelGroups,
   useAllProxyModels,
+  useAutoRouterModelGroups,
   useInfiniteModelInfo,
   useModelHub,
   useModelsInfo,
   useSelectedTeamModels,
   useUserModels,
   type AllProxyModelsResponse,
+  type AutoRouterCandidateDeployment,
   type PaginatedModelInfoResponse,
   type ProxyModel,
 } from "./useModels";
@@ -916,5 +920,163 @@ describe("useInfiniteModelInfo", () => {
     expect(result.current.data).toBeUndefined();
     expect(result.current.isFetched).toBe(false);
     expect(modelInfoCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("isAutoRouterDeployment", () => {
+  const cases: [string, string | null | undefined, boolean][] = [
+    ["base semantic auto-router", "auto_router/my_router", true],
+    ["complexity router", "auto_router/complexity_router", true],
+    ["adaptive router", "auto_router/adaptive_router", true],
+    ["quality router", "auto_router/quality_router", true],
+    ["plain provider alias", "anthropic/claude-haiku-4-5", false],
+    ["wildcard deployment", "openai/*", false],
+    ["name merely containing the prefix", "openai/auto_router/nope", false],
+    ["missing model", undefined, false],
+    ["null model", null, false],
+  ];
+
+  it.each(cases)("returns %s -> %s", (_label, litellmParamsModel, expected) => {
+    expect(isAutoRouterDeployment({ model_name: "some-group", litellm_params: { model: litellmParamsModel } })).toBe(
+      expected,
+    );
+  });
+
+  it("returns false when litellm_params is absent", () => {
+    expect(isAutoRouterDeployment({ model_name: "some-group" })).toBe(false);
+  });
+});
+
+describe("selectAutoRouterModelGroups", () => {
+  it("keeps only the public model_name of auto-router deployments", () => {
+    const deployments: AutoRouterCandidateDeployment[] = [
+      { model_name: "smart-router", litellm_params: { model: "auto_router/complexity_router" } },
+      { model_name: "claude-haiku", litellm_params: { model: "anthropic/claude-haiku-4-5" } },
+      { model_name: "claude-sonnet", litellm_params: { model: "anthropic/claude-sonnet-4-5" } },
+      { model_name: "cheap-router", litellm_params: { model: "auto_router/adaptive_router" } },
+    ];
+
+    expect(selectAutoRouterModelGroups(deployments)).toEqual(new Set(["smart-router", "cheap-router"]));
+  });
+
+  it("drops auto-router deployments that have no public model_name", () => {
+    expect(
+      selectAutoRouterModelGroups([{ model_name: "", litellm_params: { model: "auto_router/complexity_router" } }]),
+    ).toEqual(new Set());
+  });
+
+  it("returns an empty set for an empty model list", () => {
+    expect(selectAutoRouterModelGroups([])).toEqual(new Set());
+  });
+});
+
+describe("useAutoRouterModelGroups", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("resolves the set of auto-router model groups from the deployment list", async () => {
+    (modelInfoCall as any).mockResolvedValue({
+      data: [
+        { model_name: "smart-router", litellm_params: { model: "auto_router/complexity_router" } },
+        { model_name: "claude-haiku", litellm_params: { model: "anthropic/claude-haiku-4-5" } },
+      ],
+      total_count: 2,
+      current_page: 1,
+      total_pages: 1,
+      size: 1000,
+    });
+
+    const { result } = renderHook(() => useAutoRouterModelGroups(), { wrapper });
+
+    await waitFor(() => expect(result.current.size).toBe(1));
+    expect(result.current.has("smart-router")).toBe(true);
+    expect(result.current.has("claude-haiku")).toBe(false);
+  });
+
+  it("requests a single large page when the proxy reports only one page of deployments", async () => {
+    (modelInfoCall as any).mockResolvedValue({
+      data: [],
+      total_count: 0,
+      current_page: 1,
+      total_pages: 1,
+      size: 1000,
+    });
+
+    renderHook(() => useAutoRouterModelGroups(), { wrapper });
+
+    await waitFor(() => expect(modelInfoCall).toHaveBeenCalled());
+    expect(modelInfoCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", 1, 1000);
+    expect(modelInfoCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows total_pages so an auto-router past the first page is still found", async () => {
+    (modelInfoCall as any).mockImplementation((_t: string, _u: string, _r: string, page: number) => {
+      if (page === 1) {
+        return Promise.resolve({
+          data: [{ model_name: "claude-haiku", litellm_params: { model: "anthropic/claude-haiku-4-5" } }],
+          total_count: 3,
+          current_page: 1,
+          total_pages: 3,
+          size: 1000,
+        });
+      }
+      if (page === 2) {
+        return Promise.resolve({
+          data: [{ model_name: "claude-sonnet", litellm_params: { model: "anthropic/claude-sonnet-4-5" } }],
+          total_count: 3,
+          current_page: 2,
+          total_pages: 3,
+          size: 1000,
+        });
+      }
+      return Promise.resolve({
+        data: [{ model_name: "late-router", litellm_params: { model: "auto_router/complexity_router" } }],
+        total_count: 3,
+        current_page: 3,
+        total_pages: 3,
+        size: 1000,
+      });
+    });
+
+    const { result } = renderHook(() => useAutoRouterModelGroups(), { wrapper });
+
+    await waitFor(() => expect(result.current.size).toBe(1));
+    expect(result.current.has("late-router")).toBe(true);
+    expect(modelInfoCall).toHaveBeenCalledTimes(3);
+    expect(modelInfoCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", 3, 1000);
+  });
+
+  it("returns an empty set before the model list resolves", () => {
+    (modelInfoCall as any).mockReturnValue(new Promise(() => {}));
+
+    const { result } = renderHook(() => useAutoRouterModelGroups(), { wrapper });
+
+    expect(result.current.size).toBe(0);
+  });
+
+  it("returns an empty set when the model list request fails", async () => {
+    (modelInfoCall as any).mockRejectedValue(new Error("boom"));
+
+    const { result } = renderHook(() => useAutoRouterModelGroups(), { wrapper });
+
+    await waitFor(() => expect(modelInfoCall).toHaveBeenCalled());
+    expect(result.current.size).toBe(0);
   });
 });

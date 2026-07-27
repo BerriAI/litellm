@@ -13,13 +13,16 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS, PRE_CALL_EXECUTED_GUARDRAILS_KEY
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     iter_client_callback_metadata_dicts,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
+from litellm.litellm_core_utils.url_utils import (
+    is_url_destination_allowed_by_host,
+    provider_url_destination_candidates,
+)
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -45,6 +48,24 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """Only proxy-validated keys are stamped, proven by the unforgeable
+    via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
+    UserAPIKeyAuth stores virtual keys in, or the master key's stable alias.
+    Custom-auth credentials arrive raw (never forward auth material) and hashed
+    JWTs rotate on re-issue (useless as a stable ban id), so both are skipped."""
+    api_key = user_api_key_dict.api_key
+    if not user_api_key_dict.via_virtual_key or api_key is None:
+        return None
+    if api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or _SHA256_HEX_RE.fullmatch(api_key):
+        return api_key
+    return None
+
+
 _ANTHROPIC_SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
@@ -227,23 +248,26 @@ def _reject_url_valued_destinations(data: Dict[str, Any]) -> None:
     allowed_hosts = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
     for field in _URL_DESTINATION_REQUEST_FIELDS:
         value = data.get(field)
-        if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+        if not isinstance(value, str):
             continue
-        if is_url_destination_allowed_by_host(value, allowed_hosts):
-            continue
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "param": field,
-                "message": (
-                    f"URL-valued '{field}' is not allowed. Configure custom "
-                    "endpoints with api_base instead, or add the destination "
-                    "host to `provider_url_destination_allowed_hosts` in "
-                    "litellm_settings."
-                ),
-            },
-        )
+        for candidate in provider_url_destination_candidates(value):
+            if not candidate.lower().startswith(("http://", "https://")):
+                continue
+            if is_url_destination_allowed_by_host(candidate, allowed_hosts):
+                continue
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_request",
+                    "param": field,
+                    "message": (
+                        f"URL-valued '{field}' is not allowed. Configure custom "
+                        "endpoints with api_base instead, or add the destination "
+                        "host to `provider_url_destination_allowed_hosts` in "
+                        "litellm_settings."
+                    ),
+                },
+            )
 
 
 def _strip_untrusted_request_header_controls(
@@ -457,12 +481,20 @@ def is_claude_code_user_agent(user_agent: str) -> bool:
     return user_agent.startswith("claude-cli/")
 
 
-def should_auto_drop_params_for_claude_code(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
-    """drop_params defaults to on for Claude Code so its Anthropic-specific
-    params (e.g. thinking) don't fail requests routed to non-Anthropic
-    providers. An explicit drop_params from the caller or in the operator's
-    ``litellm_settings`` always wins over this default."""
-    if not is_claude_code_user_agent(user_agent):
+def is_codex_user_agent(user_agent: str) -> bool:
+    """Codex identifies itself as ``codex_cli_rs/<version> ...`` (TUI),
+    ``codex_exec/<version> ...`` (exec mode), or ``codex_vscode/<version> ...``
+    (IDE extension); all share the ``codex_`` prefix."""
+    return user_agent.startswith("codex_")
+
+
+def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
+    """drop_params defaults to on for agentic CLIs so their client-specific
+    params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
+    requests routed to providers that reject them. An explicit drop_params
+    from the caller or in the operator's ``litellm_settings`` always wins
+    over this default."""
+    if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if "drop_params" in data:
         return False
@@ -1433,6 +1465,11 @@ async def add_litellm_data_to_request(
         if "user" not in data:
             data["user"] = user
 
+    if litellm.overwrite_user_with_key_hash is True:
+        stampable_hash = _stampable_key_hash(user_api_key_dict)
+        if stampable_hash is not None:
+            data["user"] = stampable_hash
+
     data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
@@ -1687,7 +1724,7 @@ async def add_litellm_data_to_request(
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    if should_auto_drop_params_for_claude_code(user_agent, data, proxy_config):
+    if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
         data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)

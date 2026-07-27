@@ -1,6 +1,7 @@
 import { Setter } from "@/types";
 import { useEffect, useState } from "react";
 import { keyListCall, Member, Organization } from "../networking";
+import type { ObjectPermission } from "../object_permission_types";
 
 export interface Team {
   team_id: string;
@@ -90,15 +91,7 @@ export interface KeyResponse {
   user_tpm_limit: number;
   user_rpm_limit: number;
   user_email: string;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    mcp_tool_permissions?: Record<string, string[]>;
-    vector_stores: string[];
-    agents?: string[];
-    agent_access_groups?: string[];
-  };
+  object_permission?: ObjectPermission | null;
   access_group_ids?: string[];
   budget_fallbacks?: Record<string, string[]>;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;

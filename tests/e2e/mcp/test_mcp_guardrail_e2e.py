@@ -1,0 +1,146 @@
+"""Live e2e: a guardrail on the MCP tool-call path blocks banned content in the
+tool arguments before the call reaches the upstream MCP server.
+
+A general litellm_content_filter guardrail is configured with mode=pre_mcp_call
+(the event type the proxy rewrites pre_call to for a call_mcp_tool) and default_on
+(per-key/request guardrail selection is dropped from the synthetic MCP request the
+hook sees, so default_on is how it attaches to tools/call). The banned keyword is
+unique per run, so default_on only ever intercepts this test's own banned call.
+
+Against the real Datadog MCP server, calling search_datadog_logs with the banned
+keyword in the query is blocked with HTTP 400 attributed to the pre_mcp_call hook,
+and the tool never runs; the same guardrail lets a clean query through to Datadog.
+This is the enforced half (the block) plus the pass-through half in one spec.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Callable
+
+import pytest
+
+from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
+from e2e_config import DD_SEARCH_FROM, unique_marker
+from e2e_http import Result, Success, UnknownApiError, unwrap
+from lifecycle import ResourceManager
+from mcp_client import McpCallToolResponse, McpClient, McpToolArguments
+
+pytestmark = pytest.mark.e2e
+
+# Stage runs several data-plane pods behind the shared key, and each picks up a
+# newly registered guardrail only on its next periodic DB sync (~30s in
+# proxy_server.py). Every pod is guaranteed to have refreshed only once a full sync
+# interval has elapsed since the create; before then a banned call routed to a
+# lagging pod passes through as legitimate in-flight propagation, not a leak.
+GUARDRAIL_FULL_SYNC_SECONDS = 40.0
+POST_SYNC_VERIFICATION_CALLS = 4
+
+
+def _poll_until_blocked(
+    search: Callable[[str], Result[McpCallToolResponse]], banned_keyword: str, client: McpClient
+) -> Result[McpCallToolResponse]:
+    """Retry a banned tool call until the guardrail blocks it (400) or the deadline
+    passes, returning the last result. Absorbs the control-plane -> data-plane
+    guardrail-sync delay so the check waits for enforcement instead of racing it."""
+    deadline = time.monotonic() + client.proxy.poll_timeout
+    last: Result[McpCallToolResponse] = search(f"tell me about {banned_keyword}")
+    while time.monotonic() < deadline:
+        if isinstance(last, UnknownApiError) and last.status_code == 400:
+            return last
+        time.sleep(client.proxy.poll_interval)
+        last = search(f"tell me about {banned_keyword}")
+    return last
+
+
+class TestMcpToolCallGuardrail:
+    @pytest.mark.covers(
+        "guardrail.litellm_content_filter.pre_mcp_call.blocks",
+        exercised_on=["mcp_operations"],
+    )
+    def test_content_filter_blocks_banned_keyword_in_tool_args(
+        self, client: McpClient, resources: ResourceManager
+    ) -> None:
+        assert_dd_mcp_creds()
+        marker = unique_marker()
+        banned_keyword = f"e2eblocked{marker}"
+
+        guardrail_id = client.register_mcp_content_filter(
+            name=f"e2e-mcp-cf-{marker}", blocked_keyword=banned_keyword
+        )
+        guardrail_created_at = time.monotonic()
+        resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        server_id = register_datadog_mcp(client, resources)
+        key = client.generate_key(user_id=f"e2e-mcp-guard-{marker}", mcp_servers=[server_id])
+        resources.defer(lambda: client.proxy.delete_key(key))
+
+        tools = unwrap(client.list_tools(key))
+        tool_name = tools.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
+        assert tool_name is not None, (
+            f"granted key never saw {SEARCH_LOGS_TOOL} on server {server_id}; "
+            f"tools={tools.tool_names_for_server(server_id)}"
+        )
+
+        def search(query: str) -> Result[McpCallToolResponse]:
+            arguments: McpToolArguments = {
+                "query": query,
+                "from": DD_SEARCH_FROM,
+                "to": "now",
+                "max_tokens": 500,
+                "telemetry": {"intent": "e2e mcp guardrail check"},
+            }
+            return client.call_tool(key, server_id=server_id, name=tool_name, arguments=arguments)
+
+        # Registering the guardrail is a control-plane write; the data-plane worker
+        # that serves tools/call picks it up on its next guardrail sync, so an
+        # immediate call can race the propagation and slip through. Poll the banned
+        # call to the deadline and require a block, so the check proves enforcement
+        # rather than catching a pre-sync pass-through. The keyword is unique per
+        # run, so this only ever intercepts this test's own call.
+        blocked = _poll_until_blocked(search, banned_keyword, client)
+        match blocked:
+            case UnknownApiError(status_code=400, body=body):
+                assert banned_keyword in body or "content blocked" in body.lower(), (
+                    f"the block must name the content-filter reason, got: {body[:300]}"
+                )
+                assert "pre_mcp_call" in body, (
+                    f"the block must be attributed to the MCP tool-call hook (pre_mcp_call), got: {body[:300]}"
+                )
+            case _:
+                pytest.fail(
+                    "content_filter never blocked the banned keyword on the MCP tool call within "
+                    f"{client.proxy.poll_timeout}s (guardrail sync to the data plane never landed); "
+                    f"last result: {blocked}"
+                )
+
+        # The block above only proves the one pod that served it has synced; another
+        # pod could still lack the guardrail and let the banned call reach Datadog.
+        # Wait out the full sync interval from the create so every pod has refreshed
+        # from the DB, then require the banned call to stay blocked across several
+        # attempts. A pass-through now is a genuine partial-propagation leak, not a
+        # race. Client load balancing still can't guarantee every pod is hit, so this
+        # samples several worker selections rather than proving all pods synced.
+        sync_remaining = guardrail_created_at + GUARDRAIL_FULL_SYNC_SECONDS - time.monotonic()
+        if sync_remaining > 0:
+            time.sleep(sync_remaining)
+        for attempt in range(1, POST_SYNC_VERIFICATION_CALLS + 1):
+            reblocked = search(f"still about {banned_keyword} #{attempt}")
+            assert isinstance(reblocked, UnknownApiError) and reblocked.status_code == 400, (
+                "after the guardrail sync interval every data-plane pod must block the banned "
+                f"keyword, but attempt {attempt} of {POST_SYNC_VERIFICATION_CALLS} was allowed "
+                f"through (a pod still lacks the guardrail): {reblocked}"
+            )
+            if attempt < POST_SYNC_VERIFICATION_CALLS:
+                time.sleep(client.proxy.poll_interval)
+
+        allowed = search(f"e2e-clean-{marker}")
+        match allowed:
+            case Success(data=result):
+                assert result.is_error is not True, (
+                    f"a clean MCP tool call must reach the server and not error, got: {result}"
+                )
+            case _:
+                pytest.fail(
+                    f"a clean MCP tool call must pass the guardrail and reach the server; got {allowed}"
+                )

@@ -23,6 +23,22 @@ if TYPE_CHECKING:
 else:
     FastAPI = Any
 
+
+def _deprioritize_script_dir_in_sys_path() -> None:
+    """Stop ``litellm/proxy`` modules from shadowing installed packages.
+
+    Running this file as a script puts its own directory at ``sys.path[0]``, so
+    ``import a2a`` resolves to ``litellm/proxy/a2a`` instead of the ``a2a`` SDK
+    and A2A agent calls fail. The entry is moved to the end rather than dropped,
+    because the sibling-import fallbacks in this module (``from proxy_server
+    import ...``) still need it. No-op under the ``litellm`` console script.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if sys.path and os.path.abspath(sys.path[0]) == script_dir:
+        sys.path.append(sys.path.pop(0))
+
+
+_deprioritize_script_dir_in_sys_path()
 sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"

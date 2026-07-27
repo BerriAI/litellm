@@ -1781,28 +1781,38 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         from litellm.proxy.auth.auth_utils import get_team_mcp_rpm_limit
 
-        if not mcp_server_name or not user_api_key_dict.team_id:
+        if not mcp_server_name:
             return
 
-        mcp_rpm_limit = get_team_mcp_rpm_limit(user_api_key_dict)
-        if not mcp_rpm_limit:
-            return
+        # Which teams' buckets does this call charge? A key is pinned to exactly one team. A keyless
+        # MCP-admitted subject reaches servers through SEVERAL teams at once and has no team_id, so
+        # without the second source below its calls charged no team bucket at all and it outran every
+        # team's mcp_rpm_limit. Every applicable team is charged rather than one being picked: the
+        # limiter enforces all descriptors, so each team's own ceiling binds on a call made through
+        # its grant, and there is no arbitrary attribution when several teams grant the same server.
+        team_limits: list[tuple[str | None, dict[str, int] | None]] = []
+        if user_api_key_dict.team_id:
+            team_limits.append((user_api_key_dict.team_id, get_team_mcp_rpm_limit(user_api_key_dict)))
+        for source_team_id, source_limit in (user_api_key_dict.mcp_source_team_rpm_limits or {}).items():
+            team_limits.append((source_team_id, source_limit))
 
-        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
-        if server_rpm_limit is None:
-            return
-
-        descriptors.append(
-            RateLimitDescriptor(
-                key="mcp_per_team",
-                value=f"{user_api_key_dict.team_id}:{mcp_server_name}",
-                rate_limit={
-                    "requests_per_unit": server_rpm_limit,
-                    "tokens_per_unit": None,
-                    "window_size": self.window_size,
-                },
+        for team_id, mcp_rpm_limit in team_limits:
+            if not team_id or not mcp_rpm_limit:
+                continue
+            server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+            if server_rpm_limit is None:
+                continue
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="mcp_per_team",
+                    value=f"{team_id}:{mcp_server_name}",
+                    rate_limit={
+                        "requests_per_unit": server_rpm_limit,
+                        "tokens_per_unit": None,
+                        "window_size": self.window_size,
+                    },
+                )
             )
-        )
 
     def _should_enforce_rate_limit(
         self,
@@ -2661,6 +2671,35 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return total_tokens
 
+    @staticmethod
+    def _aggregate_only_total_tokens(usage: Union[Usage, dict, None]) -> int:
+        """Total for usage that carries no input/output split, else 0.
+
+        A source that can only report one number for the whole request (a
+        pass-through target pricing its own multi-model call) charges that
+        number under every ``token_rate_limit_type``. Splitting it is
+        impossible, and reading 0 out of it would leave the window
+        uncharged, which is how pass-through traffic slips past a TPM limit
+        it is supposed to share.
+        """
+        if isinstance(usage, Usage):
+            prompt_tokens, completion_tokens, total_tokens = (
+                usage.prompt_tokens or 0,
+                usage.completion_tokens or 0,
+                usage.total_tokens or 0,
+            )
+        elif isinstance(usage, dict):
+            prompt_tokens, completion_tokens, total_tokens = (
+                usage.get("prompt_tokens") or 0,
+                usage.get("completion_tokens") or 0,
+                usage.get("total_tokens") or 0,
+            )
+        else:
+            return 0
+        if prompt_tokens or completion_tokens:
+            return 0
+        return total_tokens
+
     async def _execute_token_increment_script(
         self,
         pipeline_operations: List["RedisPipelineIncrementOperation"],
@@ -3076,8 +3115,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         model_group = get_model_group_from_litellm_kwargs(kwargs)
 
-        # Get total tokens from response
-        total_tokens = 0
+        # Get total tokens from response. Responses LiteLLM does not model
+        # (e.g. pass-through, whose usage is reported by the upstream rather
+        # than parsed out of the body) carry their usage in
+        # ``combined_usage_object`` instead, and would otherwise never charge
+        # the TPM window.
+        _usage: Union[Usage, dict, None] = None
         if isinstance(
             response_obj,
             (
@@ -3088,7 +3131,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ),
         ):
             _usage = getattr(response_obj, "usage", None)
-            total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
+        else:
+            _combined_usage = kwargs.get("combined_usage_object")
+            if isinstance(_combined_usage, Usage):
+                _usage = _combined_usage
+        total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
+        if total_tokens == 0:
+            total_tokens = self._aggregate_only_total_tokens(usage=_usage)
 
         reserved_tokens = self._get_reserved_tokens_from_kwargs(
             kwargs=kwargs,

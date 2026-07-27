@@ -33,6 +33,7 @@ from litellm.constants import (
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -50,7 +51,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.guardrails import GuardrailEventHooks
@@ -89,6 +90,13 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation =
     "error_message": "Client disconnected the request",
     "error_class": "ClientDisconnected",
 }
+
+
+def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+    return any(
+        isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
+        for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
+    )
 
 
 def _apply_client_disconnect_metadata(target_metadata: Optional[dict[str, object]]) -> None:
@@ -672,6 +680,7 @@ def _override_openai_response_model(
     response_obj: Any,
     requested_model: str,
     log_context: str,
+    return_raw_model_name: bool = False,
 ) -> None:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
@@ -695,7 +704,7 @@ def _override_openai_response_model(
     3. If this was a fastest_response batch completion, use the winning model's
        model group name instead of the comma-separated list the client sent.
     """
-    if not requested_model:
+    if return_raw_model_name or not requested_model:
         return
 
     hidden_params = get_hidden_params_dict(response_obj)
@@ -1246,6 +1255,21 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        # Merge model-level guardrails before pre_call_hook so DB/UI-configured
+        # guardrails actually execute on pre_call. Without this, guardrails set
+        # via litellm_params.guardrails are only honored on post_call paths
+        # (#29652, partial fix in #23774 covered non-streaming post_call only).
+        # trust_client_model_info=False on pre_call: route_request hasn't run
+        # and add_litellm_data_to_request preserves client-supplied
+        # model_info when allow_client_pricing_override is set, so a caller
+        # could otherwise spoof an unguarded model_info.id while requesting
+        # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
+        self.data = _check_and_merge_model_level_guardrails(
+            data=self.data,
+            llm_router=llm_router,
+            trust_client_model_info=False,
+        )
 
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict,
@@ -1938,6 +1962,7 @@ class ProxyBaseLLMRequestProcessing:
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+                return_raw_model_name=_should_return_raw_model_name(self.data),
             )
 
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers

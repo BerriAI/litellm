@@ -150,7 +150,7 @@ class TestRustOcrGateway:
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
 
-        response = unwrap(endpoints_client.gateway.ocr(key, OcrBody(model=model, document=case.document)))
+        response = unwrap(endpoints_client.proxy.ocr(key, OcrBody(model=model, document=case.document)))
         _assert_ocr_document(response)
 
 

@@ -1,8 +1,8 @@
 """Spend-tracking suite's `client` fixture and driver-model registration.
 
 The shared lifecycle (resources/scoped_key), proxy liveness gate, and e2e marker
-live in the parent tests/e2e/conftest.py. SpendClient exposes the shared Gateway
-(GatewayProvider), so the `resources` fixture cleans up keys and customers this
+live in the parent tests/e2e/conftest.py. SpendClient exposes the shared ProxyClient
+(ProxyClientProvider), so the `resources` fixture cleans up keys and customers this
 suite creates.
 
 The suite drives real calls through three deployments. On the stage gateway they
@@ -21,6 +21,7 @@ import pytest
 
 from models import LiteLLMParamsBody
 from spend_e2e_client import SpendClient, build_client
+from proxy_client import ProxyClient
 
 
 def _driver_params(provider_model: str, env_var: str) -> LiteLLMParamsBody:
@@ -34,22 +35,23 @@ DRIVER_MODELS: tuple[tuple[str, str, str], ...] = (
     ("gemini-2.5-flash", "gemini/gemini-2.5-flash", "GEMINI_API_KEY"),
     ("claude-haiku-4-5", "anthropic/claude-haiku-4-5", "ANTHROPIC_API_KEY"),
     ("openai-text-embedding-3-small", "openai/text-embedding-3-small", "OPENAI_API_KEY"),
+    ("openai-responses-codex", "openai/gpt-5.3-codex", "OPENAI_API_KEY"),
 )
 
 
 @pytest.fixture(scope="session")
-def client() -> SpendClient:
-    return build_client()
+def client(proxy: ProxyClient) -> SpendClient:
+    return build_client(proxy)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def driver_models(client: SpendClient) -> Iterator[None]:
-    existing = frozenset(entry.model_name for entry in client.gateway.model_info())
+    existing = frozenset(entry.model_name for entry in client.proxy.model_info())
     created = tuple(
-        client.gateway.create_model(name, _driver_params(provider_model, env_var))
+        client.proxy.create_model(name, _driver_params(provider_model, env_var))
         for name, provider_model, env_var in DRIVER_MODELS
         if name not in existing
     )
     yield
     for model_id in created:
-        client.gateway.delete_model(model_id)
+        client.proxy.delete_model(model_id)

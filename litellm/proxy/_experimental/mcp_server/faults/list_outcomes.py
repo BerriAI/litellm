@@ -22,6 +22,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPUpstreamAuthError,
 )
+from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 
 ListFaultCategory: TypeAlias = Literal[
     "auth_required",
@@ -63,30 +64,16 @@ class AggregateToolListing(NamedTuple):
 
 
 def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response]:
-    """Yield every ``httpx.Response`` in the exception tree (``__cause__``/``__context__``/
-    ExceptionGroup members) in deliberate order, mirroring how upstream failures surface through the
-    MCP SDK's task groups. Explicit links come first: each node's ``raise ... from`` cause, then
-    group members in raise order, then the incidental ``__context__`` chain, so a response raised
-    while handling the real failure can never shadow one on the explicit causal chain. Consumers
-    apply their own predicate over the stream: selecting the first response and THEN testing it
-    would miss a causal auth response sitting behind an unrelated earlier one."""
-    seen: set[int] = set()
-    stack = [exc]
-    while stack:
-        current = stack.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
+    """Yield every ``httpx.Response`` in the exception tree, in the shared traversal's deliberate
+    order (explicit causes first, ExceptionGroup members in raise order, the incidental
+    ``__context__`` chain last), so a response raised while handling the real failure can never
+    shadow one on the explicit causal chain. Consumers apply their own predicate over the stream:
+    selecting the first response and THEN testing it would miss a causal auth response sitting
+    behind an unrelated earlier one."""
+    for current in iter_exception_tree(exc):
         response = getattr(current, "response", None)
         if isinstance(response, httpx.Response):
             yield response
-        if current.__context__ is not None:
-            stack.append(current.__context__)
-        exceptions = getattr(current, "exceptions", None)
-        if isinstance(exceptions, tuple):
-            stack.extend(reversed(exceptions))
-        if current.__cause__ is not None:
-            stack.append(current.__cause__)
 
 
 def _find_upstream_response(exc: BaseException) -> httpx.Response | None:
