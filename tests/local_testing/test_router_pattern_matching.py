@@ -395,3 +395,58 @@ def test_wildcard_priority_over_deployment_names():
     assert (
         deployments[0]["litellm_params"]["api_base"] == "http://localhost:8081/openai"
     ), f"Expected '*' wildcard deployment (8081), got {deployments[0]['litellm_params']['api_base']}"
+
+
+def test_route_does_not_mutate_stored_template():
+    """
+    Regression: route() substitutes the requested wildcard segment into
+    litellm_params["model"], but it must never mutate the deployment template
+    stored in self.patterns.
+
+    A naive shallow copy of only the outer deployment dict shares the nested
+    litellm_params dict with the template, so writing litellm_params["model"]
+    would corrupt the stored pattern for every subsequent request.
+    """
+    router = PatternMatchRouter()
+    deployment = Deployment(
+        model_name="openai/*",
+        litellm_params=LiteLLM_Params(model="openai/*"),
+        model_info=ModelInfo(),
+    )
+    router.add_pattern("openai/*", deployment.to_json(exclude_none=True))
+
+    first = router.route("openai/gpt-4o")
+    assert first is not None and first[0]["litellm_params"]["model"] == "openai/gpt-4o"
+
+    stored_template = list(router.patterns.values())[0][0]
+    assert stored_template["litellm_params"]["model"] == "openai/*"
+
+    second = router.route("openai/gpt-4o-mini")
+    assert second is not None and second[0]["litellm_params"]["model"] == "openai/gpt-4o-mini"
+    assert first[0]["litellm_params"]["model"] == "openai/gpt-4o"
+
+
+def test_route_returns_shallow_copy_not_deepcopy():
+    """
+    Regression: the per-listed-model /v1/models hot path deep-copied every
+    matched deployment, which blocked the event loop (issue tracked in PR
+    #33721). route() must isolate the mutated litellm_params.model without a
+    full deepcopy, so nested objects that are not rewritten stay shared by
+    reference with the template. Reverting to copy.deepcopy fails this.
+    """
+    router = PatternMatchRouter()
+    shared_metadata = {"team": "core"}
+    deployment = Deployment(
+        model_name="openai/*",
+        litellm_params=LiteLLM_Params(model="openai/*", metadata=shared_metadata),
+        model_info=ModelInfo(),
+    )
+    router.add_pattern("openai/*", deployment.to_json(exclude_none=True))
+
+    stored_template = list(router.patterns.values())[0][0]
+
+    routed = router.route("openai/gpt-4o")
+    assert routed is not None
+
+    assert routed[0]["litellm_params"] is not stored_template["litellm_params"]
+    assert routed[0]["litellm_params"]["metadata"] is stored_template["litellm_params"]["metadata"]
