@@ -152,6 +152,53 @@ def test_coerce_redis_kwargs_types_none_default_numeric():
     assert isinstance(result["socket_timeout"], float)
 
 
+def _redis_signature_pre_8x(
+    socket_timeout=None,
+    socket_connect_timeout=None,
+    max_connections=None,
+    health_check_interval=0,
+):
+    """Stand-in for the redis-py <= 7.x Redis signature, where the timeout defaults are None."""
+
+
+def _redis_signature_8x(
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    max_connections=None,
+    health_check_interval=0,
+):
+    """Stand-in for the redis-py 8.x Redis signature, where the timeout defaults became int 5."""
+
+
+@pytest.mark.parametrize(
+    "client",
+    [_redis_signature_pre_8x, _redis_signature_8x],
+    ids=["redis-py<=7.x", "redis-py-8.x"],
+)
+def test_coerce_fractional_socket_timeout_survives_signature_default_change(client):
+    """redis-py 8.x changed socket_timeout's default from None to int 5. Deriving the
+    target type from the signature default made int("5.5") raise, so the key was dropped
+    and REDIS_SOCKET_TIMEOUT=5.5 silently disappeared on 8.x."""
+    result = _coerce_redis_kwargs_types(
+        {"socket_timeout": "5.5", "socket_connect_timeout": "2.5", "max_connections": "20"},
+        client=client,
+    )
+
+    assert result["socket_timeout"] == pytest.approx(5.5)
+    assert isinstance(result["socket_timeout"], float)
+    assert result["socket_connect_timeout"] == pytest.approx(2.5)
+    assert isinstance(result["socket_connect_timeout"], float)
+    assert result["max_connections"] == 20
+    assert isinstance(result["max_connections"], int)
+
+
+def test_coerce_invalid_socket_timeout_is_still_dropped():
+    """Garbage must not survive the explicit-type path; Redis falls back to its own default."""
+    result = _coerce_redis_kwargs_types({"socket_timeout": "not_a_number"}, client=_redis_signature_8x)
+
+    assert "socket_timeout" not in result
+
+
 def test_coerce_redis_kwargs_types_invalid_drops_key():
     """A string that cannot be coerced to the expected numeric type is dropped."""
     result = _coerce_redis_kwargs_types({"health_check_interval": "not_a_number"})

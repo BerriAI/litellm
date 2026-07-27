@@ -181,9 +181,7 @@ def test_reconnect_kwargs_in_cluster_kwargs():
     assert "socket_keepalive" in kwargs
 
 
-@pytest.mark.parametrize(
-    "cluster_client", [redis.RedisCluster, async_redis.RedisCluster], ids=["sync", "async"]
-)
+@pytest.mark.parametrize("cluster_client", [redis.RedisCluster, async_redis.RedisCluster], ids=["sync", "async"])
 def test_cluster_kwargs_exclude_variadic_parameters(cluster_client):
     """*args / **kwargs are signature placeholders, not connection settings.
     getfullargspec never reported them, but inspect.signature does, so they must be

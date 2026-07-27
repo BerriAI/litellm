@@ -104,10 +104,12 @@ def _get_redis_env_kwarg_mapping():
     return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs()}
 
 
-def _coerce_redis_kwargs_types(redis_kwargs: dict) -> dict:
-    sig = inspect.signature(redis.Redis)
-    # Params defaulting to None but requiring a numeric type when set
-    none_default_numeric: dict[str, type[int] | type[float]] = {
+def _coerce_redis_kwargs_types(redis_kwargs: dict, client: Callable[..., object] = redis.Redis) -> dict:
+    sig = inspect.signature(client)
+    # Params whose signature default is not a reliable type hint: redis-py 8.x changed
+    # socket_timeout / socket_connect_timeout from None to int 5, which would otherwise
+    # make a fractional value like "5.5" fail int() and be dropped.
+    numeric_param_types: dict[str, type[int] | type[float]] = {
         "max_connections": int,
         "socket_timeout": float,
         "socket_connect_timeout": float,
@@ -118,6 +120,13 @@ def _coerce_redis_kwargs_types(redis_kwargs: dict) -> dict:
             continue
         param = sig.parameters.get(key)
         if param is None:
+            continue
+        explicit_type = numeric_param_types.get(key)
+        if explicit_type is not None:
+            try:
+                result[key] = explicit_type(value)
+            except (ValueError, TypeError):
+                del result[key]
             continue
         default = param.default
         if default is inspect.Parameter.empty:
@@ -133,11 +142,6 @@ def _coerce_redis_kwargs_types(redis_kwargs: dict) -> dict:
         elif isinstance(default, float):
             try:
                 result[key] = float(value)
-            except (ValueError, TypeError):
-                del result[key]
-        elif default is None and key in none_default_numeric:
-            try:
-                result[key] = none_default_numeric[key](value)
             except (ValueError, TypeError):
                 del result[key]
     return result
