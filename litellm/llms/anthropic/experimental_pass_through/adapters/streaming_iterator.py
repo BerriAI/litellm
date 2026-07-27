@@ -55,7 +55,9 @@ class _CombinedChunkSplitter:
     """
     Splits a streaming chunk that carries BOTH response content and a
     ``finish_reason`` into two chunks: a content-only chunk followed by a
-    finish-only chunk.
+    finish-only chunk. Also splits a chunk that carries BOTH reasoning and
+    response content into a reasoning-only chunk followed by a content-only
+    chunk, since Anthropic models those as two separate content blocks.
 
     ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
     assumes content and ``finish_reason`` never arrive in the same chunk — true for
@@ -97,7 +99,58 @@ class _CombinedChunkSplitter:
         )
 
     @staticmethod
+    def _has_reasoning_and_content(chunk: Any) -> bool:
+        """True if ``chunk`` carries reasoning AND response content."""
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            return False
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return False
+        has_reasoning = bool(getattr(delta, "reasoning_content", None) or getattr(delta, "thinking_blocks", None))
+        has_content = bool(getattr(delta, "content", None) or getattr(delta, "tool_calls", None))
+        return has_reasoning and has_content
+
+    @staticmethod
+    def _split_reasoning_from_content(chunk: Any) -> list[Any]:
+        """Return ``[chunk]``, or ``[reasoning_chunk, content_chunk]``.
+
+        OpenAI-compatible reasoning backends (vLLM/SGLang reasoning parsers)
+        emit a single delta carrying both ``reasoning_content`` and ``content``
+        at the reasoning-to-answer boundary. Anthropic represents those as two
+        content blocks, and the translate layer produces one delta per chunk,
+        so an unsplit chunk both types its ``thinking_delta`` into a block
+        opened as ``text`` (strict clients reject the stream with "Content
+        block is not a thinking block") and drops the ``content`` entirely.
+        """
+        if not _CombinedChunkSplitter._has_reasoning_and_content(chunk):
+            return [chunk]
+
+        reasoning_chunk = copy.deepcopy(chunk)
+        reasoning_delta = reasoning_chunk.choices[0].delta
+        reasoning_delta.content = None
+        if hasattr(reasoning_delta, "tool_calls"):
+            reasoning_delta.tool_calls = None
+
+        content_chunk = copy.deepcopy(chunk)
+        content_delta = content_chunk.choices[0].delta
+        if hasattr(content_delta, "reasoning_content"):
+            content_delta.reasoning_content = None
+        if hasattr(content_delta, "thinking_blocks"):
+            content_delta.thinking_blocks = None
+        return [reasoning_chunk, content_chunk]
+
+    @staticmethod
     def _split(chunk: Any) -> List[Any]:
+        """Split ``chunk`` on both the reasoning/content and content/finish boundaries."""
+        return [
+            split_chunk
+            for part in _CombinedChunkSplitter._split_finish_reason(chunk)
+            for split_chunk in _CombinedChunkSplitter._split_reasoning_from_content(part)
+        ]
+
+    @staticmethod
+    def _split_finish_reason(chunk: Any) -> list[Any]:
         """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
         if not _CombinedChunkSplitter._is_combined(chunk):
             return [chunk]

@@ -197,12 +197,135 @@ def test_split_clears_reasoning_and_thinking_on_finish_chunk():
         choices=[SimpleNamespace(finish_reason="stop", delta=delta)]
     )
 
-    content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
+    content_chunk, finish_chunk = _CombinedChunkSplitter._split_finish_reason(chunk)
 
     assert content_chunk.choices[0].delta.reasoning_content == "some reasoning"
     assert content_chunk.choices[0].delta.thinking_blocks == [{"type": "thinking"}]
     assert finish_chunk.choices[0].delta.reasoning_content is None
     assert finish_chunk.choices[0].delta.thinking_blocks is None
+
+
+def test_splitter_splits_reasoning_and_content_into_separate_chunks():
+    """A delta carrying both reasoning_content and content becomes two chunks.
+
+    vLLM/SGLang reasoning parsers emit this at the reasoning-to-answer boundary;
+    Anthropic needs a thinking block and a text block, not one of each in the
+    same chunk.
+    """
+    chunk = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="391", reasoning_content="done thinking"),
+                finish_reason=None,
+            )
+        ]
+    )
+
+    reasoning_chunk, content_chunk = list(_CombinedChunkSplitter(iter([chunk])))
+
+    assert reasoning_chunk.choices[0].delta.reasoning_content == "done thinking"
+    assert reasoning_chunk.choices[0].delta.content is None
+    assert content_chunk.choices[0].delta.content == "391"
+    assert content_chunk.choices[0].delta.reasoning_content is None
+
+
+def test_splitter_splits_reasoning_content_and_finish_reason_together():
+    """All three payloads in one chunk split into reasoning, content, finish."""
+    chunk = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="391", reasoning_content="done thinking"),
+                finish_reason="stop",
+            )
+        ]
+    )
+
+    reasoning_chunk, content_chunk, finish_chunk = list(_CombinedChunkSplitter(iter([chunk])))
+
+    assert reasoning_chunk.choices[0].delta.reasoning_content == "done thinking"
+    assert reasoning_chunk.choices[0].finish_reason is None
+    assert content_chunk.choices[0].delta.content == "391"
+    assert content_chunk.choices[0].finish_reason is None
+    assert finish_chunk.choices[0].finish_reason == "stop"
+    assert finish_chunk.choices[0].delta.content is None
+    assert finish_chunk.choices[0].delta.reasoning_content is None
+
+
+def _content_block_types_and_deltas(sse: str) -> "tuple[dict[int, str], list[tuple[int, str]]]":
+    events = [
+        json.loads(line[len("data: ") :])
+        for block in sse.split("\n\n")
+        for line in block.splitlines()
+        if line.startswith("data: ")
+    ]
+    block_types = {
+        event["index"]: event["content_block"]["type"] for event in events if event["type"] == "content_block_start"
+    }
+    deltas = [(event["index"], event["delta"]["type"]) for event in events if event["type"] == "content_block_delta"]
+    return block_types, deltas
+
+
+def test_combined_reasoning_and_content_chunk_never_mistypes_deltas():
+    """A chunk carrying reasoning_content AND content must not emit a
+    thinking_delta into a text block, and must not drop the content.
+
+    Strict Anthropic clients (Claude Code) reject the whole stream with
+    "Content block is not a thinking block" when the delta type does not match
+    the type of the block it lands in.
+    """
+    chunks = [
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="thinking. "), finish_reason=None)],
+        ),
+        ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(reasoning_content="done thinking.", content="391"),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=" is the answer."), finish_reason=None)],
+        ),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+            usage=Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+        ),
+    ]
+
+    async def _aiter() -> "AsyncIterator[ModelResponseStream]":
+        for chunk in chunks:
+            yield chunk
+
+    sse = _collect_async(AnthropicStreamWrapper(completion_stream=_aiter(), model="hosted_vllm/reasoner"))
+    block_types, deltas = _content_block_types_and_deltas(sse)
+
+    allowed = {
+        "text": {"text_delta"},
+        "thinking": {"thinking_delta", "signature_delta"},
+        "tool_use": {"input_json_delta"},
+    }
+    mistyped = [(index, delta_type) for index, delta_type in deltas if delta_type not in allowed[block_types[index]]]
+    assert mistyped == []
+
+    thinking_text = "".join(
+        json.loads(line[len("data: ") :])["delta"]["thinking"]
+        for block in sse.split("\n\n")
+        for line in block.splitlines()
+        if line.startswith("data: ") and '"thinking_delta"' in line
+    )
+    answer_text = "".join(
+        json.loads(line[len("data: ") :])["delta"]["text"]
+        for block in sse.split("\n\n")
+        for line in block.splitlines()
+        if line.startswith("data: ") and '"text_delta"' in line
+    )
+    assert thinking_text == "thinking. done thinking."
+    assert answer_text == "391 is the answer."
 
 
 def _thinking_delta_chunk(thinking: str) -> ModelResponseStream:
