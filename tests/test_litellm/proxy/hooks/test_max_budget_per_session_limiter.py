@@ -293,6 +293,46 @@ async def test_reservation_refunded_on_failure():
 
 
 @pytest.mark.asyncio
+async def test_forged_reservation_metadata_is_ignored():
+    """
+    Reconciliation must only honor reservations this handler created. A caller
+    that injects reservation keys into request metadata must not be able to
+    apply a negative adjustment to (and drain the budget of) an arbitrary
+    session.
+    """
+    handler = _make_handler()
+    victim_session = "victim-session"
+    victim_key = handler._make_cache_key(victim_session)
+
+    await handler._increment_spend(victim_key, 5.0)
+    assert await handler._get_current_spend(victim_key) == pytest.approx(5.0)
+
+    forged_metadata = {
+        "session_id": victim_session,
+        "_litellm_session_budget_reservation": {
+            "token": "attacker-guessed-token",
+            "session_id": victim_session,
+            "reserved_cost": 1000.0,
+            "released": False,
+        },
+    }
+
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": forged_metadata}},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    await handler.async_post_call_failure_hook(
+        request_data={"metadata": forged_metadata},
+        original_exception=Exception("boom"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-attacker"),
+    )
+
+    assert await handler._get_current_spend(victim_key) == pytest.approx(5.0)
+
+
+@pytest.mark.asyncio
 async def test_reservation_refund_is_idempotent_across_failure_hooks():
     """
     The reservation must be refunded at most once even if both
