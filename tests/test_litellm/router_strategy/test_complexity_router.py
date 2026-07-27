@@ -2794,6 +2794,84 @@ class TestSessionAffinity:
         assert third.model == "o1-preview"
 
     @pytest.mark.asyncio
+    async def test_pinned_turn_without_a_user_message_keeps_the_pin(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """A turn carrying no user text has nothing to score, so the pin is served unchanged
+        rather than being re-derived from an empty prompt."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "assistant", "content": "continuing"}],
+        )
+        assert result.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_pin_that_no_longer_maps_to_a_tier_is_served_unchanged(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """A pin written before the tier config changed no longer resolves to a tier, so it
+        cannot be compared against; serve it as-is instead of guessing an escalation."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        await mock_router_instance.cache.async_set_cache(key=cache_key, value="retired-model", ttl=60)
+
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert result.model == "retired-model"
+        assert await mock_router_instance.cache.async_get_cache(key=cache_key) == "retired-model"
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_resolved_pre_escalation_cannot_lower_the_pin(
+        self, mock_router_instance, session_affinity_config
+    ):
+        """Regression: concurrent turns in one session all resolve against the same cached
+        pin and then write back. A turn that resolved before another turn escalated must not
+        land last and revert the session to the weaker model."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = self._request_kwargs("session-1")
+        await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        cache_key = router._get_session_affinity_cache_key("session-1", request_kwargs)
+        # A concurrent turn escalates the session while a trivial turn is still in flight.
+        escalated = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        assert escalated.model == "o1-preview"
+
+        # The in-flight turn now writes back the cheap model it resolved before the escalation.
+        await router._persist_session_pin(cache_key, "gpt-4o-mini")
+        assert await mock_router_instance.cache.async_get_cache(key=cache_key) == "o1-preview"
+
+        later = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert later.model == "o1-preview"
+
+    @pytest.mark.asyncio
     async def test_pin_escalation_check_does_not_call_the_llm_classifier(
         self, mock_router_instance, session_affinity_config
     ):

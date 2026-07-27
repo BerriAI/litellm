@@ -753,6 +753,34 @@ class ComplexityRouter(CustomLogger):
             return pinned_model, "session_affinity_pin"
         return self.get_model_for_tier(classified_tier), "session_affinity_complexity_escalation"
 
+    def _more_severe_model(self, current_model: str, candidate_model: str) -> str:
+        """Return whichever of the two models maps to the more severe configured tier."""
+        current_tier = self._tier_for_model(current_model)
+        candidate_tier = self._tier_for_model(candidate_model)
+        if current_tier is None or candidate_tier is None:
+            return candidate_model
+        if TIER_SEVERITY_ORDER.index(current_tier) > TIER_SEVERITY_ORDER.index(candidate_tier):
+            return current_model
+        return candidate_model
+
+    async def _persist_session_pin(self, cache_key: str, routed_model: str) -> None:
+        """Write the session pin, refreshing its TTL, without ever lowering it.
+
+        Concurrent turns in one session all resolve against the same cached pin and then
+        write back, so an unconditional write lets a turn that resolved before another
+        turn's escalation land last and revert the session to the weaker model. Re-reading
+        at write time and keeping the more severe tier makes the pin monotonic.
+        """
+        current_model = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+        winner = (
+            self._more_severe_model(current_model, routed_model) if isinstance(current_model, str) else routed_model
+        )
+        await self.litellm_router_instance.cache.async_set_cache(
+            key=cache_key,
+            value=winner,
+            ttl=self.config.session_affinity_ttl_seconds,
+        )
+
     def _lexical_tier_override(self, user_message: str) -> ComplexityTier | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
 
@@ -1009,13 +1037,7 @@ class ComplexityRouter(CustomLogger):
                 )
                 routed_model, cause = self._resolve_pinned_model(pinned_model, user_message, system_prompt)
                 if routed_model is not None:
-                    # Refresh the TTL on every hit so an active session doesn't lose its
-                    # pin mid-conversation just because it outlives the original write.
-                    await self.litellm_router_instance.cache.async_set_cache(
-                        key=cache_key,
-                        value=routed_model,
-                        ttl=self.config.session_affinity_ttl_seconds,
-                    )
+                    await self._persist_session_pin(cache_key, routed_model)
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
                             ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
@@ -1041,11 +1063,7 @@ class ComplexityRouter(CustomLogger):
             specific_deployment=specific_deployment,
         )
         if cache_key is not None and response is not None:
-            await self.litellm_router_instance.cache.async_set_cache(
-                key=cache_key,
-                value=response.model,
-                ttl=self.config.session_affinity_ttl_seconds,
-            )
+            await self._persist_session_pin(cache_key, response.model)
         return response
 
     async def _classify_and_route(
