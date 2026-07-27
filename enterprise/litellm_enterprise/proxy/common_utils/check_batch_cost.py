@@ -627,10 +627,15 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
 
-            elif response.status in ("failed", "expired", "cancelled"):
+            elif response.status in ("failed", "expired", "cancelled") or (
+                response.status == "completed" and response.output_file_id is None
+            ):
+                terminal_status = (
+                    "complete" if response.status == "completed" else response.status
+                )
                 try:
                     update_data = {
-                        "status": response.status,
+                        "status": terminal_status,
                         "file_object": response.model_dump_json(),
                     }
                     if self._has_batch_processed_column:
@@ -640,11 +645,12 @@ class CheckBatchCost:
                         data=update_data,
                     )
                     verbose_proxy_logger.info(
-                        f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
+                        f"CheckBatchCost: marked job {job.id} as {terminal_status} in DB "
+                        f"(provider status={response.status}, output_file_id={response.output_file_id})"
                     )
                 except Exception as db_err:
                     verbose_proxy_logger.error(
-                        f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
+                        f"CheckBatchCost: failed to mark job {job.id} as {terminal_status} in DB: {db_err}"
                     )
 
         # Record polling run metrics (always, even if nothing was processed)

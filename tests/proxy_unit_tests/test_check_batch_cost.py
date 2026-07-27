@@ -557,6 +557,83 @@ class TestCheckBatchCost:
         ), "terminal-status update() must set batch_processed=True so polling stops"
 
     @pytest.mark.asyncio
+    async def test_completed_with_no_output_file_marks_job_processed(
+        self,
+        check_batch_cost_instance,
+        mock_prisma_client,
+        mock_llm_router,
+    ):
+        """A batch that OpenAI reports as completed but with output_file_id=None (every
+        request failed, only an error file is produced) must be marked complete and
+        batch_processed=True. Otherwise it matches neither the completed-with-output nor
+        the failed/expired/cancelled branch and gets re-polled forever, eventually
+        saturating the oldest-N poll window and starving newer batches.
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-completed-no-output-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+
+        assert check_batch_cost_instance._has_batch_processed_column is True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = None
+        mock_response.error_file_id = "file-error-123"
+        mock_response.model_dump_json.return_value = (
+            '{"id":"batch-1","status":"completed","output_file_id":null}'
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+            ) as mock_afile_content,
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        mock_afile_content.assert_not_called()
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "Expected update() to be called once for a completed-with-no-output batch"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["status"] == "complete"
+        assert (
+            update_data["batch_processed"] is True
+        ), "completed-with-no-output update() must set batch_processed=True so polling stops"
+
+    @pytest.mark.asyncio
     async def test_raw_output_file_id_converted_to_managed_id(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):
