@@ -668,3 +668,145 @@ def test_otel_global_provider_published_after_callback_init():
         "preset logger will not exist yet and a second generic logger will own "
         "the global provider, orphaning gen-ai spans"
     )
+
+
+# ---------------------------------------------------------------------------
+# _drain_spend_buffers_on_shutdown
+# ---------------------------------------------------------------------------
+
+
+def _patch_drain_deps(
+    monkeypatch,
+    *,
+    prisma=object(),
+    scheduler=None,
+    disable_spend_updates=False,
+    update_spend=None,
+    update_daily_tag_spend=None,
+):
+    monkeypatch.setattr(ps, "prisma_client", prisma, raising=False)
+    monkeypatch.setattr(ps, "scheduler", scheduler, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+    monkeypatch.setattr(ps, "proxy_logging_obj", MagicMock(), raising=False)
+    monkeypatch.setattr(
+        ps.ProxyUpdateSpend,
+        "disable_spend_updates",
+        staticmethod(lambda: disable_spend_updates),
+        raising=False,
+    )
+    monkeypatch.setattr(ps, "update_spend", update_spend or AsyncMock(), raising=False)
+    monkeypatch.setattr(
+        ps,
+        "update_daily_tag_spend",
+        update_daily_tag_spend or AsyncMock(),
+        raising=False,
+    )
+    return ps.update_spend, ps.update_daily_tag_spend
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_buffers_flushes_both_queues(monkeypatch):
+    scheduler = MagicMock()
+    spend, tag_spend = _patch_drain_deps(monkeypatch, scheduler=scheduler)
+
+    await ps._drain_spend_buffers_on_shutdown()
+
+    assert normalize(
+        {
+            "scheduler_stopped": scheduler.shutdown.call_count == 1,
+            "scheduler_not_waited": scheduler.shutdown.call_args.kwargs.get("wait"),
+            "spend_flushed": spend.await_count == 1,
+            "tag_spend_flushed": tag_spend.await_count == 1,
+        }
+    ) == {
+        "scheduler_stopped": True,
+        "scheduler_not_waited": False,
+        "spend_flushed": True,
+        "tag_spend_flushed": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_buffers_runs_before_prisma_disconnect(monkeypatch):
+    order: List[str] = []
+
+    async def _flush(*args, **kwargs):
+        order.append("flush")
+
+    fake_prisma = MagicMock()
+
+    async def _disconnect():
+        order.append("disconnect")
+
+    fake_prisma.disconnect = _disconnect
+    _patch_drain_deps(
+        monkeypatch,
+        prisma=fake_prisma,
+        update_spend=AsyncMock(side_effect=_flush),
+        update_daily_tag_spend=AsyncMock(side_effect=_flush),
+    )
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert order == ["flush", "flush", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_buffers_skips_without_prisma(monkeypatch):
+    spend, tag_spend = _patch_drain_deps(monkeypatch, prisma=None)
+
+    await ps._drain_spend_buffers_on_shutdown()
+
+    assert (spend.await_count, tag_spend.await_count) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_buffers_skips_when_spend_updates_disabled(monkeypatch):
+    spend, tag_spend = _patch_drain_deps(monkeypatch, disable_spend_updates=True)
+
+    await ps._drain_spend_buffers_on_shutdown()
+
+    assert (spend.await_count, tag_spend.await_count) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_buffers_timeout_does_not_block_second_flush(monkeypatch):
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    tag_spend = AsyncMock()
+    _patch_drain_deps(
+        monkeypatch,
+        update_spend=AsyncMock(side_effect=_hang),
+        update_daily_tag_spend=tag_spend,
+    )
+    monkeypatch.setattr(ps, "PROXY_SHUTDOWN_SPEND_DRAIN_TIMEOUT_SECONDS", 0.01, raising=False)
+
+    await ps._drain_spend_buffers_on_shutdown()
+
+    assert tag_spend.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_buffers_swallows_flush_and_scheduler_errors(monkeypatch):
+    scheduler = MagicMock()
+    scheduler.shutdown.side_effect = RuntimeError("scheduler gone")
+    tag_spend = AsyncMock()
+    _patch_drain_deps(
+        monkeypatch,
+        scheduler=scheduler,
+        update_spend=AsyncMock(side_effect=RuntimeError("db gone")),
+        update_daily_tag_spend=tag_spend,
+    )
+
+    await ps._drain_spend_buffers_on_shutdown()
+
+    assert tag_spend.await_count == 1
