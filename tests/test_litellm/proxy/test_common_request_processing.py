@@ -5587,6 +5587,31 @@ class TestSSEKeepalive:
         monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", Hostile(), raising=False)
         assert _resolve_sse_keepalive_interval() is None
 
+    async def test_cancelled_fetch_is_not_read_as_a_delivered_chunk(self, monkeypatch):
+        """A fetch that reports done only because it was cancelled must fall through
+        to the cancel-and-close path rather than have its result read."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        real_wait = asyncio.wait
+
+        async def cancel_the_fetch(aws, **kwargs):
+            ordered = sorted(aws, key=lambda t: int(t.get_name().rsplit("-", 1)[-1]))
+            fetch = ordered[0]
+            fetch.cancel()
+            try:
+                await fetch
+            except BaseException:
+                pass
+            return {fetch}, set(ordered[1:])
+
+        monkeypatch.setattr(asyncio, "wait", cancel_the_fetch)
+        try:
+            with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
+                await _buffer_first_chunk_honoring_disconnect(
+                    self._stalling_gen(5.0), self._request_never_disconnects(), 1.0
+                )
+        finally:
+            monkeypatch.setattr(asyncio, "wait", real_wait)
+
     async def test_keepalive_applies_without_a_request_object(self, monkeypatch):
         """Callers that omit request have no disconnect arm, but a configured
         interval must still keep their stream alive."""
