@@ -11,19 +11,19 @@ use std::sync::{Once, OnceLock};
 
 use google_cloud_auth::credentials::service_account::AccessSpecifier;
 use google_cloud_auth::credentials::{
-    external_account, impersonated, service_account, user_account, AccessTokenCredentials,
-    Builder as AdcBuilder,
+    AccessTokenCredentials, Builder as AdcBuilder, external_account, impersonated, service_account,
+    user_account,
 };
+use litellm_core::CoreResult;
 use litellm_core::cache::in_memory::InMemoryCache;
 use litellm_core::error::CoreError;
-use litellm_core::CoreResult;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use crate::config::resolve_env_reference;
 use crate::constants::{
-    CLOUD_PLATFORM_SCOPE, VERTEXAI_CREDENTIALS_ENV, VERTEX_CREDENTIALS_CACHE_CAPACITY,
+    CLOUD_PLATFORM_SCOPE, VERTEX_CREDENTIALS_CACHE_CAPACITY, VERTEXAI_CREDENTIALS_ENV,
 };
 
 type CacheKey = [u8; 32];
@@ -183,12 +183,12 @@ fn build_from_json(json: Value) -> CoreResult<AccessTokenCredentials> {
         Some(_) => {
             return Err(CoreError::Auth(
                 "Unsupported Vertex credential type".to_string(),
-            ))
+            ));
         }
         None => {
             return Err(CoreError::Auth(
                 "Vertex credentials JSON is missing the required `type` field".to_string(),
-            ))
+            ));
         }
     };
     credentials.map_err(|_| CoreError::Auth("Failed to load Vertex credentials".to_string()))

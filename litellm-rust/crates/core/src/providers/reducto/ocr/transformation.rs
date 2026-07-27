@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::error::{json_type_name, CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, json_type_name};
 use crate::ocr::transformation::{OcrDocumentPreparation, OcrProviderConfig};
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
 const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";

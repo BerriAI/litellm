@@ -9,12 +9,12 @@
 
 use std::time::Duration;
 
-use crate::io::realtime_pool::{upstream_key, RealtimePool};
+use crate::io::realtime_pool::{RealtimePool, upstream_key};
 use futures_util::{Sink, Stream};
+use litellm_core::CoreResult;
 use litellm_core::error::CoreError;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router;
-use litellm_core::CoreResult;
 
 /// Select a deployment for `model` and splice the client stream to the provider.
 ///
@@ -51,18 +51,17 @@ where
         provider_model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
-    ) {
-        if let Some(handoff) = pool.take(&key) {
-            return crate::io::realtime::realtime_warm(
-                provider_model,
-                handoff,
-                idle_timeout,
-                observe,
-                client_in,
-                client_out,
-            )
-            .await;
-        }
+    ) && let Some(handoff) = pool.take(&key)
+    {
+        return crate::io::realtime::realtime_warm(
+            provider_model,
+            handoff,
+            idle_timeout,
+            observe,
+            client_in,
+            client_out,
+        )
+        .await;
     }
 
     // Cold path: fresh dial (the original behavior).

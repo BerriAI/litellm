@@ -38,6 +38,7 @@ HEURISTIC_TIER_MODELS = frozenset({"openai/gpt-5.5", "gpt-5.5"})
 LLM_TIER_MODELS = frozenset({"anthropic/claude-haiku-4-5", "claude-haiku-4-5"})
 
 
+@pytest.mark.usefixtures("_ensure_complexity_smart_router")
 class TestComplexityRouterLlmClassifier:
     @pytest.mark.skip(
         reason="product bug LIT-4521: LLM classifier returns SIMPLE for short hard prompts "

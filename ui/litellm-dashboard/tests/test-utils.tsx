@@ -3,7 +3,7 @@ import { render, RenderOptions } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // Create a client for testing
-const queryClient = new QueryClient({
+export const testQueryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: false,
@@ -20,7 +20,7 @@ const queryClient = new QueryClient({
 });
 
 const Providers: React.FC<PropsWithChildren> = ({ children }) => {
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>;
 };
 
 export const renderWithProviders = (ui: React.ReactElement, options?: RenderOptions) =>

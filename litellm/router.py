@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    coerce_token_limit,
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
@@ -125,6 +126,7 @@ from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments_with_debug_info,
     _get_cooldown_deployments,
     _set_cooldown_deployments,
+    is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
     _check_non_standard_fallback_format,
@@ -199,6 +201,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
+    shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
@@ -7003,6 +7006,14 @@ class Router:
         verbose_router_logger.debug("Router: Entering 'deployment_callback_on_failure'")
         try:
             exception = kwargs.get("exception", None)
+
+            if is_advisor_orchestration_failure(exception):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Failure originated from advisor orchestration, not the selected deployment."
+                )
+                return False
+
             exception_status = getattr(exception, "status_code", "")
 
             # Cache litellm_params to avoid repeated dict lookups
@@ -7494,12 +7505,13 @@ class Router:
             if deployment.litellm_params.custom_llm_provider is not None:
                 _model_name = deployment.litellm_params.custom_llm_provider + "/" + _model_name
 
-            # For the shared backend key, strip custom pricing fields so that
-            # one deployment's pricing overrides don't pollute another
-            # deployment sharing the same backend model name.
-            # Each deployment's full pricing is already stored under its
-            # unique model_id above.
-            _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
+            # For the shared backend key, keep only cost-map schema fields
+            # (minus custom pricing) so that one deployment's pricing overrides
+            # or custom metadata (id, access_via_team_ids, arbitrary keys)
+            # don't pollute another deployment sharing the same backend model
+            # name. Each deployment's full model_info is already stored under
+            # its unique model_id above.
+            _shared_model_info = shared_backend_model_info(_model_info)
             _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}).get("mode")
             _deployment_mode = _shared_model_info.get("mode")
             # Keep the built-in bridge mode stable for shared backend keys.
@@ -8218,12 +8230,13 @@ class Router:
         if deployment.litellm_params.custom_llm_provider is not None:
             _model_name = deployment.litellm_params.custom_llm_provider + "/" + _model_name
 
-        # For the shared backend key, strip custom pricing fields so that
-        # one deployment's pricing overrides don't pollute another
-        # deployment sharing the same backend model name.
-        # Each deployment's full pricing is already stored under its
-        # unique model_id above (when present).
-        _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info_dict)
+        # For the shared backend key, keep only cost-map schema fields
+        # (minus custom pricing) so that one deployment's pricing overrides
+        # or custom metadata (id, access_via_team_ids, arbitrary keys)
+        # don't pollute another deployment sharing the same backend model
+        # name. Each deployment's full model_info is already stored under
+        # its unique model_id above (when present).
+        _shared_model_info = shared_backend_model_info(_model_info_dict)
         _backend_alias_cost = {_model_name: _shared_model_info}
         if "responses/" in _model_name:
             _stripped_model_name = _model_name.replace("responses/", "")
@@ -8544,18 +8557,10 @@ class Router:
         if deployment is None:
             return (None, None)
 
-        def _as_int(value: object) -> "int | None":
-            if value is None or isinstance(value, bool):
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
-
         model_info = deployment.model_info
         return (
-            _as_int(model_info.get("max_input_tokens")),
-            _as_int(model_info.get("max_output_tokens")),
+            coerce_token_limit(model_info.get("max_input_tokens")),
+            coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
     def get_deployment_credentials_with_provider(

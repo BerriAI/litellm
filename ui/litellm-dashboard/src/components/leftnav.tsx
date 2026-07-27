@@ -244,7 +244,13 @@ const menuGroups: MenuGroup[] = [
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
-      { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
+      {
+        key: "caching",
+        page: "caching",
+        label: "Response Cache",
+        icon: <Database {...ICON} />,
+        roles: all_admin_roles,
+      },
       {
         key: "experimental",
         page: "experimental",

@@ -916,4 +916,37 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
   });
+
+  it("renders the provider card logo from the bundled provider map", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    const logo = await screen.findByAltText("openai logo");
+    expect(logo.getAttribute("src")).toContain("openai_small");
+  });
+
+  it("renders a letter avatar instead of an img for an unknown provider slug", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: {
+              ...defaultModelData.litellm_params,
+              custom_llm_provider: "zzz-internal",
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("zzz-internal").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByAltText("zzz-internal logo")).not.toBeInTheDocument();
+    expect(screen.getByText("z")).toBeInTheDocument();
+  });
 });

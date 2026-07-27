@@ -37,6 +37,7 @@ pub(crate) const VERTEX_CREDENTIALS_CACHE_CAPACITY: usize = 64;
 pub(crate) const ENV_REFERENCE_PREFIX: &str = "os.environ/";
 
 pub(crate) const DEFAULT_OCR_REQUEST_TIMEOUT_SECS: u64 = 600;
+pub(crate) const DEFAULT_HTTP_CLIENT_TIMEOUT_SECS: u64 = 600;
 
 pub(crate) const OCR_ERROR_BODY_MAX_CHARS: usize = 256;
 

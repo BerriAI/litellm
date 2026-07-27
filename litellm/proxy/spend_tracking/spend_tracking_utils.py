@@ -374,12 +374,22 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             if isinstance(v, BaseModel):
                 v = v.model_dump()
             additional_usage_values.update({k: v})
-    if "cache_read_input_tokens" not in additional_usage_values:
-        prompt_tokens_details = additional_usage_values.get("prompt_tokens_details")
-        if isinstance(prompt_tokens_details, dict):
+    prompt_tokens_details = additional_usage_values.get("prompt_tokens_details")
+    if not isinstance(prompt_tokens_details, dict):
+        usage_object = clean_metadata.get("usage_object")
+        if isinstance(usage_object, dict):
+            prompt_tokens_details = usage_object.get("prompt_tokens_details")
+    if isinstance(prompt_tokens_details, dict):
+        if "cache_read_input_tokens" not in additional_usage_values:
             cached_tokens = prompt_tokens_details.get("cached_tokens")
             if isinstance(cached_tokens, int) and cached_tokens > 0:
                 additional_usage_values["cache_read_input_tokens"] = cached_tokens
+        if "cache_creation_input_tokens" not in additional_usage_values:
+            cache_write_tokens = prompt_tokens_details.get("cache_write_tokens") or prompt_tokens_details.get(
+                "cache_creation_tokens"
+            )
+            if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
+                additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
 
     if litellm.cache is not None:

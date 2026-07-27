@@ -18,6 +18,7 @@ const storedConfigValue = {
   adaptive_weights: { quality: 0.3, cost: 0.7 },
   tier_distance_penalty: 0.8,
   adaptive_eligible: "all",
+  return_raw_model_name: true,
 };
 
 const storedConfig = JSON.stringify(storedConfigValue);
@@ -78,6 +79,15 @@ describe("buildUpdatedComplexityRouterConfig", () => {
     const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, adaptiveDisabledValue);
 
     expect(updatedConfig).toEqual(expectedAdaptiveDisabledConfig);
+  });
+
+  it("includes return_raw_model_name only when enabled", () => {
+    const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, {
+      ...classifiedTierValue,
+      return_raw_model_name: true,
+    });
+
+    expect(updatedConfig.return_raw_model_name).toBe(true);
   });
 
   it("updates custom technical keywords when they are edited", () => {

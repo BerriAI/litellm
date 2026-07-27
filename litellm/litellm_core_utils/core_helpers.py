@@ -57,6 +57,35 @@ def safe_divide(
     return numerator / denominator
 
 
+def coerce_token_limit(value: object) -> int | None:
+    """
+    Coerce a max_input_tokens / max_output_tokens value to an int, treating a
+    malformed value as absent.
+
+    A deployment's model_info is registered into litellm.model_cost verbatim, so a
+    config value like "128,000" or "" reaches the /v1/models listing uncoerced from
+    both the router index and the cost map. Returning None omits that one limit
+    instead of failing the whole listing.
+
+    Args:
+        value: The raw configured or cost-map value
+
+    Returns:
+        The value as an int, or None if it is missing or not a usable number.
+        Bools are rejected because True/False is never a meaningful token limit.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (str, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return None
+
+
 _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     # Anthropic
     "stop_sequence": "stop",
@@ -164,6 +193,25 @@ def get_metadata_variable_name_from_kwargs(
     - LiteLLM is now moving to using `litellm_metadata` for our metadata
     """
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+
+
+def get_or_create_metadata_bucket(
+    request_data: dict,
+) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
+    """
+    Return the proxy-internal metadata bucket for this request, creating it if absent.
+
+    Batch/file routes store proxy state in ``litellm_metadata`` so the OpenAI
+    ``metadata`` field can remain provider-safe (string values only). Every writer and
+    reader of proxy-internal metadata resolves the bucket through here, so a caller that
+    supplies its own ``metadata`` field cannot split them across two dicts.
+    """
+    metadata_key = get_metadata_variable_name_from_kwargs(request_data)
+    metadata_bucket = request_data.get(metadata_key)
+    if not isinstance(metadata_bucket, dict):
+        metadata_bucket = {}
+        request_data[metadata_key] = metadata_bucket
+    return metadata_key, metadata_bucket
 
 
 def get_litellm_metadata_from_kwargs(kwargs: dict):

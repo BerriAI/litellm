@@ -133,6 +133,32 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        api_key = self._get_api_key(api_key)
+        if api_key is None:
+            raise ValueError("FIREWORKS_API_KEY is not set")
+
+        validated_headers = OpenAIGPTConfig.validate_environment(
+            self,
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        return self._add_session_affinity_header(validated_headers, litellm_params)
+
     def get_supported_openai_params(self, model: str):
         # Base parameters supported by all models
         supported_params = [
