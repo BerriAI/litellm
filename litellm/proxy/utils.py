@@ -5538,6 +5538,33 @@ async def update_daily_tag_spend(
         verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
+def _consume_task_exception(task: "asyncio.Future[None]") -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _requeue_spend_log_transactions(prisma_client: PrismaClient, logs: Sequence[Mapping[str, Any]]) -> None:
+    """Put a popped batch back at the head of the spend-log queue.
+
+    Re-writing a row that already landed is harmless: the bulk insert runs with
+    ``skip_duplicates=True``, so a requeued batch that partially made it to the
+    DB writes only the rows that are still missing.
+    """
+    if not logs:
+        return
+    async with prisma_client._spend_log_transactions_lock:
+        prisma_client.spend_log_transactions = [*logs, *prisma_client.spend_log_transactions]
+
+
+async def _requeue_tool_usage_transactions(
+    prisma_client: PrismaClient, transactions: Sequence["ToolUsageTransaction"]
+) -> None:
+    if not transactions:
+        return
+    async with prisma_client._tool_usage_transactions_lock:
+        prisma_client.tool_usage_transactions = [*transactions, *prisma_client.tool_usage_transactions]
+
+
 async def update_spend_logs_job(
     prisma_client: PrismaClient,
     db_writer_client: Optional[AsyncHTTPHandler],
@@ -5548,6 +5575,12 @@ async def update_spend_logs_job(
 
     This job is triggered based on queue size rather than time.
     Pops the batch once, writes spend logs, then runs guardrail usage tracking.
+
+    The batch leaves the in-memory queue before the DB write is awaited, so a
+    cancellation landing in that window (task cancelled, worker shutting down,
+    ``wait_for`` timeout) would otherwise drop those rows for good. The write is
+    shielded so it still runs to completion, and the batch is requeued so a
+    later flush retries it if the write never finished.
     """
     n_retry_times = 3
     MAX_LOGS_PER_INTERVAL = 10000
@@ -5566,13 +5599,21 @@ async def update_spend_logs_job(
         logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
         prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
 
-    await ProxyUpdateSpend.update_spend_logs(
-        n_retry_times=n_retry_times,
-        prisma_client=prisma_client,
-        proxy_logging_obj=proxy_logging_obj,
-        db_writer_client=db_writer_client,
-        logs_to_process=logs_to_process,
+    write_task = asyncio.ensure_future(
+        ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            db_writer_client=db_writer_client,
+            logs_to_process=logs_to_process,
+        )
     )
+    try:
+        await asyncio.shield(write_task)
+    except asyncio.CancelledError:
+        write_task.add_done_callback(_consume_task_exception)
+        await _requeue_spend_log_transactions(prisma_client, logs_to_process)
+        raise
 
     # Guardrail/policy usage tracking (same batch, outside spend-logs update)
     try:
@@ -5599,10 +5640,18 @@ async def update_spend_logs_job(
     try:
         from litellm.proxy.db.spend_log_tool_index import flush_tool_usage_transactions
 
-        await flush_tool_usage_transactions(
-            prisma_client=prisma_client,
-            transactions=tool_usage_to_process,
+        tool_flush_task = asyncio.ensure_future(
+            flush_tool_usage_transactions(
+                prisma_client=prisma_client,
+                transactions=tool_usage_to_process,
+            )
         )
+        try:
+            await asyncio.shield(tool_flush_task)
+        except asyncio.CancelledError:
+            tool_flush_task.add_done_callback(_consume_task_exception)
+            await _requeue_tool_usage_transactions(prisma_client, tool_usage_to_process)
+            raise
     except Exception as tool_tracking_err:
         verbose_proxy_logger.error(
             "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",

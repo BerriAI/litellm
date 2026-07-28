@@ -263,6 +263,119 @@ async def test_update_spend_logs_job_processes_and_clears_queue(
     }
 
 
+async def _wait_for(predicate: Any, iterations: int = 200) -> None:
+    for _ in range(iterations):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition never became true")
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_requeues_batch_when_cancelled_mid_write(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the batch is popped from the in-memory queue before the DB
+    write is awaited, so a cancellation arriving in that window used to lose
+    the rows permanently. The shielded write must still complete and the batch
+    must go back to the head of the queue, behind nothing that was enqueued
+    while the flush was in flight.
+    """
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False)
+
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+    written: List[List[Dict[str, Any]]] = []
+
+    async def _slow_create_many(data: Any, skip_duplicates: bool = False) -> None:
+        write_started.set()
+        await release_write.wait()
+        written.append(list(data))
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_slow_create_many)
+    mock_prisma_client.spend_log_transactions = [
+        make_spend_log_row(request_id="r1"),
+        make_spend_log_row(request_id="r2"),
+    ]
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    job = asyncio.create_task(
+        update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+    )
+    await write_started.wait()
+    assert mock_prisma_client.spend_log_transactions == []
+    mock_prisma_client.spend_log_transactions.append(make_spend_log_row(request_id="r3"))
+
+    job.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await job
+
+    requeued = [row["request_id"] for row in mock_prisma_client.spend_log_transactions]
+
+    release_write.set()
+    await _wait_for(lambda: bool(written))
+
+    assert requeued == ["r1", "r2", "r3"]
+    assert [row["request_id"] for row in written[0]] == ["r1", "r2"]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_requeues_tool_usage_when_cancelled_mid_flush(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+
+    flush_started = asyncio.Event()
+    release_flush = asyncio.Event()
+    flushed: List[Any] = []
+
+    async def _slow_flush(prisma_client: Any, transactions: Any) -> None:
+        flush_started.set()
+        await release_flush.wait()
+        flushed.append(list(transactions))
+
+    monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", _slow_flush, raising=False)
+
+    tool_transaction = MagicMock()
+    mock_prisma_client.spend_log_transactions = []
+    mock_prisma_client.tool_usage_transactions = [tool_transaction]
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    job = asyncio.create_task(
+        update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+    )
+    await flush_started.wait()
+    assert mock_prisma_client.tool_usage_transactions == []
+
+    job.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await job
+
+    requeued = list(mock_prisma_client.tool_usage_transactions)
+
+    release_flush.set()
+    await _wait_for(lambda: bool(flushed))
+
+    assert requeued == [tool_transaction]
+
+
 @pytest.mark.asyncio
 async def test_monitor_spend_logs_queue_invokes_job_when_queue_nonempty(
     mock_prisma_client: Any,
