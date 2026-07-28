@@ -1,5 +1,4 @@
 import json
-import os
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -31,13 +30,8 @@ class GithubCopilotConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
-    def api_base_without_login(self, api_base: str | None = None) -> str:
-        return (
-            api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+    def api_base_without_login(self) -> str:
+        return self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
 
     def _get_openai_compatible_provider_info(
         self,
@@ -46,7 +40,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = self.api_base_without_login(api_base)
+        dynamic_api_base: Final = self.api_base_without_login()
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:

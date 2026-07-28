@@ -1,8 +1,7 @@
 import json
 import os
 import time
-from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -10,23 +9,16 @@ from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 from .common_utils import (
-    APIKeyExpiredError,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
-    RefreshAPIKeyError,
-    get_copilot_default_headers,
+    get_copilot_auth_headers,
 )
 
 # Constants (default values — overridable via environment variables at call time)
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
-DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
-
-
-def _use_oauth_token() -> bool:
-    return os.getenv("GITHUB_COPILOT_USE_OAUTH_TOKEN", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class Authenticator:
@@ -41,7 +33,6 @@ class Authenticator:
             self.token_dir,
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
-        self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
         self._ensure_token_dir()
 
     def get_access_token(self) -> str:
@@ -72,7 +63,7 @@ class Authenticator:
                 except OSError:
                     verbose_logger.error("Error saving access token to file")
                 return access_token
-            except (GetDeviceCodeError, GetAccessTokenError, RefreshAPIKeyError) as e:
+            except (GetDeviceCodeError, GetAccessTokenError) as e:
                 verbose_logger.warning("Failed attempt %s: %s", attempt + 1, e)
                 continue
 
@@ -82,122 +73,24 @@ class Authenticator:
         )
 
     def get_api_key(self) -> str:
-        """
-        Get the API key, refreshing if necessary.
-
-        Returns:
-            str: The GitHub Copilot API key.
-
-        Raises:
-            GetAPIKeyError: If unable to obtain an API key.
-        """
-        if _use_oauth_token():
+        try:
             return self.get_access_token()
-        try:
-            with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
-                if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
-                    return api_key_info.get("token")
-                else:
-                    verbose_logger.warning("API key expired, refreshing")
-                    raise APIKeyExpiredError(
-                        message="API key expired",
-                        status_code=401,
-                    )
-        except OSError:
-            verbose_logger.warning("No API key file found or error opening file")
-        except (json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning("Error reading API key from file: %s", e)
-        except APIKeyExpiredError:
-            pass  # Already logged in the try block
-
-        try:
-            api_key_info = self._refresh_api_key()
-            with open(self.api_key_file, "w") as f:
-                json.dump(api_key_info, f)
-            token: Final = api_key_info.get("token")
-            if token:
-                return token
-            else:
-                raise GetAPIKeyError(
-                    message="API key response missing token",
-                    status_code=401,
-                )
-        except OSError as e:
-            verbose_logger.error("Error saving API key to file: %s", e)
+        except GetAccessTokenError as e:
             raise GetAPIKeyError(
-                message=f"Failed to save API key: {e}",
-                status_code=500,
-            )
-        except RefreshAPIKeyError as e:
-            raise GetAPIKeyError(
-                message=f"Failed to refresh API key: {e}",
+                message=f"Failed to get OAuth access token: {str(e)}",
                 status_code=401,
             )
 
     def get_api_base(self) -> str | None:
-        """
-        Get the API endpoint from the api-key.json file.
-
-        Returns:
-            Optional[str]: The GitHub Copilot API endpoint, or None if not found.
-        """
-        if _use_oauth_token():
-            return os.getenv("GITHUB_COPILOT_API_BASE")
-        try:
-            with open(self.api_key_file, "r") as f:
-                api_key_info: Final = json.load(f)
-                endpoints: Final = api_key_info.get("endpoints", {})
-                api_endpoint: Final = endpoints.get("api")
-                return api_endpoint
-        except (OSError, json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning("Error reading API endpoint from file: %s", e)
-            return None
-
-    def _refresh_api_key(self) -> dict[str, Any]:
-        """
-        Refresh the API key using the access token.
-
-        Returns:
-            Dict[str, Any]: The API key information including token and expiration.
-
-        Raises:
-            RefreshAPIKeyError: If unable to refresh the API key.
-        """
-        access_token: Final = self.get_access_token()
-        headers: Final = self._get_github_headers(access_token)
-        api_key_url: Final = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
-
-        max_retries: Final = 3
-        for attempt in range(max_retries):
-            try:
-                sync_client = _get_httpx_client()
-                response = sync_client.get(api_key_url, headers=headers)
-                response.raise_for_status()
-
-                response_json = response.json()
-
-                if "token" in response_json:
-                    return response_json
-                else:
-                    verbose_logger.warning("API key response missing token: %s", response_json)
-            except httpx.HTTPStatusError as e:
-                verbose_logger.error("HTTP error refreshing API key (attempt %s/%s): %s", attempt + 1, max_retries, e)
-            except Exception as e:
-                verbose_logger.error("Unexpected error refreshing API key: %s", e)
-
-        raise RefreshAPIKeyError(
-            message="Failed to refresh API key after maximum retries",
-            status_code=401,
-        )
+        return os.getenv("GITHUB_COPILOT_API_BASE")
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
         if not os.path.exists(self.token_dir):
             os.makedirs(self.token_dir, exist_ok=True)
 
-    def _get_github_headers(self, access_token: str | None = None) -> dict[str, str]:
-        return get_copilot_default_headers(access_token=access_token)
+    def _get_github_headers(self) -> dict[str, str]:
+        return get_copilot_auth_headers()
 
     def _get_device_code(self) -> dict[str, str]:
         """
