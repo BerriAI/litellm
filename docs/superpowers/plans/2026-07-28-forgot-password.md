@@ -567,8 +567,7 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         }
     )
 
-    reset_base_url = get_custom_url(str(request.base_url))
-    reset_base_url = reset_base_url.rstrip("/") + "/ui/reset-password"
+    reset_base_url = get_custom_url(str(request.base_url)).rstrip("/") + "/ui/reset-password"
     reset_link = f"{reset_base_url}?token={raw_token}"
 
     try:
