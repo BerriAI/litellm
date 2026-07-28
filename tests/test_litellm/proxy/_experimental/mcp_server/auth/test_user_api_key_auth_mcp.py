@@ -7645,3 +7645,21 @@ class TestSessionBearerEgressScrub:
         assert oauth2 is None
         assert "authorization" not in {k.lower() for k in raw}
         assert per_server == {"github": {"Authorization": "Bearer gh_injected_upstream"}}
+
+
+class TestGetMcpExcludedServersFromScope:
+    """``x-mcp-exclude-servers`` parsing: a comma-separated, subtractive scope list."""
+
+    @pytest.mark.parametrize(
+        "headers,expected",
+        [
+            ([], ()),
+            ([(b"x-mcp-exclude-servers", b"")], ()),
+            ([(b"x-mcp-exclude-servers", b"ui_server")], ("ui_server",)),
+            ([(b"x-mcp-exclude-servers", b" server_a , server_b ,")], ("server_a", "server_b")),
+            ([(b"X-MCP-Exclude-Servers", b"server_a")], ("server_a",)),
+        ],
+    )
+    def test_parses_excluded_servers(self, headers, expected):
+        scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
+        assert MCPRequestHandler.get_mcp_excluded_servers_from_scope(scope) == expected

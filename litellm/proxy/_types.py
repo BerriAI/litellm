@@ -3944,6 +3944,7 @@ class SpecialHeaders(enum.Enum):
     mcp_auth = "x-mcp-auth"
     mcp_servers = "x-mcp-servers"
     mcp_access_groups = "x-mcp-access-groups"
+    mcp_exclude_servers = "x-mcp-exclude-servers"
 
     @classmethod
     def litellm_credential_header_names(cls) -> "frozenset[str]":

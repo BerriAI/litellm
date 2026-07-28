@@ -6836,6 +6836,178 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_empty_list_fails_cl
     assert result == []
 
 
+class TestExcludeMcpServers:
+    """``x-mcp-exclude-servers`` drops servers from the aggregated session while keeping
+    everything else the caller is otherwise allowed to see.
+    """
+
+    @pytest.mark.asyncio
+    async def test_excludes_named_alias_and_keeps_the_rest(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _exclude_mcp_servers_by_names,
+        )
+
+        allowed = [
+            _make_mcp_server_for_scope_filter("id-a", "alpha"),
+            _make_mcp_server_for_scope_filter("id-b", "beta"),
+            _make_mcp_server_for_scope_filter("id-c", "gamma"),
+        ]
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await _exclude_mcp_servers_by_names(
+                excluded_servers=["BETA"],
+                allowed_mcp_servers=allowed,
+            )
+
+        assert [s.server_id for s in result] == ["id-a", "id-c"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_name_is_a_no_op(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _exclude_mcp_servers_by_names,
+        )
+
+        allowed = [_make_mcp_server_for_scope_filter("id-a", "alpha")]
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await _exclude_mcp_servers_by_names(
+                excluded_servers=["does-not-exist"],
+                allowed_mcp_servers=allowed,
+            )
+
+        assert [s.server_id for s in result] == ["id-a"]
+
+    @pytest.mark.asyncio
+    async def test_excludes_every_server_in_an_access_group(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _exclude_mcp_servers_by_names,
+        )
+
+        allowed = [
+            _make_mcp_server_for_scope_filter("id-a", "alpha"),
+            _make_mcp_server_for_scope_filter("id-b", "beta"),
+        ]
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["id-b"],
+        ):
+            result = await _exclude_mcp_servers_by_names(
+                excluded_servers=["group-name"],
+                allowed_mcp_servers=allowed,
+            )
+
+        assert [s.server_id for s in result] == ["id-a"]
+
+    @pytest.mark.asyncio
+    async def test_excluding_everything_yields_an_empty_scope(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _exclude_mcp_servers_by_names,
+        )
+
+        allowed = [_make_mcp_server_for_scope_filter("id-a", "alpha")]
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            result = await _exclude_mcp_servers_by_names(
+                excluded_servers=["alpha"],
+                allowed_mcp_servers=allowed,
+            )
+
+        assert result == ()
+
+    @pytest.mark.asyncio
+    async def test_no_exclusions_returns_full_scope(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _exclude_mcp_servers_by_names,
+        )
+
+        allowed = [
+            _make_mcp_server_for_scope_filter("id-a", "alpha"),
+            _make_mcp_server_for_scope_filter("id-b", "beta"),
+        ]
+
+        assert await _exclude_mcp_servers_by_names(excluded_servers=[], allowed_mcp_servers=allowed) == tuple(allowed)
+        assert await _exclude_mcp_servers_by_names(excluded_servers=None, allowed_mcp_servers=allowed) == tuple(allowed)
+
+    @pytest.mark.asyncio
+    async def test_request_scope_drops_excluded_server_without_an_allowlist(self):
+        """End-to-end through the scope resolver: the caller sends only
+        ``x-mcp-exclude-servers``, so every other allowed server survives.
+        """
+        from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
+            MCPAuthenticatedUser,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_allowed_mcp_servers,
+            auth_context_var,
+        )
+
+        allowed = [
+            _make_mcp_server_for_scope_filter("id-a", "alpha"),
+            _make_mcp_server_for_scope_filter("id-b", "beta"),
+        ]
+        by_id = {server.server_id: server for server in allowed}
+
+        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+        token = auth_context_var.set(
+            MCPAuthenticatedUser(
+                user_api_key_auth=user_api_key_auth,
+                mcp_excluded_servers=["beta"],
+            )
+        )
+        try:
+            with (
+                patch(
+                    "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager."
+                    "get_allowed_mcp_servers",
+                    new_callable=AsyncMock,
+                    return_value=["id-a", "id-b"],
+                ),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager."
+                    "filter_server_ids_by_ip_with_info",
+                    side_effect=lambda server_ids, client_ip: (server_ids, 0),
+                ),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager."
+                    "get_mcp_server_by_id",
+                    side_effect=by_id.get,
+                ),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+                    "MCPRequestHandler._get_mcp_servers_from_access_groups",
+                    new_callable=AsyncMock,
+                    return_value=[],
+                ),
+            ):
+                result = await _get_allowed_mcp_servers(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_servers=None,
+                    client_ip=None,
+                )
+        finally:
+            auth_context_var.reset(token)
+
+        assert [s.server_id for s in result] == ["id-a"]
+
+
 class TestProxyExceptionToHttpException:
     """Auth failures reach the MCP ASGI handlers as ProxyException, not
     HTTPException. The handlers must map them back to their real status and

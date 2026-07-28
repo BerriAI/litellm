@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Dict, List, Optional
 
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
@@ -16,6 +17,7 @@ class MCPAuthenticatedUser(AuthenticatedUser):
     4. Server-specific authentication headers
     5. OAuth2 headers
     6. Raw headers - allows forwarding specific headers to the MCP server, specified by the admin.
+    7. MCP servers the caller asked to drop from the session (subtractive scope)
     """
 
     def __init__(
@@ -28,6 +30,7 @@ class MCPAuthenticatedUser(AuthenticatedUser):
         mcp_protocol_version: Optional[str] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
+        mcp_excluded_servers: "Sequence[str] | None" = None,
     ):
         self.user_api_key_auth = user_api_key_auth
         self.mcp_auth_header = mcp_auth_header
@@ -37,3 +40,4 @@ class MCPAuthenticatedUser(AuthenticatedUser):
         self.oauth2_headers = oauth2_headers
         self.raw_headers = raw_headers
         self.client_ip = client_ip
+        self.mcp_excluded_servers = tuple(mcp_excluded_servers or ())
