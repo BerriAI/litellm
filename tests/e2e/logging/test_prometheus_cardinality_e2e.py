@@ -11,8 +11,9 @@ the aliases and fail here.
 Scraping goes through ``transport.probe`` (raw text) and is parsed with
 prometheus_client. ``/metrics`` is per-pod behind a round-robin LB and the metric
 is eventually consistent (it increments on the success-logging callback), so the
-poll re-drives each still-missing alias with fresh traffic and unions the aliases
-seen across scrapes until the deadline.
+poll re-drives each still-missing alias with fresh traffic (bounded per alias to
+cap provider spend; scrapes continue to the deadline regardless since counters
+persist on whichever pod served them) and unions the aliases seen across scrapes.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ DRIVER_MODEL = "gemini-2.5-flash"
 REQUESTS_METRIC = "litellm_requests_metric_total"
 ALIAS_LABEL = "api_key_alias"
 DISTINCT_KEYS = 3
+MAX_DRIVER_CALLS_PER_ALIAS = 4
 
 
 def _aliases_in_metric(exposition: str, metric: str, label: str) -> frozenset[str]:
@@ -67,12 +69,17 @@ class TestPrometheusPerKeyCardinality:
         wanted = frozenset(aliases)
         deadline = time.monotonic() + client.proxy.poll_timeout
         seen: frozenset[str] = frozenset()
+        drive_counts = dict.fromkeys(aliases, 1)
         while time.monotonic() < deadline:
             seen = seen | _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
             if wanted <= seen:
                 break
-            for alias in sorted(wanted - seen):
+            redriven = tuple(
+                alias for alias in sorted(wanted - seen) if drive_counts[alias] < MAX_DRIVER_CALLS_PER_ALIAS
+            )
+            for alias in redriven:
                 drive(alias, keys_by_alias[alias])
+            drive_counts = {alias: count + (alias in redriven) for alias, count in drive_counts.items()}
             time.sleep(client.proxy.poll_interval)
 
         missing = wanted - seen
