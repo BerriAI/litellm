@@ -210,6 +210,7 @@ export interface Organization {
   users: any[] | null;
   members: any[] | null;
   object_permission?: ObjectPermission | null;
+  resolved_logging_exporters?: string[] | null;
 }
 
 export interface CredentialItem {

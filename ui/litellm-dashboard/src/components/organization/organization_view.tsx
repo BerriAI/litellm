@@ -25,7 +25,6 @@ import {
 import ObjectPermissionsView from "../object_permissions_view";
 import MemberModal from "../team/EditMembership";
 import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
-import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
 
 interface OrganizationInfoProps {
@@ -59,25 +58,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
 
-  // Destinations whose credential_info.access targets THIS org (or is global).
-  // Rendered alongside the org's own metadata.logging_exporters so the Logging
-  // Exporters card reflects BOTH routing directions, matching the resolver's
-  // union at request time. GET /credentials is proxy-admin only, so the fetch is
-  // skipped (and the scoped list stays empty) for other roles.
-  const { data: orgCredentialsData } = useCredentials(is_proxy_admin);
+  // Destinations that will receive this org's traces, resolved server-side by
+  // /organization/info (own logging_exporters plus auto-enabled destinations whose
+  // access grants the org). Names only; identical for every role.
   const scopedExportersForOrg = useMemo<string[]>(() => {
-    const orgId = orgData?.organization_id;
-    if (orgId == null) return [];
-    return (orgCredentialsData?.credentials ?? [])
-      .filter((c) => c.credential_info?.credential_type === "logging")
-      .filter((c) => {
-        const access = c.credential_info?.access;
-        if (!access) return false;
-        if (access.global === true) return true;
-        return Array.isArray(access.orgs) && access.orgs.includes(orgId);
-      })
-      .map((c) => c.credential_name);
-  }, [orgCredentialsData?.credentials, orgData?.organization_id]);
+    const own = new Set(loggingExportersOf(orgData));
+    return (orgData?.resolved_logging_exporters ?? []).filter((name) => !own.has(name));
+  }, [orgData]);
 
   const loggingExporterBadges = useMemo(() => {
     const own = loggingExportersOf(orgData);

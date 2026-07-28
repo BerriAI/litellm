@@ -18,7 +18,7 @@ import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardr
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import type { ObjectPermission } from "@/components/object_permission_types";
-import { canReadCredentialsRole, isProxyAdminRole } from "@/utils/roles";
+import { isProxyAdminRole } from "@/utils/roles";
 import {
   EditOutlined,
   GlobalOutlined,
@@ -43,7 +43,6 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
-import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
@@ -119,6 +118,7 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    resolved_logging_exporters?: string[] | null;
     router_settings?: Record<string, any>;
     guardrails?: string[];
     policies?: string[];
@@ -230,25 +230,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
 
-  // Destinations whose credential_info.access targets this team (or its org, or
-  // global). Rendered alongside the team's own metadata.logging_exporters so the
-  // Logging Exporters card reflects BOTH routing directions, matching the
-  // resolver's union at request time. GET /credentials is proxy-admin only, so
-  // the fetch is skipped (and the scoped list stays empty) for other roles.
-  const { data: scopedCredentialsData } = useCredentials(canReadCredentialsRole(userRole));
+  // Destinations that will receive this team's traces, resolved server-side by
+  // /team/info (own logging_exporters plus auto-enabled destinations whose access
+  // grants the team). Names only, visible to every team viewer; the badge list is
+  // identical for every role because no client-side credentials read is involved.
   const scopedExportersForTeam = useMemo<string[]>(() => {
-    const orgId = teamData?.team_info?.organization_id ?? null;
-    return (scopedCredentialsData?.credentials ?? [])
-      .filter((c) => c.credential_info?.credential_type === "logging")
-      .filter((c) => {
-        const access = c.credential_info?.access;
-        if (!access) return false;
-        if (access.global === true) return true;
-        if (Array.isArray(access.teams) && access.teams.includes(teamId)) return true;
-        return Array.isArray(access.orgs) && orgId != null && access.orgs.includes(orgId);
-      })
-      .map((c) => c.credential_name);
-  }, [scopedCredentialsData?.credentials, teamId, teamData?.team_info?.organization_id]);
+    const own = new Set(loggingExportersOf(teamData?.team_info));
+    return (teamData?.team_info?.resolved_logging_exporters ?? []).filter((name) => !own.has(name));
+  }, [teamData?.team_info]);
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
 

@@ -78,6 +78,9 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    resolved_logging_exporter_names,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -3658,6 +3661,12 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
+
+        _team_info.resolved_logging_exporters = resolved_logging_exporter_names(
+            _team_info.logging_exporters,
+            team_id,
+            _team_info.organization_id,
+        )
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,

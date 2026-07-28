@@ -36,6 +36,9 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     update_budget,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    resolved_logging_exporter_names,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
@@ -1120,6 +1123,11 @@ async def info_organization(
         raise HTTPException(status_code=404, detail={"error": "Organization not found"})
 
     response_pydantic_obj = LiteLLM_OrganizationTableWithMembers.model_validate(response.model_dump())
+    response_pydantic_obj.resolved_logging_exporters = resolved_logging_exporter_names(
+        response_pydantic_obj.logging_exporters,
+        None,
+        organization_id,
+    )
 
     return response_pydantic_obj
 

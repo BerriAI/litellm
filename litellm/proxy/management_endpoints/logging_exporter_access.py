@@ -11,8 +11,11 @@ scope is the given set of team ids and org ids. The resolver passes a
 one-element scope built with ``identity_scope``.
 """
 
+from collections.abc import Sequence
+
 from pydantic import ValidationError
 
+import litellm
 from litellm.models.credentials import CredentialAccess, CredentialInfo
 
 
@@ -39,6 +42,32 @@ def identity_scope(team_id: str | None, org_id: str | None) -> tuple[frozenset[s
         frozenset({team_id}) if team_id else frozenset(),
         frozenset({org_id}) if org_id else frozenset(),
     )
+
+
+def resolved_logging_exporter_names(
+    assigned: Sequence[str] | None,
+    team_id: str | None,
+    org_id: str | None,
+) -> tuple[str, ...]:
+    """Destination names that will receive this identity's traces, for disclosure on
+    the team/org info pages.
+
+    Mirrors the request-time resolver's selection: a logging destination is included
+    when its ``access`` grants the identity AND it is either ``auto_enable`` or named
+    in ``assigned`` (the identity's own ``logging_exporters``). Names only; endpoints,
+    headers, and the access map itself stay proxy-admin information.
+    """
+    team_ids, org_ids = identity_scope(team_id, org_id)
+    own = frozenset(str(name) for name in (assigned or ()))
+    selected = tuple(
+        credential.credential_name
+        for credential in litellm.credential_list
+        if (info := parse_credential_info(credential.credential_info)) is not None
+        and info.credential_type == "logging"
+        and access_grants(info.access, team_ids, org_ids)
+        and (info.auto_enable or credential.credential_name in own)
+    )
+    return tuple(dict.fromkeys(selected))
 
 
 def access_grants(

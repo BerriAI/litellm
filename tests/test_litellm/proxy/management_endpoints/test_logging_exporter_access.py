@@ -10,11 +10,13 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.models.credentials import CredentialAccess, CredentialInfo
+import litellm
+from litellm.models.credentials import CredentialAccess, CredentialInfo, CredentialItem
 from litellm.proxy.management_endpoints.logging_exporter_access import (
     access_grants,
     identity_scope,
     parse_credential_info,
+    resolved_logging_exporter_names,
 )
 
 
@@ -161,3 +163,51 @@ def test_identity_scope_empty_for_none():
     teams, orgs = identity_scope(None, None)
     assert teams == frozenset()
     assert orgs == frozenset()
+
+
+# --- resolved_logging_exporter_names: the /team/info + /organization/info disclosure --
+
+
+def _cred(name, access=None, auto=False, ctype="logging"):
+    info = {"credential_type": ctype, "auto_enable": auto}
+    if access is not None:
+        info["access"] = access
+    return CredentialItem(credential_name=name, credential_values={}, credential_info=info)
+
+
+def test_resolved_names_mirror_the_resolver(monkeypatch):
+    """Included: auto+granted, named+granted. Excluded: granted-but-manual-unnamed,
+    named-but-not-granted, empty-access even with auto, provider credentials."""
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            _cred("auto-team", access={"teams": ["t1"]}, auto=True),
+            _cred("manual-team", access={"teams": ["t1"]}, auto=False),
+            _cred("named-manual", access={"teams": ["t1"]}, auto=False),
+            _cred("named-ungranted", access={"teams": ["other"]}, auto=False),
+            _cred("empty-auto", auto=True),
+            _cred("global-auto", access={"global": True}, auto=True),
+            _cred("org-auto", access={"orgs": ["o1"]}, auto=True),
+            _cred("provider", access={"global": True}, auto=True, ctype=None),
+        ],
+    )
+    names = resolved_logging_exporter_names(["named-manual", "named-ungranted"], "t1", "o1")
+    assert names == ("auto-team", "named-manual", "global-auto", "org-auto")
+
+
+def test_resolved_names_empty_scope_gets_global_only(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            _cred("global-auto", access={"global": True}, auto=True),
+            _cred("team-auto", access={"teams": ["t1"]}, auto=True),
+        ],
+    )
+    assert resolved_logging_exporter_names(None, None, None) == ("global-auto",)
+
+
+def test_resolved_names_empty_registry(monkeypatch):
+    monkeypatch.setattr(litellm, "credential_list", [])
+    assert resolved_logging_exporter_names(["anything"], "t1", "o1") == ()
