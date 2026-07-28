@@ -1,8 +1,43 @@
-import { chromium, expect, request } from "@playwright/test";
-import { users, Role, STORAGE_PATHS } from "./fixtures/users";
+import { chromium, expect, request, APIRequestContext } from "@playwright/test";
+import { users, Role, STORAGE_PATHS, DB_ROLE_USERS } from "./fixtures/users";
 import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 import * as fs from "fs";
 import * as path from "path";
+
+async function ensureDbRoleUser(
+  api: APIRequestContext,
+  baseUrl: string,
+  masterKey: string,
+  entry: { role: Role; userId: string; dbRole: string },
+): Promise<void> {
+  const { email, password } = users[entry.role];
+  const auth = { Authorization: `Bearer ${masterKey}` };
+  const created = await api.post(`${baseUrl}/user/new`, {
+    headers: auth,
+    data: {
+      user_id: entry.userId,
+      user_email: email,
+      user_role: entry.dbRole,
+      password,
+      auto_create_key: false,
+    },
+  });
+  if (created.ok()) return;
+  const body = await created.text();
+  if (created.status() === 400 && body.includes("already exists")) {
+    const updated = await api.post(`${baseUrl}/user/update`, {
+      headers: auth,
+      data: { user_id: entry.userId, user_role: entry.dbRole, password },
+    });
+    if (!updated.ok()) {
+      throw new Error(
+        `Ensuring UI role user ${entry.userId} failed on /user/update (${updated.status()}): ${await updated.text()}`,
+      );
+    }
+    return;
+  }
+  throw new Error(`Ensuring UI role user ${entry.userId} failed on /user/new (${created.status()}): ${body}`);
+}
 
 async function globalSetup() {
   const browser = await chromium.launch();
@@ -28,6 +63,9 @@ async function globalSetup() {
   });
   if (!settingsRes.ok()) {
     throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
+  }
+  for (const entry of DB_ROLE_USERS) {
+    await ensureDbRoleUser(api, `${UI_BASE_URL}${rootPath}`, masterKey, entry);
   }
   await api.dispose();
 

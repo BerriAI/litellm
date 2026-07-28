@@ -39,6 +39,13 @@ export const users: Record<Role, { email: string; password: string }> = {
 
 // Re-exported from constants so the paths have one definition; they must honor
 // ARTIFACT_DIR, since the suite runs from a read-only cwd in the e2e image.
+export const DB_ROLE_USERS: ReadonlyArray<{ role: Role; userId: string; dbRole: string }> = [
+  { role: Role.ProxyAdminViewer, userId: "e2e-admin-viewer", dbRole: "proxy_admin_viewer" },
+  { role: Role.InternalUser, userId: "e2e-internal-user", dbRole: "internal_user" },
+  { role: Role.InternalUserViewer, userId: "e2e-internal-viewer", dbRole: "internal_user_viewer" },
+  { role: Role.TeamAdmin, userId: "e2e-team-admin", dbRole: "internal_user" },
+];
+
 export const STORAGE_PATHS: Record<Role, string> = {
   [Role.ProxyAdmin]: ADMIN_STORAGE_PATH,
   [Role.ProxyAdminViewer]: ADMIN_VIEWER_STORAGE_PATH,
