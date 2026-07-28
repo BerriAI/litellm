@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
@@ -1504,7 +1504,6 @@ async def generate_key_fn(
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-    - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
@@ -1557,9 +1556,6 @@ async def generate_key_fn(
     """
     try:
         from litellm.proxy._types import CommonProxyErrors
-        from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            validate_logging_exporter_field,
-        )
         from litellm.proxy.proxy_server import (
             prisma_client,
             user_api_key_cache,
@@ -1647,11 +1643,6 @@ async def generate_key_fn(
             data=data,
             route=KeyManagementRoutes.KEY_GENERATE,
         )
-
-        # logging_exporters on a key is proxy-admin only. Skip the check when the
-        # field isn't in the payload to keep /key/generate cheap for the common case.
-        if data.logging_exporters is not None:
-            validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
         if team_table is not None:
             await _check_team_key_limits(
@@ -1829,15 +1820,6 @@ async def generate_service_account_key_fn(
         data=data,
         route=KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
     )
-
-    # Same logging_exporters gate as /key/generate: proxy-admin only. Skip the
-    # check unless the field is being written.
-    from litellm.proxy.management_endpoints.logging_exporter_validation import (
-        validate_logging_exporter_field,
-    )
-
-    if data.logging_exporters is not None:
-        validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
     data.user_id = None  # do not allow user_id to be set for service account keys
 
@@ -2559,7 +2541,6 @@ async def update_key_fn(  # noqa: C901  # single endpoint handling many optional
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-    - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -2594,9 +2575,6 @@ async def update_key_fn(  # noqa: C901  # single endpoint handling many optional
     }'
     ```
     """
-    from litellm.proxy.management_endpoints.logging_exporter_validation import (
-        validate_logging_exporter_field,
-    )
     from litellm.proxy.proxy_server import (
         llm_router,
         premium_user,
@@ -2622,16 +2600,6 @@ async def update_key_fn(  # noqa: C901  # single endpoint handling many optional
             token=data.key,
             prisma_client=prisma_client,
         )
-
-        # logging_exporters is proxy-admin only. The validator no-ops when the
-        # effective value doesn't change; pass the stored column value so a
-        # non-admin cannot clear an admin-assigned one.
-        if data.logging_exporters is not None:
-            validate_logging_exporter_field(
-                data.logging_exporters,
-                user_api_key_dict,
-                existing_exporters=getattr(existing_key_row, "logging_exporters", None),
-            )
 
         await _validate_update_key_data(
             data=data,
@@ -3621,7 +3589,6 @@ async def generate_key_helper_fn(
     rotation_interval: Optional[str] = None,
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
-    logging_exporters: Sequence[str] | None = None,  # admin-owned OTEL destinations (credential names)
     budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -3759,7 +3726,6 @@ async def generate_key_helper_fn(
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
-            "logging_exporters": logging_exporters or [],
         }
 
         # Add rotation fields if auto_rotate is enabled
@@ -4824,23 +4790,6 @@ async def regenerate_key_fn(  # noqa: C901  # single endpoint handling many opti
                 object_permission=_regen_object_permission_dict,
                 team_obj=regenerate_team_table,
                 is_proxy_admin=_regen_is_proxy_admin,
-            )
-
-        # logging_exporters gate on regenerate matches /key/generate and
-        # /key/update. Without this, a key owner could set logging_exporters on
-        # /key/{id}/regenerate and route future traces to a destination they
-        # aren't allowed to assign (Veria F3). The validator no-ops when the
-        # effective value doesn't change; pass the stored column value so a
-        # non-admin cannot clear an admin-assigned one.
-        if data is not None and data.logging_exporters is not None:
-            from litellm.proxy.management_endpoints.logging_exporter_validation import (
-                validate_logging_exporter_field,
-            )
-
-            validate_logging_exporter_field(
-                data.logging_exporters,
-                user_api_key_dict,
-                existing_exporters=getattr(_key_in_db, "logging_exporters", None),
             )
 
         verbose_proxy_logger.info(

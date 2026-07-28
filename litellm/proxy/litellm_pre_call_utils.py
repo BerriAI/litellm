@@ -625,10 +625,9 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
 async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_id: str | None) -> frozenset[str]:
     """The union of admin-assigned exporter names across the request's identity chain.
 
-    Each level is read from its own ``logging_exporters`` column: the key via
-    ``get_key_object`` (the auth object's fields are the team's shadow, so it is
-    fetched fresh), the team via ``get_team_object``, the org via ``get_org_object``
-    on the effective ``org_id`` (token org or team fallback). Internal-user is
+    Each level is read from its own ``logging_exporters`` column: the team via
+    ``get_team_object``, the org via ``get_org_object`` on the effective ``org_id``
+    (token org or team fallback). Keys inherit from their team and org. Internal-user is
     intentionally not a routing dimension. The assignment is an admin-owned column;
     the request never supplies it. Needs a DB connection: in SDK mode there is no
     identity to resolve against, so this is empty (admin-owned destinations do not
@@ -636,7 +635,6 @@ async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_i
     """
     from litellm.proxy import proxy_server
     from litellm.proxy.auth.auth_checks import (
-        get_key_object,
         get_org_object,
         get_team_object,
     )
@@ -659,19 +657,6 @@ async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_i
         except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
             return ()
 
-    key_names = (
-        await _level(
-            get_key_object(
-                hashed_token=user_api_key_dict.token,
-                prisma_client=prisma_client,
-                user_api_key_cache=cache,
-                parent_otel_span=span,
-                proxy_logging_obj=proxy_server.proxy_logging_obj,
-            )
-        )
-        if user_api_key_dict.token
-        else ()
-    )
     team_names = (
         await _level(
             get_team_object(
@@ -698,7 +683,7 @@ async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_i
         if org_id
         else ()
     )
-    return frozenset((*key_names, *team_names, *org_names))
+    return frozenset((*team_names, *org_names))
 
 
 async def _resolve_logging_exporters(

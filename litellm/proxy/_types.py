@@ -1084,7 +1084,6 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 class KeyRequestBase(GenerateRequestBase):
     key: Optional[str] = None
     budget_id: Optional[str] = None
-    logging_exporters: Sequence[str] | None = None
     tags: Optional[List[str]] = None
     disable_global_guardrails: Optional[bool] = None
     throttle_on_budget_exceeded: Optional[bool] = None

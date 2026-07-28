@@ -5232,11 +5232,12 @@ async def test_resolve_logging_exporters_team_level(_seeded_logging_credentials,
 
 
 @pytest.mark.asyncio
-async def test_resolve_logging_exporters_unions_key_team_org(
+async def test_resolve_logging_exporters_unions_team_org_keys_inherit(
     _seeded_logging_credentials, monkeypatch
 ):
-    # key, team, and org are each read from their OWN logging_exporters column.
-    # All three union, deduped.
+    # team and org are each read from their OWN logging_exporters column and union,
+    # deduped. Keys have no assignment column: they inherit from team/org, so a
+    # key-level value (patched below) must contribute nothing.
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
     _patch_identity(monkeypatch, key=["arize-prod"], team=["langfuse-eu"], org=["langfuse-eu"])
@@ -5245,9 +5246,8 @@ async def test_resolve_logging_exporters_unions_key_team_org(
 
     assert {d["endpoint"] for d in destinations} == {
         "https://cloud.langfuse.com/api/public/otel",  # team + org (deduped)
-        "https://otlp.arize.com/v1",  # key
     }
-    assert set(backends) == {"langfuse_otel", "arize"}
+    assert set(backends) == {"langfuse_otel"}
 
 
 @pytest.mark.asyncio

@@ -6570,7 +6570,6 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
@@ -6977,7 +6976,6 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -24095,8 +24093,6 @@ export interface components {
              * @default default
              */
             key_type: components["schemas"]["LiteLLMKeyType"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -24254,8 +24250,6 @@ export interface components {
             key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -25268,8 +25262,6 @@ export interface components {
             } | null;
             /** Litellm Changed By */
             litellm_changed_by?: string | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -26668,8 +26660,6 @@ export interface components {
             litellm_budget_table?: {
                 [key: string]: unknown;
             } | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -28634,8 +28624,6 @@ export interface components {
             key_type?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30420,8 +30408,6 @@ export interface components {
              * @default default
              */
             key_type: components["schemas"]["LiteLLMKeyType"] | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32508,8 +32494,6 @@ export interface components {
             key: string;
             /** Key Alias */
             key_alias?: string | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -33371,8 +33355,6 @@ export interface components {
             litellm_budget_table?: {
                 [key: string]: unknown;
             } | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
