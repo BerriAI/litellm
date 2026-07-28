@@ -24,7 +24,7 @@ async function ensureDbRoleUser(
   });
   if (created.ok()) return;
   const body = await created.text();
-  if (created.status() === 400 && body.includes("already exists")) {
+  if ((created.status() === 409 || created.status() === 400) && body.includes("already exists")) {
     const updated = await api.post(`${baseUrl}/user/update`, {
       headers: auth,
       data: { user_id: entry.userId, user_role: entry.dbRole, password },
