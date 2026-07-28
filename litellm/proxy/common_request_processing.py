@@ -491,9 +491,64 @@ def _resolve_sse_keepalive_interval() -> float | None:
     return max(interval, MIN_SSE_KEEPALIVE_INTERVAL_SECONDS)
 
 
+async def _stream_body_with_keepalive(
+    generator: AsyncGenerator[str, None], interval: float | None
+) -> AsyncGenerator[str, None]:
+    """Forward a stream, re-arming a keepalive comment on every idle gap.
+
+    The first-chunk arms cover time-to-first-token only. Sparse mid-stream gaps
+    (extended thinking, long tool-use turns) idle out the same edge timeouts, so
+    the timer has to re-arm for the whole stream rather than stop once the status
+    line is committed. ``None`` forwards unchanged.
+    """
+    if interval is None:
+        async for chunk in generator:
+            yield chunk
+        return
+    iterator = generator.__aiter__()
+    pending: asyncio.Task[str] = asyncio.ensure_future(iterator.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield SSE_KEEPALIVE_COMMENT
+                continue
+            try:
+                chunk = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = asyncio.ensure_future(iterator.__anext__())
+            yield chunk
+    finally:
+        if not pending.done():
+            pending.cancel()
+        with anyio.CancelScope(shield=True):
+            try:
+                await pending
+            except BaseException:  # noqa: BLE001  # teardown must swallow whatever the cancelled fetch raises
+                pass
+
+
+async def _aclose_quietly(target: AsyncGenerator[str, None] | None) -> None:
+    """Close a nested keepalive generator so its pending fetch is released.
+
+    Closing the outer generator does not cascade into one it is iterating, so
+    without this the inner ``__anext__`` task stays live and the upstream
+    ``aclose()`` in teardown raises "asynchronous generator is already running".
+    """
+    if target is None:
+        return
+    with anyio.CancelScope(shield=True):
+        try:
+            await target.aclose()
+        except BaseException as exc:  # noqa: BLE001
+            verbose_proxy_logger.debug("error closing keepalive body generator: %s", exc)
+
+
 async def _stream_with_pending_first_chunk(
     generator: AsyncGenerator[str, None], chunk_task: asyncio.Task[str], interval: float
 ) -> AsyncGenerator[str, None]:
+    body: AsyncGenerator[str, None] | None = None
     try:
         while not chunk_task.done():
             yield SSE_KEEPALIVE_COMMENT
@@ -502,18 +557,23 @@ async def _stream_with_pending_first_chunk(
             first_chunk = chunk_task.result()
         except StopAsyncIteration:
             return
+        body = _stream_body_with_keepalive(generator, interval)
         if not _DD_STREAMING_TRACE_ENABLED:
             # Fast path: no per-chunk span object / context-manager overhead.
             yield first_chunk
-            async for chunk in generator:
+            async for chunk in body:
                 yield chunk
             return
         with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
             yield first_chunk
-        async for chunk in generator:
+        async for chunk in body:
+            if chunk == SSE_KEEPALIVE_COMMENT:
+                yield chunk
+                continue
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
     finally:
+        await _aclose_quietly(body)
         if not chunk_task.done():
             chunk_task.cancel()
         with anyio.CancelScope(shield=True):
@@ -728,19 +788,26 @@ async def create_response(
         )
 
     async def combined_generator() -> AsyncGenerator[str, None]:
-        if not _DD_STREAMING_TRACE_ENABLED:
-            # Fast path: no per-chunk span object / context-manager overhead.
+        body = _stream_body_with_keepalive(generator, keepalive_interval)
+        try:
+            if not _DD_STREAMING_TRACE_ENABLED:
+                # Fast path: no per-chunk span object / context-manager overhead.
+                if first_chunk_value is not None:
+                    yield first_chunk_value
+                async for chunk in body:
+                    yield chunk
+                return
             if first_chunk_value is not None:
-                yield first_chunk_value
-            async for chunk in generator:
-                yield chunk
-            return
-        if first_chunk_value is not None:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield first_chunk_value
-        async for chunk in generator:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield chunk
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield first_chunk_value
+            async for chunk in body:
+                if chunk == SSE_KEEPALIVE_COMMENT:
+                    yield chunk
+                    continue
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield chunk
+        finally:
+            await _aclose_quietly(body)
 
     return _UpstreamClosingStreamingResponse(
         combined_generator(),

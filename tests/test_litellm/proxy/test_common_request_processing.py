@@ -5752,3 +5752,257 @@ class TestSSEKeepalive:
     def test_interval_resolution(self, monkeypatch, value, expected):
         monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", value, raising=False)
         assert _resolve_sse_keepalive_interval() == expected
+
+    @staticmethod
+    async def _gen_with_midstream_gap(gap: float, closed: Optional[asyncio.Event] = None):
+        try:
+            yield "data: first\n\n"
+            await asyncio.sleep(gap)
+            yield "data: second\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            if closed is not None:
+                closed.set()
+
+    async def test_midstream_gap_after_a_fast_first_chunk_emits_keepalives(self, monkeypatch):
+        """A fast TTFT commits the status line, but a later gap idles out the same
+        edge timeout, so the timer has to re-arm past the first chunk."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(2.5),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks.count(SSE_KEEPALIVE_COMMENT) >= 2
+        assert [c for c in chunks if c != SSE_KEEPALIVE_COMMENT] == [
+            "data: first\n\n",
+            "data: second\n\n",
+            "data: [DONE]\n\n",
+        ]
+        assert chunks.index("data: first\n\n") < chunks.index(SSE_KEEPALIVE_COMMENT)
+
+    async def test_midstream_gap_after_a_slow_first_chunk_keeps_emitting(self, monkeypatch):
+        """Both arms must re-arm: a stream can stall for TTFT *and* mid-body."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def stall_then_gap():
+            await asyncio.sleep(2.2)
+            yield "data: first\n\n"
+            await asyncio.sleep(2.2)
+            yield "data: [DONE]\n\n"
+
+        response = await create_response(
+            generator=stall_then_gap(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+        first_at = chunks.index("data: first\n\n")
+
+        assert SSE_KEEPALIVE_COMMENT in chunks[:first_at]
+        assert SSE_KEEPALIVE_COMMENT in chunks[first_at:]
+
+    async def test_midstream_keepalive_is_off_when_interval_unset(self, monkeypatch):
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", None, raising=False)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(0.05),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert await self._collect(response) == [
+            "data: first\n\n",
+            "data: second\n\n",
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_midstream_keepalive_is_off_for_non_sse_media_types(self, monkeypatch):
+        """Only text/event-stream may carry SSE comments — a JSON body would corrupt."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(2.5),
+            media_type="application/json",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert SSE_KEEPALIVE_COMMENT not in await self._collect(response)
+
+    async def test_consumer_exit_during_midstream_gap_closes_upstream(self, monkeypatch):
+        """Abandoning the response mid-gap must release the nested fetch and the
+        upstream generator, or the LLM connection leaks until GC."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(30, closed),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        iterator = response.body_iterator.__aiter__()
+        assert await iterator.__anext__() == "data: first\n\n"
+        assert await iterator.__anext__() == SSE_KEEPALIVE_COMMENT
+        await response.body_iterator.aclose()
+
+        # Deterministic, not GC-dependent: aclose() must have released the nested
+        # fetch and closed upstream by the time it returns, with no pending task
+        # left behind to be reaped later.
+        assert closed.is_set()
+        assert [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()] == []
+
+    async def test_midstream_upstream_exception_still_propagates(self, monkeypatch):
+        """The keepalive wrapper must not swallow a mid-stream provider failure."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def gap_then_raise():
+            yield "data: first\n\n"
+            await asyncio.sleep(1.5)
+            raise ValueError("upstream died mid-stream")
+
+        response = await create_response(
+            generator=gap_then_raise(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        with pytest.raises(ValueError, match="upstream died mid-stream"):
+            await self._collect(response)
+
+    async def test_midstream_keepalive_keeps_datadog_chunk_spans(self, monkeypatch):
+        """Wrapping the body must not cost the per-chunk spans on the normal path."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        spans = []
+
+        class FakeSpan:
+            def __enter__(self):
+                spans.append("span")
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeTracer:
+            def trace(self, *args, **kwargs):
+                return FakeSpan()
+
+        import litellm.proxy.common_request_processing as crp
+
+        monkeypatch.setattr(crp, "_DD_STREAMING_TRACE_ENABLED", True, raising=False)
+        monkeypatch.setattr(crp, "tracer", FakeTracer(), raising=False)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(2.5),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+        real = [c for c in chunks if c != SSE_KEEPALIVE_COMMENT]
+
+        assert len(real) == 3
+        assert len(spans) == len(real)
+
+    async def test_midstream_keepalives_do_not_open_datadog_chunk_spans(self, monkeypatch):
+        """Keepalives are protocol filler, not model output — tracing them inflates
+        the chunk-span count and skews per-chunk latency stats."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        spans = []
+
+        class FakeSpan:
+            def __enter__(self):
+                spans.append("span")
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeTracer:
+            def trace(self, *args, **kwargs):
+                return FakeSpan()
+
+        import litellm.proxy.common_request_processing as crp
+
+        monkeypatch.setattr(crp, "_DD_STREAMING_TRACE_ENABLED", True, raising=False)
+        monkeypatch.setattr(crp, "tracer", FakeTracer(), raising=False)
+
+        async def stall_then_gap():
+            await asyncio.sleep(2.2)
+            yield "data: first\n\n"
+            await asyncio.sleep(2.2)
+            yield "data: [DONE]\n\n"
+
+        response = await create_response(
+            generator=stall_then_gap(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks.count(SSE_KEEPALIVE_COMMENT) >= 2
+        assert len(spans) == len([c for c in chunks if c != SSE_KEEPALIVE_COMMENT]) == 2
+
+    @pytest.mark.parametrize("dd_tracing", [False, True])
+    async def test_none_first_chunk_is_skipped_but_the_body_still_streams(self, monkeypatch, dd_tracing):
+        """A None first chunk must not be emitted as a literal frame, and the
+        keepalive-wrapped body must still be forwarded after it — on both the
+        fast path and the Datadog-traced path."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        import litellm.proxy.common_request_processing as crp
+
+        monkeypatch.setattr(crp, "_DD_STREAMING_TRACE_ENABLED", dd_tracing, raising=False)
+
+        async def none_then_data():
+            yield None
+            yield "data: second\n\n"
+
+        response = await create_response(
+            generator=none_then_data(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert await self._collect(response) == ["data: second\n\n"]
+
+    async def test_body_close_failure_does_not_break_teardown(self):
+        """Teardown runs while the client is already gone — a raising aclose() must
+        be logged and swallowed, never propagated into the ASGI layer."""
+        import litellm.proxy.common_request_processing as crp
+
+        class ExplodingBody:
+            async def aclose(self):
+                raise RuntimeError("aclose exploded")
+
+        await crp._aclose_quietly(ExplodingBody())
+        await crp._aclose_quietly(None)
+
+    async def test_error_only_stream_still_becomes_json_with_midstream_wrapper(self, monkeypatch):
+        """Contract A: a fast error-only first chunk keeps its provider status code
+        even though the body is now keepalive-wrapped."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def error_first():
+            yield 'data: {"error": {"message": "bad request", "code": "400"}}\n\n'
+
+        response = await create_response(
+            generator=error_first(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
