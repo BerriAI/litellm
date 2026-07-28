@@ -1,4 +1,4 @@
-from typing import Mapping, Optional
+from typing import Mapping
 
 _SAP_RESERVED_HEADERS = frozenset(
     {
@@ -12,7 +12,7 @@ _SAP_RESERVED_HEADERS = frozenset(
 
 def merge_sap_request_headers(
     provider_headers: Mapping[str, str],
-    caller_headers: Optional[Mapping[str, str]],
+    caller_headers: Mapping[str, str] | None,
 ) -> dict[str, str]:
     if not caller_headers:
         return dict(provider_headers)
