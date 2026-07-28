@@ -168,7 +168,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_tool_choice_for_responses_api_response(
-        tool_choice: Any,
+        tool_choice: str | dict[str, Any] | None,
     ) -> str | dict[str, Any] | None:
         """
         Inverse of ``_transform_tool_choice``: normalizes tool_choice into the
