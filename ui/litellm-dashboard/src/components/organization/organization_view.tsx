@@ -271,7 +271,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     loggingExporterBadges.map((exporter, index) => (
                       <Badge key={index} variant="secondary">
                         {exporter.name}
-                        {exporter.viaScope ? " (via scope)" : ""}
+                        
                       </Badge>
                     ))
                   ) : (
@@ -373,7 +373,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                         {loggingExporterBadges.map((exporter, index) => (
                           <Badge key={index} variant="secondary">
                             {exporter.name}
-                            {exporter.viaScope ? " (via scope)" : ""}
+                            
                           </Badge>
                         ))}
                       </div>

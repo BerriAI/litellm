@@ -30,7 +30,7 @@ const AccessControlFields: React.FC<AccessControlFieldsProps> = ({ value = {}, o
     <>
       <Form.Item
         label="Global"
-        tooltip="Routing scope only: traces from every team and org may export to this destination. It does not turn on tracing by itself -- assign it on a key/team/org, or use Auto-enable, for that."
+        tooltip="Routing scope only: traces from every team and org may export to this destination. It does not turn on tracing by itself -- assign it on a key/team/org, or turn on Enable for entire scope, for that."
       >
         <Switch checked={isGlobal} onChange={(global) => onChange({ ...value, global })} />
       </Form.Item>

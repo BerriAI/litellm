@@ -900,8 +900,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               ))}
               <AccessControlFields value={addAccess} onChange={setAddAccess} />
               <Form.Item
-                label="Auto-enable for all requests"
-                tooltip="When on, every request exports its traces to this destination automatically, without being named on a key, team, or org. The explicit global default; replaces relying on Global to auto-enable."
+                label="Enable for entire scope"
+                tooltip="On: every team and org in this destination's scope exports to it automatically. Off: only the keys, teams, or orgs you explicitly assign this destination to will export, letting you activate it for a subset of the scope."
               >
                 <Switch checked={addAutoEnable} onChange={setAddAutoEnable} />
               </Form.Item>

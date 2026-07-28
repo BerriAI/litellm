@@ -90,7 +90,7 @@ export function LoggingSettingsView({
                   {entries.map((entry, index) => (
                     <Tag key={index} color={entry.source === "own" ? "blue" : "geekblue"}>
                       {entry.name}
-                      {entry.source === "scope" ? " (via scope)" : ""}
+                      
                     </Tag>
                   ))}
                 </div>
