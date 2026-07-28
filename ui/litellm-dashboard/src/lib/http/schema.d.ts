@@ -7185,6 +7185,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/spend_logs/end_users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log End Users
+         * @description The distinct end users appearing in spend logs over a time window, for the logs
+         *     page filter dropdown.
+         *
+         *     Scoped like `/spend/logs/ui`: a proxy admin sees every end user in the window,
+         *     anyone else sees only end users from their own requests or from teams they
+         *     administer (or hold the `/spend/logs` permission on).
+         *
+         *     The window is required and the inner scan is capped at SPEND_LOGS_FACET_SCAN_CAP
+         *     rows, so the query cannot degrade into a full-table scan the way
+         *     `/global/all_end_users` does.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mcp-rest/test/connection": {
         parameters: {
             query?: never;
@@ -17971,11 +18005,16 @@ export interface paths {
          * Get Tool Spend
          * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
          *
-         *     Joins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to
-         *     ``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools
-         *     counts its full spend toward each of those tools, so per-tool numbers are
-         *     attributions. ``total_spend`` is the deduplicated spend of every request that
-         *     called at least one tool in the window, so it never double counts.
+         *     Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+         *     tools only (MCP tool calls and response tool_calls; declaring a tool without
+         *     invoking it does not count). A request that invoked multiple tools counts its
+         *     full spend toward each of them, so per-tool numbers are attributions and do not
+         *     sum to a deduplicated total.
+         *
+         *     ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+         *     SQL, and ``daily`` covers only those tools, so the response is bounded by
+         *     days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+         *     distinct tool names exist.
          */
         get: operations["get_tool_spend_v1_tool_spend_get"];
         put?: never;
@@ -18035,7 +18074,8 @@ export interface paths {
         };
         /**
          * Get Tool Usage Logs
-         * @description Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+         * @description Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+         *     Declaring a tool in a request body without the model invoking it does not create an entry.
          */
         get: operations["get_tool_usage_logs_v1_tool__tool_name__logs_get"];
         put?: never;
@@ -23832,6 +23872,16 @@ export interface components {
             updated_at?: number | null;
         };
         /**
+         * FacetListResponse
+         * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
+         */
+        FacetListResponse: {
+            /** Data */
+            data: string[];
+            links: components["schemas"]["PageLinks"];
+            meta: components["schemas"]["PageMeta"];
+        };
+        /**
          * FailedKeyUpdate
          * @description Failed key update with reason
          */
@@ -28791,6 +28841,30 @@ export interface components {
             tpm_limit?: number | null;
         };
         /**
+         * PageLinks
+         * @description Hypermedia for a paginated list. No `first`/`last`: without a total count the last page is unknown.
+         */
+        PageLinks: {
+            /** Next */
+            next?: string | null;
+            /** Prev */
+            prev?: string | null;
+            /** Self */
+            self: string;
+        };
+        /**
+         * PageMeta
+         * @description `has_more` rather than `total_count`, which would need a COUNT(*) over the whole match set per keystroke.
+         */
+        PageMeta: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+        };
+        /**
          * PaginatedAuditLogResponse
          * @description Response model for paginated audit logs
          */
@@ -32138,12 +32212,6 @@ export interface components {
             end_date?: string | null;
             /** Start Date */
             start_date?: string | null;
-            /**
-             * Total Spend
-             * @description Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist
-             * @default 0
-             */
-            total_spend: number;
         };
         /**
          * ToolUsageLogEntry
@@ -43318,6 +43386,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_spend_log_end_users_management_v1_spend_logs_end_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the end user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

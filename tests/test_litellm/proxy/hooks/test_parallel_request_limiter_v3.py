@@ -4766,3 +4766,139 @@ async def test_token_only_increment_does_not_enforce_rpm():
 
     assert response["overall_code"] == "OK"
     assert [status["rate_limit_type"] for status in response["statuses"]] == ["tokens"]
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_passthrough_reported_tokens(monkeypatch):
+    """
+    Pass-through responses are not modelled as ModelResponse/EmbeddingResponse,
+    so their usage rides on ``combined_usage_object``. Without honoring it, a
+    pass-through request never charged the TPM window and a team could exceed
+    its shared token limit purely through pass-through traffic.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = hash_token("sk-passthrough")
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", lambda: "total"
+    )
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": _api_key, "user_api_key_team_id": "team-fil"}
+            },
+            "combined_usage_object": Usage(total_tokens=1874),
+        },
+        response_obj={"response": "upstream body was never parsed"},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    token_operations = [op for op in captured_operations if op["key"].endswith(":tokens")]
+    assert token_operations, "pass-through usage should charge the TPM counter"
+    assert all(op["increment_value"] == 1874 for op in token_operations)
+    assert any("team-fil" in op["key"] for op in token_operations), (
+        "team TPM window must be charged so pass-through shares the team's limit"
+    )
+
+
+@pytest.mark.parametrize("rate_limit_type", ["input", "output", "total"])
+@pytest.mark.asyncio
+async def test_aggregate_only_usage_charges_tpm_under_every_limit_type(
+    monkeypatch, rate_limit_type
+):
+    """
+    A pass-through target reports one total for the whole request and cannot
+    split it into prompt/completion. Reading a split out of it yields 0, which
+    left the TPM window uncharged under input- or output-token limiting and let
+    pass-through traffic run past a limit it is supposed to share.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = hash_token("sk-aggregate-only")
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", lambda: rate_limit_type
+    )
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(total_tokens=1874),
+        },
+        response_obj={"response": "upstream body was never parsed"},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    token_operations = [op for op in captured_operations if op["key"].endswith(":tokens")]
+    assert token_operations, f"aggregate usage should charge TPM under {rate_limit_type}"
+    assert all(op["increment_value"] == 1874 for op in token_operations)
+
+
+@pytest.mark.asyncio
+async def test_split_usage_still_respects_the_configured_limit_type(monkeypatch):
+    """The aggregate fallback must not hijack usage that does carry a split."""
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = hash_token("sk-split-usage")
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    monkeypatch.setattr(parallel_request_handler, "get_rate_limit_type", lambda: "output")
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs={"standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}}},
+        response_obj=ModelResponse(
+            model="gpt-4o",
+            usage=Usage(prompt_tokens=100, completion_tokens=7, total_tokens=107),
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    token_operations = [op for op in captured_operations if op["key"].endswith(":tokens")]
+    assert token_operations
+    assert all(op["increment_value"] == 7 for op in token_operations)

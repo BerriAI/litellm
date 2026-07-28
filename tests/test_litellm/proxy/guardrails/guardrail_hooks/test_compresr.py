@@ -6,7 +6,8 @@ Tests cover:
   resolved via tool_call_id, falling back to the last user message)
 - target selection: tool outputs by default, system/history opt-in, min-chars
   threshold, targets without a derivable query are left uncompressed
-- multimodal content: text parts replaced, non-text parts preserved
+- multimodal content: all-text rows merge into one part carrying the last
+  cache_control breakpoint, rows holding a non-text part are left uncompressed
 - recovery: hash marker appended, compresr_retrieve tool injected, originals
   stored per litellm_call_id, agentic loop returns the original content and
   rejects hashes not issued for the current request
@@ -560,7 +561,7 @@ async def test_short_messages_skipped(guardrail: CompresrGuardrail):
 
 
 @pytest.mark.asyncio
-async def test_multimodal_text_replaced_non_text_preserved(
+async def test_multimodal_row_with_non_text_part_is_not_compressed(
     guardrail: CompresrGuardrail,
 ):
     image_part = {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}}
@@ -570,6 +571,35 @@ async def test_multimodal_text_replaced_non_text_preserved(
             "role": "tool",
             "tool_call_id": "c1",
             "content": [{"type": "text", "text": TOOL_OUTPUT}, image_part],
+        },
+    ]
+    expected = json.loads(json.dumps(messages[1]["content"]))
+    mock_post = AsyncMock(return_value=_make_single_compress_response())
+
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        result = await guardrail.apply_guardrail(
+            inputs=_apply_inputs(messages),
+            request_data={"model": "gpt-4o"},
+            input_type="request",
+        )
+
+    mock_post.assert_not_called()
+    assert result["structured_messages"][1]["content"] == expected
+
+
+@pytest.mark.asyncio
+async def test_all_text_row_merges_and_keeps_last_cache_control(
+    guardrail: CompresrGuardrail,
+):
+    messages = [
+        {"role": "user", "content": USER_QUESTION},
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [
+                {"type": "text", "text": TOOL_OUTPUT, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": TOOL_OUTPUT, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
         },
     ]
     mock_post = AsyncMock(return_value=_make_single_compress_response())
@@ -583,9 +613,41 @@ async def test_multimodal_text_replaced_non_text_preserved(
 
     content = result["structured_messages"][1]["content"]
     assert isinstance(content, list)
+    assert len(content) == 1
     assert content[0]["type"] == "text"
     assert content[0]["text"].startswith("compressed summary")
-    assert content[1] == image_part
+    assert content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
+@pytest.mark.asyncio
+async def test_text_around_non_text_part_is_never_relocated(
+    guardrail: CompresrGuardrail,
+):
+    image_part = {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}}
+    messages = [
+        {"role": "user", "content": USER_QUESTION},
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [
+                {"type": "text", "text": TOOL_OUTPUT},
+                image_part,
+                {"type": "text", "text": TOOL_OUTPUT, "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    ]
+    expected = json.loads(json.dumps(messages[1]["content"]))
+    mock_post = AsyncMock(return_value=_make_single_compress_response())
+
+    with patch.object(guardrail.async_handler, "post", mock_post):
+        result = await guardrail.apply_guardrail(
+            inputs=_apply_inputs(messages),
+            request_data={"model": "gpt-4o"},
+            input_type="request",
+        )
+
+    mock_post.assert_not_called()
+    assert result["structured_messages"][1]["content"] == expected
 
 
 # ── passthrough / bypass ─────────────────────────────────────────────

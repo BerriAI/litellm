@@ -34,6 +34,7 @@ LlmEndpoint = Literal[
     "files",
     "rerank",
     "images_generations",
+    "images_edits",
     "audio_speech",
     "audio_transcriptions",
     "moderations",

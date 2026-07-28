@@ -1878,7 +1878,14 @@ class Logging(LiteLLMLoggingBaseClass):
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = standard_logging_object
             else:
-                self.model_call_details["response_cost"] = None
+                # Streaming reaches here before its cost is known, so the cost
+                # is seeded to None, but only when nothing has already
+                # established one. A stream that assembles into a response
+                # object recomputes the cost right after this; a pass-through
+                # stream cannot (its body is opaque) and carries the cost its
+                # upstream reported in the response headers, which an
+                # unconditional reset would discard.
+                self.model_call_details.setdefault("response_cost", None)
 
             result = self._transform_usage_objects(result=result)
 
@@ -5545,18 +5552,6 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         masking_fn = metadata.pop("langfuse_masking_function", None)
         if callable(masking_fn):
             litellm_params["_langfuse_masking_function"] = masking_fn
-        litellm_params["metadata"] = metadata
-
-    ## check user_api_key_metadata for sensitive logging keys
-    cleaned_user_api_key_metadata = {}
-    if "user_api_key_metadata" in metadata and isinstance(metadata["user_api_key_metadata"], dict):
-        for k, v in metadata["user_api_key_metadata"].items():
-            if k == "logging":  # prevent logging user logging keys
-                cleaned_user_api_key_metadata[k] = "scrubbed_by_litellm_for_sensitive_keys"
-            else:
-                cleaned_user_api_key_metadata[k] = v
-
-        metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
         litellm_params["metadata"] = metadata
 
     return litellm_params

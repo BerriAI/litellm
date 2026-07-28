@@ -225,11 +225,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-optimization/_components/UsageTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-tracking/_components/add_margin_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -982,9 +977,6 @@
     "max-lines": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 2
     },
@@ -1061,7 +1053,17 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/models-and-endpoints/layout.tsx": {
+  "src/app/(dashboard)/models-and-endpoints/page.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1858,11 +1860,6 @@
     },
     "prefer-const": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/users/_components/DefaultUserSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/users/_components/edit_user.tsx": {
@@ -3346,10 +3343,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 154
+      "count": 153
     },
     "prefer-const": {
-      "count": 33
+      "count": 32
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -4311,11 +4308,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/lib/http/client.ts": {
-    "no-nested-ternary": {
       "count": 1
     }
   },

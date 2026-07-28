@@ -558,10 +558,10 @@ def _custom_logger_class_exists_in_success_callbacks(
     e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.success_callback or litellm._async_success_callback
 
     Prevents double adding a custom logger callback to the litellm callbacks
+
+    Matches on the exact class; an instance of a subclass does not count as registered
     """
-    return any(
-        isinstance(cb, type(callback_class)) for cb in litellm.success_callback + litellm._async_success_callback
-    )
+    return any(type(cb) is type(callback_class) for cb in litellm.success_callback + litellm._async_success_callback)
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
@@ -573,10 +573,10 @@ def _custom_logger_class_exists_in_failure_callbacks(
     e.g if `LangfusePromptManagement` is passed in, it will return True if an instance of `LangfusePromptManagement` exists in litellm.failure_callback or litellm._async_failure_callback
 
     Prevents double adding a custom logger callback to the litellm callbacks
+
+    Matches on the exact class; an instance of a subclass does not count as registered
     """
-    return any(
-        isinstance(cb, type(callback_class)) for cb in litellm.failure_callback + litellm._async_failure_callback
-    )
+    return any(type(cb) is type(callback_class) for cb in litellm.failure_callback + litellm._async_failure_callback)
 
 
 def get_request_guardrails(kwargs: Dict[str, Any]) -> List[str]:
@@ -766,7 +766,7 @@ def function_setup(
                         llm_router=None,  # type: ignore
                     )
                     if callback is None or any(
-                        isinstance(cb, type(callback)) for cb in litellm._async_success_callback
+                        type(cb) is type(callback) for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
                 if callback not in litellm.input_callback:
