@@ -1,6 +1,7 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
 import logging
+from collections import deque
 from typing import (
     Any,
     List,
@@ -238,6 +239,9 @@ async def acompletion_with_mcp(
                 self.follow_up_stream = None
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
+                self.held_tool_call_chunks: list[ModelResponseStream] = []
+                self.pending_chunks: deque[ModelResponseStream] = deque()
+                self.any_chunk_yielded = False
 
             async def __aiter__(self):
                 return self
@@ -312,9 +316,50 @@ async def acompletion_with_mcp(
                         "Error draining inner MCP stream after final chunk; spend logging may be incomplete"
                     )
 
+            def _is_final_chunk(self, chunk: ModelResponseStream) -> bool:
+                return bool(
+                    hasattr(chunk, "choices")
+                    and chunk.choices
+                    and hasattr(chunk.choices[0], "finish_reason")
+                    and chunk.choices[0].finish_reason is not None
+                )
+
+            def _chunk_has_tool_call_delta(self, chunk: ModelResponseStream) -> bool:
+                choices = getattr(chunk, "choices", None) or []
+                return any(getattr(getattr(choice, "delta", None), "tool_calls", None) for choice in choices)
+
+            def _yield_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
+                if not self.any_chunk_yielded:
+                    self.any_chunk_yielded = True
+                    chunk = self._add_mcp_list_tools_to_chunk(chunk)
+                return chunk
+
+            async def _finish_initial_turn(self):
+                await self._process_tool_calls()
+                if self.tool_results and self.complete_response:
+                    await self._prepare_follow_up_call()
+                # Drain inner stream so CustomStreamWrapper fires its
+                # end-of-stream handler (dispatch_success_handlers →
+                # _ProxyDBLogger → LiteLLM_SpendLogs).  The CSW may
+                # yield one usage chunk before raising StopAsyncIteration.
+                await self._drain_inner_stream()
+                if self.follow_up_stream is not None:
+                    self.held_tool_call_chunks = []
+
+            def _flush_held_and_final(self, final_chunk: ModelResponseStream) -> ModelResponseStream:
+                flushed_final = self._add_mcp_tool_metadata_to_final_chunk(final_chunk)
+                self.pending_chunks = deque(
+                    [chunk for chunk in self.held_tool_call_chunks if chunk is not final_chunk] + [flushed_final]
+                )
+                self.held_tool_call_chunks = []
+                return self._yield_chunk(self.pending_chunks.popleft())
+
             async def __anext__(self):
+                if self.pending_chunks:
+                    return self._yield_chunk(self.pending_chunks.popleft())
+
                 # Phase 1: Collect and yield initial stream chunks
-                if not self.stream_exhausted:
+                while not self.stream_exhausted:
                     # Get the iterator from the stream wrapper
                     if not hasattr(self, "_stream_iterator"):
                         self._stream_iterator = self.stream_wrapper.__aiter__()
@@ -326,46 +371,29 @@ async def acompletion_with_mcp(
 
                     try:
                         chunk = await self._stream_iterator.__anext__()
-                        self.collected_chunks.append(chunk)
-
-                        # Add mcp_list_tools to the first chunk
-                        if len(self.collected_chunks) == 1:
-                            chunk = self._add_mcp_list_tools_to_chunk(chunk)
-
-                        # Check if this is the final chunk (has finish_reason)
-                        is_final = (
-                            hasattr(chunk, "choices")
-                            and chunk.choices
-                            and hasattr(chunk.choices[0], "finish_reason")
-                            and chunk.choices[0].finish_reason is not None
-                        )
-
-                        if is_final:
-                            self.stream_exhausted = True
-                            await self._process_tool_calls()
-                            chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
-                            if self.tool_results and self.complete_response:
-                                await self._prepare_follow_up_call()
-                            # Drain inner stream so CustomStreamWrapper fires its
-                            # end-of-stream handler (dispatch_success_handlers →
-                            # _ProxyDBLogger → LiteLLM_SpendLogs).  The CSW may
-                            # yield one usage chunk before raising StopAsyncIteration.
-                            await self._drain_inner_stream()
-
-                        return chunk
                     except StopAsyncIteration:
                         self.stream_exhausted = True
-                        # Process tool calls after stream is exhausted
-                        await self._process_tool_calls()
-                        # If we have chunks, yield the final one with metadata
-                        if self.collected_chunks:
-                            final_chunk = self.collected_chunks[-1]
-                            final_chunk = self._add_mcp_tool_metadata_to_final_chunk(final_chunk)
-                            # If we have tool results, prepare follow-up call
-                            if self.tool_results and self.complete_response:
-                                await self._prepare_follow_up_call()
-                            await self._drain_inner_stream()
-                            return final_chunk
+                        if not self.collected_chunks:
+                            break
+                        await self._finish_initial_turn()
+                        if self.follow_up_stream is not None:
+                            break
+                        return self._flush_held_and_final(self.collected_chunks[-1])
+
+                    self.collected_chunks.append(chunk)
+
+                    if self._is_final_chunk(chunk):
+                        self.stream_exhausted = True
+                        await self._finish_initial_turn()
+                        if self.follow_up_stream is not None:
+                            break
+                        return self._flush_held_and_final(chunk)
+
+                    if self._chunk_has_tool_call_delta(chunk):
+                        self.held_tool_call_chunks.append(chunk)
+                        continue
+
+                    return self._yield_chunk(chunk)
 
                 # Phase 2: Yield follow-up stream chunks if available
                 if self.follow_up_stream and not self.follow_up_exhausted:
@@ -380,7 +408,9 @@ async def acompletion_with_mcp(
                         from litellm._logging import verbose_logger
 
                         verbose_logger.debug(f"Follow-up chunk yielded: {chunk}")
-                        return chunk
+                        if self._is_final_chunk(chunk):
+                            chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
+                        return self._yield_chunk(chunk)
                     except StopAsyncIteration:
                         self.follow_up_exhausted = True
                         from litellm._logging import verbose_logger
