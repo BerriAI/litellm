@@ -385,6 +385,9 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     print("json payload: ", json.dumps(payload, indent=4, default=str))
 
     # Verify messages and response are included in payload
+    assert json.loads(payload["messages"] or "{}") == [
+        {"role": "user", "content": "Hello!"}
+    ]
     assert payload["response"] == json.dumps(
         {"role": "assistant", "content": "Hi there!"}
     )

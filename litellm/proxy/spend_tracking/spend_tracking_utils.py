@@ -441,7 +441,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
-                standard_logging_payload=standard_logging_payload, metadata=metadata
+                standard_logging_payload=standard_logging_payload, kwargs=kwargs
             ),
             response=_get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
@@ -655,19 +655,45 @@ async def get_spend_by_team_and_customer(
 
 def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
-    metadata: Optional[dict] = None,
+    kwargs: Optional[dict] = None,
 ) -> str:
-    if _should_store_prompts_and_responses_in_spend_logs():
-        if standard_logging_payload is not None:
-            call_type = standard_logging_payload.get("call_type", "")
-            if call_type == "_arealtime":
-                messages = standard_logging_payload.get("messages")
-                if messages is not None:
-                    try:
-                        return safe_dumps(messages)
-                    except Exception:
-                        return "{}"
-    return "{}"
+    """
+    Serialize the request prompt for ``LiteLLM_SpendLogs.messages``.
+
+    Stored for every call type when ``store_prompts_in_spend_logs`` is on; the
+    input lives under ``messages`` in the standard logging payload regardless of
+    the API surface (chat completions, Responses API, realtime, ...).
+    """
+    if standard_logging_payload is None or not _should_store_prompts_and_responses_in_spend_logs():
+        return "{}"
+
+    messages: Any = standard_logging_payload.get("messages")
+    if messages is None:
+        return "{}"
+
+    if kwargs is not None:
+        from litellm.litellm_core_utils.redact_messages import (
+            should_redact_message_logging,
+        )
+
+        model_call_details = {
+            "litellm_params": kwargs.get("litellm_params", {}),
+            "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params"),
+        }
+        if should_redact_message_logging(model_call_details=model_call_details):
+            return safe_dumps([{"role": "user", "content": REDACTED_BY_LITELM_STRING}])
+
+    sanitized_messages = _sanitize_request_body_for_spend_logs_payload({"messages": messages}).get("messages", messages)
+    try:
+        messages_json_str = safe_dumps(sanitized_messages)
+    except Exception:
+        return "{}"
+    if LITELLM_TRUNCATED_PAYLOAD_FIELD in messages_json_str:
+        verbose_proxy_logger.info(
+            "Spend Log: messages were truncated before storing in DB. %s",
+            LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+        )
+    return messages_json_str
 
 
 _SENSITIVE_REQUEST_BODY_KEYS = frozenset({"secret_fields"})
