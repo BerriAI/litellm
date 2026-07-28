@@ -103,6 +103,10 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=[0.8, 0.85, 0.95],
         description="Fraction of max_budget consumed at which to send alerts for users.",
     )
+    budget_alerts_webhook_url: Optional[str] = Field(
+        default=None,
+        description="URL that budget alerts are POSTed to as JSON. This is not a Slack webhook URL. Comma-separate the value to POST to several endpoints. Falls back to the WEBHOOK_URL env var when unset.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):

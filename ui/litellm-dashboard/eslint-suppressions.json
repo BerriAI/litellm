@@ -2930,9 +2930,6 @@
   "src/components/alerting/alerting_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/components/alerting/dynamic_form.tsx": {

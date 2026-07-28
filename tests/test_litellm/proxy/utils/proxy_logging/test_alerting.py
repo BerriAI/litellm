@@ -88,11 +88,37 @@ def _user_info(alert_emails=None):
 @pytest.mark.asyncio
 async def test_budget_alerts_no_op_when_alerting_off_and_no_emails(proxy_logging):
     proxy_logging.alerting = None
-    proxy_logging.slack_alerting_instance = MagicMock(budget_alerts=AsyncMock())
+    proxy_logging.slack_alerting_instance = MagicMock(
+        budget_alerts=AsyncMock(), is_budget_webhook_enabled=MagicMock(return_value=False)
+    )
     proxy_logging.email_logging_instance = MagicMock(budget_alerts=AsyncMock())
     await proxy_logging.budget_alerts(type="user_budget", user_info=_user_info())
     proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
     proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_dispatch_when_only_webhook_alerting(proxy_logging):
+    """Webhook alerting must reach SlackAlerting.budget_alerts - it owns the webhook POST."""
+    proxy_logging.alerting = ["webhook"]
+    proxy_logging.slack_alerting_instance = MagicMock(
+        budget_alerts=AsyncMock(), is_budget_webhook_enabled=MagicMock(return_value=True)
+    )
+    proxy_logging.email_logging_instance = None
+    await proxy_logging.budget_alerts(type="user_budget", user_info=_user_info())
+    proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_budget_alerts_dispatch_when_webhook_url_set_and_alerting_unset(proxy_logging):
+    """A configured budget webhook URL is enough - `alerting` does not have to list "webhook"."""
+    proxy_logging.alerting = None
+    proxy_logging.slack_alerting_instance = MagicMock(
+        budget_alerts=AsyncMock(), is_budget_webhook_enabled=MagicMock(return_value=True)
+    )
+    proxy_logging.email_logging_instance = None
+    await proxy_logging.budget_alerts(type="user_budget", user_info=_user_info())
+    proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -118,7 +144,9 @@ async def test_budget_alerts_slack_when_slack_alerting(proxy_logging):
 @pytest.mark.asyncio
 async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_global(proxy_logging):
     proxy_logging.alerting = None
-    proxy_logging.slack_alerting_instance = MagicMock(budget_alerts=AsyncMock())
+    proxy_logging.slack_alerting_instance = MagicMock(
+        budget_alerts=AsyncMock(), is_budget_webhook_enabled=MagicMock(return_value=False)
+    )
     proxy_logging.email_logging_instance = MagicMock(budget_alerts=AsyncMock())
     info = _user_info(alert_emails=["a@b.c"])
     await proxy_logging.budget_alerts(type="soft_budget", user_info=info)

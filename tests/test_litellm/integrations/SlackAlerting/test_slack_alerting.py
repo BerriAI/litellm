@@ -245,16 +245,14 @@ class TestSendWebhookAlert(unittest.IsolatedAsyncioTestCase):
             budget_percentage_used=budget_percentage_used,
         )
 
-    async def test_uses_alert_to_webhook_url_over_env_var(self):
-        """alert_to_webhook_url config takes priority over WEBHOOK_URL env var."""
-        from litellm.proxy._types import AlertType
-
+    async def test_uses_alerting_args_url_over_env_var(self):
+        """alerting_args.budget_alerts_webhook_url takes priority over the WEBHOOK_URL env var."""
         mock_response = MagicMock()
         mock_response.status_code = 200
 
         alerting = SlackAlerting(
             alerting=["webhook"],
-            alert_to_webhook_url={AlertType.budget_alerts: "https://configured.example.com/hook"},
+            alerting_args={"budget_alerts_webhook_url": "https://configured.example.com/hook"},
         )
         alerting.async_http_handler = AsyncMock()
         alerting.async_http_handler.post = AsyncMock(return_value=mock_response)
@@ -267,7 +265,7 @@ class TestSendWebhookAlert(unittest.IsolatedAsyncioTestCase):
         assert posted_url == "https://configured.example.com/hook"
 
     async def test_falls_back_to_env_var_when_no_config(self):
-        """When alert_to_webhook_url is not set, falls back to WEBHOOK_URL env var."""
+        """When budget_alerts_webhook_url is not set, falls back to the WEBHOOK_URL env var."""
         mock_response = MagicMock()
         mock_response.status_code = 200
 
@@ -282,6 +280,23 @@ class TestSendWebhookAlert(unittest.IsolatedAsyncioTestCase):
         posted_url = alerting.async_http_handler.post.call_args[1]["url"]
         assert posted_url == "https://env.example.com/hook"
 
+    async def test_ignores_slack_alert_to_webhook_url(self):
+        """alert_to_webhook_url holds Slack URLs only - it must never receive the JSON payload."""
+        from litellm.proxy._types import AlertType
+
+        alerting = SlackAlerting(
+            alerting=["webhook"],
+            alert_to_webhook_url={AlertType.budget_alerts: "https://hooks.slack.com/services/T000/B000/XXX"},
+        )
+        alerting.async_http_handler = AsyncMock()
+        alerting.async_http_handler.post = AsyncMock()
+
+        with unittest.mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(Exception):
+                await alerting.send_webhook_alert(self._make_webhook_event())
+
+        alerting.async_http_handler.post.assert_not_called()
+
     async def test_raises_when_no_url_configured(self):
         """Raises an exception when no URL is configured anywhere."""
         alerting = SlackAlerting(alerting=["webhook"])
@@ -295,20 +310,15 @@ class TestSendWebhookAlert(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(Exception, msg="No webhook URL configured"):
                 await alerting.send_webhook_alert(self._make_webhook_event())
 
-    async def test_posts_to_all_urls_in_list(self):
-        """When alert_to_webhook_url maps to a list, posts to every URL."""
-        from litellm.proxy._types import AlertType
-
+    async def test_posts_to_all_comma_separated_urls(self):
+        """A comma-separated budget_alerts_webhook_url posts to every URL."""
         mock_response = MagicMock()
         mock_response.status_code = 200
 
         alerting = SlackAlerting(
             alerting=["webhook"],
-            alert_to_webhook_url={
-                AlertType.budget_alerts: [
-                    "https://hook1.example.com",
-                    "https://hook2.example.com",
-                ]
+            alerting_args={
+                "budget_alerts_webhook_url": "https://hook1.example.com, https://hook2.example.com",
             },
         )
         alerting.async_http_handler = AsyncMock()
@@ -326,6 +336,29 @@ class TestSendWebhookAlert(unittest.IsolatedAsyncioTestCase):
         assert posted_urls == {"https://hook1.example.com", "https://hook2.example.com"}
 
 
+class TestIsBudgetWebhookEnabled(unittest.TestCase):
+    """A configured budget webhook URL enables webhook alerts without editing `alerting`."""
+
+    def test_enabled_when_webhook_in_alerting(self):
+        alerting = SlackAlerting(alerting=["webhook"])
+        assert alerting.is_budget_webhook_enabled() is True
+
+    def test_enabled_when_url_configured(self):
+        alerting = SlackAlerting(
+            alerting=[],
+            alerting_args={"budget_alerts_webhook_url": "https://hook.example.com"},
+        )
+        assert alerting.is_budget_webhook_enabled() is True
+
+    def test_disabled_when_neither_is_set(self):
+        alerting = SlackAlerting(alerting=["slack"])
+        assert alerting.is_budget_webhook_enabled() is False
+
+    def test_env_var_alone_does_not_enable(self):
+        """WEBHOOK_URL keeps its old meaning: a fallback URL, not an on switch."""
+        alerting = SlackAlerting(alerting=["slack"])
+        with unittest.mock.patch.dict("os.environ", {"WEBHOOK_URL": "https://env.example.com/hook"}):
+            assert alerting.is_budget_webhook_enabled() is False
 
 
 class TestBudgetAlertsDedup(unittest.IsolatedAsyncioTestCase):
@@ -333,14 +366,12 @@ class TestBudgetAlertsDedup(unittest.IsolatedAsyncioTestCase):
 
     async def test_different_thresholds_fire_independently(self):
         """Two budget_alerts calls with different budget_percentage_used values should both send."""
-        from litellm.proxy._types import AlertType
-
         mock_response = MagicMock()
         mock_response.status_code = 200
 
         alerting = SlackAlerting(
             alerting=["webhook"],
-            alert_to_webhook_url={AlertType.budget_alerts: "https://hook.example.com"},
+            alerting_args={"budget_alerts_webhook_url": "https://hook.example.com"},
         )
         alerting.async_http_handler = AsyncMock()
         alerting.async_http_handler.post = AsyncMock(return_value=mock_response)
@@ -367,14 +398,12 @@ class TestBudgetAlertsDedup(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_threshold_fires_only_once(self):
         """A second budget_alerts call with the same entity and same threshold is suppressed."""
-        from litellm.proxy._types import AlertType
-
         mock_response = MagicMock()
         mock_response.status_code = 200
 
         alerting = SlackAlerting(
             alerting=["webhook"],
-            alert_to_webhook_url={AlertType.budget_alerts: "https://hook.example.com"},
+            alerting_args={"budget_alerts_webhook_url": "https://hook.example.com"},
         )
         alerting.async_http_handler = AsyncMock()
         alerting.async_http_handler.post = AsyncMock(return_value=mock_response)
@@ -391,3 +420,28 @@ class TestBudgetAlertsDedup(unittest.IsolatedAsyncioTestCase):
         await alerting.budget_alerts(type="team_budget", user_info=call_info)
 
         assert alerting.async_http_handler.post.call_count == 1
+
+    async def test_posts_when_only_url_is_configured(self):
+        """A configured URL is enough - `general_settings.alerting` does not have to list "webhook"."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        alerting = SlackAlerting(
+            alerting=[],
+            alerting_args={"budget_alerts_webhook_url": "https://hook.example.com"},
+        )
+        alerting.async_http_handler = AsyncMock()
+        alerting.async_http_handler.post = AsyncMock(return_value=mock_response)
+
+        call_info = CallInfo(
+            spend=80.0,
+            max_budget=100.0,
+            event_group=Litellm_EntityType.TEAM,
+            team_id="team-3",
+            budget_percentage_used=0.80,
+        )
+
+        await alerting.budget_alerts(type="team_budget", user_info=call_info)
+
+        assert alerting.async_http_handler.post.call_count == 1
+        assert alerting.async_http_handler.post.call_args[1]["url"] == "https://hook.example.com"

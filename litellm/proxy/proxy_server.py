@@ -13282,6 +13282,7 @@ async def alerting_settings(
         "key_budget_alert_thresholds": {"type": "List"},
         "team_budget_alert_thresholds": {"type": "List"},
         "user_budget_alert_thresholds": {"type": "List"},
+        "budget_alerts_webhook_url": {"type": "String"},
     }
 
     _slack_alerting: SlackAlerting = proxy_logging_obj.slack_alerting_instance

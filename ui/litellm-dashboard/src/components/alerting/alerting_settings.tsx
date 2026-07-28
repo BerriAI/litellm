@@ -1,7 +1,7 @@
 /**
  * UI for controlling slack alerting settings
  */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
@@ -23,6 +23,9 @@ interface AlertingSettingsProps {
 
 const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiumUser }) => {
   const [alertingSettings, setAlertingSettings] = useState<alertingSettingsItem[]>([]);
+  // `general_settings.alerting` can hold channels this page does not manage (e.g. "email"),
+  // so it is only rewritten when the slack_alerting switch itself changed.
+  const initialSlackAlerting = useRef<boolean | null>(null);
 
   useEffect(() => {
     // get values
@@ -31,6 +34,8 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     }
     alertingSettingsCall(accessToken).then((data) => {
       setAlertingSettings(data);
+      const slackSetting = data.find((setting: alertingSettingsItem) => setting.field_name === "slack_alerting");
+      initialSlackAlerting.current = typeof slackSetting?.field_value === "boolean" ? slackSetting.field_value : null;
     });
   }, [accessToken]);
 
@@ -48,29 +53,16 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    let fieldValue = formValues;
-
-    if (fieldValue == null || fieldValue == undefined) {
+    if (formValues == null || formValues == undefined) {
       return;
     }
 
-    const initialFormValues: Record<string, any> = {};
-
-    alertingSettings.forEach((setting) => {
-      initialFormValues[setting.field_name] = setting.field_value;
-    });
-
-    // Merge initialFormValues with actual formValues
-    const mergedFormValues = { ...formValues, ...initialFormValues };
-    const { slack_alerting, ...alertingArgs } = mergedFormValues;
+    const { slack_alerting, ...alertingArgs } = formValues;
     try {
       updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
-      if (typeof slack_alerting === "boolean") {
-        if (slack_alerting == true) {
-          updateConfigFieldSetting(accessToken, "alerting", ["slack"]);
-        } else {
-          updateConfigFieldSetting(accessToken, "alerting", []);
-        }
+      if (typeof slack_alerting === "boolean" && slack_alerting !== initialSlackAlerting.current) {
+        updateConfigFieldSetting(accessToken, "alerting", slack_alerting ? ["slack"] : []);
+        initialSlackAlerting.current = slack_alerting;
       }
       // update value in state
       NotificationsManager.success("Wait 10s for proxy to update.");

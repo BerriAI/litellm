@@ -28,30 +28,30 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
 }) => {
   const [form] = Form.useForm();
 
-  const onFinish = () => {
-    const formData = form.getFieldsValue();
-    const isEmpty = Object.entries(formData).every(([key, value]) => {
-      if (typeof value === "boolean") {
-        return false;
-      }
-      return value === "" || value === null || value === undefined;
-    });
-    if (!isEmpty) {
-      const converted = Object.fromEntries(
-        Object.entries(formData).map(([key, val]) => {
-          const setting = alertingSettings.find((s) => s.field_name === key);
-          if (setting?.field_type === "List" && typeof val === "string" && val.trim() !== "") {
-            const parsed = val
-              .split(",")
-              .map((s: string) => parseFloat(s.trim()))
-              .filter((n: number) => !isNaN(n));
-            return [key, parsed];
-          }
-          return [key, val];
-        }),
-      );
-      handleSubmit(converted);
+  // Inputs are controlled by `alertingSettings`, so that state - not the antd form
+  // store - is what gets submitted. A "List" field is edited as a comma-separated
+  // string, so parse it back to numbers here.
+  const submitValue = (setting: AlertingSetting): any => {
+    if (setting.field_type === "List") {
+      if (Array.isArray(setting.field_value)) return setting.field_value;
+      if (typeof setting.field_value !== "string") return [];
+      return setting.field_value
+        .split(",")
+        .map((s: string) => parseFloat(s.trim()))
+        .filter((n: number) => !isNaN(n));
     }
+    if (setting.field_type === "String") {
+      const trimmed = typeof setting.field_value === "string" ? setting.field_value.trim() : setting.field_value;
+      return trimmed === "" || trimmed === undefined ? null : trimmed;
+    }
+    return setting.field_value;
+  };
+
+  const onFinish = () => {
+    if (alertingSettings.length === 0) {
+      return;
+    }
+    handleSubmit(Object.fromEntries(alertingSettings.map((setting) => [setting.field_name, submitValue(setting)])));
   };
 
   const listDisplayValue = (fieldValue: unknown): string => {
@@ -73,13 +73,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
     }
     if (value.field_type === "Boolean") {
       return (
-        <Switch
-          checked={value.field_value}
-          onChange={(checked) => {
-            handleInputChange(value.field_name, checked);
-            form.setFieldsValue({ [value.field_name]: checked });
-          }}
-        />
+        <Switch checked={value.field_value} onChange={(checked) => handleInputChange(value.field_name, checked)} />
       );
     }
     if (value.field_type === "List") {
@@ -91,7 +85,13 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
         />
       );
     }
-    return <Input value={value.field_value} onChange={(e) => handleInputChange(value.field_name, e)} />;
+    return (
+      <Input
+        value={value.field_value ?? ""}
+        onChange={(e) => handleInputChange(value.field_name, e.target.value)}
+        placeholder={value.field_name.endsWith("_url") ? "https://example.com/webhook" : ""}
+      />
+    );
   };
 
   const renderSettingCell = (value: AlertingSetting): React.ReactNode => {
@@ -106,15 +106,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
         </TableCell>
       );
     }
-    return (
-      <Form.Item
-        name={value.field_name}
-        className="mb-0"
-        valuePropName={value.field_type === "Boolean" ? "checked" : "value"}
-      >
-        <TableCell>{renderFieldInput(value)}</TableCell>
-      </Form.Item>
-    );
+    return <TableCell>{renderFieldInput(value)}</TableCell>;
   };
 
   const renderStoredBadge = (storedInDb: boolean | null): React.ReactNode => {
