@@ -49,6 +49,18 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="When true, fail closed on Noma API errors.",
     )
+    streaming_end_of_stream_only: Optional[bool] = Field(
+        default=None,
+        description="When true, scan the assembled response once at end of stream instead of scanning sampled chunks during the stream.",
+    )
+    streaming_sampling_rate: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "When streaming_end_of_stream_only is False, scan every Nth streamed chunk. "
+            "Ignored when streaming_end_of_stream_only is True. Must be an integer >= 1."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

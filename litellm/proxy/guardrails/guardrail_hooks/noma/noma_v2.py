@@ -43,6 +43,28 @@ class _Action(str, enum.Enum):
     GUARDRAIL_INTERVENED = "GUARDRAIL_INTERVENED"
 
 
+def _coerce_end_of_stream_only(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
+
+
+def _coerce_sampling_rate(value: Any) -> int:
+    if value is None or value == "":
+        return 5
+    if isinstance(value, bool):
+        raise ValueError(f"streaming_sampling_rate must be an integer >= 1, got {value!r}")
+    try:
+        rate = int(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"streaming_sampling_rate must be an integer >= 1, got {value!r}") from e
+    if rate != float(value) or rate < 1:
+        raise ValueError(f"streaming_sampling_rate must be an integer >= 1, got {value!r}")
+    return rate
+
+
 class NomaV2Guardrail(CustomGuardrail):
     def __init__(
         self,
@@ -51,6 +73,8 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         monitor_mode: Optional[bool] = None,
         block_failures: Optional[bool] = None,
+        streaming_end_of_stream_only: Optional[bool] = None,
+        streaming_sampling_rate: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -70,6 +94,9 @@ class NomaV2Guardrail(CustomGuardrail):
 
         if self._requires_api_key(api_base=self.api_base) and not self.api_key:
             raise ValueError("Noma v2 guardrail requires api_key when using Noma SaaS endpoint")
+
+        self.streaming_end_of_stream_only: bool = _coerce_end_of_stream_only(streaming_end_of_stream_only)
+        self.streaming_sampling_rate: int = _coerce_sampling_rate(streaming_sampling_rate)
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
