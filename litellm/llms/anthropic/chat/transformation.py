@@ -2125,12 +2125,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def get_request_inference_geo(params: Mapping[str, Any] | None) -> str | None:
-        """
-        Read the region a request asked to be served from.
-
-        Anthropic accepts ``inference_geo`` on the request but does not echo it back on response usage,
-        so the requested region is the only signal geo pricing can key on.
-        """
         if not params:
             return None
         value = params.get("inference_geo")
