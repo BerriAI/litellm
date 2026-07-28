@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2796,6 +2797,7 @@ async def test_async_success_handler_preserves_response_cost_for_pass_through_en
     assert slo is not None
     assert slo["response_cost"] > 0
 
+
 @pytest.mark.asyncio
 async def test_sync_success_handler_preserves_streaming_cost_computed_by_async_handler():
     """Regression for #34875: the sync success_handler used to reset response_cost to None
@@ -2816,9 +2818,16 @@ async def test_sync_success_handler_preserves_streaming_cost_computed_by_async_h
     logging_obj = response.logging_obj
     async for _chunk in response:
         pass
-    await asyncio.sleep(0.5)
 
-    cost_from_async_handler = logging_obj.model_call_details.get("response_cost")
+    async def wait_for_async_handler_cost() -> Optional[float]:
+        for _ in range(200):
+            cost = logging_obj.model_call_details.get("response_cost")
+            if cost:
+                return cost
+            await asyncio.sleep(0.05)
+        return None
+
+    cost_from_async_handler = await wait_for_async_handler_cost()
     assert cost_from_async_handler is not None and cost_from_async_handler > 0
 
     assembled = logging_obj.model_call_details.get(
