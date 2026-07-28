@@ -118,10 +118,11 @@ from litellm.proxy._experimental.mcp_server.utils import (
     is_short_mcp_tool_prefix_enabled,
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
-    match_known_tool_name,
     match_known_server_prefix,
+    match_known_tool_name,
     merge_mcp_headers,
     normalize_server_name,
+    openapi_tool_name,
     parse_admin_env_vars,
     strip_known_server_prefix,
     validate_mcp_server_name,
@@ -1785,7 +1786,7 @@ class MCPServerManager:
 
                     # Generate tool name (without prefix initially)
                     operation_id = operation.get("operationId", f"{method}_{path.replace('/', '_')}")
-                    base_tool_name = operation_id.replace(" ", "_").lower()
+                    base_tool_name = openapi_tool_name(operation_id)
 
                     # Add server prefix to tool name
                     prefixed_tool_name = add_server_prefix_to_name(base_tool_name, server_prefix)
