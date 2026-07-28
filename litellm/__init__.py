@@ -551,6 +551,7 @@ organization = None
 project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
+vertex_ai_use_response_json_schema: Optional[bool] = None
 
 ####### COMPLETION MODELS ###################
 from typing import Set

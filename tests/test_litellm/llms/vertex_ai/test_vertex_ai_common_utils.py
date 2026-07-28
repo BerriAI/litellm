@@ -1,9 +1,12 @@
 import os
 import sys
+from copy import deepcopy
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
 
+import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 sys.path.insert(
@@ -17,6 +20,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_project_id_from_url,
     pop_vertex_request_labels,
     set_schema_property_ordering,
+    should_use_response_json_schema,
     supports_response_json_schema,
     validate_vertex_location,
     vertex_request_labels_from_litellm_params,
@@ -181,6 +185,67 @@ def test_supports_response_json_schema(model: str, expected: bool):
     """Test supports_response_json_schema correctly detects Gemini 2.0+ model names"""
 
     assert supports_response_json_schema(model) == expected
+
+
+@pytest.mark.parametrize(
+    "override, model, expected",
+    [
+        (None, "gemini-2.5-flash", True),
+        (None, "gemini-1.5-pro", False),
+        (False, "gemini-2.5-flash", False),
+        (True, "gemini-1.5-pro", True),
+    ],
+)
+def test_should_use_response_json_schema_honors_override(
+    monkeypatch: pytest.MonkeyPatch, override: Optional[bool], model: str, expected: bool
+):
+    """`litellm.vertex_ai_use_response_json_schema` overrides the model-name heuristic; None keeps it"""
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", override)
+
+    assert should_use_response_json_schema(model) == expected
+
+
+def test_response_json_schema_opt_out_uses_native_response_schema(monkeypatch: pytest.MonkeyPatch):
+    """Opting out sends the natively converted `responseSchema` (flattened nullable union, propertyOrdering)
+    instead of the verbatim `responseJsonSchema`, for a model that would otherwise get the json schema path"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "invoice",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "total": {"type": "number"},
+                    "barcode": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                },
+                "required": ["total", "barcode"],
+            },
+        },
+    }
+
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", False)
+    opted_out: dict = {}
+    VertexGeminiConfig().apply_response_schema_transformation(
+        value=deepcopy(response_format), optional_params=opted_out, model="gemini-2.5-flash"
+    )
+
+    assert "response_json_schema" not in opted_out
+    native_schema = opted_out["response_schema"]
+    assert native_schema["propertyOrdering"] == ["total", "barcode"]
+    assert native_schema["properties"]["barcode"]["anyOf"] == [{"type": "string", "nullable": True}]
+
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", None)
+    default: dict = {}
+    VertexGeminiConfig().apply_response_schema_transformation(
+        value=deepcopy(response_format), optional_params=default, model="gemini-2.5-flash"
+    )
+
+    assert "response_schema" not in default
+    assert default["response_json_schema"] == response_format["json_schema"]["schema"]
 
 
 def test_set_schema_property_ordering_with_excessive_nesting():

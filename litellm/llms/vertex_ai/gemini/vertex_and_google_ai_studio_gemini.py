@@ -99,7 +99,7 @@ from ..common_utils import (
     VertexAIError,
     _build_json_schema,
     _build_vertex_schema,
-    supports_response_json_schema,
+    should_use_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
 from .transformation import (
@@ -779,7 +779,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # Automatically use responseJsonSchema for Gemini 2.0+ models
         # responseJsonSchema uses standard JSON Schema format and supports additionalProperties
         # For older models (Gemini 1.5), fall back to responseSchema (OpenAPI format)
-        use_json_schema = supports_response_json_schema(model)
+        use_json_schema = should_use_response_json_schema(model)
 
         if not use_json_schema:
             # For responseSchema, remove 'additionalProperties' (not supported)
