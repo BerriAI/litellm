@@ -3509,3 +3509,39 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details is not None
     assert combined_pair.prompt_tokens_details.cache_write_tokens == 100
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
+
+
+def test_completion_cost_image_edit_preserves_image_usage_input_split(monkeypatch):
+    """
+    completion_cost must not flatten ImageUsage into chat Usage before routing to the
+    image cost calculator: doing so drops input_tokens_details, so image-input tokens
+    get billed at input_cost_per_token instead of input_cost_per_image_token
+    (e.g. azure_ai MAI image edits under-billed at $5/M instead of $8/M).
+    """
+    from litellm.types.utils import (
+        ImageResponse,
+        ImageUsage,
+        ImageUsageInputTokensDetails,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    response = ImageResponse(created=1785270000, data=[{"b64_json": "aGk="}])
+    response.usage = ImageUsage(
+        input_tokens=1061,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=1024, text_tokens=37),
+        output_tokens=1024,
+        total_tokens=2085,
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="azure_ai/MAI-Image-2.5-Pro",
+        custom_llm_provider="azure_ai",
+        call_type="aimage_edit",
+    )
+
+    expected = 37 * 5e-06 + 1024 * 8e-06 + 1024 * 0.000106
+    assert cost == pytest.approx(expected)
+    assert isinstance(response.usage, ImageUsage)

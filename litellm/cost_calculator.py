@@ -97,6 +97,7 @@ from litellm.types.utils import (
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
     LlmProvidersSet,
+    ImageUsage,
     ModelInfo,
     ServiceTier,
     StandardBuiltInToolsParams,
@@ -913,6 +914,7 @@ def _is_known_usage_objects(usage_obj):
     return (
         isinstance(usage_obj, litellm.Usage)
         or isinstance(usage_obj, ResponseAPIUsage)
+        or isinstance(usage_obj, ImageUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
