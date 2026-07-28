@@ -1299,6 +1299,28 @@ async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatc
     assert team_obj.team_id == "coding-team"
 
 
+@pytest.mark.parametrize(
+    "route,expected",
+    [
+        ("/v1/messages", True),
+        ("/v1/messages/count_tokens", True),
+        ("/v1/skills", False),
+        ("/v1/skills/skill_abc123", False),
+    ],
+)
+def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expected):
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=LiteLLM_JWTAuth(),
+        )
+        is expected
+    )
+
+
 @pytest.mark.asyncio
 async def test_auth_builder_returns_team_membership_object():
     """
