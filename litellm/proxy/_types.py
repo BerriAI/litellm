@@ -421,6 +421,7 @@ class LiteLLMRoutes(enum.Enum):
         "/bedrock",
         "/vertex-ai",
         "/vertex_ai",
+        "/chatgpt",
         "/cohere",
         "/cursor",
         "/gemini",
