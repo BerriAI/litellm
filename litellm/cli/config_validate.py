@@ -311,28 +311,30 @@ def _iter_credential_refs(node: object) -> tuple[tuple[str, str], ...]:
 
     Returns a tuple of (parent_path, var_name) pairs. The parent_path
     is a dotted path for diagnostics; var_name is the env var being
-    referenced.
+    referenced. Implemented iteratively to keep the recursive_detector
+    CI check happy (recursive functions have caused CPU spikes in
+    this repo in the past).
     """
+    from collections import deque
 
-    def walk(value: object, path: str) -> tuple[tuple[str, str], ...]:
+    # Both `found` and `stack` are accumulator state for the iterative
+    # DFS walker. mutable-ok is the correct suppression for a local
+    # accumulator that never escapes the function.
+    found: deque[tuple[str, str]] = deque()  # mutable-ok: DFS accumulator
+    stack: deque[tuple[object, str]] = deque([(node, "")])  # mutable-ok: DFS stack
+    while stack:
+        value, path = stack.pop()
         if isinstance(value, dict):
-            out: tuple[tuple[str, str], ...] = ()
             for k, v in value.items():
-                out += walk(v, f"{path}.{k}" if path else str(k))
-            return out
-        if isinstance(value, list):
-            out = ()
+                stack.append((v, f"{path}.{k}" if path else str(k)))
+        elif isinstance(value, list):
             for i, v in enumerate(value):
-                out += walk(v, f"{path}[{i}]")
-            return out
-        if isinstance(value, str):
+                stack.append((v, f"{path}[{i}]"))
+        elif isinstance(value, str):
             m = _ENV_VAR_REF_RE.match(value)
             if m:
-                return ((path, m.group(1)),)
-            return ()
-        return ()
-
-    return walk(node, "")
+                found.append((path, m.group(1)))
+    return tuple(found)
 
 
 def _check_credential_pattern(data: Mapping[str, object]) -> Check:
