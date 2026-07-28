@@ -44,6 +44,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
@@ -1250,6 +1251,21 @@ def get_azure_ai_search_index_from_endpoint(endpoint: str) -> str | None:
     return None
 
 
+def is_azure_ai_search_service_level_index_create(method: str, endpoint: str) -> bool:
+    """Return True for ``POST /indexes``, Azure AI Search's service-level index create.
+
+    No index name appears in that path, so ``get_azure_ai_search_index_from_endpoint``
+    yields None and the managed-index branch can never claim the request. Without an
+    explicit guard it reaches the generic Azure passthrough on the proxy's own
+    credential, so a non-admin could create an index whenever ``AZURE_API_BASE``
+    points at the Search service.
+    """
+    if method != "POST":
+        return False
+    path: Final = endpoint.split("?", 1)[0].strip("/")
+    return path == "indexes" or path.endswith("/indexes")
+
+
 @router.api_route(
     "/azure_ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -1274,6 +1290,9 @@ async def azure_proxy_route(
     Checks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.
     """
     from litellm.proxy.proxy_server import llm_router
+
+    if is_azure_ai_search_service_level_index_create(method=request.method, endpoint=endpoint):
+        assert_proxy_admin_for_vector_store_index_management(user_api_key_dict, operation="create")
 
     parts: Final = endpoint.split(
         "/"

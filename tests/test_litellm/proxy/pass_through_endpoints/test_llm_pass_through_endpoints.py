@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -25,6 +25,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     cursor_proxy_route,
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
+    is_azure_ai_search_service_level_index_create,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
@@ -33,7 +34,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -3381,3 +3382,91 @@ class TestAzureProxyRouteCrossIndexAuthorization:
             mock_is_allowed.assert_not_called()
             mock_handler.assert_awaited_once()
             assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE
+
+
+class TestAzureProxyRouteServiceLevelIndexCreate:
+    """``POST /indexes`` carries no index name, so the managed-index branch cannot
+    claim it and it would otherwise reach the generic Azure passthrough on the
+    proxy's own credential. The admin-only index management guard has to be
+    enforced on the route itself, not just on the permission gate the route skips.
+    """
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.headers = {"content-type": "application/json"}
+        request.url = MagicMock()
+        request.url.path = path
+        return request
+
+    @pytest.mark.parametrize(
+        "method, endpoint, expected",
+        [
+            ("POST", "indexes", True),
+            ("POST", "indexes?api-version=2024-07-01", True),
+            ("POST", "/indexes/", True),
+            ("POST", "indexes/my-index", False),
+            ("POST", "indexes/my-index/docs/index", False),
+            ("GET", "indexes", False),
+            ("POST", "openai/deployments/gpt-4o/chat/completions", False),
+        ],
+    )
+    def test_recognizes_service_level_create(self, method, endpoint, expected):
+        assert is_azure_ai_search_service_level_index_create(method=method, endpoint=endpoint) is expected
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_create_an_index(self):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="https://svc.search.windows.net",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ) as mock_handler,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await azure_proxy_route(
+                    endpoint="indexes?api-version=2024-07-01",
+                    request=self._request("POST", "/azure_ai/indexes"),
+                    fastapi_response=MagicMock(spec=Response),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        token="sk-team-token",
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                    ),
+                )
+
+            assert exc_info.value.status_code == 403
+            assert "Only proxy admins can create" in exc_info.value.detail
+            mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_still_create_an_index(self):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="https://svc.search.windows.net",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="azure-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ) as mock_handler,
+        ):
+            await azure_proxy_route(
+                endpoint="indexes?api-version=2024-07-01",
+                request=self._request("POST", "/azure_ai/indexes"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="sk-admin-token",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
+
+            mock_handler.assert_awaited_once()
