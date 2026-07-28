@@ -86,6 +86,52 @@ def _iter_request_tool_call_text(data: dict) -> Iterator[str]:
                 yield from _iter_function_fragments(item)
 
 
+def _iter_request_prompt_text(data: dict) -> Iterator[str]:
+    """Yield the legacy Completions ``prompt`` and Responses-API ``instructions``.
+
+    ``iter_message_text`` only walks ``messages`` and ``input``; the
+    ``/completions`` ``prompt`` (string or list of strings) and the
+    Responses-API top-level ``instructions`` are forwarded to the model but
+    live in neither field, so without this they would reach the model
+    uninspected.
+    """
+    for key in ("prompt", "instructions"):
+        value = data.get(key)
+        if isinstance(value, str):
+            if value:
+                yield value
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item:
+                    yield item
+
+
+def _iter_request_tool_definition_text(data: dict) -> Iterator[str]:
+    """Yield names, descriptions and parameter schemas of request ``tools``.
+
+    A tool *definition* (Chat-Completions ``tools[].function`` or the flattened
+    Responses-API ``tools[]`` shape) is handed to the model as usable
+    instructions, so an injected description or JSON-schema field reaches the
+    model even though ``_iter_request_tool_call_text`` only inspects tool
+    *calls*.
+    """
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return
+    for tool in tools:
+        function = _item_get(tool, "function")
+        definition = function if function is not None else tool
+        name = _item_get(definition, "name")
+        if isinstance(name, str) and name:
+            yield name
+        description = _item_get(definition, "description")
+        if isinstance(description, str) and description:
+            yield description
+        parameters = _item_get(definition, "parameters")
+        if isinstance(parameters, dict) and parameters:
+            yield json.dumps(parameters, sort_keys=True)
+
+
 def _iter_responses_api_output_text(response: ResponsesAPIResponse) -> Iterator[str]:
     """Yield text and function-call arguments from a Responses API result.
 
@@ -177,7 +223,12 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
 
     @staticmethod
     def _input_text(data: dict) -> str:
-        fragments = chain(iter_message_text(data), _iter_request_tool_call_text(data))
+        fragments = chain(
+            iter_message_text(data),
+            _iter_request_tool_call_text(data),
+            _iter_request_tool_definition_text(data),
+            _iter_request_prompt_text(data),
+        )
         return "\n".join(fragment for fragment in fragments if fragment)
 
     @staticmethod
