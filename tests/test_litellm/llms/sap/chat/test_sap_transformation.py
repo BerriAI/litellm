@@ -639,3 +639,140 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+class TestSAPPromptCaching:
+    """`cache_control` breakpoints must survive transformation (issue #34797)."""
+
+    @pytest.fixture
+    def mock_config(self):
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+        config.token_creator = lambda: "Bearer TEST_TOKEN"
+        config._base_url = "https://api.test-sap.com"
+        config._resource_group = "test-group"
+
+        return config
+
+    def test_cache_control_preserved_on_system_user_and_tool_messages(self, mock_config):
+        config = mock_config.transform_request(
+            model="anthropic--claude-4.5-sonnet",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "large static prompt",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "question",
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "tool result",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+            ],
+            litellm_params={},
+            optional_params={},
+            headers={},
+        )
+
+        template = config["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+        assert list(template[0]["content"]) == [
+            {
+                "type": "text",
+                "text": "large static prompt",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        assert list(template[1]["content"]) == [
+            {
+                "type": "text",
+                "text": "question",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ]
+        assert list(template[2]["content"]) == [
+            {
+                "type": "text",
+                "text": "tool result",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    def test_cache_control_preserved_on_tool_definitions(self, mock_config):
+        config = mock_config.transform_request(
+            model="anthropic--claude-4.5-sonnet",
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "cached_tool", "parameters": {}},
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "function",
+                        "function": {"name": "uncached_tool", "parameters": {}},
+                    },
+                ]
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        tools = config["config"]["modules"]["prompt_templating"]["prompt"]["tools"]
+        assert tools[0]["cache_control"] == {"type": "ephemeral"}
+        assert "cache_control" not in tools[1]
+
+    def test_content_blocks_without_cache_control_stay_flattened(self, mock_config):
+        config = mock_config.transform_request(
+            model="anthropic--claude-4.5-sonnet",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "part one"},
+                        {"type": "text", "text": "part two"},
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "answer",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "tool result"},
+            ],
+            litellm_params={},
+            optional_params={},
+            headers={},
+        )
+
+        template = config["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+        assert template[0]["content"] == "part one\npart two"
+        assert template[1]["content"] == "answer"
+        assert template[2]["content"] == "tool result"

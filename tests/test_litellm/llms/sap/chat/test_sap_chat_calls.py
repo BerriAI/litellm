@@ -204,3 +204,67 @@ async def test_sap_chat_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+@pytest.mark.asyncio
+async def test_sap_chat_forwards_cache_control(
+    respx_mock,
+    sap_api_response,
+    fake_token_creator,
+    fake_deployment_url,
+):
+    """`cache_control` set by the caller must reach SAP orchestration (issue #34797)."""
+    import json
+
+    import litellm
+
+    litellm.disable_aiohttp_transport = True
+    with (
+        patch(
+            "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.chat.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        route = respx_mock.post(f"{fake_deployment_url}/v2/completion")
+        route.respond(json=sap_api_response)
+
+        await litellm.acompletion(
+            model="sap/anthropic--claude-4.5-sonnet",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "large static prompt",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": "Hello"},
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "cached_tool", "parameters": {}},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+
+        assert route.called
+        body = json.loads(route.calls[0].request.content)
+        prompt = body["config"]["modules"]["prompt_templating"]["prompt"]
+        assert prompt["template"][0]["content"] == [
+            {
+                "type": "text",
+                "text": "large static prompt",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        assert prompt["tools"][0]["cache_control"] == {"type": "ephemeral"}
