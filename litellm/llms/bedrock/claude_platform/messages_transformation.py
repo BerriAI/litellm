@@ -8,7 +8,12 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
-from .common_utils import BedrockClaudePlatformMixin, strip_claude_platform_route
+from .common_utils import (
+    BedrockClaudePlatformMixin,
+    filter_claude_platform_request_body,
+    resolve_unsupported_override,
+    strip_claude_platform_route,
+)
 
 
 class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicMessagesConfig):
@@ -43,9 +48,17 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
         if resolved_api_key and "x-api-key" not in headers:
             headers["x-api-key"] = resolved_api_key
 
+        unsupported_override = resolve_unsupported_override(
+            litellm_params, log_invalid=False
+        )
+        filtered_optional_params = filter_claude_platform_request_body(
+            optional_params,
+            unsupported_override=unsupported_override,
+            log_dropped=False,
+        )
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
-            optional_params=optional_params,
+            optional_params=filtered_optional_params,
         )
 
         return headers, api_base
@@ -58,6 +71,13 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
+        unsupported_override = resolve_unsupported_override(litellm_params)
+        anthropic_messages_optional_request_params = (
+            filter_claude_platform_request_body(
+                anthropic_messages_optional_request_params,
+                unsupported_override=unsupported_override,
+            )
+        )
         return super().transform_anthropic_messages_request(
             model=strip_claude_platform_route(model),
             messages=messages,

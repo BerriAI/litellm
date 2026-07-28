@@ -1,11 +1,15 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
-from .common_utils import BedrockClaudePlatformMixin
+from .common_utils import (
+    BedrockClaudePlatformMixin,
+    filter_claude_platform_request_body,
+    resolve_unsupported_override,
+)
 
 
 class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
@@ -24,12 +28,12 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> Dict:
+    ) -> dict:
         workspace_id = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
@@ -65,6 +69,26 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         )
         anthropic_headers["anthropic-workspace-id"] = workspace_id
         return {**headers, **anthropic_headers}
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        unsupported_override = resolve_unsupported_override(litellm_params)
+        optional_params = filter_claude_platform_request_body(
+            optional_params, unsupported_override=unsupported_override
+        )
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def get_model_response_iterator(
         self,
