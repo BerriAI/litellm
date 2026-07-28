@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
-from litellm.proxy.utils import get_custom_url, hash_password, hash_token, send_email
+from litellm.proxy.utils import get_proxy_base_url, hash_password, hash_token, send_email
 from litellm.repositories.password_reset_token_repository import (
     PasswordResetTokenRepository,
 )
@@ -63,6 +63,14 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         verbose_proxy_logger.warning("Password reset requested for an unknown or SSO-only email")
         return {"message": _GENERIC_FORGOT_PASSWORD_MESSAGE}
 
+    configured_base_url = get_proxy_base_url()
+    if configured_base_url is None:
+        verbose_proxy_logger.warning(
+            "Password reset email not sent: PROXY_BASE_URL is not configured, refusing to derive "
+            "the reset link from the request Host header"
+        )
+        return {"message": _GENERIC_FORGOT_PASSWORD_MESSAGE}
+
     now = litellm.utils.get_utc_datetime()
     token_repo = PasswordResetTokenRepository(prisma_client)
     await token_repo.invalidate_unused_for_user(user_id=user_obj.user_id, now=now)
@@ -77,7 +85,7 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         }
     )
 
-    reset_base_url = get_custom_url(str(request.base_url)).rstrip("/") + "/ui/reset-password"
+    reset_base_url = configured_base_url.rstrip("/") + "/ui/reset-password"
     reset_link = f"{reset_base_url}?token={raw_token}"
 
     try:

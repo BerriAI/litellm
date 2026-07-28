@@ -18,7 +18,8 @@ def _mock_user(user_id="user-1", email="alice@example.com", password="scrypt:has
 
 
 @pytest.mark.asyncio
-async def test_forgot_password_existing_user_sends_email(mocker):
+async def test_forgot_password_existing_user_sends_email(mocker, monkeypatch):
+    monkeypatch.setenv("PROXY_BASE_URL", "https://proxy.example.com")
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=_mock_user())
     mock_prisma.db.litellm_passwordresettoken.update_many = AsyncMock(return_value=0)
@@ -103,3 +104,26 @@ async def test_forgot_password_rate_limited_by_email(mocker):
     response = client.post("/user/forgot_password", json={"email": "alice@example.com"})
 
     assert response.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_no_proxy_base_url_same_response_no_email_sent(mocker, monkeypatch):
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=_mock_user())
+    mock_prisma.db.litellm_passwordresettoken.update_many = AsyncMock(return_value=0)
+    mock_prisma.db.litellm_passwordresettoken.create = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_send_email = mocker.patch(
+        "litellm.proxy.management_endpoints.password_reset_endpoints.send_email",
+        new=AsyncMock(),
+    )
+
+    response = client.post("/user/forgot_password", json={"email": "alice@example.com"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "If an account exists for this email, a password reset link has been sent."
+    }
+    mock_send_email.assert_not_awaited()
+    mock_prisma.db.litellm_passwordresettoken.create.assert_not_awaited()
