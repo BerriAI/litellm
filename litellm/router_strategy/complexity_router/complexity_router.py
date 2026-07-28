@@ -25,6 +25,10 @@ from pydantic import BaseModel
 from litellm._logging import verbose_router_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_strategy.complexity_router.request_metadata import (
+    get_session_id_from_request_kwargs,
+    get_user_api_key_hash_from_request_kwargs,
+)
 from litellm.types.utils import ModelResponse
 
 from .config import (
@@ -43,6 +47,7 @@ if TYPE_CHECKING:
 
     from litellm.router import Router
     from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
+    from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
     from litellm.types.router import PreRoutingHookResponse
 else:
     Router = Any
@@ -162,6 +167,14 @@ class ComplexityRouter(CustomLogger):
             self.config = ComplexityRouterConfig(**complexity_router_config)
         else:
             self.config = ComplexityRouterConfig()
+
+        self._cache_warming_ref: str | None = None
+        if self.config.cache_warming.enabled:
+            from litellm.router_strategy.complexity_router.cache_warming.capture_hook import (
+                register_warming_strategy,
+            )
+
+            self._cache_warming_ref = register_warming_strategy(self)
 
         # Override default_model if provided
         if default_model:
@@ -897,42 +910,41 @@ class ComplexityRouter(CustomLogger):
 
         return user_message, system_prompt
 
-    @staticmethod
-    def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
-        """Metadata may land on `metadata` or `litellm_metadata` depending on the
-        endpoint, mirroring DeploymentAffinityCheck's precedence."""
-        return [
-            metadata
-            for metadata_key in ("litellm_metadata", "metadata")
-            if isinstance(metadata := request_kwargs.get(metadata_key), dict)
-        ]
+    def _stamp_cache_warming_marker(
+        self,
+        request_kwargs: dict,  # mutable-ok: stamps marker into request metadata
+        routed_model: str,
+    ) -> None:
+        """Always stamps into litellm_metadata: the plain metadata kwarg IS the
+        provider-body metadata param on the native Anthropic messages surface, so an
+        internal marker there would be forwarded upstream and rejected."""
+        if not self.config.cache_warming.enabled:
+            return
+        from litellm.router_strategy.complexity_router.cache_warming.types import CACHE_WARMING_MARKER_KEY
 
-    @staticmethod
-    def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve a client-supplied session_id."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            session_id = metadata.get("session_id")
-            if session_id is not None:
-                return str(session_id)
-        return None
+        metadata = request_kwargs.setdefault("litellm_metadata", {})
+        if isinstance(metadata, dict):
+            metadata[CACHE_WARMING_MARKER_KEY] = {  # mutable-ok: stored into live request metadata
+                "auto_router_model_name": self.model_name,
+                "routed_model": routed_model,
+                "strategy_ref": self._cache_warming_ref,
+            }
 
-    @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
-        """Resolve the proxy-derived API key hash, the same trust boundary
-        DeploymentAffinityCheck uses for its own key-based affinity (not the
-        client-supplied OpenAI `user` param, which isn't authenticated)."""
-        for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
-            user_key = metadata.get("user_api_key_hash")
-            if user_key is not None:
-                return str(user_key)
-        return None
+    def get_cache_warming_store(self) -> CacheWarmingStore | None:
+        if not self.config.cache_warming.enabled:
+            return None
+        from litellm.router_strategy.complexity_router.cache_warming.store import CacheWarmingStore
+
+        router = self.litellm_router_instance
+        redis_cache = router.cache.redis_cache if router is not None and router.cache is not None else None
+        return CacheWarmingStore(redis_cache=redis_cache, auto_router_model_name=self.model_name)
 
     def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
         # Namespace by the caller's API key hash so two different callers reusing the
         # same client-supplied session_id can't poison each other's routing pin. Falls
         # back to "unscoped" only when there's no authenticated caller to scope by
         # (e.g. direct Router usage without the proxy layer).
-        caller_scope = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
+        caller_scope = get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
     async def async_pre_routing_hook(
@@ -964,7 +976,7 @@ class ComplexityRouter(CustomLogger):
                 metadata[RETURN_RAW_MODEL_NAME_METADATA_KEY] = True
 
         use_session_affinity = self.config.session_affinity and not self.config.plugins
-        session_id = self._get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
+        session_id = get_session_id_from_request_kwargs(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         if cache_key is not None:
@@ -996,6 +1008,7 @@ class ComplexityRouter(CustomLogger):
                         kwargs_metadata = request_kwargs.setdefault("metadata", {})
                         if isinstance(kwargs_metadata, dict):
                             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = routed_model
+                    self._stamp_cache_warming_marker(request_kwargs, routed_model)
                     cause = "session_affinity_escalation" if routed_model != pinned_model else "session_affinity_pin"
                     verbose_router_logger.info(
                         f"ComplexityRouter: routing decision cause={cause}, routed_model={routed_model}"
@@ -1019,6 +1032,8 @@ class ComplexityRouter(CustomLogger):
                 value=response.model,
                 ttl=self.config.session_affinity_ttl_seconds,
             )
+        if response is not None:
+            self._stamp_cache_warming_marker(request_kwargs, response.model)
         return response
 
     async def _classify_and_route(
