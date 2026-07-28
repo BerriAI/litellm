@@ -1465,6 +1465,7 @@ class CustomStreamWrapper:
                     if self.stream_options is not None and self.stream_options["include_usage"] is True:
                         model_response.choices = []
                         return model_response
+                    self._record_usage_only_chunk(model_response=model_response)
                     return
             ## CHECK FOR TOOL USE
 
@@ -1690,6 +1691,17 @@ class CustomStreamWrapper:
         ):  # don't overwrite for other - potential error finish reasons
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
+
+    def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
+        """
+        Keep provider usage-only chunks (e.g. OpenRouter's post-finish chunk, which carries a
+        provider-reported cost) available to cost tracking. They are never returned to the
+        caller; ``stream_options.include_usage`` only controls what the caller sees.
+        """
+        if getattr(model_response, "usage", None) is None:
+            return
+        model_response.choices = []
+        self.chunks.append(model_response)
 
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
