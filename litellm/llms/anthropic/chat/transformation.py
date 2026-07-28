@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
@@ -2117,6 +2118,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return False
         return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
 
+    @staticmethod
+    def _aggregate_cache_creation_token_details(
+        cache_creation_objects: Iterable[Mapping[str, Any] | None],
+    ) -> CacheCreationTokenDetails | None:
+        breakdowns: Final = tuple(c for c in cache_creation_objects if isinstance(c, Mapping))
+        if not breakdowns:
+            return None
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=sum(int(c.get("ephemeral_5m_input_tokens") or 0) for c in breakdowns),
+            ephemeral_1h_input_tokens=sum(int(c.get("ephemeral_1h_input_tokens") or 0) for c in breakdowns),
+        )
+
     def calculate_usage(
         self,
         usage_object: dict,
@@ -2150,6 +2163,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens = sum(it.get("cache_creation_input_tokens", 0) or 0 for it in iterations)
             cache_read_input_tokens = sum(it.get("cache_read_input_tokens", 0) or 0 for it in iterations)
             prompt_tokens += cache_creation_input_tokens + cache_read_input_tokens
+            cache_creation_token_details = self._aggregate_cache_creation_token_details(
+                it.get("cache_creation") for it in iterations
+            )
 
         if not iterations:
             if "cache_creation_input_tokens" in _usage and _usage["cache_creation_input_tokens"] is not None:
@@ -2182,7 +2198,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if tool_search_count > 0:
                 tool_search_requests = tool_search_count
 
-        if "cache_creation" in _usage and _usage["cache_creation"] is not None:
+        if cache_creation_token_details is None and "cache_creation" in _usage and _usage["cache_creation"] is not None:
             cache_creation_token_details = CacheCreationTokenDetails(
                 ephemeral_5m_input_tokens=_usage["cache_creation"].get("ephemeral_5m_input_tokens"),
                 ephemeral_1h_input_tokens=_usage["cache_creation"].get("ephemeral_1h_input_tokens"),
