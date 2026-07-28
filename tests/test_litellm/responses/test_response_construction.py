@@ -13,7 +13,10 @@ import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.responses.response_construction import construct_responses_api_response
+from litellm.responses.response_construction import (
+    construct_responses_api_response,
+    construct_responses_api_stream_event,
+)
 from litellm.router import Router
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
@@ -67,10 +70,28 @@ def test_usage_total_tokens_derived_when_missing():
     assert response.usage.total_tokens == 7
 
 
-def test_unparseable_usage_is_dropped_not_left_as_dict():
-    response = construct_responses_api_response({"id": "resp_1", "created_at": 1, "usage": "not-a-usage-block"})
+@pytest.mark.parametrize(
+    "usage_value",
+    ["not-a-usage-block", {"input_tokens": 1, "output_tokens": 2, "input_tokens_details": "not-details"}],
+)
+def test_unparseable_usage_is_dropped_not_left_as_dict(usage_value):
+    response = construct_responses_api_response({"id": "resp_1", "created_at": 1, "usage": usage_value})
 
     assert response.usage is None
+
+
+@pytest.mark.parametrize(
+    ("token_value", "expected"),
+    [("9", 9), (True, 0), ("nine", 0), (None, 0)],
+)
+def test_token_counts_coerced_from_loose_provider_values(token_value, expected):
+    response = construct_responses_api_response(
+        {"id": "resp_1", "created_at": 1, "usage": {"input_tokens": token_value, "output_tokens": 2}}
+    )
+
+    assert isinstance(response.usage, ResponseAPIUsage)
+    assert response.usage.input_tokens == expected
+    assert response.usage.total_tokens == expected + 2
 
 
 def test_valid_payload_is_validated_not_constructed():
@@ -92,6 +113,16 @@ def test_streaming_event_response_is_not_a_dict():
 
     assert isinstance(event.response, ResponsesAPIResponse)
     assert isinstance(event.response.usage, ResponseAPIUsage)
+
+
+def test_streaming_event_without_nested_response_is_still_constructed():
+    event = construct_responses_api_stream_event(
+        ResponseCompletedEvent,
+        {"type": "response.completed", "response": "not-a-payload"},
+    )
+
+    assert isinstance(event, ResponseCompletedEvent)
+    assert event.response == "not-a-payload"
 
 
 def test_router_extracts_partial_usage_from_dict_format_response():
