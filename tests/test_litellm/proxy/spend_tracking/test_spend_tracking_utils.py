@@ -2902,3 +2902,118 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "tokens_saved": 7000,
         "source": "compression_interception",
     }
+
+
+def test_get_logging_payload_unauthenticated_request_does_not_store_string_none():
+    """Regression for unauthenticated-request spend-log bug.
+
+    When a request reaches an LLM-API route without an Authorization header,
+    the auth-exception handler fabricates a synthetic UserAPIKeyAuth with
+    `api_key=None`. The failure hook then seeds
+    `metadata["user_api_key"] = None`. Prior to the fix, this None propagated
+    through to `SpendLogsPayload.api_key = str(None)`, producing the literal
+    four-character string "None" in the database. This makes the row
+    un-joinable to `LiteLLM_VerificationToken` and pollutes downstream
+    analysis with noise rows that look like real keys.
+
+    The fix coerces None to "" at both the read site (so downstream `or`
+    chains behave) and at the SpendLogsPayload call site (defense in depth).
+    """
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": None,  # synthesized by auth_exception_handler
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+                "status": "failure",
+            }
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("No api key passed in."),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    # The bug: api_key column held the literal string "None".
+    # The fix: api_key column holds empty string.
+    assert payload["api_key"] == "", (
+        f"Expected empty string for unauthenticated request, "
+        f"got api_key={payload['api_key']!r}"
+    )
+    assert payload["api_key"] != "None", (
+        "Regression: api_key='None' string leaked into spend log"
+    )
+
+    # Metadata should still reflect the input (don't silently rewrite user
+    # metadata; the failure-hook author is responsible for that). The bug
+    # only affected the column write, not the metadata blob.
+    metadata_dict = json.loads(payload["metadata"])
+    assert metadata_dict["user_api_key"] is None
+
+
+def test_get_logging_payload_missing_user_api_key_remains_empty_string():
+    """Sanity check: when user_api_key is absent from metadata entirely,
+    api_key stays "" (not None, not 'None', not absent).
+    """
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                # user_api_key not set at all
+                "user_api_key_user_id": "test_user",
+                "status": "success",
+            }
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == "", (
+        f"Expected empty string when user_api_key missing, "
+        f"got api_key={payload['api_key']!r}"
+    )
+
+
+def test_get_logging_payload_happy_path_still_hashes_real_key():
+    """Sanity check that the None-fix doesn't break the real-key path.
+
+    A real string key should still flow through the existing
+    _hash_api_key_for_spend_log path and produce a hashed value, not "".
+    """
+    raw_key = "sk-WLi4iRn4JmbVlTaYw12IOA"
+
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": raw_key,
+                "user_api_key_user_id": "test_user",
+                "status": "success",
+            }
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] != ""
+    assert payload["api_key"] != "None"
+    assert not payload["api_key"].startswith("sk-"), (
+        f"Real key should have been hashed, got api_key={payload['api_key']!r}"
+    )
