@@ -131,9 +131,18 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: Optional[str],
     ) -> dict:
-        payload_request_data = self._sanitize_payload_for_transport(request_data)
-        if logging_obj is not None:
-            payload_request_data["litellm_logging_obj"] = getattr(logging_obj, "model_call_details", None)
+        model_call_details = getattr(logging_obj, "model_call_details", None) if logging_obj is not None else None
+        request_data_to_send = (
+            {
+                **request_data,
+                "litellm_logging_obj": dict(model_call_details)
+                if isinstance(model_call_details, dict)
+                else model_call_details,
+            }
+            if logging_obj is not None
+            else request_data
+        )
+        payload_request_data = self._sanitize_payload_for_transport(request_data_to_send)
 
         payload: dict[str, Any] = {
             "inputs": inputs,
@@ -157,7 +166,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
         try:
             json_str = json.dumps(payload, default=_default)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RuntimeError):
             json_str = safe_dumps(payload)
 
         safe_payload = safe_json_loads(json_str, default={})
