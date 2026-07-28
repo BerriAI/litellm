@@ -19,6 +19,30 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse
 
+_RESPONSES_API_ONLY_PARAMS = frozenset(
+    {
+        "client_metadata",
+        "include",
+        "instructions",
+        "parallel_tool_calls",
+        "previous_response_id",
+        "truncation",
+        "user",
+    }
+)
+
+
+def _filter_kwargs_for_completion(kwargs: dict) -> dict:
+    """
+    Filter kwargs to exclude Responses-API-only params that are NOT valid
+    litellm.completion() / litellm.acompletion() arguments.
+
+    We use a blocklist (not an allowlist) so that valid completion kwargs like
+    api_key, mock_response, num_retries, drop_params, and litellm_* params
+    all pass through.
+    """
+    return {k: v for k, v in kwargs.items() if k not in _RESPONSES_API_ONLY_PARAMS}
+
 
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
@@ -57,7 +81,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         completion_args = {}
-        completion_args.update(kwargs)
+        completion_args.update(_filter_kwargs_for_completion(kwargs))
         completion_args.update(litellm_completion_request)
         completion_args["_skip_responses_api_bridge"] = True
 
@@ -102,7 +126,7 @@ class LiteLLMCompletionTransformationHandler:
             )
 
         acompletion_args = {}
-        acompletion_args.update(kwargs)
+        acompletion_args.update(_filter_kwargs_for_completion(kwargs))
         acompletion_args.update(litellm_completion_request)
         acompletion_args["_skip_responses_api_bridge"] = True
 
