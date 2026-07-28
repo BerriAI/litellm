@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { getCapabilityBadgeClassName, getCapabilityColor } from "./capabilityColors";
+import { CAPABILITY_COLOR_PALETTE, getCapabilityBadgeClassName, getCapabilityColor } from "./capabilityColors";
+
+const ANTD_TAG_PRESET_COLORS = new Set([
+  "blue",
+  "purple",
+  "cyan",
+  "green",
+  "magenta",
+  "pink",
+  "red",
+  "orange",
+  "yellow",
+  "volcano",
+  "geekblue",
+  "lime",
+  "gold",
+]);
 
 describe("getCapabilityColor", () => {
   it("returns the same color for the same feature across different rows / order", () => {
@@ -23,6 +39,15 @@ describe("getCapabilityColor", () => {
 
   it("falls back to a deterministic palette color for unknown capabilities", () => {
     expect(getCapabilityColor("supports_custom_widget")).toBe(getCapabilityColor("Custom Widget"));
+  });
+
+  it("only returns colors that Ant Design Tag treats as presets", () => {
+    for (const color of CAPABILITY_COLOR_PALETTE) {
+      expect(ANTD_TAG_PRESET_COLORS.has(color)).toBe(true);
+    }
+    expect(ANTD_TAG_PRESET_COLORS.has(getCapabilityColor("supports_response_schema"))).toBe(true);
+    expect(ANTD_TAG_PRESET_COLORS.has(getCapabilityColor("supports_system_messages"))).toBe(true);
+    expect(ANTD_TAG_PRESET_COLORS.has(getCapabilityColor("supports_custom_widget"))).toBe(true);
   });
 });
 
