@@ -11,16 +11,29 @@ from typing import Callable, Final, Mapping, Sequence
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
 from litellm.integrations.otel.model.payloads import LLMCallSpanData, ToolDefinition
 
-MAX_TOOL_DEFINITIONS_PER_SPAN: Final = 8
-"""How many declared tools get their definition spelled out on a span.
+DEFAULT_SPAN_ATTRIBUTE_LIMIT: Final = 128
+"""The OTel SDK's default per-span attribute count limit."""
+
+MAX_TOOL_DEFINITION_ATTRS_PER_SPAN: Final = DEFAULT_SPAN_ATTRIBUTE_LIMIT // 4
+"""Span-wide ceiling on attributes spent spelling out declared tool definitions.
 
 Tool definitions are an unbounded attribute family: one entry per declared
 tool, per field, per active vocabulary. Agentic clients declare hundreds, which
-overruns the OTel SDK's default 128-attribute span limit. That limit evicts
-oldest-first, so an uncapped family silently destroys the core ``gen_ai.*``
-attributes written before it. Capping the family keeps core telemetry intact;
-requests declaring fewer tools than this keep full per-tool detail.
+overruns the span attribute limit. That limit evicts oldest-first, so an
+uncapped family silently destroys the core ``gen_ai.*`` attributes written
+before it.
+
+The ceiling is span-wide rather than per-mapper because several vocabularies
+can be active at once and each spells the same tools out under its own keys, so
+a per-mapper allowance multiplies by the number of vocabularies and reaches the
+limit again. Reserving a quarter of the span for tool detail leaves the rest to
+core telemetry no matter how many vocabularies are configured.
 """
+
+
+def tool_attr_budget(vocabularies: int) -> int:
+    """Split the span-wide tool-definition ceiling across active vocabularies."""
+    return MAX_TOOL_DEFINITION_ATTRS_PER_SPAN // max(vocabularies, 1)
 
 
 def drop_none(values: Mapping[str, AttrValue | None]) -> AttributeMap:
@@ -32,16 +45,20 @@ def tool_definition_attrs(
     key_for: Callable[[int, str], str],
     tools: Sequence[ToolDefinition],
     extractors: Mapping[str, Callable[[ToolDefinition], AttrValue | None]],
+    attr_budget: int,
 ) -> AttributeMap:
-    """Per-index attributes for the first ``MAX_TOOL_DEFINITIONS_PER_SPAN`` tools.
+    """Per-index attributes for as many tools as ``attr_budget`` affords.
 
     ``key_for`` builds a vocabulary's key from the tool's index and the field
-    name, so each mapper keeps its own naming while sharing the cap.
+    name, so each mapper keeps its own naming while sharing the budget. One tool
+    always keeps its detail, so the family stays legible even when many
+    vocabularies split the ceiling.
     """
+    max_tools = max(attr_budget // max(len(extractors), 1), 1)
     return drop_none(
         {
             key_for(idx, suffix): extract(tool)
-            for idx, tool in enumerate(tools[:MAX_TOOL_DEFINITIONS_PER_SPAN])
+            for idx, tool in enumerate(tools[:max_tools])
             for suffix, extract in extractors.items()
         }
     )

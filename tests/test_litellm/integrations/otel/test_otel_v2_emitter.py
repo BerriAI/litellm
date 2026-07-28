@@ -17,6 +17,9 @@ from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
+from litellm.integrations.otel.mappers.utils import (  # noqa: E402
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
+)
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
@@ -372,30 +375,68 @@ def test_tool_definitions_kept_in_full_below_the_cap():
         assert a[f"llm.request.functions.{idx}.name"] == f"tool_{idx}"
 
 
-def test_many_tools_do_not_evict_core_attributes_with_vendor_mappers():
-    """The cap has to hold for every vocabulary that emits tool definitions.
-
-    Arize and Phoenix layer the OpenInference vocabulary on top of the default
-    two, so its own per-tool family would otherwise reintroduce the eviction
-    that the cap exists to prevent.
-    """
+def _tool_span(mapper_names, tool_count):
+    """The exported LLM-call span for ``mapper_names`` and ``tool_count`` tools."""
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=True,
-        mapper_names=["genai", "openinference"],
+        mapper_names=list(mapper_names),
     )
     provider, exporter = providers.in_memory_provider(cfg)
     engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
     engine.emit(
         SpanRole.LLM_CALL,
-        LLMCallSpanData.from_standard_logging_payload(_tools_payload(127)),
+        LLMCallSpanData.from_standard_logging_payload(_tools_payload(tool_count)),
     )
     (span,) = exporter.get_finished_spans()
+    return span
+
+
+def _tool_definition_keys(attributes):
+    return [
+        key
+        for key in attributes
+        if key.startswith(("gen_ai.tool.", "llm.request.functions.", "llm.tools."))
+    ]
+
+
+@pytest.mark.parametrize(
+    "mapper_names",
+    [
+        ["genai"],
+        ["genai", "openinference"],
+        ["genai", "openinference", "langfuse", "weave", "langtrace"],
+    ],
+)
+def test_tool_definitions_stay_within_one_span_wide_budget(mapper_names):
+    """Every supported composition has to leave core telemetry on the span.
+
+    Each vocabulary spells the same tools out under its own keys, so an
+    allowance handed to each mapper separately multiplies by the number of
+    configured vocabularies and reaches the attribute limit again. Arize and
+    Phoenix already layer OpenInference on top of the default two, and every
+    vendor vocabulary can be listed at once. One budget shared across them all
+    is what keeps the total bounded.
+    """
+    span = _tool_span(mapper_names, 127)
     a = span.attributes
 
-    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
-    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
-    assert a[LiteLLM.TOOLS_DECLARED] == 127
     assert span.dropped_attributes == 0
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.PROVIDER_NAME] == "openai"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+
+    emitted = _tool_definition_keys(a)
+    assert emitted, "some tool detail should survive in every composition"
+    assert len(emitted) <= MAX_TOOL_DEFINITION_ATTRS_PER_SPAN
+
+
+def test_vendor_tool_definitions_are_truncated_not_dropped():
+    """The OpenInference vocabulary keeps its leading tools and loses the tail."""
+    a = _tool_span(["genai", "openinference"], 127).attributes
     assert a["llm.tools.0.tool.name"] == "tool_0"
+    assert a["llm.tools.0.tool.json_schema"]
     assert "llm.tools.126.tool.name" not in a

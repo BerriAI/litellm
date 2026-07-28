@@ -13,6 +13,7 @@ from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, Span
 from litellm.integrations.otel.mappers.utils import (
     collect,
     drop_none,
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     json_if,
     message_content,
     output_messages,
@@ -71,6 +72,9 @@ class OpenInferenceMapper:
         ),
     }
 
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
@@ -78,14 +82,13 @@ class OpenInferenceMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
         return {
-            **collect(cls._LLM_CALL_ATTRS, data),
-            **collect(cls._BLOB_ATTRS, data),
-            **cls._messages("llm.input_messages", "input.value", data.messages_in),
-            **cls._messages("llm.output_messages", "output.value", output_messages(data)),
-            **cls._tools(data),
+            **collect(self._LLM_CALL_ATTRS, data),
+            **collect(self._BLOB_ATTRS, data),
+            **self._messages("llm.input_messages", "input.value", data.messages_in),
+            **self._messages("llm.output_messages", "output.value", output_messages(data)),
+            **self._tools(data),
         }
 
     @staticmethod
@@ -109,10 +112,10 @@ class OpenInferenceMapper:
             attrs[value_key] = json.dumps([{"role": role, "content": content} for role, content in parsed])
         return attrs
 
-    @classmethod
-    def _tools(cls, data: LLMCallSpanData) -> AttributeMap:
+    def _tools(self, data: LLMCallSpanData) -> AttributeMap:
         return tool_definition_attrs(
             lambda idx, suffix: f"llm.tools.{idx}.{suffix}",
             data.tools,
-            cls._TOOL_ATTRS,
+            self._TOOL_ATTRS,
+            self._tool_attr_budget,
         )

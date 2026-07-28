@@ -12,7 +12,11 @@ Like ``GenAIMapper``, each span kind declares its schema as a flat
 from typing import Callable, Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
-from litellm.integrations.otel.mappers.utils import collect, tool_definition_attrs
+from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
+    collect,
+    tool_definition_attrs,
+)
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     ServiceSpanData,
@@ -63,6 +67,9 @@ class LegacyMapper:
         _LEGACY_ERROR: lambda d: d.error.message if d.error is not None and d.error.message else None,
     }
 
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
@@ -72,14 +79,14 @@ class LegacyMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(cls._LLM_CALL_ATTRS, data)
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
+        attrs = collect(self._LLM_CALL_ATTRS, data)
         attrs.update(
             tool_definition_attrs(
                 lambda idx, suffix: f"llm.request.functions.{idx}.{suffix}",
                 data.tools,
-                cls._TOOL_ATTRS,
+                self._TOOL_ATTRS,
+                self._tool_attr_budget,
             )
         )
         return attrs

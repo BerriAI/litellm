@@ -11,6 +11,7 @@ from typing import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
     output_messages,
     serialize_messages,
@@ -135,6 +136,9 @@ class GenAIMapper:
         LiteLLM.SERVICE_CALL_TYPE: lambda d: d.call_type,
     }
 
+    def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
+        self._tool_attr_budget = tool_attr_budget
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
@@ -150,16 +154,16 @@ class GenAIMapper:
             case _:
                 return {}
 
-    @classmethod
-    def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
-        attrs = collect(cls._LLM_CALL_ATTRS, data)
+    def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
+        attrs = collect(self._LLM_CALL_ATTRS, data)
         if data.tools:
             attrs[LiteLLM.TOOLS_DECLARED] = len(data.tools)
             attrs.update(
                 tool_definition_attrs(
                     lambda idx, suffix: f"gen_ai.tool.{idx}.{suffix}",
                     data.tools,
-                    cls._TOOL_ATTRS,
+                    self._TOOL_ATTRS,
+                    self._tool_attr_budget,
                 )
             )
         return attrs
