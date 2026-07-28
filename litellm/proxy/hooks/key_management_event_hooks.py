@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -93,7 +94,7 @@ class KeyManagementEventHooks:
         response: Any,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: Optional[str] = None,
-        applied_values: dict | None = None,
+        applied_values: Mapping[str, Any] | None = None,
     ):
         """
         Post /key/update processing hook

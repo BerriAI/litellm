@@ -3790,7 +3790,7 @@ def test_newly_armed_user_ids_selects_only_rearmed_rows():
         SimpleNamespace(user_id=None, budget_duration=None, budget_reset_at=None),
     ]
 
-    assert _newly_armed_user_ids({"budget_duration": "30d"}, rows) == ["fresh", "expired", "changed"]
+    assert _newly_armed_user_ids({"budget_duration": "30d"}, rows) == ("fresh", "expired", "changed")
 
 
 def test_newly_armed_user_ids_empty_without_budget_duration_or_with_explicit_spend():
@@ -3800,8 +3800,8 @@ def test_newly_armed_user_ids_empty_without_budget_duration_or_with_explicit_spe
 
     rows = [SimpleNamespace(user_id="u1", budget_duration=None, budget_reset_at=None)]
 
-    assert _newly_armed_user_ids({"max_budget": 10.0}, rows) == []
-    assert _newly_armed_user_ids({"budget_duration": "30d", "spend": 5.0}, rows) == []
+    assert _newly_armed_user_ids({"max_budget": 10.0}, rows) == ()
+    assert _newly_armed_user_ids({"budget_duration": "30d", "spend": 5.0}, rows) == ()
 
 
 @pytest.mark.asyncio

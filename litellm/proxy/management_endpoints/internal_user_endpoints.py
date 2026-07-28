@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
 
@@ -1207,27 +1207,25 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
-def _newly_armed_user_ids(non_default_values: dict[str, Any], user_rows: list[Any]) -> list[str]:
+def _newly_armed_user_ids(non_default_values: Mapping[str, Any], user_rows: Sequence[Any]) -> tuple[str, ...]:
     new_duration: str | None = non_default_values.get("budget_duration")
     if new_duration is None or non_default_values.get("spend") is not None:
-        return []
+        return ()
     from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
 
-    armed: list[str] = []
-    for row in user_rows:
-        user_id: str | None = getattr(row, "user_id", None)
-        existing_duration: str | None = getattr(row, "budget_duration", None)
-        existing_reset_at: datetime | None = getattr(row, "budget_reset_at", None)
-        if user_id and is_budget_window_newly_armed(
+    return tuple(
+        row.user_id
+        for row in user_rows
+        if getattr(row, "user_id", None)
+        and is_budget_window_newly_armed(
             new_duration=new_duration,
-            existing_duration=existing_duration,
-            existing_reset_at=existing_reset_at,
-        ):
-            armed.append(user_id)
-    return armed
+            existing_duration=getattr(row, "budget_duration", None),
+            existing_reset_at=getattr(row, "budget_reset_at", None),
+        )
+    )
 
 
-async def _invalidate_user_spend_counters(user_ids: list[str]) -> None:
+async def _invalidate_user_spend_counters(user_ids: Sequence[str]) -> None:
     if not user_ids:
         return
     from litellm.proxy.proxy_server import _invalidate_spend_counter
@@ -1236,7 +1234,10 @@ async def _invalidate_user_spend_counters(user_ids: list[str]) -> None:
         await _invalidate_spend_counter(counter_key=f"spend:user:{user_id}")
 
 
-def _reset_spend_if_budget_window_newly_armed(non_default_values: dict, existing_user_row: "BaseModel | None") -> None:
+def _reset_spend_if_budget_window_newly_armed(
+    non_default_values: dict,  # mutable-ok: writes spend=0.0 back into the caller's update payload
+    existing_user_row: "BaseModel | None",
+) -> None:
     if existing_user_row is None or "budget_duration" not in non_default_values:
         return
     if non_default_values.get("spend") is not None:
@@ -1684,7 +1685,7 @@ async def bulk_user_update(
 
             if newly_armed_user_ids:
                 await UserRepository(prisma_client).table.update_many(
-                    where={"user_id": {"in": newly_armed_user_ids}},
+                    where={"user_id": {"in": list(newly_armed_user_ids)}},
                     data={"spend": 0.0},
                 )
 

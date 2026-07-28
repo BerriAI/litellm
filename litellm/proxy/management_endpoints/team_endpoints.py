@@ -898,7 +898,7 @@ def _check_team_budget_update_authority(
 def _check_team_budget_window_rearm_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
-    existing_team_row: Any,
+    existing_team_row: BaseModel,
 ) -> None:
     """
     Only a proxy admin may re-arm a team's budget window on /team/update.
@@ -2075,7 +2075,9 @@ async def patch_team(
 
 
 def _reset_team_spend_if_budget_window_newly_armed(
-    data: UpdateTeamRequest, updated_kv: dict, existing_team_row: Any
+    data: UpdateTeamRequest,
+    updated_kv: dict,  # mutable-ok: writes spend=0.0 back into the caller's update payload
+    existing_team_row: BaseModel,
 ) -> None:
     if data.budget_duration is None:
         return
@@ -2089,7 +2091,7 @@ def _reset_team_spend_if_budget_window_newly_armed(
         updated_kv["spend"] = 0.0
 
 
-async def _invalidate_team_spend_counter_if_reset(updated_kv: dict, team_id: str) -> None:
+async def _invalidate_team_spend_counter_if_reset(updated_kv: Mapping[str, Any], team_id: str) -> None:
     if updated_kv.get("spend") == 0.0:
         from litellm.proxy.proxy_server import _invalidate_spend_counter
 

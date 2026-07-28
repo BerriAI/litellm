@@ -1880,7 +1880,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     return non_default_values
 
 
-async def _sync_key_spend_counter(key: str, explicit_spend, non_default_values: dict) -> None:
+async def _sync_key_spend_counter(key: str, explicit_spend, non_default_values: Mapping[str, Any]) -> None:
     if explicit_spend is not None:
         new_spend = explicit_spend
     elif non_default_values.get("spend") == 0.0:
@@ -1904,13 +1904,16 @@ async def _sync_key_spend_counter(key: str, explicit_spend, non_default_values: 
         )
 
 
-def _budget_window_audit_values(non_default_values: dict) -> dict:
+def _budget_window_audit_values(non_default_values: Mapping[str, Any]) -> Mapping[str, Any]:
     return {
         k: non_default_values[k] for k in ("spend", "budget_duration", "budget_reset_at") if k in non_default_values
     }
 
 
-def _apply_key_budget_window(non_default_values: dict, existing_key_row: LiteLLM_VerificationToken) -> None:
+def _apply_key_budget_window(
+    non_default_values: dict,  # mutable-ok: writes budget_reset_at/spend back into the caller's update payload
+    existing_key_row: LiteLLM_VerificationToken,
+) -> None:
     budget_duration = non_default_values.pop("budget_duration")
     if budget_duration is None:
         non_default_values["budget_duration"] = None
