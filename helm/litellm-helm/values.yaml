@@ -328,8 +328,32 @@ lifecycle: {}
 
 # Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
 #  otherwise)
+#
+# Bitnami retired the versioned tags under docker.io/bitnami and republished the
+# archived builds under docker.io/bitnamilegacy, so the subchart's own image
+# defaults no longer resolve. The repository below points at the same build the
+# subchart was released with, which keeps the on-disk data directory layout
+# identical for existing installs.
+#
+# Keep the tag pinned. docker.io/bitnami still publishes a floating `latest`,
+# and starting a newer PostgreSQL major against an existing data directory
+# leaves the server refusing to boot ("database files are incompatible with
+# server") with no way back other than a dump taken beforehand. Crossing a major
+# version is a dump-and-restore, not an image bump. The chart refuses to render
+# an unpinned tag for this reason
 postgresql:
   architecture: standalone
+  image:
+    repository: bitnamilegacy/postgresql
+    tag: 16.2.0-debian-12-r6
+  volumePermissions:
+    image:
+      repository: bitnamilegacy/os-shell
+      tag: 12-debian-12-r16
+  metrics:
+    image:
+      repository: bitnamilegacy/postgres-exporter
+      tag: 0.15.0-debian-12-r14
   auth:
     username: litellm
     database: litellm
@@ -359,9 +383,36 @@ postgresql:
 # When `redis.sentinel.enabled` is set, the coordination block is rendered with
 # `sentinel_nodes` and `service_name` (from `redis.sentinel.masterSet`) instead
 # of host/port, because a plain Redis client cannot talk to the sentinel port
+#
+# The image repositories carry the same bitnamilegacy repoint as postgresql
+# above; the versioned tags the subchart ships with are gone from
+# docker.io/bitnami
 redis:
   enabled: false
   architecture: standalone
+  image:
+    repository: bitnamilegacy/redis
+    tag: 7.2.4-debian-12-r9
+  sentinel:
+    image:
+      repository: bitnamilegacy/redis-sentinel
+      tag: 7.2.4-debian-12-r7
+  metrics:
+    image:
+      repository: bitnamilegacy/redis-exporter
+      tag: 1.58.0-debian-12-r4
+  volumePermissions:
+    image:
+      repository: bitnamilegacy/os-shell
+      tag: 12-debian-12-r16
+  sysctl:
+    image:
+      repository: bitnamilegacy/os-shell
+      tag: 12-debian-12-r16
+  kubectl:
+    image:
+      repository: bitnamilegacy/kubectl
+      tag: 1.29.2-debian-12-r3
   coordination:
     # Set to false to keep the bundled Redis for response caching only and leave
     # `general_settings.coordination_redis` out of the rendered config. A
