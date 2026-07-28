@@ -361,6 +361,62 @@ def llm_passthrough_route(
         )
 
 
+def classification_passthrough_request(
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    api_key: str | None,
+    request_headers: dict[str, str] | None,
+    json: dict[str, object],
+    client: HTTPHandler | None,
+    timeout: float | httpx.Timeout | None,
+) -> httpx.Response:
+    response = llm_passthrough_route(
+        method="POST",
+        endpoint="classify",
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+        request_headers=request_headers,
+        json=json,
+        client=client,
+        timeout=timeout,
+    )
+    if not isinstance(response, httpx.Response):
+        raise TypeError(f"Expected httpx.Response from classify passthrough, got {type(response).__name__}")
+    return response
+
+
+async def aclassification_passthrough_request(
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    api_key: str | None,
+    request_headers: dict[str, str] | None,
+    json: dict[str, object],
+    client: AsyncHTTPHandler | None,
+    timeout: float | httpx.Timeout | None,
+) -> httpx.Response:
+    response = await allm_passthrough_route(
+        method="POST",
+        endpoint="classify",
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+        request_headers=request_headers,
+        json=json,
+        client=client,
+        timeout=timeout,
+    )
+    if not isinstance(response, httpx.Response):
+        raise TypeError(f"Expected httpx.Response from classify passthrough, got {type(response).__name__}")
+    return response
+
+
 async def _async_passthrough_request(
     client: Union[HTTPHandler, AsyncHTTPHandler],
     request: httpx.Request,
