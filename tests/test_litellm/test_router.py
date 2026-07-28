@@ -5936,3 +5936,56 @@ async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
             bedrock_tags=request_tags,
         )
         assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags
+
+
+def _router_with_shared_model_name_across_access_groups():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                "model_info": {"access_groups": ["group-a"]},
+            },
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+                "model_info": {"access_groups": ["group-b"]},
+            },
+        ]
+    )
+
+
+def test_required_model_access_groups_only_constrains_access_group_only_grants():
+    router = _router_with_shared_model_name_across_access_groups()
+
+    assert router.required_model_access_groups(
+        model="shared-model", allowed_models=frozenset({"group-a"})
+    ) == frozenset({"group-a"})
+    assert router.required_model_access_groups(model="shared-model", allowed_models=frozenset({"shared-model"})) is None
+    assert router.required_model_access_groups(model="shared-model", allowed_models=frozenset({"*"})) is None
+    assert router.required_model_access_groups(model="shared-model", allowed_models=frozenset()) is None
+
+
+def test_deployment_within_model_access_groups_scopes_to_the_deployments_own_group():
+    """A deployment reached by id (managed batch/file) must still respect access groups,
+    even when a sibling deployment shares its model name."""
+    router = _router_with_shared_model_name_across_access_groups()
+    group_a_id, group_b_id = (deployment["model_info"]["id"] for deployment in router.model_list)
+
+    assert (
+        router.deployment_within_model_access_groups(model_id=group_a_id, allowed_models=frozenset({"group-a"})) is True
+    )
+    assert (
+        router.deployment_within_model_access_groups(model_id=group_b_id, allowed_models=frozenset({"group-a"}))
+        is False
+    )
+    assert (
+        router.deployment_within_model_access_groups(model_id=group_b_id, allowed_models=frozenset({"shared-model"}))
+        is True
+    )
+    assert (
+        router.deployment_within_model_access_groups(model_id="not-a-deployment", allowed_models=frozenset({"group-a"}))
+        is True
+    )
