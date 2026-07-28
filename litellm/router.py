@@ -10206,7 +10206,7 @@ class Router:
         )
 
         ## get model group RPM ##
-        model_group_cache: dict[str, int] | None = None
+        model_group_cache: dict[str, int] | None = None  # mutable-ok: incremented below
         if _any_deployment_has_rpm:
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
