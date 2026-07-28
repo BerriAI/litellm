@@ -9,6 +9,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+import asyncio
 import json
 import sys
 from typing import (
@@ -57,6 +58,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrailOutput,
     BedrockGuardrailQualifier,
     BedrockGuardrailResponse,
+    BedrockGuardrailUsage,
     BedrockRequest,
     BedrockTextContent,
 )
@@ -82,6 +84,28 @@ from litellm.types.utils import (
 
 GUARDRAIL_NAME = "bedrock"
 _BEDROCK_DYNAMIC_BODY_DENYLIST = frozenset({"content", "source"})
+# ApplyGuardrail's per-request "maximum input size in text units" quota is
+# region/account/policy-dependent and cannot be predicted from config, so it is
+# only ever discovered reactively: AWS rejects an over-quota call with a 400
+# ValidationException whose message contains one of these substrings (matched
+# case-insensitively against the parsed AWS error message). On a match the
+# content is bisected and each half retried, rather than surfacing the 400.
+_BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS = (
+    "text unit",
+    "maximum input size",
+    "content size",
+    "too long",
+    "too large",
+    "exceeds the maximum",
+)
+# Bisecting stops once a chunk is down to a single content item -- it cannot be
+# split further, so a too-large error on it propagates as-is instead of looping.
+_BEDROCK_APPLY_GUARDRAIL_MIN_CHUNK_SIZE = 1
+# Exponential backoff for a chunk call throttled with ThrottlingException (429).
+# Kept small: chunking already trades one oversized call for several smaller
+# ones, so retries must not multiply per-request latency by an order of magnitude.
+_BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES = 3
+_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS = 0.5
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH = "/guardrail-checks/invoke"
 # InvokeGuardrailChecks accepts at most 10 content blocks per message. A message with
@@ -765,7 +789,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
-        bedrock_guardrail_response: BedrockGuardrailResponse = BedrockGuardrailResponse()
         api_key: Optional[str] = None
         if request_data:
             dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
@@ -779,6 +802,156 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if request_data.get("api_key") is not None:
                 api_key = request_data["api_key"]
 
+        # UI / spend logs use event_type. Bedrock's `source` is INPUT vs OUTPUT for the API
+        # body, which must not be confused with the proxy hook (pre_call / during_call /
+        # post_call). When omitted, keep legacy mapping for backward compatibility.
+        if logging_event_type is not None:
+            event_type = logging_event_type
+        else:
+            event_type = GuardrailEventHooks.pre_call if source == "INPUT" else GuardrailEventHooks.post_call
+
+        content: List[BedrockContentItem] = bedrock_request_data.get("content") or []
+        # Contextual grounding scores the response holistically against the whole
+        # reference source; bisecting it would fragment that evaluation and produce
+        # misleading grounding scores, so a too-large error is never chunked here.
+        allow_chunking = not self._content_uses_contextual_grounding(content)
+
+        responses = await self._apply_guardrail_content_with_chunking(
+            content=content,
+            base_request_data=bedrock_request_data,
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            api_key=api_key,
+            request_data=request_data,
+            event_type=event_type,
+            start_time=start_time,
+            allow_chunking=allow_chunking,
+        )
+        return self._merge_bedrock_guardrail_responses(responses)
+
+    async def _apply_guardrail_content_with_chunking(
+        self,
+        content: List[BedrockContentItem],
+        base_request_data: dict,
+        credentials,
+        aws_region_name: str,
+        api_key: Optional[str],
+        request_data: dict | None,
+        event_type: GuardrailEventHooks,
+        start_time: "datetime",
+        allow_chunking: bool,
+    ) -> List[BedrockGuardrailResponse]:
+        """Post `content` to ApplyGuardrail, bisecting on a too-large error.
+
+        Tries `content` as a single call first. AWS's per-request "maximum input
+        size in text units" quota is account/region/policy-dependent and cannot be
+        predicted ahead of time, so it is only ever discovered reactively: on a 400
+        ValidationException whose message indicates the input was too large, the
+        content is split in half and each half is retried the same way (recursing
+        until every piece fits or cannot be split further). A real guardrail block
+        on any (sub-)chunk raises immediately -- callers must not lose that signal
+        by continuing to post the remaining chunks.
+        """
+        try:
+            return [
+                await self._post_apply_guardrail_content_with_retry(
+                    content=content,
+                    base_request_data=base_request_data,
+                    credentials=credentials,
+                    aws_region_name=aws_region_name,
+                    api_key=api_key,
+                    request_data=request_data,
+                    event_type=event_type,
+                    start_time=start_time,
+                )
+            ]
+        except HTTPException as exc:
+            if (
+                allow_chunking
+                and len(content) > _BEDROCK_APPLY_GUARDRAIL_MIN_CHUNK_SIZE
+                and self._is_input_too_large_validation_error(exc.detail)
+            ):
+                first_half, second_half = self._split_bedrock_content(content)
+                first_results = await self._apply_guardrail_content_with_chunking(
+                    content=first_half,
+                    base_request_data=base_request_data,
+                    credentials=credentials,
+                    aws_region_name=aws_region_name,
+                    api_key=api_key,
+                    request_data=request_data,
+                    event_type=event_type,
+                    start_time=start_time,
+                    allow_chunking=allow_chunking,
+                )
+                second_results = await self._apply_guardrail_content_with_chunking(
+                    content=second_half,
+                    base_request_data=base_request_data,
+                    credentials=credentials,
+                    aws_region_name=aws_region_name,
+                    api_key=api_key,
+                    request_data=request_data,
+                    event_type=event_type,
+                    start_time=start_time,
+                    allow_chunking=allow_chunking,
+                )
+                return first_results + second_results
+            raise
+
+    async def _post_apply_guardrail_content_with_retry(
+        self,
+        content: List[BedrockContentItem],
+        base_request_data: dict,
+        credentials,
+        aws_region_name: str,
+        api_key: Optional[str],
+        request_data: dict | None,
+        event_type: GuardrailEventHooks,
+        start_time: "datetime",
+    ) -> BedrockGuardrailResponse:
+        """Post one ApplyGuardrail call for `content`, retrying with exponential
+        backoff on AWS ThrottlingException (HTTP 429).
+
+        Chunking already trades one oversized call for several smaller ones, so
+        retries here are capped low -- they must not multiply per-request latency
+        by an order of magnitude when the account's per-second text-unit quota is
+        the binding constraint rather than the per-request size quota.
+        """
+        attempt = 0
+        while True:
+            try:
+                return await self._post_apply_guardrail_content(
+                    content=content,
+                    base_request_data=base_request_data,
+                    credentials=credentials,
+                    aws_region_name=aws_region_name,
+                    api_key=api_key,
+                    request_data=request_data,
+                    event_type=event_type,
+                    start_time=start_time,
+                )
+            except HTTPException as exc:
+                if exc.status_code == 429 and attempt < _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES:
+                    await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (2**attempt))
+                    attempt += 1
+                    continue
+                raise
+
+    async def _post_apply_guardrail_content(
+        self,
+        content: List[BedrockContentItem],
+        base_request_data: dict,
+        credentials,
+        aws_region_name: str,
+        api_key: Optional[str],
+        request_data: dict | None,
+        event_type: GuardrailEventHooks,
+        start_time: "datetime",
+    ) -> BedrockGuardrailResponse:
+        """Make exactly one signed ApplyGuardrail HTTP call for `content` and
+        parse the result. Raises HTTPException on a guardrail block or any
+        non-200 response (including 429, handled by the retry wrapper above).
+        """
+        bedrock_request_data = {**base_request_data, "content": content}
         prepared_request = self._prepare_request(
             credentials=credentials,
             data=bedrock_request_data,
@@ -792,14 +965,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             prepared_request.url,
             prepared_request.headers,
         )
-
-        # UI / spend logs use event_type. Bedrock's `source` is INPUT vs OUTPUT for the API
-        # body, which must not be confused with the proxy hook (pre_call / during_call /
-        # post_call). When omitted, keep legacy mapping for backward compatibility.
-        if logging_event_type is not None:
-            event_type = logging_event_type
-        else:
-            event_type = GuardrailEventHooks.pre_call if source == "INPUT" else GuardrailEventHooks.post_call
 
         httpx_response = await self._sign_and_post(
             prepared_request=prepared_request,
@@ -839,16 +1004,91 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 raise self._get_http_exception_for_blocked_guardrail(
                     bedrock_guardrail_response, request_data=request_data
                 )
-        else:
-            status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)
-            verbose_proxy_logger.error(
-                "Bedrock AI: error in response. Status code: %s, response: %s",
-                httpx_response.status_code,
-                httpx_response.text,
-            )
-            raise HTTPException(status_code=status_code, detail=detail_message)
+            return bedrock_guardrail_response
 
-        return bedrock_guardrail_response
+        status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)
+        verbose_proxy_logger.error(
+            "Bedrock AI: error in response. Status code: %s, response: %s",
+            httpx_response.status_code,
+            httpx_response.text,
+        )
+        raise HTTPException(status_code=status_code, detail=detail_message)
+
+    @staticmethod
+    def _content_uses_contextual_grounding(content: List[BedrockContentItem]) -> bool:
+        """True if any content item carries a contextual-grounding qualifier
+        (``grounding_source``, ``query``, or the ``guard_content`` the response
+        itself is tagged with once grounding is present)."""
+        for item in content:
+            if (item.get("text") or {}).get("qualifiers"):
+                return True
+        return False
+
+    @staticmethod
+    def _split_bedrock_content(
+        content: List[BedrockContentItem],
+    ) -> Tuple[List[BedrockContentItem], List[BedrockContentItem]]:
+        """Bisect `content` into two roughly-equal, non-empty halves.
+
+        Only called with ``len(content) > 1`` (guarded by the caller), so both
+        halves are always non-empty.
+        """
+        midpoint = max(1, len(content) // 2)
+        return content[:midpoint], content[midpoint:]
+
+    @staticmethod
+    def _is_input_too_large_validation_error(detail: object) -> bool:
+        """True if `detail` is the AWS ValidationException message for input
+        exceeding the per-request text-unit quota.
+
+        A guardrail *block* is also raised as an HTTPException with status 400,
+        but its ``detail`` is always a dict (built by
+        ``_get_http_exception_for_blocked_guardrail``); a non-200 API error's
+        ``detail`` is always the plain string returned by
+        ``_parse_bedrock_guardrail_error_response``. Checking ``isinstance(detail,
+        str)`` is therefore sufficient to never mistake a real block for a
+        too-large error.
+        """
+        if not isinstance(detail, str):
+            return False
+        lowered = detail.lower()
+        return any(substring in lowered for substring in _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS)
+
+    @staticmethod
+    def _merge_bedrock_guardrail_responses(
+        responses: List[BedrockGuardrailResponse],
+    ) -> BedrockGuardrailResponse:
+        """Merge the per-chunk ApplyGuardrail responses of a chunked request into
+        one, so a caller cannot tell whether chunking happened.
+
+        Only ever called with responses that all passed (a block raises
+        immediately from ``_apply_guardrail_content_with_chunking`` and is never
+        added to this list), so ``action`` is included purely for completeness.
+        """
+        if len(responses) == 1:
+            return responses[0]
+
+        merged_outputs: List[BedrockGuardrailOutput] = []
+        merged_assessments: List[dict] = []
+        merged_usage: Dict[str, Any] = {}
+        merged_action = "NONE"
+        for chunk_response in responses:
+            if chunk_response.get("action") == "GUARDRAIL_INTERVENED":
+                merged_action = "GUARDRAIL_INTERVENED"
+            merged_outputs.extend(chunk_response.get("outputs") or chunk_response.get("output") or [])
+            merged_assessments.extend(chunk_response.get("assessments") or [])
+            for key, value in (chunk_response.get("usage") or {}).items():
+                if isinstance(value, (int, float)):
+                    merged_usage[key] = merged_usage.get(key, 0) + value
+
+        merged: BedrockGuardrailResponse = BedrockGuardrailResponse(action=merged_action)
+        if merged_outputs:
+            merged["outputs"] = merged_outputs
+        if merged_assessments:
+            merged["assessments"] = merged_assessments
+        if merged_usage:
+            merged["usage"] = cast(BedrockGuardrailUsage, merged_usage)
+        return merged
 
     async def _sign_and_post(
         self,
