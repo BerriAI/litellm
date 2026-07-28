@@ -64,6 +64,12 @@ class _PrismaClient(Protocol):
     def _engine(self) -> _PrismaEngine: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _EngineRetirement:
+    pid: int
+    task: "asyncio.Task[None]"
+
+
 class _PrismaDrainTracker:
     def __init__(self) -> None:
         self._active_operations = 0
@@ -222,7 +228,7 @@ class PrismaWrapper:
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: datetime | None = None
         self._active_drain_tracker = self._instrument_prisma_client(original_prisma)
-        self._retirement_tasks: frozenset[asyncio.Task[None]] = frozenset()
+        self._retirement_tasks: frozenset[_EngineRetirement] = frozenset()
 
         # Coordination for planned engine restarts (issue #29176). Every
         # `recreate_prisma_client` SIGTERMs the running query-engine on
@@ -282,30 +288,59 @@ class PrismaWrapper:
         return 0
 
     async def _retire_engine_when_drained(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
-        if tracker is not None:
-            try:
-                await asyncio.wait_for(
-                    tracker.wait_until_drained(),
-                    timeout=self.ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                verbose_proxy_logger.warning(
-                    "%sReplaced prisma engine PID %s did not drain within %ss; killing it with work still in flight.",
-                    self._log_prefix,
-                    pid,
-                    self.ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS,
-                )
-        await self._kill_engine_process(pid)
+        try:
+            if tracker is not None:
+                try:
+                    await asyncio.wait_for(
+                        tracker.wait_until_drained(),
+                        timeout=self.ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    verbose_proxy_logger.warning(
+                        "%sReplaced prisma engine PID %s did not drain within %ss; killing it with work still in flight.",
+                        self._log_prefix,
+                        pid,
+                        self.ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS,
+                    )
+            await self._kill_engine_process(pid)
+        except asyncio.CancelledError:
+            self._kill_engine_process_now(pid)
+            raise
+
+    def _kill_engine_process_now(self, pid: int) -> None:
+        if pid <= 0:
+            return
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        verbose_proxy_logger.warning(
+            "%sSent SIGKILL to prisma-query-engine PID %s while flushing engine retirements.",
+            self._log_prefix,
+            pid,
+        )
+
+    async def flush_engine_retirements(self) -> None:
+        pending = self._retirement_tasks
+        if not pending:
+            return
+        for retirement in pending:
+            retirement.task.cancel()
+        await asyncio.gather(*(retirement.task for retirement in pending), return_exceptions=True)
+        for retirement in pending:
+            self._kill_engine_process_now(retirement.pid)
 
     def _schedule_engine_retirement(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
         if pid <= 0:
             return
         retirement_task = asyncio.create_task(self._retire_engine_when_drained(pid, tracker))
-        self._retirement_tasks = self._retirement_tasks.union((retirement_task,))
+        self._retirement_tasks = self._retirement_tasks.union((_EngineRetirement(pid=pid, task=retirement_task),))
         retirement_task.add_done_callback(self._retirement_finished)
 
     def _retirement_finished(self, retirement_task: asyncio.Task[None]) -> None:
-        self._retirement_tasks = self._retirement_tasks.difference((retirement_task,))
+        self._retirement_tasks = frozenset(
+            retirement for retirement in self._retirement_tasks if retirement.task is not retirement_task
+        )
 
     async def connect(self, timeout: int | timedelta | None = None) -> None:
         if timeout is None:
@@ -649,16 +684,16 @@ class PrismaWrapper:
 
         Should be called during application shutdown to clean up resources.
         """
-        if self._token_refresh_task is None:
-            return
+        if self._token_refresh_task is not None:
+            self._token_refresh_task.cancel()
+            try:
+                await self._token_refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._token_refresh_task = None
+            verbose_proxy_logger.info("%sStopped RDS IAM token refresh background task", self._log_prefix)
 
-        self._token_refresh_task.cancel()
-        try:
-            await self._token_refresh_task
-        except asyncio.CancelledError:
-            pass
-        self._token_refresh_task = None
-        verbose_proxy_logger.info("%sStopped RDS IAM token refresh background task", self._log_prefix)
+        await self.flush_engine_retirements()
 
     async def _token_refresh_loop(self) -> None:
         """

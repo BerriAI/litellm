@@ -71,7 +71,7 @@ def test_wrapper_instruments_generated_prisma_engine() -> None:
 
 
 async def _wait_for_retirements(wrapper: PrismaWrapper) -> None:
-    await asyncio.gather(*tuple(wrapper._retirement_tasks))
+    await asyncio.gather(*tuple(retirement.task for retirement in wrapper._retirement_tasks))
 
 
 @pytest.mark.asyncio
@@ -423,6 +423,24 @@ async def test_retirement_kills_old_engine_when_drain_never_completes(
         await asyncio.wait_for(_wait_for_retirements(wrapper), timeout=2)
 
     mock_kill.assert_any_call(111, signal.SIGTERM)
+
+
+@pytest.mark.asyncio
+async def test_stop_token_refresh_flushes_pending_engine_retirement(mock_prisma_binary):
+    """Shutdown must kill a mid-drain replaced engine immediately instead of
+    abandoning its retirement task at event-loop teardown (which would orphan
+    the engine and its DB connection pool)."""
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    old_engine = wrapper._original_prisma._engine
+    old_engine._engine.start_transaction = AsyncMock(return_value="transaction-1")
+    await old_engine.start_transaction(content="transaction")
+    wrapper._schedule_engine_retirement(111, wrapper._active_drain_tracker)
+
+    with patch("os.kill") as mock_kill:
+        await asyncio.wait_for(wrapper.stop_token_refresh_task(), timeout=2)
+
+    assert mock_kill.call_args_list == [call(111, signal.SIGKILL)]
+    assert wrapper._retirement_tasks == frozenset()
 
 
 @pytest.mark.asyncio
