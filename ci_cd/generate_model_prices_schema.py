@@ -187,7 +187,8 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
         "deprecation_date": {
             "type": "string",
             "description": "Date the provider deprecates the model, YYYY-MM-DD.",
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "format": "date",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
         },
         "web_search_billing_unit": {
             "type": "string",
