@@ -30,9 +30,18 @@ vi.mock("./guardrail_table", () => ({
   ),
 }));
 
+const mockGuardrailInfoProps = vi.fn();
+
 vi.mock("./guardrail_info", () => ({
   __esModule: true,
-  default: () => <div>Mock Guardrail Info View</div>,
+  default: (props: any) => {
+    mockGuardrailInfoProps(props);
+    return <div>Mock Guardrail Info View</div>;
+  },
+}));
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
 vi.mock("./GuardrailTestPlayground", () => ({
@@ -83,6 +92,7 @@ describe("GuardrailsPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.pushState(null, "", "/guardrails");
     mockGetGuardrailsList.mockResolvedValue({
       guardrails: [
         {
@@ -127,6 +137,27 @@ describe("GuardrailsPanel", () => {
       expect(mockDeleteGuardrailCall).toHaveBeenCalledWith("test-token", "test-guardrail-1");
     });
     expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2);
+  });
+
+  it("should open the detail view on the settings tab from a deep link", async () => {
+    window.history.pushState(null, "", "/guardrails?guardrail=test-guardrail-1&guardrail_tab=settings");
+
+    render(<GuardrailsPanel {...defaultProps} />);
+    fireEvent.click(screen.getByText("Guardrails"));
+
+    expect(await screen.findByText("Mock Guardrail Info View")).toBeInTheDocument();
+    expect(screen.queryByText("Mock Guardrail Table")).not.toBeInTheDocument();
+    expect(mockGuardrailInfoProps).toHaveBeenCalledWith(
+      expect.objectContaining({ guardrailId: "test-guardrail-1", initialTab: "settings" }),
+    );
+  });
+
+  it("should show the table when no guardrail is deep-linked", async () => {
+    render(<GuardrailsPanel {...defaultProps} />);
+    fireEvent.click(screen.getByText("Guardrails"));
+
+    expect(await screen.findByText("Mock Guardrail Table")).toBeInTheDocument();
+    expect(screen.queryByText("Mock Guardrail Info View")).not.toBeInTheDocument();
   });
 
   it("should not delete anything when the modal is cancelled", async () => {

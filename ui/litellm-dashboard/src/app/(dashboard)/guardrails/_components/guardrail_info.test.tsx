@@ -166,6 +166,74 @@ describe("Guardrail Info", () => {
     }
   });
 
+  it("should open on the settings tab when linked to it, without a second click", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: {
+        guardrail: "headroom",
+        mode: "pre_call",
+        default_on: true,
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call"],
+    });
+
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { findByText, getByRole } = render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} initialTab="settings" />,
+    );
+
+    expect(await findByText("Guardrail Settings")).toBeInTheDocument();
+    expect(getByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
+  });
+
+  it("should stay on the overview tab for a non-admin linked to the settings tab", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: {
+        guardrail: "headroom",
+        mode: "pre_call",
+        default_on: true,
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call"],
+    });
+
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { findAllByText, queryByText } = render(
+      <GuardrailInfoView
+        guardrailId="123"
+        onClose={() => {}}
+        accessToken="123"
+        isAdmin={false}
+        initialTab="settings"
+      />,
+    );
+
+    await findAllByText("Test Guardrail");
+    expect(queryByText("Guardrail Settings")).not.toBeInTheDocument();
+  });
+
   it("should render the guardrail info", async () => {
     // Mock the network responses
     vi.mocked(networking.getGuardrailInfo).mockResolvedValue({

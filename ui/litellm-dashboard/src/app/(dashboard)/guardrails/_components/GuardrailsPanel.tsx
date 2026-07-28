@@ -22,6 +22,7 @@ import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
 import { CustomCodeModal } from "./custom_code";
 import GuardrailGarden from "./guardrail_garden";
 import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
+import { useGuardrailDetailRouting } from "../detailNavigation";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -40,7 +41,12 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<Guardrail | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
+  const {
+    guardrailId: selectedGuardrailId,
+    tab: guardrailDetailTab,
+    openGuardrail,
+    close,
+  } = useGuardrailDetailRouting();
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchGuardrails = async () => {
@@ -65,14 +71,14 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
 
   const handleAddGuardrail = () => {
     if (selectedGuardrailId) {
-      setSelectedGuardrailId(null);
+      close();
     }
     setIsAddModalVisible(true);
   };
 
   const handleAddCustomCodeGuardrail = () => {
     if (selectedGuardrailId) {
-      setSelectedGuardrailId(null);
+      close();
     }
     setIsCustomCodeModalVisible(true);
   };
@@ -166,16 +172,17 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                       {selectedGuardrailId ? (
                         <GuardrailInfoView
                           guardrailId={selectedGuardrailId}
-                          onClose={() => setSelectedGuardrailId(null)}
+                          onClose={close}
                           accessToken={accessToken}
                           isAdmin={isAdmin}
+                          initialTab={guardrailDetailTab}
                         />
                       ) : (
                         <GuardrailTable
                           guardrailsList={guardrailsList}
                           isLoading={isLoading}
                           onDeleteClick={handleDeleteClick}
-                          onGuardrailClick={(id) => setSelectedGuardrailId(id)}
+                          onGuardrailClick={openGuardrail}
                         />
                       )}
 
