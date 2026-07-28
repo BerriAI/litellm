@@ -85,6 +85,39 @@ def test_validated_usage_survives_nested_model_dump():
     assert dumped["usage"]["total_tokens"] == 62528
 
 
+def test_to_openai_chunk_normalizes_openai_shaped_event():
+    """An already-openai-shaped event goes through the same normalization."""
+    chunk = _StreamParser.to_openai_chunk(_final_chunk_payload())
+    assert chunk is not None
+    assert chunk.choices[0].logprobs is None
+    assert isinstance(chunk.usage, Usage)
+
+
+def test_to_openai_chunk_from_orchestration_result():
+    """An orchestration_result delta event is mapped and normalized into a chunk."""
+    event = {
+        "request_id": "a07127d3-cb74-9427-a4dc-ef9bf424fb43",
+        "orchestration_result": {
+            "id": "chatcmpl-sap-delta",
+            "object": "chat.completion.chunk",
+            "created": 1761319270,
+            "model": "anthropic--claude-4.7-opus",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello "},
+                    "logprobs": {},
+                    "finish_reason": None,
+                }
+            ],
+        },
+    }
+    chunk = _StreamParser.to_openai_chunk(event)
+    assert chunk is not None
+    assert chunk.choices[0].delta.content == "Hello "
+    assert chunk.choices[0].logprobs is None
+
+
 def test_deployment_url_raises_404_when_no_orchestration_deployment():
     from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
