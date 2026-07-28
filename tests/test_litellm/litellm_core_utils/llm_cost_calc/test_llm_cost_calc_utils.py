@@ -2399,3 +2399,44 @@ def test_generic_cost_per_token_gemini_35_flash_lite():
     )
     assert prompt_cost == pytest.approx(0.0003)
     assert completion_cost == pytest.approx(0.00125)
+
+
+@pytest.mark.parametrize(
+    "service_tier,input_rate,cache_read_rate,cache_write_rate,output_rate",
+    [
+        ("flex", 2.5e-6, 2.5e-7, 3.125e-6, 1.5e-5),
+        ("priority", 1e-5, 1e-6, 1.25e-5, 6e-5),
+    ],
+)
+def test_service_tier_cache_creation_rates_for_gpt_5_6(
+    _local_model_cost_map,
+    service_tier,
+    input_rate,
+    cache_read_rate,
+    cache_write_rate,
+    output_rate,
+):
+    """Regression: gpt-5.6 publishes cache_creation_input_token_cost_flex/_priority, so a
+    flex or priority request must bill cache writes at that tier's rate instead of falling
+    back to the standard 6.25e-6 rate."""
+    usage = Usage(
+        prompt_tokens=10_000,
+        completion_tokens=500,
+        total_tokens=10_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=6_000,
+            cache_write_tokens=3_000,
+            text_tokens=1_000,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
+    )
+
+    expected_prompt = 1_000 * input_rate + 6_000 * cache_read_rate + 3_000 * cache_write_rate
+    assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
+    assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
