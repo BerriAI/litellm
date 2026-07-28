@@ -126,10 +126,12 @@ async def get_marketplace():
 
 
 # Allowlist for git-subdir paths: one or more segments separated by '/'.
-# Each segment must start with an alphanumeric character and contain only
-# alphanumeric characters, dots, hyphens, and underscores.
-# This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
-_VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
+# Each segment may start with an optional leading dot (to support hidden directories
+# such as .claude/ or .github/) followed by a required alphanumeric character, then
+# any mix of alphanumeric characters, dots, hyphens, and underscores.
+# The required alphanumeric after the optional dot implicitly blocks '.' and '..',
+# leading '/', backslashes, and percent-encoded sequences.
+_VALID_GIT_SUBDIR_PATH_RE = re.compile(r"^\.?[a-zA-Z0-9][a-zA-Z0-9._-]*(/\.?[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 
 
 def _validate_plugin_source(source: Dict[str, Any]) -> None:
@@ -164,7 +166,7 @@ def _validate_plugin_source(source: Dict[str, Any]) -> None:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "git-subdir 'path' must be a relative path of the form 'segment/segment' (alphanumeric, dots, hyphens, underscores only)"
+                    "error": "git-subdir 'path' must be a relative path of the form 'segment/segment'; each segment may start with a dot (e.g. .claude/skills) followed by alphanumeric characters, dots, hyphens, or underscores"
                 },
             )
     else:
