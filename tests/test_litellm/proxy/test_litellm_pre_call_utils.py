@@ -5457,3 +5457,64 @@ def test_get_sanitized_user_information_from_key_drops_callback_config():
     # UserAPIKeyAuth is the live auth object; the per-key callbacks are resolved
     # from it during pre-call, so it must not be mutated by building the log view
     assert "logging" in (user_api_key_dict.metadata or {})
+
+
+def test_team_alias_targeting_deleted_team_deployment_keeps_requested_model(monkeypatch):
+    """
+    Regression: a team's model_aliases can point at the internal routing key
+    (model_name_{team_id}_{uuid}) of a team deployment that was since deleted,
+    e.g. after an admin replaces per-team duplicates with one gateway-level
+    model. Rewriting to the dead internal name made every request fail with
+    "no healthy deployments for model_name_..." even though the requested
+    public name resolves at the gateway level. The rewrite must be skipped
+    when the alias target has no live deployment.
+    """
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        model_name_to_deployment_indices = {"gpt-4": [0]}
+        team_model_to_deployment_indices = {}
+
+    test_data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4": "model_name_team-1_dead-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "gpt-4"
+
+
+def test_team_alias_targeting_live_team_deployment_still_rewrites(monkeypatch):
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        model_name_to_deployment_indices = {"model_name_team-1_live-uuid": [0]}
+        team_model_to_deployment_indices = {}
+
+    test_data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4": "model_name_team-1_live-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "model_name_team-1_live-uuid"
