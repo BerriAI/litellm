@@ -13,6 +13,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
@@ -272,6 +273,7 @@ async def patch_model(
         )
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
+        live_before_reload = live_model_ids_snapshot()
         await clear_cache()
 
         ## CREATE AUDIT LOG ##
@@ -286,6 +288,12 @@ async def patch_model(
                 litellm_changed_by=user_api_key_dict.user_id,
                 litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
             )
+        )
+
+        raise_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=[(model_id, getattr(updated_model, "model_info", None))],
+            action="update",
         )
 
         return updated_model
@@ -370,6 +378,7 @@ async def _set_model_blocked_status(
             },
         )
 
+        live_before_reload = live_model_ids_snapshot()
         await clear_cache()
 
         asyncio.create_task(
@@ -385,6 +394,12 @@ async def _set_model_blocked_status(
                 litellm_changed_by=litellm_changed_by,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
+        )
+
+        raise_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=[(data.model_id, getattr(updated_model, "model_info", None))],
+            action=action,
         )
 
         return updated_model
@@ -713,13 +728,8 @@ async def _get_team_deployments(
     # Confirm team_id in model_info (defensive check)
     result = []
     for row in response:
-        model_info = row.model_info
-        if isinstance(model_info, str):
-            try:
-                model_info = json.loads(model_info)
-            except (TypeError, ValueError):
-                continue
-        if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
+        model_info = model_info_as_mapping(row.model_info)
+        if model_info is not None and model_info.get("team_id") == team_id:
             result.append(row)
     return result
 
@@ -770,13 +780,8 @@ async def _get_team_public_model_names(
     deployments = await _get_team_deployments(team_id, prisma_client)
     public_names: Set[str] = set()
     for row in deployments:
-        model_info = row.model_info
-        if isinstance(model_info, str):
-            try:
-                model_info = json.loads(model_info)
-            except (TypeError, ValueError):
-                continue
-        if isinstance(model_info, dict):
+        model_info = model_info_as_mapping(row.model_info)
+        if model_info is not None:
             public_name = model_info.get("team_public_model_name")
             if public_name:
                 public_names.add(public_name)
@@ -853,18 +858,11 @@ async def _update_existing_team_model_assignment(
     def _get_team_public_model_name(
         model_info: Optional[Union[dict, str]],
     ) -> Optional[str]:
-        if isinstance(model_info, dict):
-            value = model_info.get("team_public_model_name")
-            return value if isinstance(value, str) else None
-        if isinstance(model_info, str):
-            try:
-                parsed = json.loads(model_info)
-            except (TypeError, ValueError):
-                return None
-            if isinstance(parsed, dict):
-                value = parsed.get("team_public_model_name")
-                return value if isinstance(value, str) else None
-        return None
+        parsed = model_info_as_mapping(model_info)
+        if parsed is None:
+            return None
+        value = parsed.get("team_public_model_name")
+        return value if isinstance(value, str) else None
 
     old_public_name = db_model.model_info.team_public_model_name if db_model.model_info else None
 
@@ -1275,6 +1273,7 @@ async def add_new_model(
             - store keys separately
             """
 
+            live_before_reload = live_model_ids_snapshot()
             try:
                 _original_litellm_model_name = model_params.model_name
                 if model_params.model_info.team_id is None:
@@ -1328,6 +1327,12 @@ async def add_new_model(
                 litellm_changed_by=user_api_key_dict.user_id,
                 litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
             )
+        )
+
+        raise_if_reload_degraded_serving(
+            before=live_before_reload,
+            written_models=[(model_response.model_id, getattr(model_response, "model_info", None))],
+            action="create",
         )
 
         return model_response
@@ -1450,8 +1455,8 @@ async def update_model(
             )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
+            live_before_reload = live_model_ids_snapshot()
             await clear_cache()
-
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(
@@ -1472,6 +1477,12 @@ async def update_model(
                     litellm_changed_by=user_api_key_dict.user_id,
                     litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
                 )
+            )
+
+            raise_if_reload_degraded_serving(
+                before=live_before_reload,
+                written_models=[(_model_id, getattr(model_response, "model_info", None))],
+                action="update",
             )
 
             return model_response
@@ -1675,6 +1686,114 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             unique_models.append(model)
             seen_ids.add(model_id)
     return unique_models
+
+
+def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
+    """A DB row's model_info column arrives as a dict or as its JSON string depending on
+    the query path, and every consumer needs the mapping. Single owner of that parse:
+    returns None when no usable mapping exists (None, an unparseable string, or JSON
+    that is not an object), and callers choose what None means for them."""
+    if isinstance(model_info, Mapping):
+        return model_info
+    if not isinstance(model_info, str):
+        return None
+    try:
+        parsed = json.loads(model_info)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, Mapping) else None
+
+
+def _expects_liveness_on_this_pod(model_info: object) -> bool:
+    from litellm.router import model_info_is_active_for_environment
+
+    try:
+        return model_info_is_active_for_environment(model_info=model_info_as_mapping(model_info))
+    except ValueError:
+        return True
+
+
+def live_model_ids_snapshot() -> frozenset[str]:
+    """The ids this pod's router is currently serving, read fresh from the module global
+    because a reload can rebind it. The empirical ground truth every verdict below is
+    computed from; an absent router serves nothing."""
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return frozenset()
+    return frozenset(llm_router.get_model_ids())
+
+
+def reload_serving_verdict(
+    before: frozenset[str],
+    written_models: Sequence[tuple[str, object]],
+    written_must_serve: bool,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Judge a write-triggered reload by diffing the router's serving state instead of
+    trusting any layer of the reload stack to report its own failure.
+
+    The full cell matrix, per id:
+    - written, must-serve (the write's purpose is this model's serving state): live now
+      is fine; not live is reported unless the row is deliberately inactive for this
+      pod's LITELLM_ENVIRONMENT; a row whose model_info cannot be read counts as
+      expecting to serve, so its drop is still reported
+    - written, metadata-only (must_not_degrade): live before and gone now is reported;
+      a row that was already not serving stays silent, because its deadness predates
+      this write and blaming it would block unrelated metadata fixes
+    - not written but live before and gone now: collateral degradation of this pod
+      caused by the reload this request triggered (a wholesale re-add failure, or a
+      newly introduced conflict), always reported
+
+    Returns (written ids violating their obligation, collateral ids no longer served).
+    Best effort under concurrent admin writes: the snapshot spans only this request.
+    """
+    now = live_model_ids_snapshot()
+    written_ids = frozenset(model_id for model_id, _ in written_models)
+    if written_must_serve:
+        missing = tuple(
+            model_id
+            for model_id, model_info in written_models
+            if model_id not in now and _expects_liveness_on_this_pod(model_info)
+        )
+    else:
+        missing = tuple(model_id for model_id, _ in written_models if model_id in before and model_id not in now)
+    collateral = tuple(sorted(before - now - written_ids))
+    return (missing, collateral)
+
+
+def raise_if_reload_degraded_serving(
+    before: frozenset[str],
+    written_models: Sequence[tuple[str, object]],
+    action: str,
+) -> None:
+    """The caller-visible error this pod's model-write endpoints owe their caller when
+    the model they wrote is not being served after the reload they triggered. The DB
+    write is durable either way and every other pod reloads on its own interval; this
+    speaks only for the handling pod."""
+    missing, collateral = reload_serving_verdict(before=before, written_models=written_models, written_must_serve=True)
+    if not missing and not collateral:
+        return
+    missing_clause = (
+        f"the model id(s) {list(missing)} are not live in this pod's router after the reload and are not "
+        "being served by this pod."
+        if missing
+        else "the reload it triggered degraded this pod's serving state."
+    )
+    collateral_clause = (
+        f" Previously served model id(s) {list(collateral)} are also no longer being served by this pod."
+        if collateral
+        else ""
+    )
+    raise ProxyException(
+        message=(
+            f"Model {action} was saved to the database, but {missing_clause}{collateral_clause} "
+            "Other pods reload on their own interval. Check server logs for 'Error upserting deployment' or "
+            "'Error creating deployment' for the cause."
+        ),
+        type=ProxyErrorTypes.internal_server_error,
+        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        param=None,
+    )
 
 
 async def clear_cache():
