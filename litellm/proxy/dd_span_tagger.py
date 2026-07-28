@@ -38,11 +38,15 @@ class DDSpanTagger:
         - ``litellm.key_alias``      — human-readable alias for the API key
         - ``litellm.key_hash``       — hashed API key (safe to log; never the raw secret)
         - ``litellm.requested_model``— model name as sent by the client
+        - ``litellm_user_email``     — email of the authenticated user
 
         Use cases:
         - Trace all requests from a specific user/key: filter by ``litellm.key_alias`` or
           ``litellm.key_hash``.
         - Trace all requests for a specific model: filter by ``litellm.requested_model``.
+        - Trace all requests from a specific person under JWT auth, where there is no key_alias:
+          filter by ``@litellm_user_email:"user@example.com"``. The value comes from the JWT claim
+          mapped by ``litellm_jwtauth.user_email_jwt_field``, or from the user row for virtual keys.
 
         Note: key_alias / key_hash are not available for unauthenticated (e.g. 401) requests.
         """
@@ -53,8 +57,10 @@ class DDSpanTagger:
                 set_active_span_tag("litellm.key_hash", str(user_api_key_dict.token))
             if requested_model:
                 set_active_span_tag("litellm.requested_model", str(requested_model))
+            if user_api_key_dict.user_email:
+                set_active_span_tag("litellm_user_email", str(user_api_key_dict.user_email))
         except Exception:
             verbose_proxy_logger.debug(
-                "Failed to tag active ddtrace span with key/model tags",
+                "Failed to tag active ddtrace span with key/model/user tags",
                 exc_info=True,
             )
