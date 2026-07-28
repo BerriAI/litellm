@@ -539,6 +539,63 @@ async def test_populate_team_access_sets_direct_access_false_by_default(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_populate_team_access_grants_config_access_group_model():
+    """LIT-4433: a team whose only model grant is a CONFIG-defined access group
+    (model_info.access_groups) must have that group's member deployments listed in
+    access_via_team_ids. Before the fix _add_team_models_to_all_models passed the
+    access-group name straight to get_model_list, which never matched, leaving the
+    team's /v2/model/info?include_team_models=true result empty."""
+    team_id = "team-access-group-only"
+    access_group_model = {
+        "model_name": "team-allowed-model-a",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {
+            "id": "model-a-id",
+            "access_groups": ["test-access-group"],
+            "db_model": False,
+        },
+    }
+
+    router = MagicMock()
+    router.get_model_names.return_value = ["team-allowed-model-a"]
+    router.get_model_access_groups.return_value = {"test-access-group": ["team-allowed-model-a"]}
+    router.get_model_ids.return_value = []
+
+    def get_model_list(model_name=None, team_id=None):
+        if model_name == "team-allowed-model-a":
+            return [access_group_model]
+        return None
+
+    router.get_model_list.side_effect = get_model_list
+
+    team_db_object = MagicMock()
+    team_db_object.model_dump.return_value = {
+        "team_id": team_id,
+        "models": ["test-access-group"],
+        "access_group_ids": [],
+    }
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team_db_object])
+
+    admin = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[])
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=admin,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[
+            {
+                "model_name": "team-allowed-model-a",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "model-a-id", "access_groups": ["test-access-group"], "db_model": False},
+            }
+        ],
+    )
+
+    by_id = {m["model_info"]["id"]: m for m in result}
+    assert by_id["model-a-id"]["model_info"]["access_via_team_ids"] == [team_id]
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_team_id_without_db_fails_fast(monkeypatch):
     """`teamId` without a connected DB raises 500 before any enrichment work runs."""
     router = MagicMock()
