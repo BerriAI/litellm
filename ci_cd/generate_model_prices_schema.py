@@ -289,7 +289,9 @@ def render(schema: JsonSchema) -> str:
 
 
 def validation_errors(prices: dict, schema: JsonSchema) -> tuple:
-    validator = jsonschema.Draft202012Validator(schema)
+    validator = jsonschema.Draft202012Validator(
+        schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
+    )
     return tuple(
         f"{'.'.join(str(part) for part in error.absolute_path)}: {error.message}"
         for error in validator.iter_errors(prices)

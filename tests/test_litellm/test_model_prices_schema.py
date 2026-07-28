@@ -13,6 +13,10 @@ PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
 
 
+def build_validator(schema: dict) -> jsonschema.Draft202012Validator:
+    return jsonschema.Draft202012Validator(schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER)
+
+
 def load_generator():
     spec = importlib.util.spec_from_file_location("generate_model_prices_schema", GENERATOR_PATH)
     assert spec is not None and spec.loader is not None
@@ -41,7 +45,7 @@ def test_committed_schema_matches_generator_output(prices: dict, committed_schem
 
 
 def test_prices_file_validates_against_committed_schema(prices: dict, committed_schema: dict):
-    validator = jsonschema.Draft202012Validator(committed_schema)
+    validator = build_validator(committed_schema)
     errors = [
         f"{'.'.join(str(part) for part in error.absolute_path)}: {error.message}"
         for error in validator.iter_errors(prices)
@@ -61,6 +65,7 @@ def test_prices_file_validates_against_committed_schema(prices: dict, committed_
         {"litellm_provider": "openai", "deprecation_date": "2026-13-01"},
         {"litellm_provider": "openai", "deprecation_date": "2026-01-32"},
         {"litellm_provider": "openai", "deprecation_date": "2026-01-00"},
+        {"litellm_provider": "openai", "deprecation_date": "2026-02-31"},
         {"litellm_provider": "openai", "supported_modalities": ["smell"]},
         {"litellm_provider": "openai", "supports_vision": "yes"},
         {"litellm_provider": "openai", "max_tokens": 8191.5},
@@ -76,6 +81,7 @@ def test_prices_file_validates_against_committed_schema(prices: dict, committed_
         "month_out_of_range",
         "day_out_of_range",
         "day_zero",
+        "calendar_impossible_day",
         "unknown_modality",
         "boolean_flag_as_string",
         "fractional_max_tokens",
@@ -83,11 +89,11 @@ def test_prices_file_validates_against_committed_schema(prices: dict, committed_
     ],
 )
 def test_schema_rejects_malformed_entries(committed_schema: dict, entry: dict):
-    validator = jsonschema.Draft202012Validator(committed_schema)
+    validator = build_validator(committed_schema)
     assert not validator.is_valid({"some-model": entry})
 
 
 def test_schema_accepts_minimal_and_unknown_optional_fields(committed_schema: dict):
-    validator = jsonschema.Draft202012Validator(committed_schema)
+    validator = build_validator(committed_schema)
     assert validator.is_valid({"some-model": {"litellm_provider": "openai"}})
     assert validator.is_valid({"some-model": {"litellm_provider": "openai", "brand_new_field": {"nested": True}}})
