@@ -2,9 +2,10 @@ import json
 import os
 import time
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -18,16 +19,6 @@ from .common_utils import (
     get_copilot_auth_headers,
 )
 
-
-class _LegacyCopilotEndpoints(TypedDict, total=False):
-    api: str
-
-
-class _LegacyCopilotTokenCache(TypedDict, total=False):
-    endpoints: _LegacyCopilotEndpoints
-
-
-_LEGACY_COPILOT_TOKEN_CACHE_ADAPTER = TypeAdapter(_LegacyCopilotTokenCache)
 
 # Constants (default values — overridable via environment variables at call time)
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
@@ -70,6 +61,18 @@ def github_api_headers(
     return headers
 
 
+def _is_secure_api_base(api_base: str) -> bool:
+    parsed_api_base = urlsplit(api_base)
+    return (
+        parsed_api_base.scheme.lower() == "https"
+        and parsed_api_base.hostname is not None
+        and parsed_api_base.username is None
+        and parsed_api_base.password is None
+        and not parsed_api_base.query
+        and not parsed_api_base.fragment
+    )
+
+
 class Authenticator:
     def __init__(self) -> None:
         """Initialize the GitHub Copilot authenticator with configurable token paths."""
@@ -82,14 +85,6 @@ class Authenticator:
             self.token_dir,
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
-        self.legacy_api_key_file = os.path.join(
-            self.token_dir,
-            os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"),
-        )
-        if os.getenv("GITHUB_COPILOT_API_KEY_URL"):
-            verbose_logger.warning(
-                "GITHUB_COPILOT_API_KEY_URL is no longer used; LiteLLM sends the OAuth access token directly"
-            )
         self._ensure_token_dir()
 
     def get_access_token(self) -> str:
@@ -152,17 +147,14 @@ class Authenticator:
 
     def get_api_base(self) -> str | None:
         configured_api_base = os.getenv("GITHUB_COPILOT_API_BASE")
-        if configured_api_base:
-            return configured_api_base
-        try:
-            with open(self.legacy_api_key_file, "r") as legacy_api_key_file:
-                legacy_cache = _LEGACY_COPILOT_TOKEN_CACHE_ADAPTER.validate_json(legacy_api_key_file.read())
-        except IOError:
+        if configured_api_base is None:
             return None
-        except ValidationError as e:
-            verbose_logger.warning(f"Error reading legacy GitHub Copilot API endpoint: {str(e)}")
+        if not _is_secure_api_base(configured_api_base):
+            verbose_logger.warning(
+                "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTPS URL without credentials, query, or fragment"
+            )
             return None
-        return legacy_cache.get("endpoints", {}).get("api")
+        return configured_api_base
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
