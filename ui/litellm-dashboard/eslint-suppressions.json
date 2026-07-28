@@ -1978,11 +1978,6 @@
       "count": 1
     }
   },
-  "src/app/forgot-password/ForgotPasswordForm.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/login/LoginPage.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
