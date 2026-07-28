@@ -9512,6 +9512,16 @@ class TestServerToolListsHonorThePrefixBoundary:
         assert "include_internal" in exc_info.value.detail["error"]
 
     @pytest.mark.asyncio
+    async def test_an_entry_does_not_decide_an_operation_id_registration_keeps_separate(self):
+        server = self._aliased_server(disallowed_tools=["foo/bar"], spec_path="/specs/petstore.yaml")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run_check(server, "foo/bar")
+
+        assert exc_info.value.status_code == 403
+        await self._run_check(server, "foo.bar")
+
+    @pytest.mark.asyncio
     async def test_a_blocklist_entry_does_not_reach_a_case_variant_sibling_tool(self):
         server = self._aliased_server(disallowed_tools=["petstore-getPet"])
 
