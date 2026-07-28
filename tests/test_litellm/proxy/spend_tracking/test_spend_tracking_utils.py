@@ -78,6 +78,29 @@ def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_token
     assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
 
 
+def test_should_preserve_model_group_in_spend_logs_with_both_metadata_buckets():
+    """Router model groups must reach SpendLogsPayload when guardrails add a second bucket."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "provider/deployment-model",
+            "call_type": "acompletion",
+            "response_cost": 0.0,
+            "litellm_params": {
+                "metadata": {"model_group": "router-model-group"},
+                "litellm_metadata": {"user_api_key": "test-key"},
+            },
+        },
+        response_obj={
+            "id": "chatcmpl-metadata-regression",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model_group"] == "router-model-group"
+
+
 def test_get_logging_payload_preserves_anthropic_cache_read_input_tokens():
     additional_usage_values = _get_additional_usage_values_for_usage(
         litellm.Usage(

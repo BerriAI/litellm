@@ -164,17 +164,24 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
+_ROUTER_METADATA_KEYS_TO_PRESERVE = frozenset({"model_group"})
+
+
 def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    and spend-tracking values are in 'metadata'. User API key values keep their
+    existing overwrite behavior. Router metadata is only copied when the target
+    bucket does not already contain the key, so an existing internal value wins.
     """
     potential_spend_tracking_metadata_substring = "user_api_key"
     for key, value in metadata.items():
         if potential_spend_tracking_metadata_substring in key:
             litellm_metadata[key] = value
+        elif key in _ROUTER_METADATA_KEYS_TO_PRESERVE:
+            litellm_metadata.setdefault(key, value)
     return litellm_metadata
 
 

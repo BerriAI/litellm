@@ -4,6 +4,8 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    add_missing_spend_metadata_to_litellm_metadata,
+    get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
     map_finish_reason,
     reconstruct_model_name,
@@ -242,3 +244,37 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+def test_should_preserve_model_group_when_both_metadata_buckets_exist():
+    """Router metadata must survive the spend-tracking metadata merge."""
+    result = add_missing_spend_metadata_to_litellm_metadata(
+        litellm_metadata={"user_api_key_user_id": "test-user"},
+        metadata={"model_group": "router-model-group"},
+    )
+
+    assert result["model_group"] == "router-model-group"
+
+
+def test_should_keep_existing_litellm_model_group_value():
+    """A value already in the internal bucket must not be overwritten."""
+    result = add_missing_spend_metadata_to_litellm_metadata(
+        litellm_metadata={"model_group": "trusted-model-group"},
+        metadata={"model_group": "request-model-group"},
+    )
+
+    assert result["model_group"] == "trusted-model-group"
+
+
+def test_should_preserve_model_group_through_metadata_lookup():
+    """The public metadata lookup should return Router fields from either bucket."""
+    result = get_litellm_metadata_from_kwargs(
+        {
+            "litellm_params": {
+                "metadata": {"model_group": "router-model-group"},
+                "litellm_metadata": {"user_api_key_user_id": "test-user"},
+            }
+        }
+    )
+
+    assert result["model_group"] == "router-model-group"
