@@ -67,7 +67,9 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug(f"Transformed request: {request_body}")
 
             # Get endpoint URL
-            endpoint_url = api_base or self.get_anthropic_count_tokens_endpoint()
+            endpoint_url = (
+                f"{api_base}/v1/messages/count_tokens" if api_base else self.get_anthropic_count_tokens_endpoint()
+            )
 
             verbose_logger.debug(f"Making request to: {endpoint_url}")
 
