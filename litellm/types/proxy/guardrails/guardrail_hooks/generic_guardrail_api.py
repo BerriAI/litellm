@@ -108,6 +108,20 @@ class GenericGuardrailAPIConfigModel(
 ):
     """Configuration parameters for the Generic Guardrail API guardrail"""
 
+    api_base: Optional[str] = Field(
+        default=None,
+        description=(
+            "Base URL of the guardrail service implementing the LiteLLM Basic Guardrail API spec; "
+            "LiteLLM appends /beta/litellm_basic_guardrail_api to it. Falls back to the "
+            "GENERIC_GUARDRAIL_API_BASE environment variable, and initialization fails when neither is set."
+        ),
+    )
+
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API key for the guardrail service, sent as the x-api-key header.",
+    )
+
     optional_params: Optional[GenericGuardrailAPIOptionalParams] = Field(
         default_factory=GenericGuardrailAPIOptionalParams,
         description="Optional parameters for the Generic Guardrail API guardrail",

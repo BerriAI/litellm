@@ -1150,6 +1150,26 @@ class TestGenericGuardrailAPIStreamingConfig:
 
         assert GenericGuardrailAPI.get_config_model() is GenericGuardrailAPIConfigModel
 
+    def test_config_model_exposes_api_base_and_api_key(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIConfigModel,
+        )
+
+        assert set(GenericGuardrailAPIConfigModel.model_fields) >= {"api_base", "api_key"}
+
+    @pytest.mark.asyncio
+    async def test_ui_provider_specific_params_expose_connection_fields(self):
+        from litellm.proxy.guardrails.guardrail_endpoints import (
+            get_provider_specific_params,
+        )
+
+        provider_params = await get_provider_specific_params()
+        generic_params = provider_params["generic_guardrail_api"]
+
+        assert generic_params["api_base"]["type"] == "string"
+        assert generic_params["api_key"]["type"] == "string"
+        assert generic_params["optional_params"]["type"] == "nested"
+
     def test_streaming_transform_mode_defaults_block_only(self):
         guardrail = GenericGuardrailAPI(
             api_base="https://api.test.guardrail.com",
