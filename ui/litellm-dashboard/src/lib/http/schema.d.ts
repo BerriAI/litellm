@@ -26630,6 +26630,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
@@ -35210,6 +35212,8 @@ export interface components {
             input_cost_per_video_token?: number | null;
             /** Itpm */
             itpm?: number | null;
+            /** Keepalive Seconds */
+            keepalive_seconds?: number | null;
             /** Litellm Credential Name */
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
