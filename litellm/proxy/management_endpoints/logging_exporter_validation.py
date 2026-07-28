@@ -15,17 +15,6 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 LOGGING_EXPORTERS_KEY = "logging_exporters"
 
 
-def is_admin_gated_credential_info(credential_info: dict | None) -> bool:
-    """Whether a credential write must be proxy-admin only.
-
-    True when the credential is a logging destination or carries an ``access`` grant,
-    since both control where other tenants' traces are exported.
-    """
-    if not isinstance(credential_info, dict):
-        return False
-    return credential_info.get("credential_type") == "logging" or "access" in credential_info
-
-
 def validate_credential_access(credential_info: dict | None) -> None:
     """Validate ``credential_info.access`` shape when the write sets one.
 

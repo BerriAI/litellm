@@ -3091,7 +3091,7 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Your role=internal_user" in str(exc_info.value)
 
 
-# --- Credential route gating (PR #30873: /credentials opened to self-managed) --- #
+# --- Credential route gating (PR #30873: /credentials is proxy-admin only) --- #
 
 
 @pytest.mark.parametrize(

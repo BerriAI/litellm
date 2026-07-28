@@ -9,7 +9,12 @@ import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels,
 import { Form, Modal, Tag } from "antd";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useMemo, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import {
+  canReadCredentialsRole,
+  isProxyAdminRole,
+  isUserTeamAdminForSingleTeam,
+  rolesWithWriteAccess,
+} from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -73,7 +78,7 @@ export default function KeyInfoView({
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
-  const { data: keyCredentialsData } = useCredentials();
+  const { data: keyCredentialsData } = useCredentials(canReadCredentialsRole(userRole));
   const { data: keyOrganizationsData } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();

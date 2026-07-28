@@ -32,10 +32,10 @@ class CreateCredentialItem(CredentialBase):
 class UpdateCredentialItem(BaseModel):
     """PATCH body for ``/credentials/{name}``.
 
-    Both ``credential_values`` and ``credential_info`` are optional so a caller
-    can patch one without sending the other (team-admins patching access without
-    knowing the upstream secrets; proxy admins rotating values without touching
-    access). ``credential_name`` is optional because most patches don't rename.
+    Both ``credential_values`` and ``credential_info`` are optional so the proxy
+    admin can patch one without sending the other (rotating values without
+    touching access, or adjusting access without re-sending secrets).
+    ``credential_name`` is optional because most patches don't rename.
     """
 
     credential_name: str | None = None
@@ -59,19 +59,17 @@ class CredentialAccess(BaseModel):
 
 
 class CredentialInfo(BaseModel):
-    """Typed shape of ``credential_info`` for the access-control decider.
+    """Typed shape of ``credential_info`` as read by the request-time resolver.
 
     Existing stored credentials carry arbitrary extra fields (e.g.
-    ``custom_llm_provider``); ``extra="allow"`` preserves them. The decider
-    inspects ``model_fields_set`` to learn which fields the caller actually
-    patched, which is what Pydantic gives us natively without dict-key spelunking.
+    ``custom_llm_provider``); ``extra="allow"`` preserves them. Only the fields
+    the resolver consumes are typed: ``credential_type`` selects logging
+    destinations, and ``access``/``auto_enable`` decide which identities the
+    destination fires for.
     """
 
     model_config = ConfigDict(extra="allow")
 
     credential_type: str | None = None
-    description: str | None = None
-    host: str | None = None
-    endpoint: str | None = None
     access: CredentialAccess | None = None
     auto_enable: bool = False

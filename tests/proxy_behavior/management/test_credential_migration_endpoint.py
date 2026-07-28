@@ -50,12 +50,9 @@ async def test_migrate_encryption_check_requires_admin(proxy_client, scratch):
 async def test_migrate_encryption_requires_admin(proxy_client, scratch):
     """A non-admin key cannot trigger the migration; it is rejected before any write.
 
-    ``/credentials/{credential_name}`` is a self-managed route (team admins reach
-    ``PATCH /credentials/{name}`` to grant their own team a logging destination), so
-    the single-segment ``/credentials/migrate-encryption`` path matches that pattern
-    and clears the route-level gate. The migration endpoint then rejects the
-    non-admin on its first line via ``_require_proxy_admin`` (403), ahead of any DB
-    read or write. Either way the non-admin never triggers the migration.
+    No ``/credentials`` route is self-managed: credentials are proxy-admin only, so
+    a non-admin POST to ``/credentials/migrate-encryption`` is rejected at the
+    route-level gate (401) before the handler or any DB read/write runs.
     """
     gen = await proxy_client.post(
         "/key/generate",
@@ -72,4 +69,4 @@ async def test_migrate_encryption_requires_admin(proxy_client, scratch):
         "/credentials/migrate-encryption",
         headers={"Authorization": f"Bearer {nonadmin_key}"},
     )
-    assert resp.status_code == 403, resp.text
+    assert resp.status_code == 401, resp.text

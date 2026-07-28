@@ -23,6 +23,7 @@ type LoggingCallbacksProps = {
   onDelete?: (callback: AlertingObject) => void;
   onEditAccess?: (callback: AlertingObject) => void;
   onAdd?: () => void;
+  readOnly?: boolean;
 };
 
 function EmptyState() {
@@ -48,21 +49,25 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   onDelete = () => {},
   onEditAccess = () => {},
   onAdd = () => {},
+  readOnly = false,
 }) => {
   const columns = useMemo(() => {
     const deps = { availableCallbacks, onTest, onEdit, onDelete, onEditAccess };
-    return getLoggingCallbacksTableColumns(deps);
-  }, [availableCallbacks, onTest, onEdit, onDelete, onEditAccess]);
+    const all = getLoggingCallbacksTableColumns(deps);
+    return readOnly ? all.filter((column) => column.id !== "actions") : all;
+  }, [availableCallbacks, onTest, onEdit, onDelete, onEditAccess, readOnly]);
 
   return (
     <div className="mt-4 flex w-full flex-col gap-4">
       <h3 className="text-lg font-semibold tracking-tight text-foreground">Active Logging Callbacks</h3>
-      <div>
-        <Button onClick={onAdd}>
-          <Plus />
-          Add Callback
-        </Button>
-      </div>
+      {!readOnly && (
+        <div>
+          <Button onClick={onAdd}>
+            <Plus />
+            Add Callback
+          </Button>
+        </div>
+      )}
       <DataTable
         data={callbacks as CallbackRow[]}
         columns={columns}

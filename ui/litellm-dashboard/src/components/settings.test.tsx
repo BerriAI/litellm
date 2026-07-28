@@ -90,7 +90,7 @@ beforeAll(() => {
 describe("Settings", () => {
   const defaultProps = {
     accessToken: "token",
-    userRole: "admin",
+    userRole: "Admin",
     userID: "user-123",
     premiumUser: false,
   };

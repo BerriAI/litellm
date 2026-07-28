@@ -32,7 +32,7 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
-            detail={"error": "Only the proxy admin can manage logging credentials"},
+            detail={"error": "Only the proxy admin can manage credentials"},
         )
 
 
@@ -271,8 +271,6 @@ async def delete_credential(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    # DELETE stays proxy-admin only. The route gate lets team-admins reach
-    # /credentials/{name} for PATCH; reject any DELETE that isn't proxy-admin.
     _require_proxy_admin(user_api_key_dict)
 
     try:
@@ -334,14 +332,12 @@ def update_db_credential(
 def _merge_credential_info(into: dict, patch: dict) -> None:
     """Merge ``patch`` into ``into`` in place, with surgical access subfields.
 
-    A prior top-level dict.update let a patch like ``{access: {teams: [...]}}``
+    A top-level dict.update would let a patch like ``{access: {teams: [...]}}``
     replace the entire stored ``access`` object, wiping ``access.global=true``
-    and ``access.orgs`` entries that the decider intentionally protected by
-    refusing to allow them in the patch (Veria F1: scope tampering). Now
-    ``access`` is merged subfield-by-subfield, so a non-admin patch carrying
-    only ``access.teams`` keeps existing ``access.global`` / ``access.orgs``
-    intact. The DB write and the in-memory cache sync both call this so the
-    two stores can't drift.
+    and ``access.orgs`` entries the caller never mentioned. ``access`` is merged
+    subfield-by-subfield instead, so a partial patch keeps the untouched
+    subfields intact. The DB write and the in-memory cache sync both call this
+    so the two stores can't drift.
     """
     patch_copy = dict(patch)
     patch_access = patch_copy.pop("access", None)

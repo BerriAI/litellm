@@ -88,13 +88,7 @@ async def test_create_logging_credential_allowed_for_admin(_connected_db):
 
 @pytest.mark.asyncio
 async def test_create_provider_credential_forbidden_for_non_admin(_connected_db):
-    """POST is proxy-admin only even for provider credentials.
-
-    The route gate now lets non-admins reach the credentials path so they can
-    PATCH ``access.teams`` on logging destinations they should be able to
-    self-assign. POST remains admin-only to keep credential creation a
-    platform-admin concern.
-    """
+    """POST is proxy-admin only for provider and logging credentials alike."""
     with pytest.raises(HTTPException) as exc:
         await endpoints.create_credential(
             request=MagicMock(),
@@ -191,11 +185,9 @@ def test_update_db_credential_preserves_existing_info_on_partial_patch():
 
 
 def test_update_db_credential_preserves_untouched_access_subfields():
-    """Veria regression: an access patch carrying only `teams` must NOT clobber
-    existing `global` / `orgs`. Pre-fix this caused a scope-tampering bug —
-    the decider only allowed team-admin patches that touched access.teams,
-    but the merge replaced the entire access object, silently dropping
-    access.global=true and any access.orgs entries.
+    """An access patch carrying only `teams` must NOT clobber existing
+    `global` / `orgs`: a top-level replace of the access object would silently
+    drop access.global=true and any access.orgs entries the patch never named.
     """
     from litellm.proxy.credential_endpoints.endpoints import update_db_credential
 
@@ -213,8 +205,7 @@ def test_update_db_credential_preserves_untouched_access_subfields():
             },
         },
     )
-    # Team-admin's allowed shape: add their team to access.teams. Crucially,
-    # they don't (and per the decider can't) include global/orgs.
+    # A partial patch touching only access.teams; global/orgs are not sent.
     patch = CredentialItem(
         credential_name="dest",
         credential_values={},
@@ -314,19 +305,14 @@ async def test_delete_db_only_logging_credential_forbidden_for_non_admin(
     _connected_db.delete_by_name.assert_not_awaited()
 
 
-# --- team-admin self-assign tests (LIT-3850 follow-up) ----------------------
+# --- PATCH gating (proxy-admin only) ----------------------------------------
 
 @pytest.mark.asyncio
 async def test_provider_credential_patch_forbidden_for_non_admin(
     _connected_db, monkeypatch
 ):
-    """A team-admin (or any non-admin) cannot PATCH a non-logging credential.
-
-    The route gate was widened to let team-admins reach /credentials/{name}
-    for logging-credential access edits. A provider credential is not
-    is_admin_gated_credential_info, so the decider block is skipped; without
-    an explicit else-branch a team-admin could rotate the upstream api_key.
-    """
+    """A non-admin cannot PATCH a provider credential (or any credential):
+    without the gate a non-admin could rotate the upstream api_key."""
     provider_cred = CredentialItem(
         credential_name="openai-prod",
         credential_values={"api_key": "sk-real"},

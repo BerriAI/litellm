@@ -19,7 +19,6 @@ import litellm
 from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
-    is_admin_gated_credential_info,
     validate_credential_access,
     validate_logging_exporter_assignment,
     validate_logging_exporter_field,
@@ -99,9 +98,6 @@ def test_non_admin_with_no_flags_is_forbidden(_registry):
     with pytest.raises(HTTPException) as exc:
         validate_logging_exporter_assignment(_ok(["langfuse-eu"]), _non_admin())
     assert exc.value.status_code == 403
-
-
-# --- Scope checks: a non-proxy-admin may only name destinations granted to them -
 
 
 # --- Shape / registry checks (run regardless of who's calling) --------------
@@ -210,22 +206,7 @@ def test_omitted_on_both_sides_is_noop(_registry):
     )
 
 
-# --- is_admin_gated_credential_info / validate_credential_access ------------
-
-
-@pytest.mark.parametrize(
-    "credential_info, gated",
-    [
-        ({"credential_type": "logging"}, True),
-        ({"access": {"global": True}}, True),
-        ({"credential_type": "logging", "access": {"teams": ["t"]}}, True),
-        ({"custom_llm_provider": "openai"}, False),
-        ({}, False),
-        (None, False),
-    ],
-)
-def test_is_admin_gated_credential_info(credential_info, gated):
-    assert is_admin_gated_credential_info(credential_info) is gated
+# --- validate_credential_access ---------------------------------------------
 
 
 def test_validate_credential_access_accepts_valid_object():

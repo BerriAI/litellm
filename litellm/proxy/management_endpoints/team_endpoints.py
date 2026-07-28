@@ -1019,10 +1019,8 @@ async def new_team(
             user_api_key_cache,
         )
 
-        # New team has no admins yet, so only proxy admin or an org admin of
-        # the destination org may assign logging exporters at creation time.
-        # Skip the org-admin lookup entirely when the field isn't being
-        # written, to avoid hitting the cache for unrelated /team/new calls.
+        # logging_exporters is proxy-admin only. Skip the check when the field
+        # isn't being written so unrelated /team/new calls stay cheap.
         if data.logging_exporters is not None:
             validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 

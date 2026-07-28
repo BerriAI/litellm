@@ -36,7 +36,7 @@ import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
 import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
-import LoggingExportersSelect from "../logging_credentials/LoggingExportersSelect";
+import { LoggingExportersFormItem } from "../logging_credentials/LoggingExportersSelect";
 import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
@@ -834,9 +834,7 @@ export function KeyEditView({
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
-      <Form.Item label="Logging Exporters" name="logging_exporters" tooltip="Trace destinations this key exports to.">
-        <LoggingExportersSelect />
-      </Form.Item>
+      <LoggingExportersFormItem tooltip="Trace destinations this key exports to." />
 
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings

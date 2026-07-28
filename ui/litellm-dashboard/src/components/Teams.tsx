@@ -47,7 +47,7 @@ interface EditTeamModalProps {
 }
 
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
-import LoggingExportersSelect from "./logging_credentials/LoggingExportersSelect";
+import { LoggingExportersFormItem } from "./logging_credentials/LoggingExportersSelect";
 import { teamCreateCall } from "./networking";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 
@@ -1101,14 +1101,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   <b>Logging Settings</b>
                 </AccordionHeader>
                 <AccordionBody>
-                  <Form.Item
-                    label="Logging Exporters"
-                    name="logging_exporters"
+                  <LoggingExportersFormItem
                     tooltip="Admin-owned trace destinations this team exports to. Resolved server-side and fanned out (added to the key's and org's). Manage destinations under Settings -> Logging Callbacks."
                     className="mt-4"
-                  >
-                    <LoggingExportersSelect />
-                  </Form.Item>
+                  />
                   <div className="mt-4">
                     <PremiumLoggingSettings
                       value={loggingSettings}

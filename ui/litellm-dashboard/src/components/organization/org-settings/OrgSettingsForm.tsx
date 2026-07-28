@@ -4,6 +4,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -59,6 +61,8 @@ export const OrgSettingsForm = ({
 }: OrgSettingsFormProps) => {
   const queryClient = useQueryClient();
   const form = useZodForm(orgSettingsSchema, { defaultValues: orgToForm(org) });
+  const { userRole } = useAuthorized();
+  const isProxyAdmin = userRole != null && isProxyAdminRole(userRole);
   const { isDirty } = form.formState;
 
   const mutation = useMutation({
@@ -151,14 +155,16 @@ export const OrgSettingsForm = ({
           )}
         </FormField>
 
-        <FormField
-          control={form.control}
-          name="logging_exporters"
-          label="Logging Exporters"
-          description="Admin-owned trace destinations every team in this org exports to. Manage destinations under Settings -> Logging Callbacks."
-        >
-          {(field) => <LoggingExportersSelect value={field.value} onChange={field.onChange} />}
-        </FormField>
+        {isProxyAdmin && (
+          <FormField
+            control={form.control}
+            name="logging_exporters"
+            label="Logging Exporters"
+            description="Admin-owned trace destinations every team in this org exports to. Manage destinations under Settings -> Logging Callbacks."
+          >
+            {(field) => <LoggingExportersSelect value={field.value} onChange={field.onChange} />}
+          </FormField>
+        )}
 
         <FormField control={form.control} name="metadata" label="Metadata">
           {({ ref, ...field }) => <Textarea {...field} ref={ref} rows={4} />}

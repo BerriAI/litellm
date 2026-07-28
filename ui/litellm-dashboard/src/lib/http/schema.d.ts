@@ -2485,13 +2485,10 @@ export interface paths {
          * Get Credentials
          * @description [BETA] endpoint. This might change unexpectedly.
          *
-         *     Proxy admins see every credential (values masked). A non-proxy-admin sees
-         *     only the logging destinations actually visible to a scope they administer:
-         *     the same ``is_destination_visible`` predicate the assignment validator and
-         *     the request-time resolver use, so the list can never show a destination a
-         *     caller could neither assign nor route to. Provider credentials, and logging
-         *     destinations scoped to other tenants, stay invisible. A caller who
-         *     administers nothing gets 403 (Veria F2).
+         *     Proxy-admin only (a proxy-admin-viewer may read). Credentials, including
+         *     admin-owned logging destinations, are managed exclusively by the proxy admin;
+         *     tenants never read them over the API. Values are masked for the admin and
+         *     fully redacted for the admin-viewer.
          */
         get: operations["get_credentials_credentials_get"];
         put?: never;
@@ -2615,10 +2612,8 @@ export interface paths {
          * Update Credential
          * @description [BETA] endpoint. This might change unexpectedly.
          *
-         *     Both ``credential_values`` and ``credential_info`` are optional; a team-admin
-         *     typically patches only ``credential_info.access`` to grant or revoke their
-         *     own team. A proxy admin may patch either or both. See
-         *     ``decide_credential_patch`` for the exact contract.
+         *     Proxy-admin only. Credentials, including admin-owned logging destinations and
+         *     their ``access`` scoping, are managed exclusively by the proxy admin.
          */
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
@@ -32395,10 +32390,10 @@ export interface components {
          * UpdateCredentialItem
          * @description PATCH body for ``/credentials/{name}``.
          *
-         *     Both ``credential_values`` and ``credential_info`` are optional so a caller
-         *     can patch one without sending the other (team-admins patching access without
-         *     knowing the upstream secrets; proxy admins rotating values without touching
-         *     access). ``credential_name`` is optional because most patches don't rename.
+         *     Both ``credential_values`` and ``credential_info`` are optional so the proxy
+         *     admin can patch one without sending the other (rotating values without
+         *     touching access, or adjusting access without re-sending secrets).
+         *     ``credential_name`` is optional because most patches don't rename.
          */
         UpdateCredentialItem: {
             /** Credential Info */

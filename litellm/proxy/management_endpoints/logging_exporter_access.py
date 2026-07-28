@@ -1,18 +1,14 @@
-"""Shared visibility predicate for admin-owned logging destinations.
+"""Request-time routing predicate for admin-owned logging destinations.
 
-``credential_info.access`` answers "who may see and assign this destination". It
-is visibility, decoupled from enablement (a named assignment plus the explicit
-``auto_enable`` default-on flag). One predicate serves three callers so "visible"
-means the same thing everywhere: the ``GET /credentials`` list filter, the
-assignment validator, and the request-time resolver. When these disagree a
-non-admin can be shown, or route traffic to, a destination it should never see;
-keeping the check in one place is what prevents that.
+``credential_info.access`` answers "which identities' traces may this destination
+receive". It is routing scope, decoupled from enablement (a named assignment plus
+the explicit ``auto_enable`` default-on flag). The request-time resolver in
+``litellm_pre_call_utils`` is the consumer: at call time it checks whether the
+request's team/org is granted before firing the destination.
 
-``access_grants`` is the primitive: does this ``access`` reach a caller whose
-admin scope is the given set of team ids and org ids. Single-identity callers
-(the resolver, the per-write assignment gate) pass a one-element scope built with
-``identity_scope``; the list endpoint, whose caller may administer several teams
-and orgs, passes the full scope.
+``access_grants`` is the primitive: does this ``access`` reach an identity whose
+scope is the given set of team ids and org ids. The resolver passes a
+one-element scope built with ``identity_scope``.
 """
 
 from pydantic import ValidationError
@@ -25,8 +21,8 @@ def parse_credential_info(raw: object) -> CredentialInfo | None:
     absent or malformed.
 
     Callers fail closed on ``None``: a destination whose stored ``access`` cannot be
-    parsed (a legacy shape the strict read model rejects) is treated as invisible
-    rather than granted to everyone.
+    parsed (a legacy shape the strict read model rejects) is treated as granted to
+    no one rather than granted to everyone.
     """
     if not isinstance(raw, dict):
         return None
@@ -37,8 +33,8 @@ def parse_credential_info(raw: object) -> CredentialInfo | None:
 
 
 def identity_scope(team_id: str | None, org_id: str | None) -> tuple[frozenset[str], frozenset[str]]:
-    """A single request identity's admin scope as ``(team_ids, org_ids)`` for
-    ``access_grants`` / ``is_destination_visible``."""
+    """A single request identity's scope as ``(team_ids, org_ids)`` for
+    ``access_grants``."""
     return (
         frozenset({team_id}) if team_id else frozenset(),
         frozenset({org_id}) if org_id else frozenset(),
@@ -50,11 +46,11 @@ def access_grants(
     team_ids: frozenset[str],
     org_ids: frozenset[str],
 ) -> bool:
-    """Whether ``access`` makes a destination visible to a caller admin-scoped to
+    """Whether ``access`` grants a destination to an identity scoped to
     ``team_ids`` / ``org_ids``.
 
-    ``global`` reaches everyone; otherwise one of the caller's admin teams or orgs
-    must be granted. A missing ``access`` grants no one (fail closed): visibility is
+    ``global`` reaches everyone; otherwise one of the identity's teams or orgs
+    must be granted. A missing ``access`` grants no one (fail closed): routing is
     an explicit admin grant, never the accident of an absent field.
     """
     if access is None:
@@ -64,18 +60,3 @@ def access_grants(
     if not team_ids.isdisjoint(access.teams):
         return True
     return not org_ids.isdisjoint(access.orgs)
-
-
-def is_destination_visible(
-    info: CredentialInfo,
-    team_ids: frozenset[str],
-    org_ids: frozenset[str],
-) -> bool:
-    """Whether a caller admin-scoped to ``team_ids`` / ``org_ids`` may see and assign
-    this destination.
-
-    Visibility is decided entirely by ``access``: empty access grants no one, so an
-    empty-access destination is invisible regardless of ``auto_enable``. Proxy-wide
-    visibility must be requested explicitly with ``access.global = true``.
-    """
-    return access_grants(info.access, team_ids, org_ids)

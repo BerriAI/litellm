@@ -23,6 +23,11 @@ export const isProxyAdminRole = (role: string): boolean => {
   return role === "proxy_admin" || role === "Admin";
 };
 
+// Roles allowed to read GET /credentials (proxy admin, plus the read-only admin viewer)
+export const canReadCredentialsRole = (role: string | null | undefined): boolean => {
+  return role != null && (isProxyAdminRole(role) || role === "Admin Viewer" || role === "proxy_admin_viewer");
+};
+
 export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string): boolean => {
   if (teams == null) {
     return false;

@@ -1,9 +1,8 @@
-"""The shared visibility predicate for admin-owned logging destinations.
+"""The request-time routing predicate for admin-owned logging destinations.
 
-This is the single chokepoint the list endpoint, the assignment validator, and
-the request-time resolver all route through, so a mutation here would let a
-non-admin see or route to a destination outside their scope. Each case is written
-to fail if the corresponding branch is flipped.
+``access_grants`` is the chokepoint the resolver routes through at call time, so a
+mutation here would route an identity's traces to a destination outside its scope.
+Each case is written to fail if the corresponding branch is flipped.
 """
 
 import os
@@ -15,7 +14,6 @@ from litellm.models.credentials import CredentialAccess, CredentialInfo
 from litellm.proxy.management_endpoints.logging_exporter_access import (
     access_grants,
     identity_scope,
-    is_destination_visible,
     parse_credential_info,
 )
 
@@ -99,54 +97,55 @@ def test_access_grants_not_global_when_false():
     assert access_grants(a, frozenset({"t1"}), frozenset({"o1"})) is False
 
 
-# --- is_destination_visible: decided entirely by access --------------------
+# --- routing scope decided entirely by access -------------------------------
 #
-# Visibility is access-only. auto_enable does not affect it: an empty-access
-# destination is invisible regardless of auto_enable (empty access = deny-all).
-# Proxy-wide visibility must be requested explicitly with access.global=True.
+# Routing is access-only. auto_enable does not widen it: an empty-access
+# destination fires for no one regardless of auto_enable (empty access =
+# deny-all). Proxy-wide routing must be requested explicitly with
+# access.global=True.
 
 
-def test_visible_empty_access_is_deny_all_even_with_auto_enable():
+def test_empty_access_is_deny_all_even_with_auto_enable():
     """Empty access grants no one, even when auto_enable=True: not proxy-wide."""
     info = CredentialInfo(credential_type="logging", auto_enable=True)
-    assert is_destination_visible(info, frozenset(), frozenset()) is False
-    assert is_destination_visible(info, frozenset({"any-team"}), frozenset()) is False
-    assert is_destination_visible(info, frozenset(), frozenset({"any-org"})) is False
+    assert access_grants(info.access, frozenset(), frozenset()) is False
+    assert access_grants(info.access, frozenset({"any-team"}), frozenset()) is False
+    assert access_grants(info.access, frozenset(), frozenset({"any-org"})) is False
 
 
-def test_visible_global_access_is_proxy_wide():
+def test_global_access_is_proxy_wide():
     """access.global=True is proxy-wide regardless of auto_enable."""
     info = CredentialInfo(credential_type="logging", auto_enable=True, access=_access(global_=True))
-    assert is_destination_visible(info, frozenset({"t1"}), frozenset()) is True
-    assert is_destination_visible(info, frozenset(), frozenset()) is True
+    assert access_grants(info.access, frozenset({"t1"}), frozenset()) is True
+    assert access_grants(info.access, frozenset(), frozenset()) is True
     manual = CredentialInfo(credential_type="logging", access=_access(global_=True))
-    assert is_destination_visible(manual, frozenset(), frozenset()) is True
+    assert access_grants(manual.access, frozenset(), frozenset()) is True
 
 
-def test_visible_auto_enable_team_scoped():
-    """auto_enable=True + access.teams=[t1] is visible only to t1 admins."""
+def test_auto_enable_team_scoped():
+    """auto_enable=True + access.teams=[t1] fires only for t1 identities."""
     info = CredentialInfo(credential_type="logging", auto_enable=True, access=_access(teams=["t1"]))
-    assert is_destination_visible(info, frozenset({"t1"}), frozenset()) is True
-    assert is_destination_visible(info, frozenset({"t2"}), frozenset()) is False
-    assert is_destination_visible(info, frozenset(), frozenset()) is False
+    assert access_grants(info.access, frozenset({"t1"}), frozenset()) is True
+    assert access_grants(info.access, frozenset({"t2"}), frozenset()) is False
+    assert access_grants(info.access, frozenset(), frozenset()) is False
 
 
-def test_visible_auto_enable_org_scoped():
-    """auto_enable=True + access.orgs=[o1] is visible only to o1 admins."""
+def test_auto_enable_org_scoped():
+    """auto_enable=True + access.orgs=[o1] fires only for o1 identities."""
     info = CredentialInfo(credential_type="logging", auto_enable=True, access=_access(orgs=["o1"]))
-    assert is_destination_visible(info, frozenset(), frozenset({"o1"})) is True
-    assert is_destination_visible(info, frozenset(), frozenset({"o2"})) is False
+    assert access_grants(info.access, frozenset(), frozenset({"o1"})) is True
+    assert access_grants(info.access, frozenset(), frozenset({"o2"})) is False
 
 
-def test_visible_delegates_to_access_when_not_auto_enable():
+def test_access_scoped_when_not_auto_enable():
     info = CredentialInfo(credential_type="logging", access=_access(teams=["t1"]))
-    assert is_destination_visible(info, frozenset({"t1"}), frozenset()) is True
-    assert is_destination_visible(info, frozenset({"t2"}), frozenset()) is False
+    assert access_grants(info.access, frozenset({"t1"}), frozenset()) is True
+    assert access_grants(info.access, frozenset({"t2"}), frozenset()) is False
 
 
-def test_visible_denies_when_neither():
+def test_denies_when_no_access():
     info = CredentialInfo(credential_type="logging")
-    assert is_destination_visible(info, frozenset({"t1"}), frozenset({"o1"})) is False
+    assert access_grants(info.access, frozenset({"t1"}), frozenset({"o1"})) is False
 
 
 # --- identity_scope --------------------------------------------------------

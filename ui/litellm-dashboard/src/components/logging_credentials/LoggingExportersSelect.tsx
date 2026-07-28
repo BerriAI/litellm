@@ -1,4 +1,4 @@
-import { Select } from "antd";
+import { Form, Select } from "antd";
 import React from "react";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
@@ -47,9 +47,32 @@ const LoggingExportersSelect: React.FC<LoggingExportersSelectProps> = ({ value, 
       options={options}
       style={{ width: "100%" }}
       optionFilterProp="label"
-      notFoundContent="No logging destinations available. Ask your proxy admin to create one under Settings -> Logging Callbacks."
+      notFoundContent="No logging destinations available. Create one under Settings -> Logging Callbacks."
     />
   );
 };
 
 export default LoggingExportersSelect;
+
+interface LoggingExportersFormItemProps {
+  tooltip: string;
+  className?: string;
+}
+
+/**
+ * The antd Form.Item wrapper for LoggingExportersSelect, gated to proxy admins so
+ * non-admin forms render neither the picker nor an orphaned "Logging Exporters"
+ * label. Keeps the role gate in one place for every antd form that binds the
+ * logging_exporters field.
+ */
+export const LoggingExportersFormItem: React.FC<LoggingExportersFormItemProps> = ({ tooltip, className }) => {
+  const { userRole } = useAuthorized();
+  if (userRole == null || !isProxyAdminRole(userRole)) {
+    return null;
+  }
+  return (
+    <Form.Item label="Logging Exporters" name="logging_exporters" tooltip={tooltip} className={className}>
+      <LoggingExportersSelect />
+    </Form.Item>
+  );
+};

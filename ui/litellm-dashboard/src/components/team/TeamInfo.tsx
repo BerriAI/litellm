@@ -18,7 +18,7 @@ import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardr
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import type { ObjectPermission } from "@/components/object_permission_types";
-import { isProxyAdminRole } from "@/utils/roles";
+import { canReadCredentialsRole, isProxyAdminRole } from "@/utils/roles";
 import {
   EditOutlined,
   GlobalOutlined,
@@ -54,7 +54,7 @@ import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
-import LoggingExportersSelect from "../logging_credentials/LoggingExportersSelect";
+import { LoggingExportersFormItem } from "../logging_credentials/LoggingExportersSelect";
 import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
@@ -233,8 +233,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // Destinations whose credential_info.access targets this team (or its org, or
   // global). Rendered alongside the team's own metadata.logging_exporters so the
   // Logging Exporters card reflects BOTH routing directions, matching the
-  // resolver's union at request time.
-  const { data: scopedCredentialsData } = useCredentials();
+  // resolver's union at request time. GET /credentials is proxy-admin only, so
+  // the fetch is skipped (and the scoped list stays empty) for other roles.
+  const { data: scopedCredentialsData } = useCredentials(canReadCredentialsRole(userRole));
   const scopedExportersForTeam = useMemo<string[]>(() => {
     const orgId = teamData?.team_info?.organization_id ?? null;
     return (scopedCredentialsData?.credentials ?? [])
@@ -1481,13 +1482,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item
-                      label="Logging Exporters"
-                      name="logging_exporters"
-                      tooltip="Trace destinations this team exports to. Resolved server-side and unioned with the key's and org's destinations. Destinations are created by the proxy admin; team admins may attach any of them to teams they admin."
-                    >
-                      <LoggingExportersSelect />
-                    </Form.Item>
+                    <LoggingExportersFormItem tooltip="Trace destinations this team exports to. Resolved server-side and unioned with the key's and org's destinations. Destinations are created and assigned by the proxy admin." />
 
                     <Form.Item label="Logging Settings" name="logging_settings">
                       <EditLoggingSettings

@@ -62,8 +62,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   // Destinations whose credential_info.access targets THIS org (or is global).
   // Rendered alongside the org's own metadata.logging_exporters so the Logging
   // Exporters card reflects BOTH routing directions, matching the resolver's
-  // union at request time.
-  const { data: orgCredentialsData } = useCredentials();
+  // union at request time. GET /credentials is proxy-admin only, so the fetch is
+  // skipped (and the scoped list stays empty) for other roles.
+  const { data: orgCredentialsData } = useCredentials(is_proxy_admin);
   const scopedExportersForOrg = useMemo<string[]>(() => {
     const orgId = orgData?.organization_id;
     if (orgId == null) return [];

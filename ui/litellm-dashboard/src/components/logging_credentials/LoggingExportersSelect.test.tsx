@@ -81,16 +81,16 @@ describe("LoggingExportersSelect", () => {
     render(<LoggingExportersSelect value={[]} onChange={() => {}} />);
 
     expect(screen.queryAllByTestId("option")).toHaveLength(0);
-    expect(screen.getByTestId("empty").textContent).toMatch(/proxy admin/i);
+    expect(screen.getByTestId("empty").textContent).toMatch(/Create one under Settings/i);
   });
 
   it("shows exactly the logging destinations the backend returned, without any client-side scope filtering", () => {
-    // GET /credentials is already scoped server-side (proxy admin -> all; team/org
-    // admin -> only in-scope destinations) by the same predicate the assignment gate
-    // and the resolver use. The picker must therefore render every logging-typed
-    // destination in the response verbatim; re-filtering here by role/scope on the
-    // client would risk disagreeing with the authoritative backend in either
-    // direction. This response mixes access shapes to prove none are dropped locally.
+    // GET /credentials is proxy-admin only and returns every destination; the
+    // picker (which itself renders only for a proxy admin) must show every
+    // logging-typed destination in the response verbatim regardless of its
+    // access shape, since access controls request-time routing, not what the
+    // admin may assign. This response mixes access shapes to prove none are
+    // dropped locally.
     mockUseCredentials.mockReturnValue({
       data: {
         credentials: [

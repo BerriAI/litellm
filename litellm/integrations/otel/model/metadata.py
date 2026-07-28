@@ -194,9 +194,6 @@ class LLMCallEvent:
     # at ``pre_call``, or when the call closed before any payload materialized (so
     # there is nothing to stamp on the span).
     payload: "StandardLoggingPayload | None"
-    # The ``standard_callback_dynamic_params`` routing the call to a per-tenant
-    # tracer (its own exporter/endpoint), or ``None`` when the call isn't scoped.
-    dynamic_params: Any
     # The admin-resolved OTLP destinations (endpoint + auth headers) for this call's
     # identity chain, fanned out to. Empty when none are assigned. Read from the
     # server-only request ContextVar the proxy anchors at auth time, so it is never
@@ -217,11 +214,9 @@ class LLMCallEvent:
         payload = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation = resolve_operation(as_str(kwargs.get("call_type")))
         model = as_str(kwargs.get("model")) or ""
-        dynamic_params = kwargs.get("standard_callback_dynamic_params")
         return cls(
             call_id=_call_id(payload, kwargs),
             payload=payload,
-            dynamic_params=dynamic_params,
             otel_destinations=request_destinations(),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             provisional_span_name=f"{operation.value} {model}".strip(),
