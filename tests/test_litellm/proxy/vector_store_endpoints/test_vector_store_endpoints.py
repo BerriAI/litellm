@@ -2946,6 +2946,21 @@ class TestAzureAIDocumentWritePassthroughPermission:
 
     INDEX = "my-index"
 
+    # Every non-lifecycle read Azure exposes for an index. The GET forms are all
+    # covered by the ("GET", "/indexes/") entry; the POST query endpoints each
+    # need their own, since the write entry also matches on POST.
+    READ_ROUTES = [
+        ("GET", f"/azure_ai/indexes/{INDEX}/stats"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/$count"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/seed-doc-1"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/suggest"),
+        ("GET", f"/azure_ai/indexes/{INDEX}/docs/autocomplete"),
+        ("POST", f"/azure_ai/indexes/{INDEX}/docs/suggest"),
+        ("POST", f"/azure_ai/indexes/{INDEX}/docs/autocomplete"),
+        ("POST", f"/azure_ai/indexes/{INDEX}/analyze"),
+    ]
+
     def _request(self, method: str, path: str) -> MagicMock:
         request = MagicMock(spec=Request)
         request.method = method
@@ -3002,6 +3017,27 @@ class TestAzureAIDocumentWritePassthroughPermission:
                 provider=LlmProviders.AZURE_AI,
                 index_name=self.INDEX,
                 request=self._request("GET", f"/azure_ai/indexes/{self.INDEX}"),
+                user_api_key_dict=self._team_member(["write"]),
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize("method, path", READ_ROUTES)
+    def test_team_with_read_grant_can_call_every_read_route(self, method, path):
+        result = is_allowed_to_call_vector_store_endpoint(
+            provider=LlmProviders.AZURE_AI,
+            index_name=self.INDEX,
+            request=self._request(method, path),
+            user_api_key_dict=self._team_member(["read"]),
+        )
+        assert result is True
+
+    @pytest.mark.parametrize("method, path", READ_ROUTES)
+    def test_team_without_read_grant_cannot_call_read_routes(self, method, path):
+        with pytest.raises(HTTPException) as exc_info:
+            is_allowed_to_call_vector_store_endpoint(
+                provider=LlmProviders.AZURE_AI,
+                index_name=self.INDEX,
+                request=self._request(method, path),
                 user_api_key_dict=self._team_member(["write"]),
             )
         assert exc_info.value.status_code == 403
