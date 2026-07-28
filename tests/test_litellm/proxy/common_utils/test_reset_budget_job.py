@@ -1153,6 +1153,54 @@ def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-expired:window:1d", value=0.0)
 
 
+def test_reset_budget_windows_resets_tz_aware_expired_key_window(monkeypatch):
+    """Regression for #34896: a window whose `reset_at` carries a non-UTC offset
+    (e.g. Asia/Tokyo, +09:00) must be compared as an absolute instant, not by
+    dropping the offset. A reset_at that has already passed in UTC but reads
+    ~9h in the future once the offset is stripped must still reset now."""
+    now_utc = datetime.now(timezone.utc)
+    tokyo = timezone(timedelta(hours=9))
+    expired_tokyo = (now_utc - timedelta(minutes=5)).astimezone(tokyo).isoformat()
+    assert expired_tokyo.endswith("+09:00")
+
+    key_rows = [
+        {
+            "token": "sk-tokyo",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired_tokyo}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-tokyo:window:1d", value=0.0)
+
+
+def test_reset_budget_windows_skips_tz_aware_unexpired_key_window(monkeypatch):
+    """The offset-aware comparison must not fire early either: a reset_at that is
+    genuinely in the future but expressed in a negative offset (US/Pacific,
+    -07:00) must be left untouched."""
+    now_utc = datetime.now(timezone.utc)
+    pacific = timezone(timedelta(hours=-7))
+    future_pacific = (now_utc + timedelta(hours=1)).astimezone(pacific).isoformat()
+    assert future_pacific.endswith("-07:00")
+
+    key_rows = [
+        {
+            "token": "sk-pacific",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": future_pacific}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
 def test_reset_budget_windows_skips_unexpired_key_window(monkeypatch):
     """If `reset_at` is in the future, no write should happen for that key."""
     now = datetime.utcnow()
