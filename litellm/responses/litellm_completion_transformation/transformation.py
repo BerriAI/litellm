@@ -5,7 +5,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import json
 import re
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any, Literal, Mapping, cast
 
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
@@ -168,8 +168,8 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_tool_choice_for_responses_api_response(
-        tool_choice: str | dict[str, Any] | None,
-    ) -> str | dict[str, Any] | None:
+        tool_choice: str | Mapping[str, Any] | None,
+    ) -> str | Mapping[str, Any] | None:
         """
         Inverse of ``_transform_tool_choice``: normalizes tool_choice into the
         shape ``ResponsesAPIResponse.tool_choice`` accepts (flat
