@@ -547,6 +547,45 @@ async def test_route_request_leaves_model_untouched_for_irrelevant_or_malformed_
     assert response.choices[0].message.content == "from-group-a"
 
 
+@pytest.mark.asyncio
+async def test_route_request_model_group_alias_target_needs_model_access():
+    """
+    The request is authorized against the requested model, so an alias pointing at a
+    model group the key cannot access must be rejected rather than silently served.
+    """
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    router = _router_with_two_model_groups()
+    key = UserAPIKeyAuth(api_key="sk-restricted", models=["group-a"])
+    data = {
+        "model": "group-a",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {"model_group_alias": {"group-a": "group-b"}},
+    }
+
+    with pytest.raises(ProxyException) as exc_info:
+        await route_request(data, router, None, "acompletion", user_api_key_dict=key)
+
+    assert "group-b" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_route_request_model_group_alias_applies_when_target_is_allowed():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _router_with_two_model_groups()
+    key = UserAPIKeyAuth(api_key="sk-allowed", models=["group-a", "group-b"])
+    data = {
+        "model": "group-a",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {"model_group_alias": {"group-a": "group-b"}},
+    }
+
+    response = await (await route_request(data, router, None, "acompletion", user_api_key_dict=key))
+
+    assert response.choices[0].message.content == "from-group-b"
+
+
 def test_mock_testing_kwarg_names_matches_dataclass():
     """``_MOCK_TESTING_KWARG_NAMES`` is hardcoded to avoid a cyclic import
     against ``litellm.types.router``. This test guards against drift —

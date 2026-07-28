@@ -485,6 +485,15 @@ async def route_request(
 
         aliased_model = _resolve_per_request_model_group_alias(override_settings, data.get("model"))
         if aliased_model is not None:
+            if user_api_key_dict is not None:
+                from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+                await can_key_call_resolved_model(
+                    model=aliased_model,
+                    llm_model_list=llm_router.model_list if llm_router is not None else None,
+                    valid_token=user_api_key_dict,
+                    llm_router=llm_router,
+                )
             data["model"] = aliased_model
 
         # Use main router with overridden kwargs
