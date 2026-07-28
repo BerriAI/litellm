@@ -3774,6 +3774,30 @@ def test_handle_anthropic_messages_response_logging_translates_bare_responses_ap
     assert result.usage.total_tokens == 18  # type: ignore[attr-defined]
 
 
+def test_handle_anthropic_messages_response_logging_uses_deployment_inference_geo():
+    """A deployment can pin inference_geo in litellm_params instead of the request body;
+    the logged usage must still carry the region so regional pricing applies."""
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.model_call_details["optional_params"] = {}
+    logging_obj.model_call_details["litellm_params"] = {"inference_geo": "us"}
+
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_geo",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.usage.inference_geo == "us"
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
