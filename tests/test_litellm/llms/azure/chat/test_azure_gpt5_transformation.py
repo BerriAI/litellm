@@ -509,3 +509,74 @@ def test_azure_gpt5_logprobs_still_gated_by_model_version(
         model="azure/gpt-5", deployment_model="gpt-5-sampling-dz"
     )
     assert "logprobs" in config.get_supported_openai_params(model="azure/gpt-5.2")
+
+
+@pytest.fixture()
+def minimal_effort_overrides() -> Iterator[None]:
+    """Register deployments overriding the minimal reasoning-effort capability both ways."""
+    original_model_cost = litellm.model_cost.copy()
+    litellm.register_model(
+        model_cost={
+            "azure/gpt-55-minimal-allowed-dz": {"supports_minimal_reasoning_effort": True},
+            "azure/gpt-54-minimal-blocked-dz": {"supports_minimal_reasoning_effort": False},
+        }
+    )
+    yield
+    litellm.model_cost = original_model_cost
+
+
+def test_azure_gpt5_deployment_override_re_enables_minimal_effort(
+    config: AzureOpenAIGPT5Config, minimal_effort_overrides: None
+):
+    """A deployment may re-enable a minimal effort level its base model disables.
+
+    azure/gpt-5.5-pro sets supports_minimal_reasoning_effort=false, so without the
+    override reasoning_effort='minimal' is dropped.
+    """
+    assert litellm.model_cost["azure/gpt-5.5-pro"]["supports_minimal_reasoning_effort"] is False
+
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="azure/gpt-5.5-pro",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+        deployment_model="gpt-55-minimal-allowed-dz",
+    )
+    assert params["reasoning_effort"] == "minimal"
+
+
+def test_azure_gpt5_deployment_override_blocks_minimal_effort(
+    config: AzureOpenAIGPT5Config, minimal_effort_overrides: None
+):
+    """A deployment may disable a minimal effort level its base model allows.
+
+    azure/gpt-5.4 carries no explicit setting, so minimal passes through unless the
+    deployment override marks it unsupported.
+    """
+    assert litellm.model_cost["azure/gpt-5.4"].get("supports_minimal_reasoning_effort") is None
+
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="azure/gpt-5.4",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+        deployment_model="gpt-54-minimal-blocked-dz",
+    )
+    assert "reasoning_effort" not in params
+
+
+def test_azure_gpt5_deployment_override_blocks_minimal_effort_strict(
+    config: AzureOpenAIGPT5Config, minimal_effort_overrides: None
+):
+    """The blocking override must raise rather than forward when drop_params is off."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model="azure/gpt-5.4",
+            drop_params=False,
+            api_version="2025-01-01-preview",
+            deployment_model="gpt-54-minimal-blocked-dz",
+        )
