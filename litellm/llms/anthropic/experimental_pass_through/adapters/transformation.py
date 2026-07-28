@@ -768,7 +768,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
+                input_schema = tool["input_schema"]
+                if input_schema is not None:
+                    function_chunk["parameters"] = dict(input_schema)
             if "description" in tool:
                 function_chunk["description"] = tool["description"]  # type: ignore
 

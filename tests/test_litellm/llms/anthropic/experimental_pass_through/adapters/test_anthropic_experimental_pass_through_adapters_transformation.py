@@ -3147,3 +3147,29 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_tools_to_openai_does_not_mutate_caller_input_schema():
+    """Regression for #34277: extra top-level tool keys (e.g. a computer tool's
+    display_width_px) must not leak into the caller's input_schema. The caller
+    reuses the same in-memory tool list across translations (proxy pre-call
+    hook, then the real call), so mutating input_schema in place pollutes it."""
+    import copy
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tool = {
+        "name": "computer",
+        "type": "computer_20241022",
+        "input_schema": {"type": "object", "properties": {"action": {"type": "string"}}},
+        "display_width_px": 1024,
+        "display_height_px": 768,
+    }
+    input_schema_before = copy.deepcopy(tool["input_schema"])
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=[tool], model="claude-3-5-sonnet")
+
+    assert tool["input_schema"] == input_schema_before
+    assert "display_width_px" not in tool["input_schema"]
+    params = new_tools[0]["function"]["parameters"]
+    assert params["display_width_px"] == 1024
+    assert params["display_height_px"] == 768
