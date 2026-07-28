@@ -5466,6 +5466,50 @@ class TestSSEKeepalive:
         assert isinstance(response, JSONResponse)
         assert response.status_code == 400
 
+    async def test_raise_before_the_timer_keeps_its_status_code(self, monkeypatch):
+        """An exception raised while create_response is still buffering is mapped to
+        its own status, exactly as it is with the feature off."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 2.0, raising=False)
+
+        async def raises_fast():
+            await asyncio.sleep(0.05)
+            raise HTTPException(status_code=400, detail={"error": "blocked"})
+            yield  # pragma: no cover
+
+        response = await create_response(
+            generator=raises_fast(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert response.status_code == 400
+        assert SSE_KEEPALIVE_COMMENT not in chunks
+
+    async def test_raise_after_the_timer_loses_its_status_code(self, monkeypatch):
+        """Committing to a response to send a keepalive gives up the ability to map a
+        later exception onto a status code, so it escapes instead. Pinned so the
+        trade-off stays a decision: keep the interval below the time a guardrail
+        needs to reject a request and this stays unreachable."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+
+        async def raises_slow():
+            await asyncio.sleep(2.5)
+            raise HTTPException(status_code=400, detail={"error": "blocked"})
+            yield  # pragma: no cover
+
+        response = await create_response(
+            generator=raises_slow(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        assert response.status_code == 200
+        with pytest.raises(HTTPException):
+            await self._collect(response)
+
     async def test_disconnect_during_keepalive_window_completes_shielded_cleanup(
         self, monkeypatch
     ):
