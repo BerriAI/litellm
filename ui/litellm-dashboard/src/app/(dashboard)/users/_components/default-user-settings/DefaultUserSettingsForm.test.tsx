@@ -234,11 +234,13 @@ describe("DefaultUserSettingsForm", () => {
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, teams: null });
   });
 
-  it("returns to the read-only view showing the new values after a successful save", async () => {
+  it("shows the saved values in the read-only view immediately, without waiting for the refetch", async () => {
     const user = userEvent.setup();
-    const updated = { ...SETTINGS, values: { ...SETTINGS.values, max_budget: 250 } };
     const { updateSettings } = renderForm({
-      fetchSettings: vi.fn().mockResolvedValueOnce(SETTINGS).mockResolvedValue(updated),
+      fetchSettings: vi
+        .fn()
+        .mockResolvedValueOnce(SETTINGS)
+        .mockImplementation(() => new Promise(() => {})),
     });
 
     await enterEditMode(user);
@@ -249,6 +251,7 @@ describe("DefaultUserSettingsForm", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole("button", { name: "Edit Settings" })).toBeInTheDocument();
     expect(await screen.findByText("250")).toBeInTheDocument();
+    expect(screen.queryByText("100")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
     expect(NotificationsManager.success).toHaveBeenCalledWith("Default user settings updated successfully");
 

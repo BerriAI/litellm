@@ -150,6 +150,10 @@ const SettingsForm = ({ initialValues, updateSettings, onCancel, onSaved }: Sett
     mutationFn: (values: DefaultTeamSettingsFormValues) => updateSettings(buildBody(values)),
     onSuccess: (_result, values) => {
       NotificationsManager.success("Default team settings updated successfully");
+      queryClient.setQueryData<DefaultTeamSettings>(SETTINGS_QUERY_KEY, (existing) => ({
+        field_schema: existing?.field_schema ?? {},
+        values: buildBody(values),
+      }));
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
       form.reset(values);
       onSaved();

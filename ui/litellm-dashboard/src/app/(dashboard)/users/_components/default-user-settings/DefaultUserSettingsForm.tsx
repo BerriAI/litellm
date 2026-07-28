@@ -227,6 +227,10 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
     mutationFn: (values: DefaultUserSettingsFormValues) => updateSettings(buildBody(values)),
     onSuccess: (_result, values) => {
       NotificationsManager.success("Default user settings updated successfully");
+      queryClient.setQueryData<InternalUserSettings>(SETTINGS_QUERY_KEY, (existing) => ({
+        field_schema: existing?.field_schema ?? {},
+        values: buildBody(values),
+      }));
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
       form.reset(values);
       onSaved();
