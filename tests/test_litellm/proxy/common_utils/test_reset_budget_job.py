@@ -1196,6 +1196,50 @@ def test_reset_budget_windows_resets_expired_team_window(monkeypatch):
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team:team-expired:window:30d", value=0.0)
 
 
+def test_reset_budget_windows_resets_expired_window_with_non_utc_offset(monkeypatch):
+    """Regression for #34896: `reset_at` written with a non-UTC offset (e.g. +09:00
+    when `litellm_settings.timezone: Asia/Tokyo`) must be converted to UTC before
+    the expiry comparison. Previously the offset was dropped, so a window stayed
+    blocked for the length of the offset."""
+    jst = timezone(timedelta(hours=9))
+    expired = (datetime.now(jst) - timedelta(minutes=5)).isoformat()
+
+    key_rows = [
+        {
+            "token": "sk-jst-expired",
+            "budget_limits": [{"budget_duration": "30d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-jst-expired:window:30d", value=0.0)
+
+
+def test_reset_budget_windows_skips_unexpired_window_with_non_utc_offset(monkeypatch):
+    """The mirror of the #34896 guard: a `+09:00` timestamp that is still in the
+    future in real time must not be reset early just because its wall-clock value
+    is already behind naive UTC now."""
+    jst = timezone(timedelta(hours=9))
+    future = (datetime.now(jst) + timedelta(minutes=5)).isoformat()
+
+    key_rows = [
+        {
+            "token": "sk-jst-future",
+            "budget_limits": [{"budget_duration": "30d", "reset_at": future}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(monkeypatch, key_rows=key_rows, team_rows=[])
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
 def test_reset_budget_windows_handles_string_budget_limits(monkeypatch):
     """Defensive: if `query_raw` returns `budget_limits` as a JSON-encoded
     string (driver-dependent), the code still parses and resets it.
