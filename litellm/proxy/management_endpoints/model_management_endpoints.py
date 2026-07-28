@@ -52,6 +52,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     UpdateUsefulLinksRequest,
 )
@@ -788,6 +789,7 @@ async def _remove_unbacked_team_models(
     prisma_client: PrismaClient,
     user_api_key_cache: Any,
     proxy_logging_obj: Any,
+    llm_router: Router | None = None,
 ) -> None:
     """
     Strip a deleted team model's public name(s) from team.models and refresh the cache.
@@ -795,26 +797,40 @@ async def _remove_unbacked_team_models(
     Must be called after the deployment row is deleted: a public name is removed only
     when no remaining team deployment still backs it, so a load-balanced replica isn't
     revoked while siblings serve it, and concurrent deletes can't leave a ghost.
+
+    Legacy team models (created before team_public_model_name existed) store a
+    ``{public_name: "model_name_{team_id}_{uuid}"}`` entry in the team's model_aliases,
+    so the alias scan runs for every team model; skipping it for internal-shaped names
+    left stale aliases that rewrote requests to deployments that no longer exist.
+
+    A public name that still resolves to a live router deployment (e.g. a gateway-level
+    model group shared with the team) is kept in team.models, so deleting a per-team
+    duplicate does not revoke the team's access to the shared deployment.
     """
     team_id = model_params.model_info.team_id
     if team_id is None:
         return
 
-    # BYOK models carry an internal `model_name_{team_id}_{uuid}` name that can never
-    # be a team alias value, so skip the full litellm_modeltable scan for them.
-    removed_model_aliases: List[Tuple[str, str]] = []
-    if not model_params.model_name.startswith(f"model_name_{team_id}_"):
-        removed_model_aliases = await delete_team_model_alias(
-            public_model_name=model_params.model_name,
-            prisma_client=prisma_client,
-        )
-    names_to_remove = {alias for alias_team_id, alias in removed_model_aliases if alias_team_id == team_id}
-    if model_params.model_info.team_public_model_name is not None:
-        names_to_remove.add(model_params.model_info.team_public_model_name)
+    removed_model_aliases = await delete_team_model_alias(
+        public_model_name=model_params.model_name,
+        prisma_client=prisma_client,
+    )
+    removed_alias_names = {alias for alias_team_id, alias in removed_model_aliases if alias_team_id == team_id}
+    candidate_names = (
+        removed_alias_names | {model_params.model_info.team_public_model_name}
+        if model_params.model_info.team_public_model_name is not None
+        else removed_alias_names
+    )
+    if not candidate_names:
+        return
 
-    if names_to_remove:
-        names_to_remove -= await _get_team_public_model_names(team_id=team_id, prisma_client=prisma_client)
-
+    team_backed_names = await _get_team_public_model_names(team_id=team_id, prisma_client=prisma_client)
+    router_served_names = (
+        frozenset(name for name in candidate_names if name in llm_router.model_name_to_deployment_indices)
+        if llm_router is not None
+        else frozenset()
+    )
+    names_to_remove = candidate_names - team_backed_names - router_served_names
     if not names_to_remove:
         return
 
@@ -1120,6 +1136,7 @@ async def delete_model(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    llm_router=llm_router,
                 )
 
             ## CREATE AUDIT LOG ##
