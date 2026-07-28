@@ -30545,6 +30545,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01,
@@ -30573,6 +30574,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01,
@@ -30656,6 +30658,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01,

@@ -162,6 +162,44 @@ def test_wandb_model_api_pricing_entries():
         assert model_info["output_cost_per_token"] == output_cost
 
 
+def test_openrouter_claude_sonnet_above_200k_1hr_cache_creation_pricing():
+    """
+    One-hour cache writes on openrouter/anthropic/claude-sonnet-{4,4.5,4.6} above
+    the 200K prompt-token threshold must bill at the tiered
+    cache_creation_input_token_cost_above_1hr_above_200k_tokens rate ($12/M),
+    not the base one-hour rate ($6/M), matching the direct Anthropic entries.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import CacheCreationTokenDetails
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    for model in (
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-sonnet-4.5",
+        "anthropic/claude-sonnet-4.6",
+    ):
+        usage = Usage(
+            prompt_tokens=250_000,
+            completion_tokens=1_000,
+            total_tokens=251_000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=249_000,
+                cache_creation_tokens=1_000,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1_000
+                ),
+            ),
+        )
+        prompt_cost, _ = generic_cost_per_token(
+            model=model, usage=usage, custom_llm_provider="openrouter"
+        )
+
+        expected_prompt_cost = 249_000 * 6e-06 + 1_000 * 1.2e-05
+        assert prompt_cost == pytest.approx(expected_prompt_cost), model
+
+
 def test_openrouter_qwen36_plus_above_256k_cache_creation_pricing():
     """
     Cache writes on openrouter/qwen/qwen3.6-plus above the 256K prompt-token
