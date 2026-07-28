@@ -802,6 +802,9 @@ async def _remove_unbacked_team_models(
     ``{public_name: "model_name_{team_id}_{uuid}"}`` entry in the team's model_aliases,
     so the alias scan runs for every team model; skipping it for internal-shaped names
     left stale aliases that rewrote requests to deployments that no longer exist.
+    Aliases are scrubbed only when the deleted deployment's name no longer resolves in
+    the router, so deleting one replica of a load-balanced group never breaks aliases
+    that still route to the surviving replicas (in any team).
 
     A public name that still resolves to a live router deployment (e.g. a gateway-level
     model group shared with the team) is kept in team.models, so deleting a per-team
@@ -811,9 +814,16 @@ async def _remove_unbacked_team_models(
     if team_id is None:
         return
 
-    removed_model_aliases = await delete_team_model_alias(
-        public_model_name=model_params.model_name,
-        prisma_client=prisma_client,
+    deleted_name_still_served = (
+        llm_router is not None and model_params.model_name in llm_router.model_name_to_deployment_indices
+    )
+    removed_model_aliases: List[Tuple[str, str]] = (
+        []
+        if deleted_name_still_served
+        else await delete_team_model_alias(
+            public_model_name=model_params.model_name,
+            prisma_client=prisma_client,
+        )
     )
     removed_alias_names = {alias for alias_team_id, alias in removed_model_aliases if alias_team_id == team_id}
     candidate_names = (
