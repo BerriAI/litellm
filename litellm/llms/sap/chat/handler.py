@@ -47,7 +47,7 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
-    def _validate_chunk(payload: dict) -> OpenAIChatCompletionChunk:
+    def _validate_chunk(payload: dict) -> OpenAIChatCompletionChunk:  # mutable-ok: normalizes the raw SSE dict in place (pops empty logprobs) before validation
         """
         Validate an OpenAI-shaped dict into a chunk, normalizing fields that would
         otherwise break downstream serialization:
