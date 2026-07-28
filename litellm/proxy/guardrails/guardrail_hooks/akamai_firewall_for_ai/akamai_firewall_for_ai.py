@@ -14,6 +14,7 @@ from typing import (
     AsyncGenerator,
     Iterator,
     TypedDict,
+    cast,
 )
 
 from fastapi import HTTPException
@@ -41,11 +42,13 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
 DEFAULT_API_BASE = "https://aisec.akamai.com"
 BLOCKING_ACTIONS = frozenset({"deny", "block"})
+ANTHROPIC_MESSAGES_CALL_TYPES = frozenset({"anthropic_messages", "aanthropic_messages"})
 
 
 def _item_get(item: Any, key: str) -> Any:
@@ -130,6 +133,37 @@ def _iter_request_tool_definition_text(data: dict) -> Iterator[str]:
         parameters = _item_get(definition, "parameters")
         if isinstance(parameters, dict) and parameters:
             yield json.dumps(parameters, sort_keys=True)
+
+
+def _translate_anthropic_to_openai_request(data: dict) -> dict:
+    """Translate an Anthropic ``/v1/messages`` request into Chat-Completions shape.
+
+    Hook-based guardrails receive the provider-native body, so the top-level
+    ``system`` prompt, ``tool_use`` / ``tool_result`` content blocks and tool
+    ``input_schema`` never match the OpenAI-shaped iterators. Reusing the shared
+    Anthropic adapter lifts ``system`` into a system message, ``tool_use`` /
+    ``tool_result`` into ``tool_calls`` / tool messages and ``input_schema`` into
+    ``tools[].function.parameters`` so the standard extraction inspects them all.
+    On a translation failure the raw body is returned so text content is still
+    inspected rather than the whole request being dropped.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    try:
+        body = cast("AnthropicMessagesRequest", data.copy())  # cast-ok: dict passed to adapter TypedDict param
+        openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            anthropic_message_request=body
+        )
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "Akamai Firewall for AI: could not translate Anthropic /v1/messages request for inspection; "
+            "falling back to raw extraction: %s",
+            exc,
+        )
+        return data
+    return dict(openai_request)
 
 
 def _iter_responses_api_output_text(response: ResponsesAPIResponse) -> Iterator[str]:
@@ -222,12 +256,13 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
         return f"{self.api_base}/fai/v1/fai-configurations/{self.fai_configuration_id}/detect"
 
     @staticmethod
-    def _input_text(data: dict) -> str:
+    def _input_text(data: dict, call_type: str) -> str:
+        request = _translate_anthropic_to_openai_request(data) if call_type in ANTHROPIC_MESSAGES_CALL_TYPES else data
         fragments = chain(
-            iter_message_text(data),
-            _iter_request_tool_call_text(data),
-            _iter_request_tool_definition_text(data),
-            _iter_request_prompt_text(data),
+            iter_message_text(request),
+            _iter_request_tool_call_text(request),
+            _iter_request_tool_definition_text(request),
+            _iter_request_prompt_text(request),
         )
         return "\n".join(fragment for fragment in fragments if fragment)
 
@@ -321,7 +356,10 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
     ) -> Exception | str | dict | None:
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is not True:
             return data
-        await self._detect(client_request_id=self._client_request_id(data), llm_input=self._input_text(data))
+        await self._detect(
+            client_request_id=self._client_request_id(data),
+            llm_input=self._input_text(data, call_type),
+        )
         return data
 
     @log_guardrail_information
@@ -333,7 +371,10 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
     ) -> Exception | str | dict | None:
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.during_call) is not True:
             return data
-        await self._detect(client_request_id=self._client_request_id(data), llm_input=self._input_text(data))
+        await self._detect(
+            client_request_id=self._client_request_id(data),
+            llm_input=self._input_text(data, call_type),
+        )
         return data
 
     @log_guardrail_information

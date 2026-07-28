@@ -597,6 +597,64 @@ async def test_input_hook_inspects_tool_definitions():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["anthropic_messages", "aanthropic_messages"])
+async def test_input_hook_inspects_anthropic_messages_native_fields(call_type: str):
+    """Regression: /v1/messages reaches this hook as the native Anthropic body.
+
+    Hook-based guardrails do not go through the unified translation layer, so
+    the native payload arrives with an Anthropic ``system`` prompt, ``tool_use``
+    / ``tool_result`` content blocks and tool ``input_schema`` - none of which
+    the OpenAI-shaped iterators match. The guardrail must translate the request
+    via the shared adapter so all of those fields are sent to Akamai; before the
+    fix each payload below reached the model uninspected.
+    """
+    guardrail = _init("pre_call")
+    data = {
+        "litellm_call_id": "req-1",
+        "guardrails": ["akamai-guard"],
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 100,
+        "system": "SYSTEM_INJECTION_PAYLOAD",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "benign question"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "lookup", "input": {"q": "TOOL_USE_PAYLOAD"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "TOOL_RESULT_PAYLOAD"}],
+            },
+        ],
+        "tools": [
+            {
+                "name": "lookup",
+                "description": "TOOL_DESCRIPTION_PAYLOAD",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"q": {"type": "string", "description": "INPUT_SCHEMA_PAYLOAD"}},
+                },
+            }
+        ],
+    }
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(CLEAN_BODY)),
+    ) as mock_post:
+        await guardrail.async_pre_call_hook(
+            data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type=call_type
+        )
+    llm_input = mock_post.call_args.kwargs["json"]["llmInput"]
+    assert "SYSTEM_INJECTION_PAYLOAD" in llm_input
+    assert "TOOL_USE_PAYLOAD" in llm_input
+    assert "TOOL_RESULT_PAYLOAD" in llm_input
+    assert "INPUT_SCHEMA_PAYLOAD" in llm_input
+    assert "benign question" in llm_input
+
+
+@pytest.mark.asyncio
 async def test_input_hook_inspects_responses_input_function_call():
     """Responses-API ``input`` function_call items must be inspected too."""
     guardrail = _init("pre_call")
