@@ -20,6 +20,7 @@ from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transfo
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.openai import ResponseAPIUsage
 
 
 def _make_request(**overrides) -> AnthropicMessagesRequest:
@@ -823,11 +824,19 @@ def _make_mock_response(
     model: str = "gpt-4o",
     input_tokens: int = 100,
     output_tokens: int = 50,
+    cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> MagicMock:
     """Build a minimal mock ResponsesAPIResponse."""
-    usage = MagicMock()
-    usage.input_tokens = input_tokens
-    usage.output_tokens = output_tokens
+    usage = ResponseAPIUsage(
+        input_tokens=input_tokens,
+        input_tokens_details={
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
 
     resp = MagicMock()
     resp.id = response_id
@@ -960,6 +969,25 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["usage"]["input_tokens"] == 200
         assert result["usage"]["output_tokens"] == 75
+
+    def test_cache_tokens_mapped_to_anthropic_usage(self):
+        """Cache reads/writes reported by the Responses API must survive the
+        Anthropic mapping, and input_tokens must exclude them so spend is not
+        billed at the uncached input rate."""
+        response = _make_mock_response(
+            output=[_make_output_message(["OK"])],
+            input_tokens=4017,
+            output_tokens=5,
+            cached_tokens=4004,
+            cache_write_tokens=10,
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["usage"] == {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 4004,
+        }
 
     def test_model_and_id_preserved(self):
         """Model and response ID from the Responses API are forwarded."""

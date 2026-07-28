@@ -7,6 +7,9 @@ from typing import Any, AsyncIterator, Dict
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+
+from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 
 class AnthropicResponsesStreamWrapper:
@@ -226,24 +229,17 @@ class AnthropicResponsesStreamWrapper:
                 event.get("response") if isinstance(event, dict) else None
             )
             stop_reason = "end_turn"
-            input_tokens = 0
-            output_tokens = 0
-            cache_creation_tokens = 0
-            cache_read_tokens = 0
+            anthropic_usage: AnthropicUsage = AnthropicUsage(input_tokens=0, output_tokens=0)
 
             if response_obj is not None:
                 status = getattr(response_obj, "status", None)
                 if status == "incomplete":
                     stop_reason = "max_tokens"
-                usage = getattr(response_obj, "usage", None)
-                if usage is not None:
-                    input_tokens = getattr(usage, "input_tokens", 0) or 0
-                    output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
-                    cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
-                    # Prefer direct cache fields if present
-                    cache_creation_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-                    cache_read_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+                anthropic_usage = (
+                    LiteLLMAnthropicToResponsesAPIAdapter.translate_responses_api_usage_to_anthropic_usage(
+                        getattr(response_obj, "usage", None)
+                    )
+                )
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:
@@ -256,20 +252,11 @@ class AnthropicResponsesStreamWrapper:
                         stop_reason = "tool_use"
                         break
 
-            usage_delta: Dict[str, Any] = {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-            }
-            if cache_creation_tokens:
-                usage_delta["cache_creation_input_tokens"] = cache_creation_tokens
-            if cache_read_tokens:
-                usage_delta["cache_read_input_tokens"] = cache_read_tokens
-
             self._chunk_queue.append(
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                    "usage": usage_delta,
+                    "usage": dict(anthropic_usage),
                 }
             )
             self._chunk_queue.append({"type": "message_stop"})
