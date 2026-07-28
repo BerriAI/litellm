@@ -4,7 +4,7 @@ import React from "react";
 import { z } from "zod/v4";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useValidateResetToken, useResetPassword } from "@/app/(dashboard)/hooks/passwordReset/usePasswordReset";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -26,6 +26,16 @@ type ResetPasswordFormProps = {
   token: string | null;
 };
 
+function ResetPasswordCardHeader({ description }: { description?: React.ReactNode }) {
+  return (
+    <CardHeader>
+      <CardTitle className="text-center">🚅 LiteLLM</CardTitle>
+      <h1 className="text-lg font-semibold">Reset Password</h1>
+      {description && <p className="text-sm text-muted-foreground">{description}</p>}
+    </CardHeader>
+  );
+}
+
 export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
   const { data: validationData, isLoading: isValidating, isError: isValidationError } = useValidateResetToken(token);
   const { mutate: submitResetPassword, isPending, isSuccess, error: resetError } = useResetPassword();
@@ -34,20 +44,34 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
   if (!token || isValidationError) {
     return (
       <div className="mx-auto w-full max-w-md mt-10">
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-red-700">
-          This link is invalid or has expired.
-        </div>
-        <div className="mt-4">
-          <a href="/ui/forgot-password">Request a new link</a>
-        </div>
+        <Card>
+          <ResetPasswordCardHeader />
+          <CardContent>
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-red-700">
+              This link is invalid or has expired.
+            </div>
+            <div className="mt-4">
+              <a href="/ui/forgot-password" className="text-sm text-primary underline-offset-4 hover:underline">
+                Request a new link
+              </a>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
   if (isValidating) {
     return (
-      <div className="mx-auto w-full max-w-md mt-10 flex justify-center">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="mx-auto w-full max-w-md mt-10">
+        <Card>
+          <ResetPasswordCardHeader />
+          <CardContent>
+            <div className="flex justify-center">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -55,12 +79,19 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
   if (isSuccess) {
     return (
       <div className="mx-auto w-full max-w-md mt-10">
-        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-2 text-green-700">
-          Password reset successfully.
-        </div>
-        <div className="mt-4">
-          <a href={getLoginUrl()}>Back to Login</a>
-        </div>
+        <Card>
+          <ResetPasswordCardHeader />
+          <CardContent>
+            <div className="rounded-md border border-green-200 bg-green-50 px-4 py-2 text-green-700">
+              Password reset successfully.
+            </div>
+            <div className="mt-4">
+              <a href={getLoginUrl()} className="text-sm text-primary underline-offset-4 hover:underline">
+                Back to Login
+              </a>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -72,32 +103,33 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
 
   return (
     <div className="mx-auto w-full max-w-md mt-10">
-      <Card className="p-6">
-        <h1 className="text-center text-lg font-semibold mb-5">🚅 LiteLLM</h1>
-        <h2 className="text-xl font-semibold">Reset Password</h2>
-        <p className="text-sm text-muted-foreground">Resetting password for {validationData?.user_email}</p>
+      <Card>
+        <ResetPasswordCardHeader description={`Resetting password for ${validationData?.user_email}`} />
+        <CardContent>
+          <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+            <FieldGroup>
+              <FormField control={form.control} name="password" label="New Password">
+                {({ ref, ...field }) => <Input {...field} ref={ref} type="password" />}
+              </FormField>
+              <FormField control={form.control} name="confirm_password" label="Confirm New Password">
+                {({ ref, ...field }) => <Input {...field} ref={ref} type="password" />}
+              </FormField>
+            </FieldGroup>
 
-        <form className="mt-10 mb-5 space-y-4" onSubmit={onSubmit}>
-          <FieldGroup>
-            <FormField control={form.control} name="password" label="New Password">
-              {({ ref, ...field }) => <Input {...field} ref={ref} type="password" />}
-            </FormField>
-            <FormField control={form.control} name="confirm_password" label="Confirm New Password">
-              {({ ref, ...field }) => <Input {...field} ref={ref} type="password" />}
-            </FormField>
-          </FieldGroup>
+            {resetError && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-red-700">
+                {(resetError as Error).message}
+              </div>
+            )}
 
-          {resetError && (
-            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-red-700">
-              {(resetError as Error).message}
+            <div className="mt-6">
+              <Button type="submit" disabled={isPending}>
+                {isPending && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+                Reset Password
+              </Button>
             </div>
-          )}
-
-          <Button type="submit" disabled={isPending}>
-            {isPending && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
-            Reset Password
-          </Button>
-        </form>
+          </form>
+        </CardContent>
       </Card>
     </div>
   );
