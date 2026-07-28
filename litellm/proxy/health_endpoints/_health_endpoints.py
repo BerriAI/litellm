@@ -1314,6 +1314,79 @@ async def _db_health_readiness_check():
         return db_health_cache
 
 
+_DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS = "2.0"
+
+
+def _readiness_ignores_db_outage() -> bool:
+    """
+    True when ``general_settings.allow_requests_on_db_unavailable`` is set.
+
+    That flag declares the worker serves traffic without the DB, and the
+    request layer honours it via ``PrismaDBExceptionHandler``. Failing the
+    readiness probe on DB loss removes every replica from the Service at the
+    same time, so the fallback the flag enables never gets a request to run on.
+    """
+    return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+
+
+def _readiness_db_probe_timeout_seconds() -> float:
+    """
+    Upper bound on the time the readiness probe may spend on the DB when the
+    worker is allowed to serve without it.
+
+    ``PrismaClient.health_check`` retries under ``backoff`` and its underlying
+    ``query_raw`` has no timeout of its own, so an unreachable DB can block
+    past the kubelet's ``timeoutSeconds`` and fail the probe on time no matter
+    what status code we would have returned.
+    """
+    return max(
+        0.1,
+        float(
+            os.getenv(
+                "LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS",
+                _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS,
+            )
+        ),
+    )
+
+
+async def _readiness_db_status() -> str:
+    """
+    DB status string for the readiness payload, for callers that already know a
+    Prisma client is configured.
+
+    When the worker may serve without the DB the lookup is bounded, because a
+    probe that answers late is indistinguishable from a probe that answers 503.
+    Reconnection is not lost by giving up early: ``_db_health_watchdog_loop``
+    owns it and runs on its own schedule.
+    """
+    if not _readiness_ignores_db_outage():
+        return (await _db_health_readiness_check())["status"]
+
+    timeout_seconds = _readiness_db_probe_timeout_seconds()
+    try:
+        db_health_status = await asyncio.wait_for(_db_health_readiness_check(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.warning(
+            "_readiness_db_status: DB probe exceeded %ss, reporting disconnected while staying ready",
+            timeout_seconds,
+        )
+        return "disconnected"
+    return db_health_status["status"]
+
+
+def _apply_db_readiness_status(db_status: str, response: Response | None) -> None:
+    """
+    Flip the probe to 503 when a configured DB is unreachable, unless the
+    operator opted into serving without one.
+    """
+    if response is None or db_status == "connected":
+        return
+    if _readiness_ignores_db_outage():
+        return
+    response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
 @router.get(
     "/settings",
     tags=["health"],
@@ -1449,16 +1522,17 @@ async def _get_health_readiness_details(
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
-            db_health_status = await _db_health_readiness_check()
+            db_status = await _readiness_db_status()
             # A configured DB that is not reachable means the worker cannot
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
-            # rotation; "Not connected" (no DB configured at all) stays 200.
-            if response is not None and db_health_status["status"] != "connected":
-                response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            # rotation; "Not connected" (no DB configured at all) stays 200,
+            # and so does an unreachable DB once the operator has set
+            # allow_requests_on_db_unavailable.
+            _apply_db_readiness_status(db_status, response)
             return {
                 "status": "healthy",
-                "db": db_health_status["status"],
+                "db": db_status,
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
@@ -1536,16 +1610,18 @@ async def _resolve_public_readiness_db(response: Response) -> str:
     Return the db status string for the public probe and flip the response to
     503 when a configured DB is unreachable. Mirrors the legacy values:
     "Not connected" (no DB configured), "connected", "disconnected".
+
+    ``allow_requests_on_db_unavailable`` keeps the 200 so the pod stays in
+    rotation; the body still reports the real db status either way.
     """
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         return "Not connected"
 
-    db_health_status = await _db_health_readiness_check()
-    if db_health_status["status"] != "connected":
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return db_health_status["status"]
+    db_status = await _readiness_db_status()
+    _apply_db_readiness_status(db_status, response)
+    return db_status
 
 
 @router.get(

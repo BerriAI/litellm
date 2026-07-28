@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import time
@@ -2292,7 +2293,13 @@ async def test_health_readiness_returns_503_when_db_disconnected():
     }
 
     response = Response()
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
         result = await health_readiness(response=response)
 
     assert response.status_code == 503
@@ -2339,6 +2346,157 @@ async def test_health_readiness_returns_200_when_no_db_configured():
 
     assert response.status_code == 200
     assert result == {"status": "healthy", "db": "Not connected"}
+
+
+def _unreachable_prisma_client():
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("Can't reach database server"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=False)
+    return mock_prisma
+
+
+def _expire_db_health_cache():
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_stays_ready_when_db_unreachable_and_fallback_enabled():
+    """
+    allow_requests_on_db_unavailable declares that this worker serves traffic
+    without the DB, and the request layer honours it. A readiness 503 pulls
+    every replica out of the Service at once, so the fallback never gets a
+    request to run on and a recoverable DB blip becomes a total outage.
+
+    Regression test for the flag being ignored by the readiness probe.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    _expire_db_health_cache()
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _unreachable_prisma_client()),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allow_requests_on_db_unavailable, expected_status_code",
+    [(True, 200), (False, 503)],
+)
+async def test_health_readiness_details_honours_db_fallback_flag(
+    allow_requests_on_db_unavailable, expected_status_code
+):
+    """
+    The detailed payload is reachable unauthenticated via
+    allow_public_health_readiness_details, so it must make the same
+    in-rotation decision as the low-detail probe. Either way the body keeps
+    reporting the real db status.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    _expire_db_health_cache()
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _unreachable_prisma_client()),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "allow_public_health_readiness_details": True,
+                "allow_requests_on_db_unavailable": allow_requests_on_db_unavailable,
+            },
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == expected_status_code
+    assert result["db"] == "disconnected"
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_bounds_db_probe_when_fallback_enabled():
+    """
+    Returning 200 is not enough on its own. health_check retries under backoff
+    and its query_raw has no timeout, so an unreachable DB can outlast the
+    kubelet's timeoutSeconds and fail the probe on time whatever status code we
+    would have produced. With the fallback enabled the lookup must give up and
+    report 'disconnected' rather than wait for the DB to answer.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    async def _slow_health_check(*args, **kwargs):
+        await asyncio.sleep(0.3)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=_slow_health_check)
+
+    _expire_db_health_cache()
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+        patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": "0.05"}),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_does_not_bound_db_probe_when_fallback_disabled():
+    """
+    The bound only exists because the fallback makes the DB answer optional.
+    Without the flag a slow but reachable DB must still be reported connected,
+    so the default path keeps waiting for health_check exactly as before.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    async def _slow_health_check(*args, **kwargs):
+        await asyncio.sleep(0.3)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=_slow_health_check)
+
+    _expire_db_health_cache()
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+        patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": "0.05"}),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "connected"}
 
 
 def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
