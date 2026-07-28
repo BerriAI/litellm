@@ -756,6 +756,46 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypatch):
+    """
+    The periodic reload job (model cost map / anthropic beta headers) must be scheduled
+    even when store_model_in_db is False.
+
+    Regression test: the reload checks only ran from the store_model_in_db-gated
+    add_deployment job, so a schedule configured in the Admin UI silently never fired
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+    from litellm.proxy.proxy_server import scheduler
+
+    assert scheduler is not None
+    assert scheduler.get_job("periodic_reload_job") is not None
+    assert scheduler.get_job("add_deployment_job") is None
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
     The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
@@ -3701,6 +3741,7 @@ class TestPriceDataReloadAPI:
         """Test that admin users can schedule periodic reload"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             # Mock database upsert
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
             mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
             response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
@@ -3763,35 +3804,27 @@ class TestPriceDataReloadAPI:
         assert "Admin role required" in data["detail"]
 
     def test_get_model_cost_map_reload_status_admin_access(self, client_with_auth):
-        """Test that admin users can get reload status"""
+        """Test that admin users can get reload status, sourced from the persisted last_run"""
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             # Mock database config record
             mock_config = MagicMock()
-            mock_config.param_value = {"interval_hours": 6, "force_reload": False}
+            mock_config.param_value = {
+                "interval_hours": 6,
+                "force_reload": False,
+                "last_run": "2024-01-01T06:00:00+00:00",
+            }
             mock_prisma.db.litellm_config.find_unique = AsyncMock(
                 return_value=mock_config
             )
 
-            # Mock the last reload time and current time
-            with patch(
-                "litellm.proxy.proxy_server.last_model_cost_map_reload",
-                "2024-01-01T06:00:00",
-            ):
-                with patch("litellm.proxy.proxy_server.datetime") as mock_datetime:
-                    # Mock current time to be 1 hour after last reload
-                    mock_datetime.utcnow.return_value = datetime(2024, 1, 1, 7, 0, 0)
-                    mock_datetime.fromisoformat = datetime.fromisoformat
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
 
-                    response = client_with_auth.get(
-                        "/schedule/model_cost_map_reload/status"
-                    )
-
-                    assert response.status_code == 200
-                    data = response.json()
-                    assert data["scheduled"] == True
-                    assert data["interval_hours"] == 6
-                    assert data["last_run"] == "2024-01-01T06:00:00"
-                    assert data["next_run"] == "2024-01-01T12:00:00"
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] == True
+            assert data["interval_hours"] == 6
+            assert data["last_run"] == "2024-01-01T06:00:00+00:00"
+            assert data["next_run"] == "2024-01-01T12:00:00+00:00"
 
     def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot get reload status"""
@@ -3935,15 +3968,15 @@ class TestPriceDataReloadIntegration:
         # Mock current time and last reload time
         with patch(
             "litellm.proxy.proxy_server.last_model_cost_map_reload",
-            "2024-01-01T06:00:00",
+            datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc),
         ):
-            with patch("litellm.proxy.proxy_server.datetime") as mock_datetime:
-                mock_datetime.utcnow.return_value = datetime(
-                    2024, 1, 1, 7, 0, 0
-                )  # 1 hour later
-
+            with patch(
+                "litellm.proxy.proxy_server.utc_now",
+                return_value=datetime(2024, 1, 1, 7, 0, 0, tzinfo=timezone.utc),
+            ):
                 # Should not reload (only 1 hour passed, need 6)
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+                mock_prisma.db.litellm_config.upsert.assert_not_called()
 
         # Test case 3: Config with force reload
         litellm_config_cache.flush_cache()
@@ -3972,9 +4005,108 @@ class TestPriceDataReloadIntegration:
                 param_value_dict = json.loads(param_value_json)
                 assert param_value_dict["force_reload"] == False
                 assert param_value_dict.get("interval_hours") == 6
+                assert param_value_dict.get("last_run") is not None
         finally:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
+
+    def test_distributed_reload_persists_last_run(self):
+        """A completed reload must stamp last_run in the DB row.
+
+        Regression test: last_run used to live only in the pod's memory, so the Admin UI
+        reported "Never" for a schedule that had been running for days
+        """
+        from litellm.proxy.proxy_server import ProxyConfig
+        from litellm.proxy.utils import litellm_config_cache
+
+        litellm_config_cache.flush_cache()
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+
+        mock_config = MagicMock()
+        mock_config.param_value = {"interval_hours": 6, "force_reload": False}
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        reload_time = datetime(2024, 1, 1, 7, 0, 0, tzinfo=timezone.utc)
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with patch(
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map",
+                return_value={"gpt-4": {"input_cost_per_token": 0.001}},
+            ):
+                with patch(
+                    "litellm.proxy.proxy_server.last_model_cost_map_reload", None
+                ):
+                    with patch(
+                        "litellm.proxy.proxy_server.utc_now", return_value=reload_time
+                    ):
+                        asyncio.run(
+                            proxy_config._check_and_reload_model_cost_map(mock_prisma)
+                        )
+
+            call_args = mock_prisma.db.litellm_config.upsert.call_args
+            param_value_dict = json.loads(
+                call_args[1]["data"]["update"]["param_value"]
+            )
+            assert param_value_dict["last_run"] == reload_time.isoformat()
+            assert param_value_dict["interval_hours"] == 6
+            assert param_value_dict["force_reload"] is False
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
+            litellm_config_cache.flush_cache()
+
+    def test_schedule_model_cost_map_reload_preserves_last_run(self):
+        """Re-scheduling must not wipe the recorded last_run"""
+        from litellm.proxy.proxy_server import schedule_model_cost_map_reload
+
+        mock_prisma = MagicMock()
+        existing = MagicMock()
+        existing.param_value = {
+            "interval_hours": 6,
+            "force_reload": False,
+            "last_run": "2024-01-01T06:00:00+00:00",
+        }
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=existing)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+
+        admin = MagicMock()
+        admin.user_role = LitellmUserRoles.PROXY_ADMIN
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            asyncio.run(
+                schedule_model_cost_map_reload(hours=12, user_api_key_dict=admin)
+            )
+
+        param_value_dict = json.loads(
+            mock_prisma.db.litellm_config.upsert.call_args[1]["data"]["update"][
+                "param_value"
+            ]
+        )
+        assert param_value_dict["interval_hours"] == 12
+        assert param_value_dict["last_run"] == "2024-01-01T06:00:00+00:00"
+
+    def test_check_periodic_reloads_runs_both_checks(self):
+        """check_periodic_reloads drives both admin-configurable reloads"""
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        proxy_config = ProxyConfig()
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.get_generic_data = AsyncMock(return_value=None)
+
+        with patch.object(
+            proxy_config, "_check_and_reload_model_cost_map", new=AsyncMock()
+        ) as mock_cost_map_check:
+            with patch.object(
+                proxy_config, "_check_and_reload_anthropic_beta_headers", new=AsyncMock()
+            ) as mock_beta_headers_check:
+                asyncio.run(proxy_config.check_periodic_reloads(mock_prisma))
+
+        mock_cost_map_check.assert_awaited_once()
+        mock_beta_headers_check.assert_awaited_once()
 
     def test_distributed_reload_preserves_interval_hours(self):
         """Test that _check_and_reload_model_cost_map preserves interval_hours after reload.

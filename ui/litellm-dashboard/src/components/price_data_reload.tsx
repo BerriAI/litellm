@@ -60,6 +60,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [hours, setHours] = useState<number>(6);
   const [reloadStatus, setReloadStatus] = useState<ReloadStatus | null>(null);
+  const [statusError, setStatusError] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [sourceInfo, setSourceInfo] = useState<CostMapSourceInfo | null>(null);
   const [loadingSource, setLoadingSource] = useState(false);
@@ -85,15 +86,10 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
     try {
       const status = await getModelCostMapReloadStatus(accessToken);
       setReloadStatus(status);
+      setStatusError(false);
     } catch (error) {
       console.error("Failed to fetch reload status:", error);
-      // Set a default status to prevent UI issues
-      setReloadStatus({
-        scheduled: false,
-        interval_hours: null,
-        last_run: null,
-        next_run: null,
-      });
+      setStatusError(true);
     } finally {
       setLoadingStatus(false);
     }
@@ -420,6 +416,26 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       )}
 
       {/* Reload Schedule Status Card */}
+      {statusError && (
+        <Card
+          size="small"
+          style={{
+            backgroundColor: "#fff7e6",
+            border: "1px solid #ffd591",
+            borderRadius: 8,
+            marginBottom: reloadStatus ? 12 : 0,
+          }}
+        >
+          <Space size="small">
+            <WarningOutlined style={{ color: "#fa8c16", fontSize: 12 }} />
+            <Text style={{ fontSize: "12px", color: "#614700" }}>
+              Could not load the reload schedule. {reloadStatus ? "Showing the last known state; refresh" : "Refresh"}{" "}
+              the page or sign in again.
+            </Text>
+          </Space>
+        </Card>
+      )}
+
       {reloadStatus && (
         <Card
           size="small"
