@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockGetGuardrailsList = vi.fn();
 const mockCreateGuardrailCall = vi.fn();
 const mockUpdateGuardrailCall = vi.fn();
+const mockDeleteGuardrailCall = vi.fn();
 const mockPush = vi.fn();
 
 vi.mock("@/components/networking", () => ({
@@ -13,6 +14,7 @@ vi.mock("@/components/networking", () => ({
   getGuardrailsList: (...args: unknown[]) => mockGetGuardrailsList(...args),
   createGuardrailCall: (...args: unknown[]) => mockCreateGuardrailCall(...args),
   updateGuardrailCall: (...args: unknown[]) => mockUpdateGuardrailCall(...args),
+  deleteGuardrailCall: (...args: unknown[]) => mockDeleteGuardrailCall(...args),
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mockPush }) }));
@@ -99,6 +101,56 @@ describe("PromptCompressionTab", () => {
     expect(await screen.findByText("Always on")).toBeInTheDocument();
     expect(screen.queryByLabelText("Compression mode for headroom-compression")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Edit settings/ })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Delete headroom-compression")).not.toBeInTheDocument();
+  });
+
+  it("deletes an endpoint after the confirmation modal and drops it from the card", async () => {
+    mockDeleteGuardrailCall.mockResolvedValue({});
+    mockGetGuardrailsList
+      .mockResolvedValueOnce({ guardrails: [compressionGuardrail()] })
+      .mockResolvedValueOnce({ guardrails: [] });
+
+    render(<PromptCompressionTab accessToken="sk-test" userRole="Admin" />);
+
+    fireEvent.click(await screen.findByLabelText("Delete headroom-compression"));
+
+    const modal = within(await screen.findByRole("dialog"));
+    expect(modal.getByText(/Every request is compressed by this guardrail today/)).toBeInTheDocument();
+    expect(modal.getByText("https://headroom.example.com")).toBeInTheDocument();
+
+    fireEvent.click(modal.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(mockDeleteGuardrailCall).toHaveBeenCalledWith("sk-test", "fee65a60"));
+    expect(await screen.findByLabelText("Headroom API base")).toBeInTheDocument();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+
+  it("does not delete anything when the confirmation is cancelled", async () => {
+    render(<PromptCompressionTab accessToken="sk-test" userRole="Admin" />);
+
+    fireEvent.click(await screen.findByLabelText("Delete headroom-compression"));
+    const modal = within(await screen.findByRole("dialog"));
+    fireEvent.click(modal.getByRole("button", { name: "Cancel" }));
+
+    expect(mockDeleteGuardrailCall).not.toHaveBeenCalled();
+    expect(within(screen.getByRole("list")).getByText("headroom-compression")).toBeInTheDocument();
+  });
+
+  it("warns about failing opt-in callers instead of lost savings when deleting an opt-in endpoint", async () => {
+    mockGetGuardrailsList.mockResolvedValue({
+      guardrails: [
+        compressionGuardrail({
+          litellm_params: { guardrail: "headroom", api_base: "https://headroom.example.com", default_on: false },
+        }),
+      ],
+    });
+
+    render(<PromptCompressionTab accessToken="sk-test" userRole="Admin" />);
+
+    fireEvent.click(await screen.findByLabelText("Delete headroom-compression"));
+
+    const modal = within(await screen.findByRole("dialog"));
+    expect(modal.getByText(/Requests that ask for this guardrail by name will fail/)).toBeInTheDocument();
   });
 
   it("keeps a config-file guardrail read-only even for an admin", async () => {
@@ -110,6 +162,7 @@ describe("PromptCompressionTab", () => {
 
     expect(await screen.findByText(/Defined in the proxy config file/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Compression mode for headroom-compression")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Delete headroom-compression")).not.toBeInTheDocument();
   });
 
   it("creates a guardrail from the empty state and refreshes the list", async () => {

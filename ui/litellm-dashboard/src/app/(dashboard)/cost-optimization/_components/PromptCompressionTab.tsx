@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Settings2 } from "lucide-react";
+import { Plus, Settings2, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,12 +12,19 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { createGuardrailCall, getGuardrailsList, updateGuardrailCall } from "@/components/networking";
+import {
+  createGuardrailCall,
+  deleteGuardrailCall,
+  getGuardrailsList,
+  updateGuardrailCall,
+} from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { guardrailDetailHref } from "@/app/(dashboard)/guardrails/detailNavigation";
 import { isAdminRole } from "@/utils/roles";
 import {
   buildCompressionGuardrailPayload,
+  CompressionGuardrailInput,
   compressionGuardrailsOf,
   GuardrailListItem,
   GuardrailListResponse,
@@ -45,6 +52,7 @@ interface CompressionEndpointRowProps {
   isPending: boolean;
   onModeChange: (guardrail: GuardrailListItem, mode: CompressionMode) => void;
   onEditSettings: (guardrail: GuardrailListItem) => void;
+  onDelete: (guardrail: GuardrailListItem) => void;
 }
 
 const CompressionEndpointRow: React.FC<CompressionEndpointRowProps> = ({
@@ -53,6 +61,7 @@ const CompressionEndpointRow: React.FC<CompressionEndpointRowProps> = ({
   isPending,
   onModeChange,
   onEditSettings,
+  onDelete,
 }) => {
   const mode = modeOf(guardrail);
   const name = guardrail.guardrail_name ?? guardrail.guardrail_id;
@@ -102,6 +111,18 @@ const CompressionEndpointRow: React.FC<CompressionEndpointRowProps> = ({
             Edit settings
           </Button>
         )}
+
+        {isEditable && (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Delete ${name}`}
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => onDelete(guardrail)}
+          >
+            <Trash2 />
+          </Button>
+        )}
       </div>
 
       {mode === "opt_in" && (
@@ -115,6 +136,127 @@ const CompressionEndpointRow: React.FC<CompressionEndpointRowProps> = ({
   );
 };
 
+interface AddEndpointFormProps {
+  isSaving: boolean;
+  canCancel: boolean;
+  onCancel: () => void;
+  onSubmit: (input: CompressionGuardrailInput) => void;
+}
+
+const AddEndpointForm: React.FC<AddEndpointFormProps> = ({ isSaving, canCancel, onCancel, onSubmit }) => {
+  const [name, setName] = useState<string>("");
+  const [apiBase, setApiBase] = useState<string>("");
+  const [defaultOn, setDefaultOn] = useState<boolean>(true);
+  const [showFieldErrors, setShowFieldErrors] = useState<boolean>(false);
+
+  const isNameMissing = !name.trim();
+  const isApiBaseMissing = !apiBase.trim();
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isNameMissing || isApiBaseMissing) {
+      setShowFieldErrors(true);
+      return;
+    }
+    onSubmit({ name, apiBase, defaultOn });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-border p-4">
+      <div className="space-y-2">
+        <Label htmlFor="compression-name">Name</Label>
+        <Input
+          id="compression-name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="headroom-compression"
+          aria-invalid={showFieldErrors && isNameMissing}
+        />
+        {showFieldErrors && isNameMissing && <p className="text-xs text-destructive">Name is required</p>}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="compression-api-base">Headroom API base</Label>
+        <Input
+          id="compression-api-base"
+          value={apiBase}
+          onChange={(event) => setApiBase(event.target.value)}
+          placeholder="https://your-headroom-endpoint"
+          aria-invalid={showFieldErrors && isApiBaseMissing}
+        />
+        <p className="text-xs text-muted-foreground">
+          Where your Headroom compression service is hosted; LiteLLM calls its /v1/compress endpoint
+        </p>
+        {showFieldErrors && isApiBaseMissing && <p className="text-xs text-destructive">API base is required</p>}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="compression-default-on">
+          <Switch id="compression-default-on" checked={defaultOn} onCheckedChange={setDefaultOn} />
+          Apply to all requests
+        </Label>
+        <p className="text-xs text-muted-foreground">
+          Off means callers opt in per request. Applying compression to all requests is available to all users; enabling
+          it selectively per key or team is a LiteLLM Enterprise feature.{" "}
+          <a
+            href="https://www.litellm.ai/#pricing"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-primary underline underline-offset-4"
+          >
+            Get a trial key
+          </a>
+        </p>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        {canCancel && (
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+        <Button type="submit" disabled={isSaving}>
+          {isSaving ? "Adding..." : "Add guardrail"}
+        </Button>
+      </div>
+    </form>
+  );
+};
+
+interface DeleteEndpointModalProps {
+  guardrail: GuardrailListItem | null;
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+const DeleteEndpointModal: React.FC<DeleteEndpointModalProps> = ({ guardrail, isDeleting, onCancel, onConfirm }) => {
+  const isAlwaysOn = guardrail !== null && modeOf(guardrail) === "always";
+
+  return (
+    <DeleteResourceModal
+      isOpen={guardrail !== null}
+      title="Delete compression guardrail"
+      alertMessage={
+        isAlwaysOn
+          ? "Every request is compressed by this guardrail today. Deleting it stops compression immediately and input token costs go back up"
+          : "Requests that ask for this guardrail by name will fail once it is deleted"
+      }
+      message={`Are you sure you want to delete guardrail: ${guardrail?.guardrail_name ?? ""}? This action cannot be undone.`}
+      resourceInformationTitle="Guardrail Information"
+      resourceInformation={[
+        { label: "Name", value: guardrail?.guardrail_name },
+        { label: "ID", value: guardrail?.guardrail_id, code: true },
+        { label: "API base", value: guardrail?.litellm_params?.api_base },
+        { label: "Applies to", value: isAlwaysOn ? MODE_LABELS.always : MODE_LABELS.opt_in },
+      ]}
+      onCancel={onCancel}
+      onOk={onConfirm}
+      confirmLoading={isDeleting}
+    />
+  );
+};
+
 const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken, userRole }) => {
   const router = useRouter();
   const isAdmin = userRole ? isAdminRole(userRole) : false;
@@ -123,11 +265,9 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [pendingModeId, setPendingModeId] = useState<string | null>(null);
+  const [guardrailToDelete, setGuardrailToDelete] = useState<GuardrailListItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isAddFormOpen, setIsAddFormOpen] = useState<boolean>(false);
-  const [name, setName] = useState<string>("");
-  const [apiBase, setApiBase] = useState<string>("");
-  const [defaultOn, setDefaultOn] = useState<boolean>(true);
-  const [showFieldErrors, setShowFieldErrors] = useState<boolean>(false);
 
   const loadGuardrails = useCallback(() => {
     if (!accessToken) {
@@ -172,23 +312,32 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
     router.push(guardrailDetailHref(guardrail.guardrail_id, "settings"));
   };
 
-  const handleAdd = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!accessToken) {
+  const handleDeleteConfirm = async () => {
+    if (!accessToken || !guardrailToDelete) {
       return;
     }
-    if (!name.trim() || !apiBase.trim()) {
-      setShowFieldErrors(true);
+    setIsDeleting(true);
+    try {
+      await deleteGuardrailCall(accessToken, guardrailToDelete.guardrail_id);
+      NotificationsManager.success("Compression guardrail deleted");
+      setGuardrailToDelete(null);
+      await loadGuardrails();
+    } catch (error) {
+      console.error("Failed to delete compression guardrail:", error);
+      NotificationsManager.fromBackend("Failed to delete compression guardrail");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleAdd = async (input: CompressionGuardrailInput) => {
+    if (!accessToken) {
       return;
     }
     setIsSaving(true);
     try {
-      await createGuardrailCall(accessToken, buildCompressionGuardrailPayload({ name, apiBase, defaultOn }));
+      await createGuardrailCall(accessToken, buildCompressionGuardrailPayload(input));
       NotificationsManager.success("Compression guardrail created");
-      setName("");
-      setApiBase("");
-      setDefaultOn(true);
-      setShowFieldErrors(false);
       setIsAddFormOpen(false);
       await loadGuardrails();
     } catch (error) {
@@ -200,7 +349,12 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
   };
 
   const hasGuardrails = guardrails.length > 0;
-  const isFormVisible = isAdmin && !isLoading && (!hasGuardrails || isAddFormOpen);
+  const isSettled = !isLoading;
+  const wantsAddForm = !hasGuardrails || isAddFormOpen;
+  const isFormVisible = isAdmin && isSettled && wantsAddForm;
+  const isListVisible = isSettled && hasGuardrails;
+  const isEmptyStateVisible = isSettled && !hasGuardrails && !isFormVisible;
+  const isAddAnotherVisible = isListVisible && isAdmin && !isAddFormOpen;
 
   return (
     <Card>
@@ -221,9 +375,9 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {isLoading && <Skeleton className="h-14 w-full" />}
+        {!isSettled && <Skeleton className="h-14 w-full" />}
 
-        {!isLoading && hasGuardrails && (
+        {isListVisible && (
           <ul className="divide-y divide-border rounded-lg border border-border">
             {guardrails.map((guardrail) => (
               <CompressionEndpointRow
@@ -233,18 +387,19 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
                 isPending={pendingModeId === guardrail.guardrail_id}
                 onModeChange={handleModeChange}
                 onEditSettings={handleEditSettings}
+                onDelete={setGuardrailToDelete}
               />
             ))}
           </ul>
         )}
 
-        {!isLoading && !hasGuardrails && !isFormVisible && (
+        {isEmptyStateVisible && (
           <p className="text-sm text-muted-foreground">
             No prompt compression endpoint is configured. An admin can add one to start saving on input tokens
           </p>
         )}
 
-        {!isLoading && hasGuardrails && isAdmin && !isAddFormOpen && (
+        {isAddAnotherVisible && (
           <Button variant="ghost" size="sm" onClick={() => setIsAddFormOpen(true)}>
             <Plus />
             Add another endpoint
@@ -252,69 +407,20 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
         )}
 
         {isFormVisible && (
-          <form onSubmit={handleAdd} className="space-y-4 rounded-lg border border-border p-4">
-            <div className="space-y-2">
-              <Label htmlFor="compression-name">Name</Label>
-              <Input
-                id="compression-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="headroom-compression"
-                aria-invalid={showFieldErrors && !name.trim()}
-              />
-              {showFieldErrors && !name.trim() && <p className="text-xs text-destructive">Name is required</p>}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="compression-api-base">Headroom API base</Label>
-              <Input
-                id="compression-api-base"
-                value={apiBase}
-                onChange={(event) => setApiBase(event.target.value)}
-                placeholder="https://your-headroom-endpoint"
-                aria-invalid={showFieldErrors && !apiBase.trim()}
-              />
-              <p className="text-xs text-muted-foreground">
-                Where your Headroom compression service is hosted; LiteLLM calls its /v1/compress endpoint
-              </p>
-              {showFieldErrors && !apiBase.trim() && <p className="text-xs text-destructive">API base is required</p>}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="compression-default-on">
-                <Switch
-                  id="compression-default-on"
-                  checked={defaultOn}
-                  onCheckedChange={(checked) => setDefaultOn(checked)}
-                />
-                Apply to all requests
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Off means callers opt in per request. Applying compression to all requests is available to all users;
-                enabling it selectively per key or team is a LiteLLM Enterprise feature.{" "}
-                <a
-                  href="https://www.litellm.ai/#pricing"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium text-primary underline underline-offset-4"
-                >
-                  Get a trial key
-                </a>
-              </p>
-            </div>
-
-            <div className="flex justify-end gap-2">
-              {hasGuardrails && (
-                <Button type="button" variant="ghost" onClick={() => setIsAddFormOpen(false)}>
-                  Cancel
-                </Button>
-              )}
-              <Button type="submit" disabled={isSaving}>
-                {isSaving ? "Adding..." : "Add guardrail"}
-              </Button>
-            </div>
-          </form>
+          <AddEndpointForm
+            isSaving={isSaving}
+            canCancel={hasGuardrails}
+            onCancel={() => setIsAddFormOpen(false)}
+            onSubmit={handleAdd}
+          />
         )}
+
+        <DeleteEndpointModal
+          guardrail={guardrailToDelete}
+          isDeleting={isDeleting}
+          onCancel={() => setGuardrailToDelete(null)}
+          onConfirm={handleDeleteConfirm}
+        />
       </CardContent>
     </Card>
   );
