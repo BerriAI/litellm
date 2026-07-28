@@ -1245,6 +1245,7 @@ class PrometheusLogger(CustomLogger):
             client_ip=standard_logging_payload["metadata"].get("requester_ip_address"),
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
             stream=(str(standard_logging_payload.get("stream")) if litellm.prometheus_emit_stream_label else None),
+            service_tier=get_service_tier_from_standard_logging_payload(standard_logging_payload),
         )
 
         if user_api_key is not None and isinstance(user_api_key, str) and user_api_key.startswith("sk-"):
@@ -4096,6 +4097,31 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
             result[original_key.replace(".", "_")] = value
 
     return result
+
+
+def get_service_tier_from_standard_logging_payload(
+    standard_logging_payload: StandardLoggingPayload,
+) -> str | None:
+    """
+    Resolve the service tier a request ran on, for the ``service_tier`` label.
+
+    The tier the provider actually served wins over the tier the caller asked for,
+    so latency and spend stay segmentable when the request said ``auto`` and the
+    provider picked the concrete tier. Providers report the served tier either at
+    the top level of the response (OpenAI, Bedrock, Groq) or on the usage object
+    (Anthropic); the requested value from the request params is the last resort,
+    which is what covers streaming responses that carry no served tier.
+    """
+    response = standard_logging_payload.get("response")
+    usage_object = standard_logging_payload.get("metadata", {}).get("usage_object")
+    model_parameters = standard_logging_payload.get("model_parameters")
+
+    candidates: tuple[object, ...] = (
+        response.get("service_tier") if isinstance(response, dict) else None,
+        usage_object.get("service_tier") if isinstance(usage_object, dict) else None,
+        model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None,
+    )
+    return next((tier for tier in candidates if isinstance(tier, str) and tier), None)
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
