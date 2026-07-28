@@ -602,13 +602,23 @@ async def anthropic_proxy_route(
         _forward_headers=True,
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
-    received_value = await endpoint_func(
-        request,
-        fastapi_response,
-        user_api_key_dict,
-    )
-
-    return received_value
+    try:
+        return await endpoint_func(
+            request,
+            fastapi_response,
+            user_api_key_dict,
+        )
+    except ProxyException as e:
+        if auth_header is None and e.code == "401":
+            e.message = (
+                "No Anthropic credentials found on the proxy, so the incoming "
+                "request headers were forwarded to Anthropic as-is and were "
+                "rejected. Either set the ANTHROPIC_API_KEY environment variable "
+                "(or ANTHROPIC_AUTH_TOKEN for OAuth) on the proxy, configure "
+                "Anthropic pass-through credentials, or send a valid Anthropic "
+                f"credential in the request headers. Original error: {e.message}"
+            )
+        raise e
 
 
 # Bedrock endpoint actions - consolidated list used for model extraction and streaming detection
