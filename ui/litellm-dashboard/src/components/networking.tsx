@@ -1526,6 +1526,70 @@ export const claimOnboardingToken = async (
   }
 };
 
+export const forgotPasswordCall = async (email: string): Promise<{ message: string }> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/forgot_password` : `/user/forgot_password`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to submit forgot password request:", error);
+    throw error;
+  }
+};
+
+export const validateResetTokenCall = async (token: string): Promise<{ user_email: string }> => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/reset_password/validate` : `/user/reset_password/validate`;
+    url += `?token=${encodeURIComponent(token)}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to validate reset token:", error);
+    throw error;
+  }
+};
+
+export const resetPasswordCall = async (token: string, newPassword: string): Promise<{ message: string }> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/reset_password` : `/user/reset_password`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to reset password:", error);
+    throw error;
+  }
+};
+
 export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
   try {
     const url = proxyBaseUrl
