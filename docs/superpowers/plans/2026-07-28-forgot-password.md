@@ -1329,7 +1329,7 @@ git commit -m "feat(ui): add /ui/forgot-password page"
 - Test: `ui/litellm-dashboard/src/app/reset-password/ResetPasswordForm.test.tsx`
 
 **Interfaces:**
-- Consumes: `useValidateResetToken`, `useResetPassword` (Task 9), `OnboardingLoadingView` (`ui/litellm-dashboard/src/app/onboarding/OnboardingLoadingView.tsx`, reused as-is — generic spinner, no invite-specific copy), `getLoginUrl`.
+- Consumes: `useValidateResetToken`, `useResetPassword` (Task 9), `useZodForm` (`ui/litellm-dashboard/src/lib/forms/useZodForm.ts`), `FormField`/`FieldGroup` (`ui/litellm-dashboard/src/components/shared/form/`), `getLoginUrl`. Built with shadcn/ui primitives (`Button`, `Card`, `Input`), not antd — antd new imports are blocked by this project's `no-restricted-imports` ESLint rule (`ui/litellm-dashboard/eslint.config.mjs`).
 - Produces: route `/ui/reset-password?token=...` rendering `ResetPasswordForm`.
 
 - [ ] **Step 1: Write the failing test**
@@ -1421,10 +1421,26 @@ Create `ui/litellm-dashboard/src/app/reset-password/ResetPasswordForm.tsx`:
 "use client";
 
 import React from "react";
-import { Alert, Button, Card, Form, Input, Typography } from "antd";
+import { z } from "zod";
+import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { useValidateResetToken, useResetPassword } from "@/app/(dashboard)/hooks/passwordReset/usePasswordReset";
-import { OnboardingLoadingView } from "@/app/onboarding/OnboardingLoadingView";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { FormField } from "@/components/shared/form/FormField";
+import { FieldGroup } from "@/components/shared/form/field";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+
+const resetPasswordSchema = z
+  .object({
+    password: z.string().min(1, "Please enter a new password"),
+    confirm_password: z.string().min(1, "Please confirm your new password"),
+  })
+  .refine((data) => data.password === data.confirm_password, {
+    path: ["confirm_password"],
+    message: "Passwords do not match",
+  });
 
 type ResetPasswordFormProps = {
   token: string | null;
@@ -1433,83 +1449,75 @@ type ResetPasswordFormProps = {
 export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
   const { data: validationData, isLoading: isValidating, isError: isValidationError } = useValidateResetToken(token);
   const { mutate: submitResetPassword, isPending, isSuccess, error: resetError } = useResetPassword();
+  const form = useZodForm(resetPasswordSchema, { defaultValues: { password: "", confirm_password: "" } });
 
   if (!token || isValidationError) {
     return (
       <div className="mx-auto w-full max-w-md mt-10">
-        <Alert type="error" message="This link is invalid or has expired." showIcon />
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-red-700">
+          This link is invalid or has expired.
+        </div>
         <div className="mt-4">
-          <Button href="/ui/forgot-password">Request a new link</Button>
+          <a href="/ui/forgot-password">Request a new link</a>
         </div>
       </div>
     );
   }
 
-  if (isValidating) return <OnboardingLoadingView />;
+  if (isValidating) {
+    return (
+      <div className="mx-auto w-full max-w-md mt-10 flex justify-center">
+        <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
 
   if (isSuccess) {
     return (
       <div className="mx-auto w-full max-w-md mt-10">
-        <Alert type="success" message="Password reset successfully." showIcon />
+        <div className="rounded-md border border-green-200 bg-green-50 px-4 py-2 text-green-700">
+          Password reset successfully.
+        </div>
         <div className="mt-4">
-          <Button href={getLoginUrl()}>Back to Login</Button>
+          <a href={getLoginUrl()}>Back to Login</a>
         </div>
       </div>
     );
   }
 
+  const onSubmit = form.handleSubmit((values) => {
+    if (!token) return;
+    submitResetPassword({ token, newPassword: values.password });
+  });
+
   return (
     <div className="mx-auto w-full max-w-md mt-10">
-      <Card>
-        <Typography.Title level={5} className="text-center mb-5">
-          🚅 LiteLLM
-        </Typography.Title>
-        <Typography.Title level={3}>Reset Password</Typography.Title>
-        <Typography.Text>Resetting password for {validationData?.user_email}</Typography.Text>
+      <Card className="p-6">
+        <h1 className="text-center text-lg font-semibold mb-5">🚅 LiteLLM</h1>
+        <h2 className="text-xl font-semibold">Reset Password</h2>
+        <p className="text-sm text-muted-foreground">Resetting password for {validationData?.user_email}</p>
 
-        <Form
-          className="mt-10 mb-5"
-          layout="vertical"
-          onFinish={(values) => {
-            if (!token) return;
-            submitResetPassword({ token, newPassword: values.password });
-          }}
-        >
-          <Form.Item
-            label="New Password"
-            name="password"
-            rules={[{ required: true, message: "Please enter a new password" }]}
-          >
-            <Input.Password />
-          </Form.Item>
+        <form className="mt-10 mb-5 space-y-4" onSubmit={onSubmit}>
+          <FieldGroup>
+            <FormField control={form.control} name="password" label="New Password">
+              {({ ref, ...field }) => <Input {...field} ref={ref} type="password" />}
+            </FormField>
+            <FormField control={form.control} name="confirm_password" label="Confirm New Password">
+              {({ ref, ...field }) => <Input {...field} ref={ref} type="password" />}
+            </FormField>
+          </FieldGroup>
 
-          <Form.Item
-            label="Confirm New Password"
-            name="confirm_password"
-            dependencies={["password"]}
-            rules={[
-              { required: true, message: "Please confirm your new password" },
-              ({ getFieldValue }) => ({
-                validator(_, value) {
-                  if (!value || getFieldValue("password") === value) {
-                    return Promise.resolve();
-                  }
-                  return Promise.reject(new Error("Passwords do not match"));
-                },
-              }),
-            ]}
-          >
-            <Input.Password />
-          </Form.Item>
+          {resetError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-red-700">
+              {(resetError as Error).message}
+            </div>
+          )}
 
-          {resetError && <Alert type="error" message={(resetError as Error).message} showIcon className="mb-4" />}
-
-          <div className="mt-10">
-            <Button htmlType="submit" loading={isPending}>
-              Reset Password
-            </Button>
-          </div>
-        </Form>
+          <Button type="submit" disabled={isPending}>
+            {isPending && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+            Reset Password
+          </Button>
+        </form>
       </Card>
     </div>
   );
