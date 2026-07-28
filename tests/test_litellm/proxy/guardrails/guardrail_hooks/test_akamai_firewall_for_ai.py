@@ -807,3 +807,163 @@ async def test_streaming_hook_blocks_anthropic_messages_stream():
     # none of the raw Anthropic SSE bytes are delivered
     assert all(not isinstance(chunk, (bytes, bytearray)) for chunk in yielded)
     assert len(yielded) == 1 and "Blocked by Akamai Firewall for AI" in yielded[0]
+
+
+@pytest.mark.asyncio
+async def test_output_hook_inspects_reasoning_content():
+    """Regression: reasoning models emit their chain of thought in reasoning_content.
+
+    ``get_content_from_model_response`` only reads ``message.content`` and tool
+    calls, so sensitive text a model places in ``reasoning_content`` reached the
+    client without a detect request. The content here is benign; only the
+    reasoning carries the payload, so a block proves reasoning is inspected.
+    """
+    guardrail = _init("post_call")
+    data = {"litellm_call_id": "req-1", "guardrails": ["akamai-guard"], "messages": [{"role": "user", "content": "hi"}]}
+    response = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="here is a harmless final answer",
+                    reasoning_content="internally the SSN is AKIA-super-secret",
+                ),
+            )
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(BLOCK_BODY)),
+    ) as mock_post:
+        with pytest.raises(HTTPException):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+    llm_output = mock_post.call_args.kwargs["json"]["llmOutput"]
+    assert "AKIA-super-secret" in llm_output
+    assert "here is a harmless final answer" in llm_output
+
+
+@pytest.mark.asyncio
+async def test_output_hook_inspects_thinking_blocks():
+    """Regression: Anthropic-style thinking_blocks[].thinking must be inspected too."""
+    guardrail = _init("post_call")
+    data = {"litellm_call_id": "req-1", "guardrails": ["akamai-guard"], "messages": [{"role": "user", "content": "hi"}]}
+    response = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="benign",
+                    thinking_blocks=[
+                        {"type": "thinking", "thinking": "the secret is AKIA-super-secret", "signature": "sig"},
+                        {"type": "redacted_thinking", "data": "opaque-encrypted-blob"},
+                    ],
+                ),
+            )
+        ]
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(BLOCK_BODY)),
+    ) as mock_post:
+        with pytest.raises(HTTPException):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+    llm_output = mock_post.call_args.kwargs["json"]["llmOutput"]
+    assert "AKIA-super-secret" in llm_output
+
+
+@pytest.mark.asyncio
+async def test_output_hook_inspects_responses_reasoning_summary():
+    """Regression: /v1/responses reasoning items carry text in summary[].text."""
+    guardrail = _init("post_call")
+    data = {"litellm_call_id": "req-1", "guardrails": ["akamai-guard"], "messages": [{"role": "user", "content": "hi"}]}
+    response = ResponsesAPIResponse(
+        id="resp-1",
+        created_at=1,
+        output=[
+            GenericResponseOutputItem(
+                type="message",
+                id="m",
+                status="completed",
+                role="assistant",
+                content=[OutputText(type="output_text", text="benign answer", annotations=None)],
+            ),
+        ],
+    )
+    # a reasoning item carries its text in summary[].text; append as the raw provider
+    # dict the Responses API emits (the typed output union does not model it)
+    response.output.append(
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "reasoning reveals AKIA-super-secret"}]}
+    )
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(BLOCK_BODY)),
+    ) as mock_post:
+        with pytest.raises(HTTPException):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+    llm_output = mock_post.call_args.kwargs["json"]["llmOutput"]
+    assert "AKIA-super-secret" in llm_output
+    assert "benign answer" in llm_output
+
+
+@pytest.mark.asyncio
+async def test_output_hook_inspects_anthropic_thinking_block():
+    """Regression: a native Anthropic reply's thinking content block must be inspected."""
+    guardrail = _init("post_call")
+    data = {"litellm_call_id": "req-1", "guardrails": ["akamai-guard"], "messages": [{"role": "user", "content": "hi"}]}
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+            {"type": "thinking", "thinking": "quietly the SSN is AKIA-super-secret", "signature": "sig"},
+            {"type": "text", "text": "benign visible answer"},
+        ],
+        "stop_reason": "end_turn",
+    }
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(BLOCK_BODY)),
+    ) as mock_post:
+        with pytest.raises(HTTPException):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+    llm_output = mock_post.call_args.kwargs["json"]["llmOutput"]
+    assert "AKIA-super-secret" in llm_output
+    assert "benign visible answer" in llm_output
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_inspects_reasoning_content():
+    """Streamed reasoning_content deltas are assembled and inspected before delivery."""
+    guardrail = _init("post_call")
+    request_data = {"litellm_call_id": "req-1", "guardrails": ["akamai-guard"]}
+    chunks = [
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="benign "))]),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="answer"))]),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(reasoning_content="secret AKIA-super-secret"))]
+        ),
+    ]
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(BLOCK_BODY)),
+    ) as mock_post:
+        yielded = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=request_data
+            )
+        ]
+    assert "AKIA-super-secret" in mock_post.call_args.kwargs["json"]["llmOutput"]
+    assert all(not isinstance(chunk, ModelResponseStream) for chunk in yielded)
+    assert len(yielded) == 1 and "Blocked by Akamai Firewall for AI" in yielded[0]

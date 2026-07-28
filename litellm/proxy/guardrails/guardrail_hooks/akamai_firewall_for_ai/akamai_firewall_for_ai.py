@@ -170,7 +170,8 @@ def _iter_responses_api_output_text(response: ResponsesAPIResponse) -> Iterator[
     """Yield text and function-call arguments from a Responses API result.
 
     ``/v1/responses`` returns a ``ResponsesAPIResponse`` whose generated text
-    lives in ``output[].content[].text`` and whose tool-call payloads live in
+    lives in ``output[].content[].text``, whose reasoning summaries live in
+    ``output[].summary[].text`` and whose tool-call payloads live in
     ``output[].arguments`` / ``output[].input``; none of it is reachable via
     the Chat-Completions ``choices`` shape.
     """
@@ -181,6 +182,12 @@ def _iter_responses_api_output_text(response: ResponsesAPIResponse) -> Iterator[
                 text = _item_get(part, "text")
                 if isinstance(text, str) and text:
                     yield text
+        summary = _item_get(item, "summary")
+        if isinstance(summary, list):
+            for part in summary:
+                text = _item_get(part, "text")
+                if isinstance(text, str) and text:
+                    yield text
         yield from _iter_function_fragments(item)
 
 
@@ -188,9 +195,10 @@ def _iter_anthropic_output_text(content: Any) -> Iterator[str]:
     """Yield text and tool-call payloads from an Anthropic ``/v1/messages`` reply.
 
     The non-streaming ``/v1/messages`` response reaches the hook as a native
-    dict whose generated text lives in ``content[].text`` and whose tool calls
-    live in ``content[].input`` (``type == "tool_use"``); neither is reachable
-    via the Chat-Completions ``choices`` or the Responses-API ``output`` shapes.
+    dict whose generated text lives in ``content[].text``, whose extended
+    thinking lives in ``content[].thinking`` (``type == "thinking"``) and whose
+    tool calls live in ``content[].input`` (``type == "tool_use"``); none of it
+    is reachable via the Chat-Completions ``choices`` or Responses-API shapes.
     """
     if not isinstance(content, list):
         return
@@ -200,6 +208,10 @@ def _iter_anthropic_output_text(content: Any) -> Iterator[str]:
             text = _item_get(block, "text")
             if isinstance(text, str) and text:
                 yield text
+        elif block_type == "thinking":
+            thinking = _item_get(block, "thinking")
+            if isinstance(thinking, str) and thinking:
+                yield thinking
         elif block_type == "tool_use":
             name = _item_get(block, "name")
             if isinstance(name, str) and name:
@@ -207,6 +219,30 @@ def _iter_anthropic_output_text(content: Any) -> Iterator[str]:
             tool_input = _item_get(block, "input")
             if isinstance(tool_input, dict) and tool_input:
                 yield json.dumps(tool_input, sort_keys=True)
+
+
+def _iter_model_response_reasoning_text(response: ModelResponse) -> Iterator[str]:
+    """Yield reasoning text carried on a chat ``ModelResponse``.
+
+    Reasoning models return their chain of thought outside ``message.content``:
+    OpenAI-style ``message.reasoning_content`` and Anthropic-style
+    ``message.thinking_blocks[].thinking``. ``stream_chunk_builder`` preserves
+    both when assembling a stream, so inspecting them here covers the
+    non-streaming, chat-streaming and Anthropic-streaming paths at once.
+    Encrypted ``redacted_thinking`` blocks carry no readable text and are skipped.
+    """
+    for choice in response.choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        reasoning = getattr(message, "reasoning_content", None)
+        if isinstance(reasoning, str) and reasoning:
+            yield reasoning
+        for block in getattr(message, "thinking_blocks", None) or []:
+            if _item_get(block, "type") == "thinking":
+                thinking = _item_get(block, "thinking")
+                if isinstance(thinking, str) and thinking:
+                    yield thinking
 
 
 class AkamaiRuleTriggered(TypedDict, total=False):
@@ -298,7 +334,11 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
         )
 
         if isinstance(response, ModelResponse):
-            return get_content_from_model_response(response)
+            fragments = chain(
+                [get_content_from_model_response(response)],
+                _iter_model_response_reasoning_text(response),
+            )
+            return "\n".join(fragment for fragment in fragments if fragment)
         if isinstance(response, ResponsesAPIResponse):
             return "\n".join(_iter_responses_api_output_text(response))
         if isinstance(response, dict) and response.get("type") == "message":
