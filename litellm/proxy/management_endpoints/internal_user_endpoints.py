@@ -1722,7 +1722,12 @@ async def bulk_user_update(
                         user_api_key_dict=user_api_key_dict,
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
                         before_value=f"Updated {len(all_users_in_db)} users",
-                        after_value=json.dumps(non_default_values),
+                        after_value=json.dumps(
+                            {**non_default_values, "spend_reset_user_ids": list(newly_armed_user_ids)}
+                            if newly_armed_user_ids
+                            else non_default_values,
+                            default=str,
+                        ),
                     )
                 )
             except Exception as audit_error:

@@ -3945,3 +3945,50 @@ async def test_bulk_user_update_all_users_explicit_spend_invalidates_every_count
         "spend:user:u1",
         "spend:user:u2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_update_audit_log_names_the_users_whose_spend_was_reset(mocker):
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        UpdateUserRequestNoUserIDorEmail,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        SimpleNamespace(user_id="armed", user_email=None, budget_duration=None, budget_reset_at=None),
+        SimpleNamespace(
+            user_id="untouched",
+            user_email=None,
+            budget_duration="30d",
+            budget_reset_at=now + timedelta(days=15),
+        ),
+    ]
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=rows)
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._invalidate_spend_counter", mocker.AsyncMock())
+    mock_audit = mocker.patch(
+        "litellm.proxy.hooks.user_management_event_hooks.UserManagementEventHooks.create_internal_user_audit_log",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await bulk_user_update(
+        data=BulkUpdateUserRequest(
+            all_users=True,
+            user_updates=UpdateUserRequestNoUserIDorEmail(budget_duration="30d"),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    after_value = json.loads(mock_audit.call_args.kwargs["after_value"])
+    assert after_value["spend_reset_user_ids"] == ["armed"]
