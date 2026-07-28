@@ -10,9 +10,6 @@ requests itself imports.
 
 from __future__ import annotations
 
-import time
-from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Generic, Iterator, Literal, NewType, TypeVar, cast
 
 import pytest
@@ -232,90 +229,6 @@ def _params(params: BaseModel | None) -> dict[str, str]:
     return {key: str(value) for key, value in dumped.items()}
 
 
-_TRANSIENT_STATUSES: frozenset[int] = frozenset({502, 503, 504})
-
-
-@dataclass(frozen=True, slots=True)
-class _RetryPolicy:
-    budget_seconds: float
-    initial_backoff_seconds: float
-
-
-_GATEWAY_RETRY = _RetryPolicy(budget_seconds=15.0, initial_backoff_seconds=0.5)
-
-
-@dataclass(frozen=True, slots=True)
-class _Delivered:
-    response: requests.Response
-
-
-@dataclass(frozen=True, slots=True)
-class _Undelivered:
-    error: requests.RequestException
-
-
-type _Attempt = _Delivered | _Undelivered
-
-
-def _attempt(call: Callable[[], requests.Response]) -> _Attempt:
-    try:
-        return _Delivered(response=call())
-    except requests.RequestException as exc:
-        return _Undelivered(error=exc)
-
-
-def _is_transient(attempt: _Attempt) -> bool:
-    """True only when the gateway dropped the call instead of the app answering it: a
-    502/503/504 from the load balancer while pods roll or scale down, or that same
-    event one layer lower as a refused/reset connection. A 429, a 500 and every 4xx
-    are the app's own answer and must reach the caller untouched, because tests assert
-    on them (rate limits, budget blocks, error mapping)."""
-    match attempt:
-        case _Delivered(response=response):
-            return response.status_code in _TRANSIENT_STATUSES
-        case _Undelivered(error=error):
-            return isinstance(error, requests.ConnectionError)
-
-
-def _retry(
-    call: Callable[[], requests.Response],
-    *,
-    deadline: float,
-    backoff: float,
-    last: _Attempt,
-) -> _Attempt:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        return last
-    time.sleep(min(backoff, remaining))
-    attempt = _attempt(call)
-    if not _is_transient(attempt):
-        return attempt
-    return _retry(call, deadline=deadline, backoff=backoff * 2, last=attempt)
-
-
-def _dispatch(
-    call: Callable[[], requests.Response],
-    *,
-    policy: _RetryPolicy | None = _GATEWAY_RETRY,
-) -> _Attempt:
-    """The single seam every non-streaming verb sends through, so one bounded retry
-    covers all of them. A transient gateway failure is retried with exponential
-    backoff until the policy's budget is spent, after which the last attempt is
-    handed back unchanged - a permanent failure therefore looks exactly like it did
-    before, just later. `policy=None` opts a call out (the streaming paths, whose
-    body is consumed live)."""
-    first = _attempt(call)
-    if policy is None or not _is_transient(first):
-        return first
-    return _retry(
-        call,
-        deadline=time.monotonic() + policy.budget_seconds,
-        backoff=policy.initial_backoff_seconds,
-        last=first,
-    )
-
-
 def _classify[R: BaseModel](
     resp: requests.Response, response_type: type[R]
 ) -> Result[R]:
@@ -331,14 +244,6 @@ def _classify[R: BaseModel](
         return ValidationError(message=str(exc))
 
 
-def _result[R: BaseModel](attempt: _Attempt, response_type: type[R]) -> Result[R]:
-    match attempt:
-        case _Delivered(response=response):
-            return _classify(response, response_type)
-        case _Undelivered(error=error):
-            return NetworkError(message=str(error))
-
-
 def post[R: BaseModel](
     url: URL,
     *,
@@ -347,17 +252,16 @@ def post[R: BaseModel](
     response_type: type[R],
     timeout: float = 30.0,
 ) -> Result[R]:
-    return _result(
-        _dispatch(
-            lambda: requests.post(
-                str(url),
-                headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
-                timeout=timeout,
-            )
-        ),
-        response_type,
-    )
+    try:
+        resp = requests.post(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
 
 
 def get[R: BaseModel](
@@ -368,17 +272,16 @@ def get[R: BaseModel](
     response_type: type[R],
     timeout: float = 30.0,
 ) -> Result[R]:
-    return _result(
-        _dispatch(
-            lambda: requests.get(
-                str(url),
-                headers=_headers(headers),
-                params=params.model_dump(by_alias=True, exclude_none=True),
-                timeout=timeout,
-            )
-        ),
-        response_type,
-    )
+    try:
+        resp = requests.get(
+            str(url),
+            headers=_headers(headers),
+            params=params.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
 
 
 def get_external[R: BaseModel](
@@ -390,16 +293,15 @@ def get_external[R: BaseModel](
     """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
     Unlike the transport wrappers there is no proxy base url and no proxy auth; the
     response still gets the same tagged-union classification as every other call."""
-    return _result(
-        _dispatch(
-            lambda: requests.get(
-                url,
-                headers={"Accept": "application/json"},
-                timeout=timeout,
-            )
-        ),
-        response_type,
-    )
+    try:
+        resp = requests.get(
+            url,
+            headers={"Accept": "application/json"},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
 
 
 def delete[R: BaseModel](
@@ -411,18 +313,17 @@ def delete[R: BaseModel](
     params: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
-    return _result(
-        _dispatch(
-            lambda: requests.delete(
-                str(url),
-                headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
-                params=_params(params),
-                timeout=timeout,
-            )
-        ),
-        response_type,
-    )
+    try:
+        resp = requests.delete(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            params=_params(params),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
 
 
 def patch[R: BaseModel](
@@ -433,17 +334,16 @@ def patch[R: BaseModel](
     response_type: type[R],
     timeout: float = 30.0,
 ) -> Result[R]:
-    return _result(
-        _dispatch(
-            lambda: requests.patch(
-                str(url),
-                headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
-                timeout=timeout,
-            )
-        ),
-        response_type,
-    )
+    try:
+        resp = requests.patch(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
 
 
 def put[R: BaseModel](
@@ -454,34 +354,31 @@ def put[R: BaseModel](
     response_type: type[R],
     timeout: float = 30.0,
 ) -> Result[R]:
-    return _result(
-        _dispatch(
-            lambda: requests.put(
-                str(url),
-                headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
-                timeout=timeout,
-            )
-        ),
-        response_type,
-    )
+    try:
+        resp = requests.put(
+            str(url),
+            headers=_headers(headers),
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
 
 
 def probe(
     url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0
 ) -> ProbeResult:
-    match _dispatch(
-        lambda: requests.get(
+    try:
+        resp = requests.get(
             str(url),
             headers=_headers(headers),
             params=params.model_dump(by_alias=True, exclude_none=True),
             timeout=timeout,
         )
-    ):
-        case _Delivered(response=response):
-            return ProbeResult(status_code=response.status_code, body=response.text)
-        case _Undelivered(error=error):
-            return ProbeResult(status_code=-1, body=str(error))
+    except requests.RequestException as exc:
+        return ProbeResult(status_code=-1, body=str(exc))
+    return ProbeResult(status_code=resp.status_code, body=resp.text)
 
 
 def _parse_response_cost(resp: requests.Response) -> float | None:
@@ -558,21 +455,18 @@ def send(
     x-litellm-call-id header. For native/passthrough bodies and for calls judged by
     status rather than a typed JSON model (e.g. a budget block is a non-2xx). With
     ``stream=True`` the SSE body is consumed and its events counted instead."""
-    match _dispatch(
-        lambda: requests.post(
+    try:
+        resp = requests.post(
             str(url),
             headers=_headers(headers),
             params=_params(params),
             json=json.model_dump(by_alias=True, exclude_none=True),
             stream=stream,
             timeout=timeout,
-        ),
-        policy=None if stream else _GATEWAY_RETRY,
-    ):
-        case _Delivered(response=response):
-            return _streaming_outcome(response, stream)
-        case _Undelivered(error=error):
-            return StreamingResponse(status_code=-1, body=str(error))
+        )
+    except requests.RequestException as exc:
+        return StreamingResponse(status_code=-1, body=str(exc))
+    return _streaming_outcome(resp, stream)
 
 
 def stream(
@@ -602,19 +496,18 @@ def upload[R: BaseModel](
     routing (e.g. ?model=). requests sets the multipart Content-Type itself."""
     dumped: dict[str, object] = form.model_dump(by_alias=True, exclude_none=True)
     data = {key: str(value) for key, value in dumped.items()}
-    return _result(
-        _dispatch(
-            lambda: requests.post(
-                str(url),
-                headers=_headers(headers),
-                params=_params(params),
-                data=data,
-                files={file_field: (filename, content, file_content_type)},
-                timeout=timeout,
-            )
-        ),
-        response_type,
-    )
+    try:
+        resp = requests.post(
+            str(url),
+            headers=_headers(headers),
+            params=_params(params),
+            data=data,
+            files={file_field: (filename, content, file_content_type)},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
 
 
 def stream_binary(
@@ -670,15 +563,13 @@ def download(
 ) -> StreamingResponse:
     """Raw GET for file content (/v1/files/{id}/content): provider-native bytes, no
     schema. Returns the decoded body and the x-litellm-call-id header."""
-    match _dispatch(
-        lambda: requests.get(str(url), headers=_headers(headers), timeout=timeout)
-    ):
-        case _Delivered(response=response):
-            return StreamingResponse(
-                status_code=response.status_code,
-                call_id=_hdr(response, "x-litellm-call-id"),
-                content_type=_hdr(response, "content-type"),
-                body=response.text,
-            )
-        case _Undelivered(error=error):
-            return StreamingResponse(status_code=-1, body=str(error))
+    try:
+        resp = requests.get(str(url), headers=_headers(headers), timeout=timeout)
+    except requests.RequestException as exc:
+        return StreamingResponse(status_code=-1, body=str(exc))
+    return StreamingResponse(
+        status_code=resp.status_code,
+        call_id=_hdr(resp, "x-litellm-call-id"),
+        content_type=_hdr(resp, "content-type"),
+        body=resp.text,
+    )
