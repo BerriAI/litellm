@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -7650,7 +7650,7 @@ _KEEPALIVE_MIN_SECONDS = 1.0
 _KEEPALIVE_MAX_SECONDS = 300.0
 
 
-async def _iter_with_keepalive(aiter: Any, keepalive_seconds: float) -> AsyncGenerator[Any, None]:
+async def _iter_with_keepalive(aiter: AsyncIterator[Any], keepalive_seconds: float) -> AsyncGenerator[Any, None]:
     if keepalive_seconds <= 0:
         async for item in aiter:
             yield item
@@ -7686,7 +7686,7 @@ class _DeploymentKeepaliveConfig(NamedTuple):
     allow_client_override: bool
 
 
-def _keepalive_from_deployment_config(request_data: dict[str, Any], response: Any) -> _DeploymentKeepaliveConfig | None:
+def _keepalive_from_deployment_config(request_data: Mapping[str, Any], response) -> _DeploymentKeepaliveConfig | None:
     if llm_router is None:
         return None
 
@@ -7727,7 +7727,7 @@ def _keepalive_from_deployment_config(request_data: dict[str, Any], response: An
     return None
 
 
-def _is_explicit_keepalive_disable(raw: Any) -> bool:
+def _is_explicit_keepalive_disable(raw) -> bool:
     if raw is None:
         return False
     try:
@@ -7736,7 +7736,7 @@ def _is_explicit_keepalive_disable(raw: Any) -> bool:
         return False
 
 
-def _resolve_keepalive_seconds(request_data: dict[str, Any], response: Any = None) -> float:
+def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response=None) -> float:
     deployment_config = _keepalive_from_deployment_config(request_data, response)
     deployment_raw = deployment_config.keepalive_seconds if deployment_config is not None else None
     allow_client_override = deployment_config.allow_client_override if deployment_config is not None else False

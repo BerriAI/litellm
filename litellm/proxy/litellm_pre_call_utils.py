@@ -883,7 +883,7 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def _get_keepalive_seconds_from_request(headers: dict) -> float | None:
+    def _get_keepalive_seconds_from_request(headers: Mapping[str, str]) -> float | None:
         """
         Get `keepalive_seconds` from the request headers, for clients (e.g. the
         Vercel AI SDK) that can set custom headers more easily than extra body
