@@ -571,6 +571,13 @@ def _check_allowed_routes_caller_permission(
     grant. A key whose existing value contains anything outside the safe
     presets was route-restricted by an admin, so every non-admin write on it,
     including clearing, stays rejected regardless of ownership.
+
+    Provenance of a safe preset is deliberately not tracked: the preset tier
+    is the self-service vocabulary (the 403 below directs non-admins to
+    `key_type`), and preset values were owner-adjustable on every release
+    before the LIT-4139 hardening. An admin who needs a restriction the
+    key's owner cannot lift must use a custom route list, which non-admins
+    can never write or clear.
     """
     if not allowed_routes_was_provided and not allowed_routes:
         return
