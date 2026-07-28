@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from e2e_http import NoBody, Result, Success, get_external, is_ok
+from e2e_http import NoBody, Result, Success, UnknownApiError, get_external, is_ok
 from proxy_client import ProxyClient
 
 
@@ -286,6 +287,20 @@ class A2AResponse(BaseModel):
     error: A2AError | None = None
 
 
+def _is_agent_unknown[R: BaseModel](result: Result[R], agent_id: str) -> bool:
+    """True when `result` is the data plane reporting `agent_id` as not found.
+
+    Both /a2a surfaces answer an unsynced worker's lookup miss with HTTP 404 naming the
+    agent: the card read as a FastAPI `detail`, message/send as a JSON-RPC error object.
+    Matching on the id keeps an unrelated 404 (a mistyped route, say) from being retried.
+    """
+    match result:
+        case UnknownApiError(status_code=404, body=body):
+            return agent_id in body
+        case _:
+            return False
+
+
 @dataclass(frozen=True, slots=True)
 class A2AClient:
     proxy: ProxyClient
@@ -351,20 +366,49 @@ class A2AClient:
             warnings.warn(f"delete_agent({agent_id!r}) failed: {result}", stacklevel=2)
 
     def agent_card(self, agent_id: str, key: str) -> Result[ServedAgentCard]:
-        return self.proxy.transport.get(
-            f"/a2a/{agent_id}/.well-known/agent-card.json",
-            headers=self.proxy.transport.bearer(key),
-            params=NoBody(),
-            response_type=ServedAgentCard,
+        return self._retry_while_unsynced(
+            lambda: self.proxy.transport.get(
+                f"/a2a/{agent_id}/.well-known/agent-card.json",
+                headers=self.proxy.transport.bearer(key),
+                params=NoBody(),
+                response_type=ServedAgentCard,
+            ),
+            agent_id=agent_id,
         )
 
     def send_message(self, agent_id: str, key: str, body: A2AJsonRpcRequest) -> Result[A2AResponse]:
-        return self.proxy.transport.post(
-            f"/a2a/{agent_id}",
-            headers=self.proxy.transport.bearer(key),
-            json=body,
-            response_type=A2AResponse,
+        return self._retry_while_unsynced(
+            lambda: self.proxy.transport.post(
+                f"/a2a/{agent_id}",
+                headers=self.proxy.transport.bearer(key),
+                json=body,
+                response_type=A2AResponse,
+            ),
+            agent_id=agent_id,
         )
+
+    def _retry_while_unsynced[R: BaseModel](
+        self, call: Callable[[], Result[R]], *, agent_id: str
+    ) -> Result[R]:
+        """Re-issue `call` while it reports `agent_id` as unknown, up to poll_timeout.
+
+        Each data-plane worker keeps its own in-process agent registry and refreshes it
+        on an independent periodic DB sync, and several workers sit behind one address.
+        So the card read in `_await_agent_servable` only proves that *whichever* worker
+        answered it has synced; a later call load-balanced onto a slower worker still
+        sees no such agent. Retrying is safe rather than wasteful here because this
+        rejection happens during agent lookup, before any provider call, so a retried
+        message/send bills nothing extra. Any other outcome, including a real error from
+        the bridge, is returned on the first try so genuine failures stay loud.
+        """
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = call()
+            if not _is_agent_unknown(result, agent_id):
+                return result
+            if time.monotonic() >= deadline:
+                return result
+            time.sleep(self.proxy.poll_interval)
 
 
 def build_a2a_client(proxy: ProxyClient) -> A2AClient:
