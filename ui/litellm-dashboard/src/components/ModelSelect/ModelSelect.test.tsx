@@ -33,21 +33,20 @@ vi.mock("antd", async (importOriginal) => {
       "data-testid": dataTestId,
       allowClear,
       maxTagCount,
-      maxTagPlaceholder,
       mode,
+      className,
       ...props
     }: any) => {
-      // Simulate maxTagCount responsive behavior - if value length > 5, call maxTagPlaceholder
-      const shouldShowPlaceholder = maxTagCount === "responsive" && Array.isArray(value) && value.length > 5;
-      const visibleValues = shouldShowPlaceholder ? value.slice(0, 5) : value;
-      const omittedValues = shouldShowPlaceholder ? value.slice(5).map((v: string) => ({ value: v, label: v })) : [];
-
       return (
-        <div data-testid={dataTestId || "model-select"}>
+        <div
+          data-testid={dataTestId || "model-select"}
+          data-classname={className}
+          data-max-tag-count={maxTagCount ?? ""}
+        >
           <select
             multiple={mode === "multiple"}
             role="listbox"
-            value={visibleValues}
+            value={value}
             onChange={(e) => {
               const selectedValues = Array.from(e.target.selectedOptions, (option) => option.value);
               onChange(mode === "multiple" ? selectedValues : selectedValues[0]);
@@ -67,16 +66,12 @@ vi.mock("antd", async (importOriginal) => {
               </optgroup>
             ))}
           </select>
-          {shouldShowPlaceholder && maxTagPlaceholder && (
-            <div data-testid="max-tag-placeholder">{maxTagPlaceholder(omittedValues)}</div>
-          )}
         </div>
       );
     },
     Skeleton: {
       Input: ({ active, block }: any) => <div data-testid="skeleton-input" data-active={active} data-block={block} />,
     },
-    Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   };
 });
 
@@ -546,36 +541,13 @@ describe("ModelSelect", () => {
     });
   });
 
-  it("should render maxTagPlaceholder when many items are selected", async () => {
-    // Create many models to trigger maxTagCount responsive behavior
-    const manyModels: ProxyModel[] = Array.from({ length: 20 }, (_, i) => ({
-      id: `model-${i}`,
-      object: "model",
-      created: 1234567890,
-      owned_by: "test",
-    }));
-
-    mockUseAllProxyModels.mockReturnValue({
-      data: { data: manyModels },
-      isLoading: false,
-    } as any);
-
-    const selectedValues = manyModels.slice(0, 10).map((m) => m.id);
-
+  it("wraps selected tags instead of collapsing them onto a single responsive row", async () => {
     renderWithProviders(
-      <ModelSelect
-        onChange={mockOnChange}
-        value={selectedValues}
-        context="user"
-        options={{ showAllProxyModelsOverride: true }}
-      />,
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByTestId("model-select")).toBeInTheDocument();
-      // Verify maxTagPlaceholder is rendered with omitted values
-      expect(screen.getByTestId("max-tag-placeholder")).toBeInTheDocument();
-      expect(screen.getByText(/\+5 more/)).toBeInTheDocument();
-    });
+    const select = await screen.findByTestId("model-select");
+    expect(select).toHaveAttribute("data-classname", "model-select-multi");
+    expect(select.getAttribute("data-max-tag-count")).toBe("");
   });
 });

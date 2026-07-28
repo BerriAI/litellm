@@ -235,3 +235,11 @@
 .custom-border {
   border: 1px solid var(--neutral-border);
 }
+
+/* Caps the multi-select tag area so selected models wrap and scroll instead of
+   collapsing onto one row. Targets antd-internal .ant-select-selector (validated
+   on antd 5.29.3); re-verify if antd is upgraded. */
+.model-select-multi .ant-select-selector {
+  max-height: 132px;
+  overflow-y: auto;
+}
