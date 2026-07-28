@@ -1406,6 +1406,21 @@ def callback_name(callback):
             return str(callback)
 
 
+def _db_unavailable_should_flip_readiness_to_503() -> bool:
+    """
+    Whether an unreachable-but-configured DB should mark this worker NotReady.
+
+    Defaults to True so orchestrators pull the pod out of rotation when the DB
+    is down. Operators who set general_settings.allow_requests_on_db_unavailable
+    are explicitly opting to keep serving during a DB outage (the request layer
+    already fails open via PrismaDBExceptionHandler), so readiness must stay 200
+    and keep the pod in the Service endpoints; flipping to 503 here would pull
+    every replica out of rotation and defeat the very flag meant to survive the
+    outage.
+    """
+    return not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+
+
 async def _get_health_readiness_details(
     response: Optional[Response] = None,
 ) -> Dict[str, Any]:
@@ -1454,7 +1469,13 @@ async def _get_health_readiness_details(
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
             # rotation; "Not connected" (no DB configured at all) stays 200.
-            if response is not None and db_health_status["status"] != "connected":
+            # When allow_requests_on_db_unavailable is set the operator wants
+            # the pod to keep serving through the outage, so readiness stays 200.
+            if (
+                response is not None
+                and db_health_status["status"] != "connected"
+                and _db_unavailable_should_flip_readiness_to_503()
+            ):
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
@@ -1534,8 +1555,10 @@ def _authorize_drain_request(request: Request) -> None:
 async def _resolve_public_readiness_db(response: Response) -> str:
     """
     Return the db status string for the public probe and flip the response to
-    503 when a configured DB is unreachable. Mirrors the legacy values:
-    "Not connected" (no DB configured), "connected", "disconnected".
+    503 when a configured DB is unreachable, unless the operator opted into
+    allow_requests_on_db_unavailable (see _db_unavailable_should_flip_readiness_to_503).
+    Mirrors the legacy values: "Not connected" (no DB configured), "connected",
+    "disconnected".
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -1543,7 +1566,7 @@ async def _resolve_public_readiness_db(response: Response) -> str:
         return "Not connected"
 
     db_health_status = await _db_health_readiness_check()
-    if db_health_status["status"] != "connected":
+    if db_health_status["status"] != "connected" and _db_unavailable_should_flip_readiness_to_503():
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return db_health_status["status"]
 
