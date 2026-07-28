@@ -133,9 +133,9 @@ class TestVertexAIBinaryFileUpload:
     @pytest.mark.asyncio
     async def test_jsonl_file_upload_returns_streaming_body(self):
         """
-        Test that JSONL batch files are transformed into a streaming-media config
+        Test that JSONL batch files are transformed into a resumable-upload config
         carrying a streaming body (not a buffered bytes payload), so the handler
-        can stage the upload to a temp file and send it in one media request.
+        can chunk the upload to a GCS resumable session.
         """
         # Create mock JSONL content
         mock_jsonl_content = (
@@ -158,11 +158,11 @@ class TestVertexAIBinaryFileUpload:
             litellm_params={},
         )
 
-        assert isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request, (
-            f"Expected a streaming media upload config for JSONL, got {type(transformed_request)}"
+        assert isinstance(transformed_request, dict) and "resumable_chunked_upload" in transformed_request, (
+            f"Expected a resumable upload config for JSONL, got {type(transformed_request)}"
         )
 
-        stream = transformed_request["streaming_media_upload"]["body_stream"]
+        stream = transformed_request["resumable_chunked_upload"]["body_stream"]
         decoded = json.loads(b"".join(stream.iter_bytes()).decode("utf-8"))
         assert "request" in decoded, "JSONL transform must wrap each row in {'request': ...}"
 
@@ -205,7 +205,7 @@ class TestVertexAIBinaryFileUpload:
             optional_params={},
             litellm_params={},
         )
-        assert isinstance(result2, dict) and "streaming_media_upload" in result2
+        assert isinstance(result2, dict) and "resumable_chunked_upload" in result2
 
         # Test 3: Upload another binary file
         binary_content2 = b"\xc4\xe5\xf2\xe5\xeb"

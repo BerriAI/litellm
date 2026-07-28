@@ -323,18 +323,19 @@ class TwoStepFileUploadConfig(TypedDict, total=False):
     upload_url_key: str
 
 
-class StreamingMediaUploadConfig(TypedDict, total=False):
-    """Drives a memory-bounded single-request upload (GCS simple/media upload).
+class ResumableChunkedUploadConfig(TypedDict, total=False):
+    """Drives a memory-bounded resumable upload (GCS JSON API).
 
-    The handler stages ``body_stream`` to a temp file off the event loop (so peak
-    memory stays bounded), then PUTs/POSTs it in one request with a known
-    Content-Length. Unlike a resumable chunked upload this incurs no per-chunk
-    round-trips, so a multi-GB upload finishes in one continuous transfer instead
-    of hundreds of sequential PUTs that overrun client/LB timeouts.
+    The handler POSTs to the upload URL to open a session, reads the session URI
+    from ``session_url_header``, then PUTs ``body_stream`` to that URI in
+    ``chunk_size``-byte chunks (a 256 KiB multiple) using Content-Range, so the
+    payload is never buffered in full and the transfer is resumable.
 
     ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``Any`` here to
     avoid importing the llms layer into types.
     """
 
     body_stream: Required[Any]
-    content_type: str
+    chunk_size: int
+    session_url_header: str
+    initiate_headers: dict[str, str]
