@@ -19,6 +19,143 @@ from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.types.integrations.langfuse import *
 
 
+def _make_fake_langfuse_module(langfuse_class):
+    """Build a stand-in for the langfuse package — only what LangFuseLogger / langfuse_client_init touch at init time."""
+    module = MagicMock()
+    module.Langfuse = langfuse_class
+    module.version = MagicMock()
+    module.version.__version__ = "3.14.0"
+    return module
+
+
+class _FakeLangfuseV3:
+    """Mimics Langfuse SDK v3.x: no ``sdk_integration`` kwarg, no ``**kwargs`` catchall."""
+
+    def __init__(
+        self,
+        public_key=None,
+        secret_key=None,
+        host=None,
+        release=None,
+        debug=None,
+        flush_interval=None,
+        httpx_client=None,
+        environment=None,
+    ):
+        self.public_key = public_key
+        self.client = MagicMock()
+        self.client.projects.get.side_effect = Exception("offline test")
+
+
+class _FakeLangfuseV2:
+    """Mimics Langfuse SDK v2.6+: ``sdk_integration`` is in the signature."""
+
+    def __init__(
+        self,
+        public_key=None,
+        secret_key=None,
+        host=None,
+        release=None,
+        debug=None,
+        flush_interval=None,
+        httpx_client=None,
+        sdk_integration=None,
+    ):
+        self.public_key = public_key
+        self.sdk_integration = sdk_integration
+        self.client = MagicMock()
+        self.client.projects.get.side_effect = Exception("offline test")
+
+
+def test_langfuse_init_supports_sdk_integration_true_on_v2_signature():
+    """Helper returns True when ``Langfuse.__init__`` accepts ``sdk_integration`` (v2.6+)."""
+    fake_module = _make_fake_langfuse_module(_FakeLangfuseV2)
+    with patch.dict(sys.modules, {"langfuse": fake_module}):
+        from litellm.integrations.langfuse.langfuse import (
+            _langfuse_init_supports_sdk_integration,
+        )
+
+        assert _langfuse_init_supports_sdk_integration() is True
+
+
+def test_langfuse_init_supports_sdk_integration_false_on_v3_signature():
+    """Helper returns False when ``Langfuse.__init__`` lacks ``sdk_integration`` (v3+).
+
+    Regression for #13137 / #11703 — passing the kwarg to v3 raises TypeError.
+    """
+    fake_module = _make_fake_langfuse_module(_FakeLangfuseV3)
+    with patch.dict(sys.modules, {"langfuse": fake_module}):
+        from litellm.integrations.langfuse.langfuse import (
+            _langfuse_init_supports_sdk_integration,
+        )
+
+        assert _langfuse_init_supports_sdk_integration() is False
+
+
+def test_lang_fuse_logger_does_not_pass_sdk_integration_on_v3():
+    """``LangFuseLogger`` constructs successfully against a v3-style ``Langfuse.__init__`` (no TypeError).
+
+    This is the customer-reported regression: with ``langfuse>=3.0.0`` installed,
+    LangFuseLogger init blew up because the kwarg was unconditionally injected.
+    """
+    fake_module = _make_fake_langfuse_module(_FakeLangfuseV3)
+    with patch.dict(sys.modules, {"langfuse": fake_module}):
+        from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-test",
+            langfuse_secret="sk-test",
+            langfuse_host="https://example.com",
+        )
+
+    assert isinstance(logger.Langfuse, _FakeLangfuseV3)
+    assert logger.Langfuse.public_key == "pk-test"
+
+
+def test_lang_fuse_logger_passes_sdk_integration_on_v2():
+    """``LangFuseLogger`` still tags ``sdk_integration="litellm"`` on a v2-style SDK.
+
+    Guards against silently dropping the litellm-origin tag for users on v2.6+.
+    """
+    fake_module = _make_fake_langfuse_module(_FakeLangfuseV2)
+    fake_module.version.__version__ = "2.60.0"
+    with patch.dict(sys.modules, {"langfuse": fake_module}):
+        from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-test",
+            langfuse_secret="sk-test",
+            langfuse_host="https://example.com",
+        )
+
+    assert isinstance(logger.Langfuse, _FakeLangfuseV2)
+    assert logger.Langfuse.sdk_integration == "litellm"
+
+
+def test_langfuse_client_init_does_not_pass_sdk_integration_on_v3():
+    """``langfuse_client_init`` (prompt management path) constructs against a v3-style SDK without TypeError.
+
+    Mirrors the LangFuseLogger test for the second crash site.
+    """
+    fake_module = _make_fake_langfuse_module(_FakeLangfuseV3)
+    with patch.dict(sys.modules, {"langfuse": fake_module}):
+        from litellm.integrations.langfuse.langfuse_prompt_management import (
+            langfuse_client_init,
+        )
+
+        # lru_cache on langfuse_client_init means the first call to a previously-cached
+        # arg tuple wins — clear to make this test independent of order.
+        langfuse_client_init.cache_clear()
+        client = langfuse_client_init(
+            langfuse_public_key="pk-test",
+            langfuse_secret="sk-test",
+            langfuse_host="https://example.com",
+        )
+
+    assert isinstance(client, _FakeLangfuseV3)
+    assert client.public_key == "pk-test"
+
+
 class TestLangfuseUsageDetails(unittest.TestCase):
     def setUp(self):
         # Save global Langfuse client counter to restore after test

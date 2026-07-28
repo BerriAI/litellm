@@ -6,7 +6,6 @@ import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
-from packaging.version import Version
 from typing_extensions import TypeAlias
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -20,7 +19,11 @@ from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
 from ..prompt_management_base import PromptManagementBase
-from .langfuse import LangFuseLogger, resolve_langfuse_credentials
+from .langfuse import (
+    LangFuseLogger,
+    _langfuse_init_supports_sdk_integration,
+    resolve_langfuse_credentials,
+)
 from .langfuse_handler import LangFuseHandler
 
 if TYPE_CHECKING:
@@ -64,7 +67,6 @@ def langfuse_client_init(
         Exception: If langfuse package is not installed
     """
     try:
-        import langfuse
         from langfuse import Langfuse
     except Exception as e:
         raise Exception(
@@ -95,7 +97,7 @@ def langfuse_client_init(
         "flush_interval": LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # flush interval in seconds
     }
 
-    if Version(langfuse.version.__version__) >= Version("2.6.0"):
+    if _langfuse_init_supports_sdk_integration():
         parameters["sdk_integration"] = "litellm"
 
     if Version(langfuse.version.__version__) >= Version("2.7.3"):

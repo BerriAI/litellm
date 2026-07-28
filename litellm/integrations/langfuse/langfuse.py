@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import inspect
 import os
 import traceback
 from datetime import datetime
@@ -103,6 +104,26 @@ def resolve_langfuse_credentials(
     return public_key, secret_key, resolved_host
 
 
+def _langfuse_init_supports_sdk_integration() -> bool:
+    """
+    Whether the installed Langfuse SDK's ``Langfuse.__init__`` accepts the
+    ``sdk_integration`` kwarg.
+
+    The kwarg was added in Langfuse 2.6.0 and removed in Langfuse 3.x. We
+    detect by signature introspection rather than version-string comparison
+    so the gate stays correct across past and future SDK releases.
+
+    See: https://github.com/BerriAI/litellm/issues/13137
+    """
+    from langfuse import Langfuse
+
+    try:
+        params = inspect.signature(Langfuse.__init__).parameters
+    except (TypeError, ValueError):
+        return False
+    return "sdk_integration" in params
+
+
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(
@@ -152,7 +173,7 @@ class LangFuseLogger:
         }
         self.langfuse_sdk_version: str = langfuse.version.__version__
 
-        if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
+        if _langfuse_init_supports_sdk_integration():
             parameters["sdk_integration"] = "litellm"
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)
 
