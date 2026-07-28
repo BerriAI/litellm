@@ -105,10 +105,9 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <CardTitle>Cache leakage by {dimension === "model" ? "model" : "virtual key"}</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-1 text-sm text-muted-foreground line-clamp-2">
                 {subject} sending large volumes of uncached input with a low cache hit rate are likely missing prompt
                 caching. Potential savings is approximate: uncached input priced at the realized cache-read discount.
-                {dimension === "model" ? " Limited to Anthropic (Claude) models, which support prompt caching." : ""}
               </p>
             </div>
             <div className="shrink-0">
@@ -118,7 +117,6 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           <Tabs
             value={dimension}
             onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}
-            className="mt-3"
           >
             <TabsList>
               <TabsTrigger value="key">By virtual key</TabsTrigger>
