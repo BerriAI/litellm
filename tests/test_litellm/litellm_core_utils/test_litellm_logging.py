@@ -4118,3 +4118,20 @@ def test_get_error_information_truncates_base64_in_error_message():
     assert payload not in error_information["error_message"]
     assert "base64_data truncated" in error_information["error_message"]
     assert "provider rejected request:" in error_information["error_message"]
+
+def test_get_error_information_truncates_parameterized_base64_data_uri():
+    from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    payload = "B" * (MAX_BASE64_LENGTH_FOR_LOGGING + 200)
+    data_uri = f"data:image/png;charset=utf-8;base64,{payload}"
+    exception = Exception(f"provider rejected request: {data_uri}")
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=exception
+    )
+
+    assert payload not in error_information["error_message"]
+    assert "base64_data truncated" in error_information["error_message"]
+    assert "provider rejected request:" in error_information["error_message"]
+
