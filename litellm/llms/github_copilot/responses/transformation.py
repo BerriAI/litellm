@@ -267,7 +267,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         effective_api_base = (
             (user_session.api_base if user_session is not None else None)
-            or self.authenticator.get_api_base()
+            or self.authenticator.get_api_base(api_base)
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )
 
