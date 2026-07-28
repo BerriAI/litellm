@@ -489,6 +489,85 @@ def test_gemini_upstream_error_body_code_429_maps_to_rate_limit(
     assert isinstance(excinfo.value, expected_exception), description
 
 
+def _quota_exceeded_body(retry_delay: str) -> str:
+    return (
+        '{"error": {"code": 429, "message": "You exceeded your current quota. '
+        "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests. "
+        f'Please retry in {retry_delay}s.", "status": "RESOURCE_EXHAUSTED"}}}}'
+    )
+
+
+# https://github.com/BerriAI/litellm/issues/34954 - "403" appearing anywhere in a 429 body
+# (e.g. inside the sub-second retry hint) must not divert the mapping away from RateLimitError
+vertex_403_collision_test_cases = [
+    (429, _quota_exceeded_body("18.403470473"), litellm.RateLimitError, 429),
+    (429, _quota_exceeded_body("18.9"), litellm.RateLimitError, 429),
+    (
+        429,
+        '{"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).",'
+        ' "status": "RESOURCE_EXHAUSTED"}}',
+        litellm.RateLimitError,
+        429,
+    ),
+    (
+        403,
+        '{"error": {"code": 403, "message": "Permission denied on resource project foo.",'
+        ' "status": "PERMISSION_DENIED"}}',
+        litellm.BadRequestError,
+        403,
+    ),
+    (
+        403,
+        '{"error": {"code": 403, "message": "Quota exceeded for metric: some-metric",'
+        ' "status": "PERMISSION_DENIED"}}',
+        litellm.BadRequestError,
+        403,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "status_code, error_body, expected_exception, expected_status_code",
+    vertex_403_collision_test_cases,
+)
+def test_vertex_403_substring_does_not_shadow_rate_limit(
+    status_code, error_body, expected_exception, expected_status_code
+):
+    class _FakeVertexError(Exception):
+        def __init__(self, status_code, message):
+            self.status_code = status_code
+            self.message = message
+            super().__init__(message)
+
+    with pytest.raises(expected_exception) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=_FakeVertexError(status_code=status_code, message=error_body),
+            custom_llm_provider="gemini",
+        )
+
+    assert excinfo.value.status_code == expected_status_code
+    assert litellm._should_retry(excinfo.value.status_code) is (expected_status_code == 429)
+
+
+@pytest.mark.parametrize(
+    "error_message, expected_exception",
+    [
+        ("403 Permission denied on resource project foo.", litellm.BadRequestError),
+        ("429 Quota exceeded for metric: foo. Please retry in 18.403470473s.", litellm.RateLimitError),
+        ("429 RESOURCE_EXHAUSTED. Please retry in 1.403s.", litellm.RateLimitError),
+    ],
+)
+def test_vertex_status_less_exception_403_mapping(error_message, expected_exception):
+    """google's SDK raises status-less errors whose text starts with the HTTP code."""
+    with pytest.raises(expected_exception):
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=Exception(error_message),
+            custom_llm_provider="vertex_ai",
+        )
+
+
 class TestExtractAndRaiseLitellmException:
     """Tests for extract_and_raise_litellm_exception function"""
 

@@ -1064,6 +1064,13 @@ def _map_sagemaker_exception(
             )
 
 
+def _is_vertex_403_error(*, original_exception: _ProviderHTTPException, error_str: str) -> bool:
+    status_code = getattr(original_exception, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code == 403
+    return re.search(r"\b403\b", error_str) is not None
+
+
 def _map_vertex_exception(
     *,
     model: str,
@@ -1120,7 +1127,7 @@ def _map_vertex_exception(
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
         )
-    elif "403" in error_str:
+    elif _is_vertex_403_error(original_exception=original_exception, error_str=error_str):
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
             model=model,
@@ -1154,7 +1161,7 @@ def _map_vertex_exception(
     elif (
         "429 Quota exceeded" in error_str
         or "Quota exceeded for" in error_str
-        or "Resource exhausted" in error_str
+        or re.search(r"resource[\s_]exhausted", error_str, re.IGNORECASE) is not None
         or "IndexError: list index out of range" in error_str
         or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
     ):
