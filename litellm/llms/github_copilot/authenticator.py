@@ -58,9 +58,7 @@ def _is_trusted_api_base(api_base: str) -> bool:
         return True
     if hostname in _configured_allowed_api_hosts():
         return True
-    return any(
-        hostname == oauth_host or hostname.endswith(f".{oauth_host}") for oauth_host in _configured_oauth_hosts()
-    )
+    return any(hostname == f"copilot-api.{oauth_host}" for oauth_host in _configured_oauth_hosts())
 
 
 class Authenticator:
