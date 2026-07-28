@@ -939,6 +939,22 @@ if MCP_AVAILABLE:
                 aggregated.setdefault(server.server_id, server)
         return list(aggregated.values())
 
+    async def _connected_app_reachable_server_ids(user_id: str | None) -> frozenset[str]:
+        if not user_id:
+            return frozenset()
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        try:
+            admitted = await MCPRequestHandler._reload_admitted_user(user_id)
+            return frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(admitted))
+        except HTTPException as e:
+            verbose_proxy_logger.warning(
+                f"connected_app_view: marking every MCP server unreachable; admitted-subject reload failed: {e.detail}"
+            )
+            return frozenset()
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -952,6 +968,12 @@ if MCP_AVAILABLE:
             description="Filter MCP servers by team scope. When provided, returns only "
             "servers the team has access to plus globally available (allow_all_keys) servers. "
             "Used by the Create Key UI to show team-scoped MCP servers.",
+        ),
+        connected_app_view: bool = Query(
+            False,
+            description="Annotate each returned server with connected_app_reachable: whether a "
+            "connected app authorized by the calling user (a gateway OAuth session) is served "
+            "this server on the aggregate MCP endpoint.",
         ),
     ):
         """
@@ -1008,6 +1030,11 @@ if MCP_AVAILABLE:
         else:
             servers = await _resolve_accessible_mcp_servers(user_api_key_dict)
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+
+        if connected_app_view is True:
+            reachable_ids = await _connected_app_reachable_server_ids(user_api_key_dict.user_id)
+            for server in redacted_mcp_servers:
+                server.connected_app_reachable = server.server_id in reachable_ids
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:

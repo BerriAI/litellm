@@ -1,6 +1,6 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchMCPServers, listMCPTools } from "../networking";
@@ -84,5 +84,62 @@ describe("MCPAppsPanel logos", () => {
 
     expect(await screen.findByRole("heading", { name: "local_logo" })).toBeInTheDocument();
     expect(screen.getByAltText("local_logo logo").getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+  });
+});
+
+const connectServers = [
+  {
+    server_id: "s-reach",
+    server_name: "reachable_srv",
+    auth_type: "none",
+    connected_app_reachable: true,
+  },
+  {
+    server_id: "s-unreach",
+    server_name: "unreachable_srv",
+    auth_type: "none",
+    connected_app_reachable: false,
+  },
+] as MCPServer[];
+
+const renderConnectPanel = (connectMode: boolean, selectedServers: string[] = []) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MCPAppsPanel accessToken="tok" selectedServers={selectedServers} onChange={vi.fn()} connectMode={connectMode} />
+    </QueryClientProvider>,
+  );
+
+describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("requests the connected-app view and labels unreachable servers in connect mode", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue(connectServers);
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+
+    renderConnectPanel(true, ["reachable_srv", "unreachable_srv"]);
+
+    expect(await screen.findByText("unreachable_srv")).toBeInTheDocument();
+    expect(vi.mocked(fetchMCPServers)).toHaveBeenCalledWith("tok", undefined, true);
+    expect(screen.getByText("Not available to connected apps")).toBeInTheDocument();
+    expect(screen.getByText("Connected (1)")).toBeInTheDocument();
+    const toolCountFetchedIds = vi.mocked(listMCPTools).mock.calls.map((call) => call[1]);
+    expect(toolCountFetchedIds).toContain("s-reach");
+    expect(toolCountFetchedIds).not.toContain("s-unreach");
+  });
+
+  it("ignores the flag and skips no server outside connect mode", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue(connectServers);
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+
+    renderConnectPanel(false, ["reachable_srv", "unreachable_srv"]);
+
+    expect(await screen.findByText("unreachable_srv")).toBeInTheDocument();
+    expect(vi.mocked(fetchMCPServers)).toHaveBeenCalledWith("tok", undefined, false);
+    expect(screen.queryByText("Not available to connected apps")).not.toBeInTheDocument();
+    expect(screen.getByText("Connected (2)")).toBeInTheDocument();
+    const toolCountFetchedIds = vi.mocked(listMCPTools).mock.calls.map((call) => call[1]);
+    expect(toolCountFetchedIds).toContain("s-unreach");
   });
 });

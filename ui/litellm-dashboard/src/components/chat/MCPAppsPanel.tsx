@@ -124,6 +124,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
+  const unreachableOnConnect = (s: MCPServer) => !!connectMode && s.connected_app_reachable === false;
+
   const fetchLoadCancelledRef = useRef(false);
 
   const fetchToolCount = useCallback(
@@ -166,11 +168,12 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   useEffect(() => {
     fetchLoadCancelledRef.current = false;
 
-    fetchMCPServers(accessToken)
+    fetchMCPServers(accessToken, undefined, connectMode)
       .then(async (serverData) => {
         if (fetchLoadCancelledRef.current) return;
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
-        const oauthServers = list.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
+        const reachable = connectMode ? list.filter((s) => s.connected_app_reachable !== false) : list;
+        const oauthServers = reachable.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
         setServers(list);
         setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
         setLoading(false);
@@ -178,8 +181,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         oauthServers.forEach((s) => checkOauthCredential(s));
 
         setLoadingCounts(true);
-        const chunks = Array.from({ length: Math.ceil(list.length / TOOLS_FETCH_CONCURRENCY) }, (_, i) =>
-          list.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
+        const chunks = Array.from({ length: Math.ceil(reachable.length / TOOLS_FETCH_CONCURRENCY) }, (_, i) =>
+          reachable.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
         );
         for (const chunk of chunks) {
           if (fetchLoadCancelledRef.current) return;
@@ -196,7 +199,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     return () => {
       fetchLoadCancelledRef.current = true;
     };
-  }, [accessToken, fetchToolCount, checkOauthCredential]);
+  }, [accessToken, connectMode, fetchToolCount, checkOauthCredential]);
 
   useEffect(() => {
     if (oauthConnected.size === 0) return;
@@ -250,6 +253,13 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         </span>
       );
     }
+    if (unreachableOnConnect(server)) {
+      return (
+        <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">
+          Not available to connected apps
+        </span>
+      );
+    }
     if (server.auth_type === AUTH_TYPE.OAUTH2) {
       if (oauthConnected.has(server.server_id)) {
         return <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />;
@@ -285,11 +295,11 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       !query.trim() ||
       name.toLowerCase().includes(query.toLowerCase()) ||
       (s.description ?? "").toLowerCase().includes(query.toLowerCase());
-    const matchesTab = activeTab === "all" || selectedServers.includes(name);
+    const matchesTab = activeTab === "all" || (selectedServers.includes(name) && !unreachableOnConnect(s));
     return matchesQuery && matchesTab;
   });
 
-  const connectedCount = servers.filter((s) => selectedServers.includes(nameOf(s))).length;
+  const connectedCount = servers.filter((s) => selectedServers.includes(nameOf(s)) && !unreachableOnConnect(s)).length;
   const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
   if (detailServer) {
@@ -508,7 +518,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             const color = getAvatarColor(name);
             const isLeftCol = idx % 2 === 0;
             const count = toolCounts[name];
-            const unsupported = !!connectMode && isUnsupportedOnGatewayConnect(server.auth_type);
+            const unavailable =
+              (!!connectMode && isUnsupportedOnGatewayConnect(server.auth_type)) || unreachableOnConnect(server);
 
             return (
               <div
@@ -517,7 +528,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
                 className={`flex items-center gap-3 p-4 bg-card cursor-pointer transition-colors hover:bg-accent/30 min-w-0 ${
                   isLeftCol ? "border-r" : ""
                 } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""} ${
-                  unsupported ? "opacity-50" : ""
+                  unavailable ? "opacity-50" : ""
                 }`}
               >
                 {server.mcp_info?.logo_url ? (

@@ -436,6 +436,7 @@ export interface MCPServer {
   byok_description?: string[] | null;
   byok_api_key_help_url?: string | null;
   has_user_credential?: boolean | null;
+  connected_app_reachable?: boolean | null;
 
   /** GitHub / source repository URL */
   source_url?: string | null;
