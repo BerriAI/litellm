@@ -68,7 +68,7 @@ def _base64_data_uri_replacer(match: re.Match) -> str:
     return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
 
 
-def _truncate_base64_in_string(value: str) -> str:
+def truncate_base64_data_uris(value: str) -> str:
     """Replace long base64 data-URI payloads in a string with a size placeholder."""
     if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return value
@@ -84,7 +84,7 @@ def _truncate_base64_in_value(value: Any) -> Any:
     # Stack entries: (source_value, depth, parent_container, key_or_index)
     # We mutate *copies* of dicts/lists in-place via parent references.
     if isinstance(value, str):
-        return _truncate_base64_in_string(value)
+        return truncate_base64_data_uris(value)
     if not isinstance(value, (dict, list)):
         return value
 
@@ -99,7 +99,7 @@ def _truncate_base64_in_value(value: Any) -> Any:
         if isinstance(container, dict):
             for k, v in container.items():
                 if isinstance(v, str):
-                    container[k] = _truncate_base64_in_string(v)
+                    container[k] = truncate_base64_data_uris(v)
                 elif isinstance(v, dict):
                     copy: Union[dict, list] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
@@ -111,7 +111,7 @@ def _truncate_base64_in_value(value: Any) -> Any:
         elif isinstance(container, list):
             for i, v in enumerate(container):
                 if isinstance(v, str):
-                    container[i] = _truncate_base64_in_string(v)
+                    container[i] = truncate_base64_data_uris(v)
                 elif isinstance(v, dict):
                     copy = {ck: cv for ck, cv in v.items()}
                     container[i] = copy

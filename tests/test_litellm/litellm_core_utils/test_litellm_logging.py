@@ -2594,6 +2594,39 @@ def test_get_error_information_falls_back_to_str_when_no_message_attr():
     assert result["error_class"] == "ValueError"
 
 
+def test_get_error_information_truncates_base64_data_uris():
+    """
+    Regression for #34753: a failed request carrying a file upload echoed the
+    whole base64 payload back through the provider error string, so
+    error_information.error_message (and its traceback) grew to megabytes and
+    blew past the DB query size once written to LiteLLM_SpendLogs.metadata.
+
+    MAX_BASE64_LENGTH_FOR_LOGGING must bound base64 data URIs here too, while
+    keeping the surrounding human-readable error text intact.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    payload = "A" * 3_000_000
+    message = (
+        "litellm.ContextWindowExceededError: OpenAIException - This model's maximum "
+        "context length is 128000 tokens. Request body: {'messages': [{'role': 'user', "
+        f"'content': [{{'type': 'file', 'file_data': 'data:application/pdf;base64,{payload}'}}]}}]}}"
+    )
+
+    exc = ValueError(message)
+    result = StandardLoggingPayloadSetup.get_error_information(
+        exc, traceback_str=f"Traceback: data:application/pdf;base64,{payload}"
+    )
+
+    assert payload not in result["error_message"]
+    assert payload not in (result["traceback"] or "")
+    assert len(result["error_message"]) < 1000
+    assert "base64_data truncated" in result["error_message"]
+    assert "base64_data truncated" in (result["traceback"] or "")
+    assert "maximum context length is 128000 tokens" in result["error_message"]
+    assert "data:application/pdf;base64," in result["error_message"]
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests for _get_assembled_streaming_response non-streaming early return
 # ──────────────────────────────────────────────────────────────────────
