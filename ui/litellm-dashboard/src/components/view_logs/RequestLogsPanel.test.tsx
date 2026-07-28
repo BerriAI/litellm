@@ -27,17 +27,25 @@ vi.mock("./LogDetailsDrawer", () => ({
     logEntry,
     sessionId,
     onClose,
+    allLogs = [],
+    onSelectLog,
   }: {
     open: boolean;
     logEntry?: { request_id: string } | null;
     sessionId?: string | null;
     onClose: () => void;
+    allLogs?: { request_id: string }[];
+    onSelectLog?: (log: { request_id: string }) => void;
   }) {
+    const nextLog = allLogs.find((log) => log.request_id !== logEntry?.request_id);
     return (
       <div data-testid="log-details-drawer" data-log-id={logEntry?.request_id ?? ""} data-session-id={sessionId ?? ""}>
         {open ? "open" : "closed"}
         <button type="button" onClick={onClose}>
           close-drawer
+        </button>
+        <button type="button" onClick={() => nextLog && onSelectLog?.(nextLog)}>
+          select-next-log
         </button>
       </div>
     );
@@ -53,7 +61,11 @@ vi.mock("next/navigation", async (importOriginal) => {
       const search = useSyncExternalStore(
         (onChange: () => void) => {
           window.addEventListener("test-locationchange", onChange);
-          return () => window.removeEventListener("test-locationchange", onChange);
+          window.addEventListener("popstate", onChange);
+          return () => {
+            window.removeEventListener("test-locationchange", onChange);
+            window.removeEventListener("popstate", onChange);
+          };
         },
         () => window.location.search,
       );
@@ -63,14 +75,20 @@ vi.mock("next/navigation", async (importOriginal) => {
 });
 
 const originalPushState = window.history.pushState.bind(window.history);
+const originalReplaceState = window.history.replaceState.bind(window.history);
 beforeAll(() => {
   window.history.pushState = (data, unused, url) => {
     originalPushState(data, unused, url);
     window.dispatchEvent(new Event("test-locationchange"));
   };
+  window.history.replaceState = (data, unused, url) => {
+    originalReplaceState(data, unused, url);
+    window.dispatchEvent(new Event("test-locationchange"));
+  };
 });
 afterAll(() => {
   window.history.pushState = originalPushState;
+  window.history.replaceState = originalReplaceState;
 });
 
 import { uiSpendLogsCall } from "../networking";
@@ -296,6 +314,57 @@ describe("RequestLogsPanel", () => {
 
       expect(new URLSearchParams(window.location.search).get("log_id")).toBeNull();
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
+    });
+
+    it("switching logs inside the drawer replaces the URL, so back closes the drawer in one step", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-1" }), logEntry({ request_id: "req-2" })]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(row("req-1")).not.toBeNull());
+      await user.click(row("req-1") as HTMLElement);
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-1"));
+
+      await user.click(screen.getByRole("button", { name: "select-next-log" }));
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-2"));
+      expect(new URLSearchParams(window.location.search).get("log_id")).toBe("req-2");
+
+      window.history.back();
+
+      await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
+      expect(new URLSearchParams(window.location.search).get("log_id")).toBeNull();
+    });
+
+    it("clicking a session id writes ?session_id= and ?log_id= and opens the session drawer", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-solo", session_id: "sess-solo", session_total_count: 1 })]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(row("req-solo")).not.toBeNull());
+      await user.click(within(row("req-solo") as HTMLElement).getByText("sess-solo"));
+
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("session_id")).toBe("sess-solo");
+      expect(params.get("log_id")).toBe("req-solo");
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+        expect(drawer()).toHaveAttribute("data-session-id", "sess-solo");
+      });
+    });
+
+    it("browser back after opening via a session id closes the drawer", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-solo", session_id: "sess-solo", session_total_count: 1 })]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(row("req-solo")).not.toBeNull());
+      await user.click(within(row("req-solo") as HTMLElement).getByText("sess-solo"));
+      await waitFor(() => expect(drawer()).toHaveTextContent("open"));
+
+      window.history.back();
+
+      await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
+      expect(new URLSearchParams(window.location.search).get("session_id")).toBeNull();
     });
 
     it("opens a deep-linked multi-call session log in session mode", async () => {

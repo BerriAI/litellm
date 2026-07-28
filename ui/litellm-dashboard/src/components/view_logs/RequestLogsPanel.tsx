@@ -54,9 +54,15 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
-  const { logId: urlLogId, openLog, close: closeUrlLog } = useLogDetailRouting();
+  const {
+    logId: urlLogId,
+    sessionId: urlSessionId,
+    openLog,
+    openSession,
+    selectLog,
+    close: closeUrlLog,
+  } = useLogDetailRouting();
 
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
     const storedValue = sessionStorage.getItem("isLiveTail");
@@ -131,20 +137,18 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const { data: urlLog } = useQuery(urlLogQueryOptions);
 
   const displayLog = useMemo<LogEntry | null>(() => {
-    if (urlLogId !== null) {
-      if (selectedLog?.request_id === urlLogId) return selectedLog;
-      return filteredLogs.data.find((log) => log.request_id === urlLogId) ?? urlLog ?? null;
-    }
-    return selectedSessionId !== null ? selectedLog : null;
-  }, [urlLogId, selectedLog, filteredLogs.data, urlLog, selectedSessionId]);
+    if (urlLogId === null) return null;
+    if (selectedLog?.request_id === urlLogId) return selectedLog;
+    return filteredLogs.data.find((log) => log.request_id === urlLogId) ?? urlLog ?? null;
+  }, [urlLogId, selectedLog, filteredLogs.data, urlLog]);
 
   const displaySessionId = useMemo<string | null>(() => {
-    if (selectedSessionId !== null) return selectedSessionId;
+    if (urlSessionId !== null) return urlSessionId;
     if (displayLog?.session_id !== undefined && (displayLog.session_total_count || 1) > 1) {
       return displayLog.session_id;
     }
     return null;
-  }, [selectedSessionId, displayLog]);
+  }, [urlSessionId, displayLog]);
 
   const isDrawerOpen = displayLog !== null || displaySessionId !== null;
 
@@ -230,7 +234,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const handleRowClick = useCallback(
     (log: LogEntry) => {
-      setSelectedSessionId(null);
       setSelectedLog(log);
       openLog(log.request_id);
     },
@@ -241,25 +244,19 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     (sessionId: string) => {
       if (!sessionId) return;
       const log = rows.find((candidate) => candidate.session_id === sessionId) ?? null;
-      setSelectedSessionId(sessionId);
       setSelectedLog(log);
-      if (log) openLog(log.request_id);
+      openSession(sessionId, log?.request_id ?? null);
     },
-    [rows, openLog],
+    [rows, openSession],
   );
 
   const handleSelectLog = useCallback(
     (log: LogEntry) => {
       setSelectedLog(log);
-      openLog(log.request_id);
+      selectLog(log.request_id);
     },
-    [openLog],
+    [selectLog],
   );
-
-  const handleDrawerClose = useCallback(() => {
-    setSelectedSessionId(null);
-    closeUrlLog();
-  }, [closeUrlLog]);
 
   const handleKeyHashClick = useCallback((keyHash: string) => {
     setSelectedKeyIdInfoView(keyHash);
@@ -324,7 +321,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
       <LogDetailsDrawer
         open={isDrawerOpen}
-        onClose={handleDrawerClose}
+        onClose={closeUrlLog}
         logEntry={displayLog}
         sessionId={displaySessionId}
         accessToken={accessToken}
