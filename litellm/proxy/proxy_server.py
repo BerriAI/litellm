@@ -12149,9 +12149,10 @@ async def model_info_v2(
                 user_model_info = dict(litellm.get_model_info(model=user_model))
             except Exception:
                 user_model_info = {}
+            user_model_litellm_params = LiteLLM_Params(model=user_model)
             user_model_deployment = Deployment(
                 model_name="*",
-                litellm_params=LiteLLM_Params(model=user_model),
+                litellm_params=user_model_litellm_params,
                 model_info=user_model_info,
             )
             all_models += [user_model_deployment.model_dump()]
