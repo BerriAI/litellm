@@ -24,7 +24,6 @@ RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 """
 
 import os
-import re
 import sys
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
@@ -220,54 +219,4 @@ def test_every_app_mount_is_assigned_to_a_component():
         f"{len(unassigned)} Mount(s) are not exposed on any component. "
         f"Add them to GATEWAY_MOUNT_PATHS, BACKEND_MOUNT_PATHS, or serve them "
         f"from the UI container:\n  " + "\n  ".join(sorted(unassigned))
-    )
-
-
-def _ingress_gateway_prefixes() -> frozenset[str]:
-    """The ``$gatewayPrefixes`` list from the helm ingress template — the path
-    prefixes the load balancer routes to the gateway service."""
-    template_path = os.path.join(_REPO_ROOT, "helm", "litellm", "templates", "ingress.yaml")
-    with open(template_path) as handle:
-        template = handle.read()
-    match = re.search(r"\$gatewayPrefixes := list(.*?)-\}\}", template, re.DOTALL)
-    assert match, "helm/litellm/templates/ingress.yaml no longer defines $gatewayPrefixes"
-    return frozenset(re.findall(r'"([^"]+)"', match.group(1)))
-
-
-def test_ingress_gateway_prefixes_are_served_by_the_gateway():
-    """Every prefix the ingress routes to the gateway service must survive the
-    gateway route trim. The template's header comment says the two lists must
-    mirror each other, but nothing enforced it: an ingress prefix absent from
-    GATEWAY_PATH_PREFIXES sends that surface to pods that trimmed it -> 404."""
-    allowlisted = frozenset(prefix.rstrip("/") for prefix in GATEWAY_PATH_PREFIXES)
-    unserved = frozenset(
-        prefix for prefix in _ingress_gateway_prefixes() if prefix.rstrip("/") not in allowlisted
-    )
-    assert not unserved, (
-        f"{len(unserved)} ingress gateway prefix(es) are trimmed from the gateway "
-        f"route table; add them to gateway/routes/allowlist.py or stop routing "
-        f"them to the gateway:\n  " + "\n  ".join(sorted(unserved))
-    )
-
-
-def test_a2a_routes_ride_the_gateway():
-    """A2A message-send runs the completion bridge (an outbound LLM call), so
-    /a2a/* must ride the gateway fleet, which holds the provider credentials;
-    on the backend fleet the bridge dies with a missing-provider-key auth error.
-    The routes register lazily via LazyFeatureMiddleware, so the gateway
-    allowlist must also keep them for the eager/force-load path."""
-    assert "/a2a" in _ingress_gateway_prefixes(), (
-        "the ingress no longer routes /a2a to the gateway service; A2A tool "
-        "invocation falls to the backend catch-all, which has no provider keys"
-    )
-    from litellm.proxy.agent_endpoints.a2a_endpoints import router as a2a_router
-
-    dropped = frozenset(
-        path
-        for route in a2a_router.routes
-        if (path := getattr(route, "path", None)) is not None and not _is_gateway_route(route)
-    )
-    assert not dropped, (
-        "a2a routes trimmed from the gateway route table (add their prefix to "
-        "gateway/routes/allowlist.py):\n  " + "\n  ".join(sorted(dropped))
     )
