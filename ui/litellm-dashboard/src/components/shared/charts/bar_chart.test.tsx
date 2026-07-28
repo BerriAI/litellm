@@ -106,6 +106,40 @@ describe("BarChart", () => {
     expect(container.querySelector("style")).toBeNull();
   });
 
+  it("colors each bar by its datum when colorByDatum is set, instead of one fill for the series", () => {
+    const singleCategory = [
+      { tool: "alpha", spend: 3 },
+      { tool: "beta", spend: 2 },
+      { tool: "gamma", spend: 1 },
+    ];
+
+    const { container, rerender } = render(
+      <BarChart data={singleCategory} index="tool" categories={["spend"]} colors={["blue", "cyan", "violet"]} />,
+    );
+    const sharedFills = Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) =>
+      rect.getAttribute("fill"),
+    );
+    expect(new Set(sharedFills).size).toBe(1);
+
+    rerender(
+      <BarChart
+        data={singleCategory}
+        index="tool"
+        categories={["spend"]}
+        colors={["blue", "cyan", "violet"]}
+        colorByDatum
+      />,
+    );
+    const perDatumFills = Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) =>
+      rect.getAttribute("fill"),
+    );
+    expect(perDatumFills).toEqual([
+      "var(--color-blue-500, #3b82f6)",
+      "var(--color-cyan-500, #06b6d4)",
+      "var(--color-violet-500, #8b5cf6)",
+    ]);
+  });
+
   it("stacks bars into a single column per index when stack is set", () => {
     const { container } = render(
       <BarChart data={data} index="date" categories={["passed", "blocked"]} colors={["green", "red"]} stack={true} />,

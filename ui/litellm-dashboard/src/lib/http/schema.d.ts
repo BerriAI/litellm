@@ -17899,6 +17899,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tool/spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tool Spend
+         * @description Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
+         *
+         *     Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+         *     tools only (MCP tool calls and response tool_calls; declaring a tool without
+         *     invoking it does not count). A request that invoked multiple tools counts its
+         *     full spend toward each of them, so per-tool numbers are attributions and do not
+         *     sum to a deduplicated total.
+         *
+         *     ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+         *     SQL, and ``daily`` covers only those tools, so the response is bounded by
+         *     days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+         *     distinct tool names exist.
+         */
+        get: operations["get_tool_spend_v1_tool_spend_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tool/{tool_name}": {
         parameters: {
             query?: never;
@@ -17948,7 +17979,8 @@ export interface paths {
         };
         /**
          * Get Tool Usage Logs
-         * @description Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+         * @description Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+         *     Declaring a tool in a request body without the model invoking it does not create an entry.
          */
         get: operations["get_tool_usage_logs_v1_tool__tool_name__logs_get"];
         put?: never;
@@ -31803,6 +31835,61 @@ export interface components {
             tool_name: string;
             /** Updated */
             updated: boolean;
+        };
+        /**
+         * ToolSpendDailyEntry
+         * @description Spend attributed to one tool on one UTC day.
+         */
+        ToolSpendDailyEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /** Date */
+            date: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /**
+         * ToolSpendEntry
+         * @description Total spend attributed to one tool over the requested window.
+         */
+        ToolSpendEntry: {
+            /**
+             * Call Count
+             * @default 0
+             */
+            call_count: number;
+            /**
+             * Spend
+             * @description Attributed spend: a request that used several tools counts its full spend toward each of them
+             * @default 0
+             */
+            spend: number;
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+        };
+        /** ToolSpendResponse */
+        ToolSpendResponse: {
+            /** By Tool */
+            by_tool?: components["schemas"]["ToolSpendEntry"][];
+            /** Daily */
+            daily?: components["schemas"]["ToolSpendDailyEntry"][];
+            /** End Date */
+            end_date?: string | null;
+            /** Start Date */
+            start_date?: string | null;
         };
         /**
          * ToolUsageLogEntry
@@ -55994,6 +56081,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ToolPolicyOptionsResponse"];
+                };
+            };
+        };
+    };
+    get_tool_spend_v1_tool_spend_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD (defaults to 30 days ago) */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD (defaults to today) */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolSpendResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

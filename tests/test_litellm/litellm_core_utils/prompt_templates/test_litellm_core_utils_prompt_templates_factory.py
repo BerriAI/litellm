@@ -3166,3 +3166,34 @@ async def test_bedrock_converse_message_level_cache_point_preserves_ttl_async():
     )
 
     assert _collect_cache_points(result) == [{"type": "default", "ttl": "1h"}]
+
+
+def _n_choices_response(*names_per_choice):
+    from types import SimpleNamespace
+
+    choices = [
+        SimpleNamespace(
+            message=SimpleNamespace(
+                tool_calls=[SimpleNamespace(id=f"c{i}", function=SimpleNamespace(name=name, arguments="{}"))]
+            )
+        )
+        for i, name in enumerate(names_per_choice)
+    ]
+    return SimpleNamespace(choices=choices)
+
+
+def test_get_tool_calls_from_response_defaults_to_primary_choice_only():
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response = _n_choices_response("tool_alpha", "tool_beta")
+
+    assert [tc["name"] for tc in get_tool_calls_from_response(response)] == ["tool_alpha"]
+
+
+def test_get_tool_calls_from_response_include_all_choices_reads_every_choice():
+    from litellm.litellm_core_utils.prompt_templates.factory import get_tool_calls_from_response
+
+    response = _n_choices_response("tool_alpha", "tool_beta")
+
+    names = [tc["name"] for tc in get_tool_calls_from_response(response, include_all_choices=True)]
+    assert names == ["tool_alpha", "tool_beta"]
