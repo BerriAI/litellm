@@ -8,11 +8,21 @@ import litellm
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+from litellm.litellm_core_utils.audio_utils.streaming_multipart import (
+    StreamingMultipartUpload,
+)
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.openai.transcriptions.streaming_upload import (
+    multipart_content_type,
+    new_boundary,
+    stream_multipart_body,
+)
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes
 from litellm.utils import (
     TranscriptionResponse,
@@ -173,6 +183,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         max_retries=None,
         shared_session: Optional["ClientSession"] = None,
     ):
+        if isinstance(audio_file, StreamingMultipartUpload) and not audio_file.started:
+            return await self._async_streaming_audio_transcriptions(
+                upload=audio_file,
+                data=data,
+                model_response=model_response,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                shared_session=shared_session,
+            )
         try:
             openai_aclient: AsyncOpenAI = self._get_openai_client(  # type: ignore
                 is_async=True,
@@ -231,3 +252,76 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 original_response=str(e),
             )
             raise e
+
+    async def _async_streaming_audio_transcriptions(
+        self,
+        upload: StreamingMultipartUpload,
+        data: dict,
+        model_response: TranscriptionResponse,
+        timeout: float,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: str | None,
+        api_base: str | None,
+        shared_session: "ClientSession | None" = None,
+    ) -> TranscriptionResponse:
+        """Stream the multipart upload straight to the provider (SDK bypass), teeing into a buffer."""
+        complete_url = (api_base or "https://api.openai.com/v1").rstrip("/") + "/audio/transcriptions"
+        extra_headers = data.get("extra_headers") if isinstance(data.get("extra_headers"), dict) else {}
+        fields = {key: value for key, value in data.items() if key not in ("file", "extra_headers")}
+        boundary = new_boundary()
+        headers = {"Content-Type": multipart_content_type(boundary)}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        # Match the OpenAI SDK, which sends the org header when configured.
+        organization = litellm.organization or get_secret_str("OPENAI_ORGANIZATION")
+        if organization:
+            headers["OpenAI-Organization"] = organization
+        # Forward any caller-configured headers, matching the SDK's default_headers behavior.
+        headers.update({str(key): str(value) for key, value in extra_headers.items()})
+
+        logging_obj.pre_call(
+            input=None,
+            api_key=api_key,
+            additional_args={"api_base": complete_url, "atranscription": True, "complete_input_dict": fields},
+        )
+
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.OPENAI,
+            params={"shared_session": shared_session} if shared_session is not None else {},
+        )
+        body = stream_multipart_body(
+            boundary=boundary,
+            fields=fields,
+            filename=upload.filename or "audio",
+            file_content_type=upload.file_content_type,
+            upload=upload,
+        )
+        response = await client.post(url=complete_url, headers=headers, content=body, timeout=timeout)
+        response.raise_for_status()
+
+        # Parse by the response's own content-type, not the requested response_format: some providers
+        # (e.g. vLLM) return JSON even when text/srt/vtt was requested, and wrapping that JSON string
+        # as the transcript would double-encode it.
+        if "application/json" in response.headers.get("content-type", ""):
+            stringified_response = response.json()
+        else:
+            text = response.text
+            stringified_response = TranscriptionResponse(text=text).model_dump()
+            stringified_response["_audio_transcription_duration"] = extract_duration_from_srt_or_vtt(text)
+
+        logging_obj.post_call(
+            input=upload.filename,
+            api_key=api_key,
+            additional_args={"complete_input_dict": fields},
+            original_response=stringified_response,
+        )
+        hidden_params = {"model": data.get("model", "whisper-1"), "custom_llm_provider": "openai"}
+        transcription_response = convert_to_model_response_object(
+            response_object=stringified_response,
+            model_response_object=model_response,
+            hidden_params=hidden_params,
+            response_type="audio_transcription",
+        )
+        if not isinstance(transcription_response, TranscriptionResponse):
+            raise ValueError(f"Expected TranscriptionResponse, got {type(transcription_response)}")
+        return transcription_response
