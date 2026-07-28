@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import logging
+import math
 import os
 import secrets
 import time
@@ -1314,7 +1315,8 @@ async def _db_health_readiness_check():
         return db_health_cache
 
 
-_DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS = "2.0"
+_DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS = 2.0
+_MIN_READINESS_DB_PROBE_TIMEOUT_SECONDS = 0.1
 
 
 def _readiness_ignores_db_outage() -> bool:
@@ -1338,16 +1340,36 @@ def _readiness_db_probe_timeout_seconds() -> float:
     ``query_raw`` has no timeout of its own, so an unreachable DB can block
     past the kubelet's ``timeoutSeconds`` and fail the probe on time no matter
     what status code we would have returned.
+
+    A misconfigured override falls back to the default instead of propagating:
+    this runs per probe on an unauthenticated endpoint, so letting a typo raise
+    would 500 the probe and evict the pod, which is the very outage the
+    ``allow_requests_on_db_unavailable`` path exists to prevent. Non-finite
+    values are rejected for the same reason, since ``inf`` silently restores
+    the unbounded wait.
     """
-    return max(
-        0.1,
-        float(
-            os.getenv(
-                "LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS",
-                _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS,
-            )
-        ),
-    )
+    raw = os.getenv("LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS")
+    if raw is None:
+        return _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS
+
+    parsed = _parse_finite_float(raw)
+    if parsed is None:
+        verbose_proxy_logger.warning(
+            "LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS=%r is not a finite number, using %ss",
+            raw,
+            _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS,
+        )
+        return _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS
+
+    return max(_MIN_READINESS_DB_PROBE_TIMEOUT_SECONDS, parsed)
+
+
+def _parse_finite_float(raw: str) -> float | None:
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
 async def _readiness_db_status() -> str:

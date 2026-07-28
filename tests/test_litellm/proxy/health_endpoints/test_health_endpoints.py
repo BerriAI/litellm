@@ -2465,6 +2465,60 @@ async def test_health_readiness_bounds_db_probe_when_fallback_enabled():
     assert result == {"status": "healthy", "db": "disconnected"}
 
 
+@pytest.mark.parametrize(
+    "raw_timeout, expected",
+    [
+        ("0.5", 0.5),
+        ("0.01", 0.1),
+        ("abc", 2.0),
+        ("", 2.0),
+        ("inf", 2.0),
+        ("-inf", 2.0),
+        ("nan", 2.0),
+    ],
+)
+def test_readiness_db_probe_timeout_rejects_unusable_overrides(raw_timeout, expected):
+    """
+    The override is read per probe on an unauthenticated endpoint, so a typo
+    must not propagate: an unhandled ValueError would 500 the probe and evict
+    the pod, which is the outage this whole path exists to prevent. 'inf' is
+    rejected too because it silently restores the unbounded wait.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _readiness_db_probe_timeout_seconds,
+    )
+
+    with patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": raw_timeout}):
+        assert _readiness_db_probe_timeout_seconds() == expected
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_survives_malformed_probe_timeout_override():
+    """
+    End to end version of the above: a malformed override must still leave the
+    pod in rotation rather than turning the probe into a 500.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    _expire_db_health_cache()
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _unreachable_prisma_client()),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+        patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": "not-a-number"}),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
 @pytest.mark.asyncio
 async def test_health_readiness_does_not_bound_db_probe_when_fallback_disabled():
     """
