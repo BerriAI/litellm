@@ -2740,7 +2740,7 @@ def _register_anthropic_geo_cache_model(model: str) -> None:
     )
 
 
-def test_anthropic_geo_multiplier_applies_to_cache_tokens():
+def test_anthropic_geo_multiplier_applies_to_cache_tokens(monkeypatch):
     """
     Regression: the regional (geo) uplift must scale cache read and cache write
     cost too, not just non-cache input and output.
@@ -2755,7 +2755,7 @@ def test_anthropic_geo_multiplier_applies_to_cache_tokens():
     )
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-geo-cache-model"
@@ -2785,7 +2785,7 @@ def test_anthropic_geo_multiplier_applies_to_cache_tokens():
     assert geo_completion_cost == pytest.approx(base_completion_cost * 1.1)
 
 
-def test_anthropic_geo_and_fast_multipliers_compose():
+def test_anthropic_geo_and_fast_multipliers_compose(monkeypatch):
     """
     The ``fast`` speed multiplier stays cache-exclusive (the old explicit
     ``fast/`` entries kept base cache rates) while the geo multiplier scales the
@@ -2797,7 +2797,7 @@ def test_anthropic_geo_and_fast_multipliers_compose():
     )
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "claude-test-geo-fast-cache-model"
