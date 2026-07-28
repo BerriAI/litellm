@@ -444,6 +444,21 @@ async def test_stop_token_refresh_flushes_pending_engine_retirement(mock_prisma_
 
 
 @pytest.mark.asyncio
+async def test_retirement_scheduled_after_flush_kills_engine_synchronously(mock_prisma_binary):
+    """A rotation that completes during shutdown (e.g. an in-flight __getattr__
+    refresh) must not create an unowned retirement task after the flush; the
+    old engine is killed inline instead."""
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    await wrapper.stop_token_refresh_task()
+
+    with patch("os.kill") as mock_kill:
+        wrapper._schedule_engine_retirement(333, wrapper._active_drain_tracker)
+
+    assert mock_kill.call_args_list == [call(333, signal.SIGKILL)]
+    assert wrapper._retirement_tasks == frozenset()
+
+
+@pytest.mark.asyncio
 async def test_safe_refresh_cancellation_restores_token_and_cleans_replacement(
     mock_prisma_binary, monkeypatch
 ):

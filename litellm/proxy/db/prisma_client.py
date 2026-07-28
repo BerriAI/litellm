@@ -229,6 +229,7 @@ class PrismaWrapper:
         self._last_refresh_time: datetime | None = None
         self._active_drain_tracker = self._instrument_prisma_client(original_prisma)
         self._retirement_tasks: frozenset[_EngineRetirement] = frozenset()
+        self._retirements_flushed = False
 
         # Coordination for planned engine restarts (issue #29176). Every
         # `recreate_prisma_client` SIGTERMs the running query-engine on
@@ -321,6 +322,7 @@ class PrismaWrapper:
         )
 
     async def flush_engine_retirements(self) -> None:
+        self._retirements_flushed = True
         pending = self._retirement_tasks
         if not pending:
             return
@@ -332,6 +334,9 @@ class PrismaWrapper:
 
     def _schedule_engine_retirement(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
         if pid <= 0:
+            return
+        if self._retirements_flushed:
+            self._kill_engine_process_now(pid)
             return
         retirement_task = asyncio.create_task(self._retire_engine_when_drained(pid, tracker))
         self._retirement_tasks = self._retirement_tasks.union((_EngineRetirement(pid=pid, task=retirement_task),))
