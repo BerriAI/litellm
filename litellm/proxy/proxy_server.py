@@ -12146,7 +12146,7 @@ async def model_info_v2(
         if user_model is not None:
             # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
             try:
-                user_model_info = cast(dict[str, object], litellm.get_model_info(model=user_model))
+                user_model_info = dict(litellm.get_model_info(model=user_model))
             except Exception:
                 user_model_info = {}
             user_model_deployment = Deployment(

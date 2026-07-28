@@ -1673,7 +1673,14 @@ async def test_get_all_team_models():
 
 
 @pytest.mark.asyncio
-async def test_model_info_v2_with_cli_model_and_team_models_does_not_crash(monkeypatch):
+@pytest.mark.parametrize(
+    "cli_model",
+    [
+        "deepseek/deepseek-v4-pro",  # litellm.get_model_info succeeds
+        "totally-unrecognized-cli-model-xyz",  # litellm.get_model_info raises, falls back to {}
+    ],
+)
+async def test_model_info_v2_with_cli_model_and_team_models_does_not_crash(monkeypatch, cli_model):
     """
     Regression test: a proxy started with `--model <name>` (no config.yaml)
     crashed GET /v2/model/info?include_team_models=true.
@@ -1687,6 +1694,10 @@ async def test_model_info_v2_with_cli_model_and_team_models_does_not_crash(monke
     that calls `_model.get("model_info", {})` (e.g.
     `_populate_team_access_on_models`, reached via `include_team_models=true`)
     raised `AttributeError: 'str' object has no attribute 'get'`.
+
+    Parametrized over a model litellm recognizes (get_model_info succeeds)
+    and one it doesn't (get_model_info raises, falling back to `{}`), since
+    both paths build the CLI-model deployment differently.
     """
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -1704,7 +1715,7 @@ async def test_model_info_v2_with_cli_model_and_team_models_does_not_crash(monke
     )
 
     monkeypatch.setattr(proxy_server_module, "llm_router", llm_router)
-    monkeypatch.setattr(proxy_server_module, "user_model", "deepseek/deepseek-v4-pro")
+    monkeypatch.setattr(proxy_server_module, "user_model", cli_model)
     monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
     monkeypatch.setattr(
         proxy_server_module.proxy_config, "get_config", AsyncMock(return_value={})
