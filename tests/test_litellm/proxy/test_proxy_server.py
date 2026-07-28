@@ -1672,6 +1672,69 @@ async def test_get_all_team_models():
         assert result == {"gpt-4-model-1": ["team1"], "gpt-4-model-2": ["team1"]}
 
 
+@pytest.mark.asyncio
+async def test_model_info_v2_with_cli_model_and_team_models_does_not_crash(monkeypatch):
+    """
+    Regression test: a proxy started with `--model <name>` (no config.yaml)
+    crashed GET /v2/model/info?include_team_models=true.
+
+    `user_model` (set from the CLI `--model` flag) used to be appended to
+    `all_models` as a bare string:
+
+        all_models += [user_model]
+
+    every other entry in that list is a deployment dict, so downstream code
+    that calls `_model.get("model_info", {})` (e.g.
+    `_populate_team_access_on_models`, reached via `include_team_models=true`)
+    raised `AttributeError: 'str' object has no attribute 'get'`.
+    """
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import model_info_v2
+    from litellm.router import Router
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4.1"},
+                "model_info": {"id": "configured-model-1"},
+            }
+        ]
+    )
+
+    monkeypatch.setattr(proxy_server_module, "llm_router", llm_router)
+    monkeypatch.setattr(proxy_server_module, "user_model", "deepseek/deepseek-v4-pro")
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+    monkeypatch.setattr(
+        proxy_server_module.proxy_config, "get_config", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        proxy_server_module, "get_all_team_models", AsyncMock(return_value={})
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    # Before the fix, this raised AttributeError: 'str' object has no attribute 'get'
+    response = await model_info_v2(
+        user_api_key_dict=user_api_key_dict,
+        model=None,
+        user_models_only=False,
+        include_team_models=True,
+        debug=False,
+        page=1,
+        size=50,
+        search=None,
+        modelId=None,
+        teamId=None,
+        sortBy=None,
+        sortOrder="asc",
+    )
+
+    model_names = {m["model_name"] for m in response["data"]}
+    assert "gpt-4" in model_names
+
+
 def test_add_team_models_to_all_models():
     """
     Test add_team_models_to_all_models function
