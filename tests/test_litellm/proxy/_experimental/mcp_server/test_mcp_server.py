@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import json
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1687,6 +1688,109 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
     # All chunks must still reach the downstream handler via replay+stream.
     total_streamed = sum(len(b) for b in stateless_received_chunks)
     assert total_streamed == len(first_chunk) + sum(len(b) for b in oversized_tail)
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap():
+    """
+    A tool-call POST whose UTF-8 body is larger than the routing peek cap, with a
+    multibyte character straddling the cap boundary, must still be forwarded
+    intact instead of blowing up with a UnicodeDecodeError 500.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/34917
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    peek_cap = mcp_server._MCP_ROUTING_PEEK_MAX_BYTES
+
+    def _splits_multibyte_at_cap(candidate: bytes) -> bool:
+        try:
+            candidate[:peek_cap].decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+        return False
+
+    def _build_body() -> bytes:
+        for pad in range(4):
+            candidate = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "update_full_document" + "x" * pad,
+                        "arguments": {"markdown": "щ" * 3000},
+                    },
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            if len(candidate) > peek_cap and _splits_multibyte_at_cap(candidate):
+                return candidate
+        raise AssertionError("could not build a body splitting a multibyte char at the peek cap")
+
+    body = _build_body()
+
+    messages = [{"type": "http.request", "body": body, "more_body": False}]
+    receive_calls = {"count": 0}
+
+    async def receive():
+        idx = receive_calls["count"]
+        receive_calls["count"] += 1
+        return messages[idx]
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/progress_test",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    send = AsyncMock()
+
+    streamed_chunks = []
+
+    async def stateless_handle(s, r, se):
+        while True:
+            msg = await r()
+            if msg.get("type") != "http.request":
+                break
+            streamed_chunks.append(msg.get("body", b"") or b"")
+            if not msg.get("more_body", False):
+                break
+
+    async def stateful_handle(s, r, se):
+        raise AssertionError("non-initialize POST should not reach stateful manager")
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(session_manager_stateless, "handle_request", side_effect=stateless_handle),
+        patch.object(session_manager_stateful, "handle_request", side_effect=stateful_handle),
+        patch.object(session_manager_stateless, "_server_instances", {}),
+        patch.object(session_manager_stateful, "_server_instances", {}),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert send.await_count == 0, f"unexpected response emitted by the proxy: {send.await_args_list}"
+    assert b"".join(streamed_chunks) == body
 
 
 @pytest.mark.asyncio
