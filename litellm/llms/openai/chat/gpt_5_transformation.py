@@ -1,6 +1,6 @@
 """Support for OpenAI gpt-5 model family."""
 
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import litellm
 from litellm.utils import (
@@ -115,7 +115,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
-    def _deployment_capability_override(cls, deployment_model: str, key: str) -> Optional[bool]:
+    def _deployment_capability_override(cls, deployment_model: str, key: str) -> bool | None:
         """Resolve an explicitly configured capability for a deployment name.
 
         Per-deployment ``model_info`` overrides are registered in the cost map under
@@ -131,7 +131,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return None
 
     @classmethod
-    def _supports_reasoning_effort_level(cls, model: str, level: str, deployment_model: Optional[str] = None) -> bool:
+    def _supports_reasoning_effort_level(cls, model: str, level: str, deployment_model: str | None = None) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
         Looks up ``supports_{level}_reasoning_effort`` in the model map via
@@ -155,7 +155,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def _is_reasoning_effort_level_explicitly_disabled(
-        cls, model: str, level: str, deployment_model: Optional[str] = None
+        cls, model: str, level: str, deployment_model: str | None = None
     ) -> bool:
         """Return True only when the model map explicitly sets the capability to False.
 
@@ -180,7 +180,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             key=key,
         )
 
-    def get_supported_openai_params(self, model: str, deployment_model: Optional[str] = None) -> List[str]:
+    def get_supported_openai_params(self, model: str, deployment_model: str | None = None) -> list[str]:
         if self.is_model_gpt_5_search_model(model):
             return [
                 "max_tokens",
@@ -230,7 +230,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
         *,
-        deployment_model: Optional[str] = None,
+        deployment_model: str | None = None,
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:

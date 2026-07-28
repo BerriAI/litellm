@@ -1,6 +1,6 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from typing import List, Optional
+from typing import List
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -32,7 +32,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         return model
 
     @classmethod
-    def _supports_reasoning_effort_level(cls, model: str, level: str, deployment_model: Optional[str] = None) -> bool:
+    def _supports_reasoning_effort_level(cls, model: str, level: str, deployment_model: str | None = None) -> bool:
         """Override to handle gpt5_series/ prefix used for Azure routing.
 
         The parent class calls ``_supports_factory(model, custom_llm_provider=None)``
@@ -48,7 +48,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     @classmethod
     def _is_reasoning_effort_level_explicitly_disabled(
-        cls, model: str, level: str, deployment_model: Optional[str] = None
+        cls, model: str, level: str, deployment_model: str | None = None
     ) -> bool:
         """Override to handle gpt5_series/ prefix and Azure cost-map key resolution."""
         return super()._is_reasoning_effort_level_explicitly_disabled(
@@ -80,7 +80,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "azure/"
         return ("gpt-5" in model and not _normalized.startswith("gpt-5-chat")) or "gpt5_series" in model
 
-    def get_supported_openai_params(self, model: str, deployment_model: Optional[str] = None) -> List[str]:
+    def get_supported_openai_params(self, model: str, deployment_model: str | None = None) -> list[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
 
         Azure OpenAI GPT-5.2/5.4 models support logprobs, unlike OpenAI's GPT-5.
@@ -119,7 +119,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
         *,
-        deployment_model: Optional[str] = None,
+        deployment_model: str | None = None,
     ) -> dict:
         reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(reasoning_effort_value)
