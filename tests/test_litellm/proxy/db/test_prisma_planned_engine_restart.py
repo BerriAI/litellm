@@ -396,6 +396,36 @@ async def test_safe_refresh_waits_for_open_transaction_before_retiring_old_engin
 
 
 @pytest.mark.asyncio
+async def test_retirement_kills_old_engine_when_drain_never_completes(
+    mock_prisma_binary, monkeypatch
+):
+    """A leaked drain count (e.g. a transaction whose owner was hard-cancelled
+    before commit/rollback) must not keep the replaced engine alive forever."""
+    wrapper = _make_wrapper(engine_pid=111, iam=True)
+    monkeypatch.setattr(wrapper, "ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS", 0.05)
+    old_engine = wrapper._original_prisma._engine
+    old_engine._engine.start_transaction = AsyncMock(return_value="transaction-1")
+    await old_engine.start_transaction(content="transaction")
+
+    expired = datetime.utcnow() - timedelta(seconds=1200)
+    monkeypatch.setenv("DATABASE_URL", _token_db_url(created=expired, expires_in=900))
+    wrapper.get_rds_iam_token = MagicMock(return_value="postgresql://fresh")
+    replacement_prisma = MagicMock(connect=AsyncMock())
+    replacement_prisma._engine = MagicMock()
+    replacement_prisma._engine.process.pid = 222
+    mock_prisma_binary.Prisma.return_value = replacement_prisma
+
+    with (
+        patch("os.kill") as mock_kill,
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        await wrapper._safe_refresh_token()
+        await asyncio.wait_for(_wait_for_retirements(wrapper), timeout=2)
+
+    mock_kill.assert_any_call(111, signal.SIGTERM)
+
+
+@pytest.mark.asyncio
 async def test_safe_refresh_cancellation_restores_token_and_cleans_replacement(
     mock_prisma_binary, monkeypatch
 ):

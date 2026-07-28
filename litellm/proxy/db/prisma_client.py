@@ -188,6 +188,8 @@ class PrismaWrapper:
     # Fallback refresh interval if token parsing fails (10 minutes)
     FALLBACK_REFRESH_INTERVAL_SECONDS = 600
 
+    ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS = 90
+
     def __init__(
         self,
         original_prisma: Any,
@@ -281,7 +283,18 @@ class PrismaWrapper:
 
     async def _retire_engine_when_drained(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
         if tracker is not None:
-            await tracker.wait_until_drained()
+            try:
+                await asyncio.wait_for(
+                    tracker.wait_until_drained(),
+                    timeout=self.ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                verbose_proxy_logger.warning(
+                    "%sReplaced prisma engine PID %s did not drain within %ss; killing it with work still in flight.",
+                    self._log_prefix,
+                    pid,
+                    self.ENGINE_RETIREMENT_DRAIN_TIMEOUT_SECONDS,
+                )
         await self._kill_engine_process(pid)
 
     def _schedule_engine_retirement(self, pid: int, tracker: _PrismaDrainTracker | None) -> None:
