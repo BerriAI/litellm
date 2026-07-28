@@ -1,18 +1,14 @@
-import json
 import os
-import time
-from datetime import datetime, timedelta
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
-    APIKeyExpiredError,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
-    RefreshAPIKeyError,
+    get_copilot_default_headers,
 )
 
 
@@ -45,7 +41,6 @@ class TestGitHubCopilotAuthenticator:
             auth = Authenticator()
             assert auth.token_dir.endswith("/github_copilot")
             assert auth.access_token_file.endswith("/access-token")
-            assert auth.api_key_file.endswith("/api-key.json")
             mock_makedirs.assert_called_once()
 
     def test_ensure_token_dir(self):
@@ -68,9 +63,6 @@ class TestGitHubCopilotAuthenticator:
             "user-agent": "GitHubCopilotChat/0.44.0",
         }
 
-        headers_with_token = authenticator._get_github_headers("test-token")
-        assert headers_with_token["Authorization"] == "token test-token"
-
     def test_auth_requests_support_opencode_identity(self, authenticator, mock_http_client):
         mock_client, mock_response = mock_http_client
         mock_response.json.side_effect = (
@@ -87,7 +79,8 @@ class TestGitHubCopilotAuthenticator:
             "GITHUB_COPILOT_INTEGRATION_ID": "",
             "GITHUB_COPILOT_EDITOR_VERSION": "",
             "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION": "",
-            "GITHUB_COPILOT_USE_OAUTH_TOKEN": "true",
+            "GITHUB_COPILOT_API_VERSION": "2026-06-01",
+            "GITHUB_COPILOT_OPENAI_INTENT": "conversation-edits",
             "GITHUB_COPILOT_API_BASE": "https://api.githubcopilot.com",
         }
 
@@ -103,26 +96,33 @@ class TestGitHubCopilotAuthenticator:
             assert authenticator._poll_for_access_token("dc") == "opencode-oauth-token"
             assert authenticator.get_api_key() == "opencode-oauth-token"
             assert authenticator.get_api_base() == "https://api.githubcopilot.com"
+            request_headers = get_copilot_default_headers("opencode-oauth-token")
 
-        expected_headers = {
+        expected_auth_headers = {
             "accept": "application/json",
             "content-type": "application/json",
             "user-agent": "opencode/1.18.7",
         }
         assert mock_client.post.call_args_list[0].kwargs == {
-            "headers": expected_headers,
+            "headers": expected_auth_headers,
             "json": {
                 "client_id": "Ov23li8tweQw6odWQebz",
                 "scope": "read:user",
             },
         }
         assert mock_client.post.call_args_list[1].kwargs == {
-            "headers": expected_headers,
+            "headers": expected_auth_headers,
             "json": {
                 "client_id": "Ov23li8tweQw6odWQebz",
                 "device_code": "dc",
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             },
+        }
+        assert request_headers == {
+            **expected_auth_headers,
+            "openai-intent": "conversation-edits",
+            "x-github-api-version": "2026-06-01",
+            "Authorization": "Bearer opencode-oauth-token",
         }
         mock_client.get.assert_not_called()
 
@@ -161,68 +161,14 @@ class TestGitHubCopilotAuthenticator:
                 authenticator.get_access_token()
             assert authenticator._login.call_count == 3
 
-    def test_get_api_key_from_file(self, authenticator):
-        """Test retrieving an API key from a file."""
-        future_time = (datetime.now() + timedelta(hours=1)).timestamp()
-        mock_api_key_data = json.dumps({"token": "mock-api-key", "expires_at": future_time})
-
-        with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
-            api_key = authenticator.get_api_key()
-            assert api_key == "mock-api-key"
-
-    def test_get_api_key_expired(self, authenticator):
-        """Test refreshing an expired API key."""
-        past_time = (datetime.now() - timedelta(hours=1)).timestamp()
-        mock_expired_data = json.dumps({"token": "expired-api-key", "expires_at": past_time})
-        mock_new_data = {
-            "token": "new-api-key",
-            "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
-        }
-
-        with (
-            patch("builtins.open", mock_open(read_data=mock_expired_data)),
-            patch.object(authenticator, "_refresh_api_key", return_value=mock_new_data),
-            patch("json.dump") as mock_json_dump,
+    def test_get_api_key_maps_access_token_failure(self, authenticator):
+        with patch.object(
+            authenticator,
+            "get_access_token",
+            side_effect=GetAccessTokenError(message="OAuth failed", status_code=401),
         ):
-            api_key = authenticator.get_api_key()
-            assert api_key == "new-api-key"
-            authenticator._refresh_api_key.assert_called_once()
-
-    def test_refresh_api_key(self, authenticator, mock_http_client):
-        """Test refreshing an API key."""
-        mock_client, mock_response = mock_http_client
-        mock_token = "mock-access-token"
-        mock_api_key_data = {"token": "new-api-key", "expires_at": 12345}
-
-        with (
-            patch.object(authenticator, "get_access_token", return_value=mock_token),
-            patch(
-                "litellm.llms.github_copilot.authenticator._get_httpx_client",
-                return_value=mock_client,
-            ),
-            patch.object(mock_response, "json", return_value=mock_api_key_data),
-        ):
-            result = authenticator._refresh_api_key()
-            assert result == mock_api_key_data
-            mock_client.get.assert_called_once()
-            authenticator.get_access_token.assert_called_once()
-
-    def test_refresh_api_key_failure(self, authenticator, mock_http_client):
-        """Test failure to refresh an API key."""
-        mock_client, mock_response = mock_http_client
-        mock_token = "mock-access-token"
-
-        with (
-            patch.object(authenticator, "get_access_token", return_value=mock_token),
-            patch(
-                "litellm.llms.github_copilot.authenticator._get_httpx_client",
-                return_value=mock_client,
-            ),
-            patch.object(mock_response, "json", return_value={}),
-        ):
-            with pytest.raises(RefreshAPIKeyError):
-                authenticator._refresh_api_key()
-            assert mock_client.get.call_count == 3
+            with pytest.raises(GetAPIKeyError, match="Failed to get OAuth access token"):
+                authenticator.get_api_key()
 
     def test_get_device_code(self, authenticator, mock_http_client):
         """Test getting a device code."""
@@ -281,19 +227,6 @@ class TestGitHubCopilotAuthenticator:
             authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
             mock_print.assert_called_once()
 
-    def test_get_api_base_from_file(self, authenticator):
-        """Test retrieving the API base endpoint from a file."""
-        mock_api_key_data = json.dumps(
-            {
-                "token": "mock-api-key",
-                "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
-                "endpoints": {"api": "https://api.enterprise.githubcopilot.com"},
-            }
-        )
-        with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
-            api_base = authenticator.get_api_base()
-            assert api_base == "https://api.enterprise.githubcopilot.com"
-
     def test_get_device_code_with_custom_url(self, authenticator, mock_http_client):
         """GITHUB_COPILOT_DEVICE_CODE_URL env var must be used by _get_device_code at call time."""
         mock_client, mock_response = mock_http_client
@@ -351,16 +284,3 @@ class TestGitHubCopilotAuthenticator:
         ):
             authenticator._poll_for_access_token("dc")
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id
-
-    def test_refresh_api_key_with_custom_url(self, authenticator, mock_http_client):
-        """GITHUB_COPILOT_API_KEY_URL env var must be used by _refresh_api_key at call time."""
-        mock_client, mock_response = mock_http_client
-        custom_url = "https://custom.example.com/api-key"
-        mock_response.json.return_value = {"token": "api-tok", "expires_at": 9999999999}
-        with (
-            patch.dict(os.environ, {"GITHUB_COPILOT_API_KEY_URL": custom_url}),
-            patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client),
-            patch.object(authenticator, "get_access_token", return_value="access-tok"),
-        ):
-            authenticator._refresh_api_key()
-            assert mock_client.get.call_args[0][0] == custom_url

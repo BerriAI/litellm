@@ -1,8 +1,6 @@
 import json
 from typing import Any, List, Tuple
 
-import os
-
 import httpx
 
 from litellm.exceptions import AuthenticationError
@@ -36,12 +34,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> Tuple[str | None, str | None, str]:
-        dynamic_api_base = (
-            api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base = self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
