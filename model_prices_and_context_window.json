@@ -45402,6 +45402,47 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
+    "volcengine/doubao-seed-1-8-251228": {
+        "cache_read_input_token_cost": 2.2e-08,
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false,
+        "supports_vision": true,
+        "tiered_pricing": [
+            {
+                "input_cost_per_token": 1.1e-07,
+                "output_cost_per_token": 2.8e-07,
+                "output_cost_per_token_above_200_tokens": 1.1e-06,
+                "range": [
+                    0,
+                    32000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 1.7e-07,
+                "output_cost_per_token": 2.2e-06,
+                "range": [
+                    32000.0,
+                    128000.0
+                ]
+            },
+            {
+                "input_cost_per_token": 3.3e-07,
+                "output_cost_per_token": 3.3e-06,
+                "range": [
+                    128000.0,
+                    256000.0
+                ]
+            }
+        ]
+    },
     "volcengine/doubao-seed-2-0-pro-260215": {
         "litellm_provider": "volcengine",
         "max_input_tokens": 256000,

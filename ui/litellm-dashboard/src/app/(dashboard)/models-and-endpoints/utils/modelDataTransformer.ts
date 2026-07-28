@@ -2,6 +2,20 @@
  * Utility function to transform raw model data into the format expected by UI components
  * This creates a new transformed data object without mutating the original
  */
+const formatTieredCostRange = (tiers: any[], costKey: string): string | null => {
+  const rates = tiers.flatMap((tier) =>
+    Object.entries(tier)
+      .filter(([key, value]) => (key === costKey || key.startsWith(`${costKey}_above_`)) && value != null)
+      .map(([, value]) => Number(value) * 1_000_000),
+  );
+  const validRates = rates.filter(Number.isFinite);
+  if (validRates.length === 0) return null;
+
+  const minimum = Math.min(...validRates).toFixed(2);
+  const maximum = Math.max(...validRates).toFixed(2);
+  return minimum === maximum ? minimum : `${minimum}–$${maximum}`;
+};
+
 export const transformModelData = (rawModelData: any, getProviderFromModel: (model: string) => string) => {
   if (!rawModelData?.data) return { data: [] };
 
@@ -44,6 +58,13 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
       output_cost = model_info?.output_cost_per_token;
       max_tokens = model_info?.max_tokens;
       max_input_tokens = model_info?.max_input_tokens;
+
+      const tieredPricing = Array.isArray(model_info?.tiered_pricing) ? model_info.tiered_pricing : [];
+      if (tieredPricing.length > 0) {
+        input_cost = formatTieredCostRange(tieredPricing, "input_cost_per_token") ?? input_cost;
+        output_cost = formatTieredCostRange(tieredPricing, "output_cost_per_token") ?? output_cost;
+        transformedData[i].has_tiered_pricing = true;
+      }
     }
 
     if (curr_model?.litellm_params) {
@@ -58,11 +79,11 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
     transformedData[i].litellm_model_name = litellm_model_name;
 
     // Convert Cost in terms of Cost per 1M tokens
-    if (transformedData[i].input_cost != null) {
+    if (transformedData[i].input_cost != null && !transformedData[i].has_tiered_pricing) {
       transformedData[i].input_cost = (Number(transformedData[i].input_cost) * 1000000).toFixed(2);
     }
 
-    if (transformedData[i].output_cost != null) {
+    if (transformedData[i].output_cost != null && !transformedData[i].has_tiered_pricing) {
       transformedData[i].output_cost = (Number(transformedData[i].output_cost) * 1000000).toFixed(2);
     }
 

@@ -190,7 +190,7 @@ function CostsCell({ model }: { model: ModelData }) {
 
   return (
     <CellTooltip
-      content="Cost per 1M tokens"
+      content={model.has_tiered_pricing ? "Tiered cost per 1M tokens; shown as minimum–maximum" : "Cost per 1M tokens"}
       trigger={
         <div className="flex flex-col gap-0.5 whitespace-nowrap">
           {inputCost != null && (
