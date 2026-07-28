@@ -5148,6 +5148,11 @@ class TestSSEKeepalive:
     async def _collect(self, response) -> list:
         return [chunk async for chunk in response.body_iterator]
 
+    @staticmethod
+    def _pending_tasks_since(before: set) -> list:
+        """Tasks this test started and left running, ignoring the harness's own."""
+        return [t for t in asyncio.all_tasks() if t not in before and t is not asyncio.current_task() and not t.done()]
+
     async def test_interval_unset_leaves_stream_byte_identical(self, monkeypatch):
         monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", None, raising=False)
 
@@ -5769,8 +5774,10 @@ class TestSSEKeepalive:
         edge timeout, so the timer has to re-arm past the first chunk."""
         monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
 
+        # 4x the interval: at 2.5s a single slow scheduler wake-up pushed the
+        # second expiry past the end of the gap and left only one comment.
         response = await create_response(
-            generator=self._gen_with_midstream_gap(2.5),
+            generator=self._gen_with_midstream_gap(4.0),
             media_type="text/event-stream",
             headers={},
             request=self._request_never_disconnects(),
@@ -5808,10 +5815,12 @@ class TestSSEKeepalive:
         assert SSE_KEEPALIVE_COMMENT in chunks[first_at:]
 
     async def test_midstream_keepalive_is_off_when_interval_unset(self, monkeypatch):
+        """The gap has to out-wait the interval floor, or 'disabled' silently
+        becoming a 1s keepalive would look identical to genuinely disabled."""
         monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", None, raising=False)
 
         response = await create_response(
-            generator=self._gen_with_midstream_gap(0.05),
+            generator=self._gen_with_midstream_gap(MIN_SSE_KEEPALIVE_INTERVAL_SECONDS * 2.5),
             media_type="text/event-stream",
             headers={},
             request=self._request_never_disconnects(),
@@ -5834,13 +5843,18 @@ class TestSSEKeepalive:
             request=self._request_never_disconnects(),
         )
 
-        assert SSE_KEEPALIVE_COMMENT not in await self._collect(response)
+        assert await self._collect(response) == [
+            "data: first\n\n",
+            "data: second\n\n",
+            "data: [DONE]\n\n",
+        ]
 
     async def test_consumer_exit_during_midstream_gap_closes_upstream(self, monkeypatch):
         """Abandoning the response mid-gap must release the nested fetch and the
         upstream generator, or the LLM connection leaks until GC."""
         monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
         closed = asyncio.Event()
+        before = set(asyncio.all_tasks())
 
         response = await create_response(
             generator=self._gen_with_midstream_gap(30, closed),
@@ -5858,7 +5872,95 @@ class TestSSEKeepalive:
         # fetch and closed upstream by the time it returns, with no pending task
         # left behind to be reaped later.
         assert closed.is_set()
-        assert [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()] == []
+        assert self._pending_tasks_since(before) == []
+
+    async def test_consumer_exit_mid_gap_after_a_slow_first_chunk_closes_upstream(self, monkeypatch):
+        """Same leak as the fast-TTFT case, on the path that stalled for the first
+        token: the nested fetch must be released before the upstream aclose(), or
+        that aclose() raises "asynchronous generator is already running"."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+        before = set(asyncio.all_tasks())
+
+        async def slow_then_gap():
+            try:
+                await asyncio.sleep(2.2)
+                yield "data: first\n\n"
+                await asyncio.sleep(30)
+                yield "data: [DONE]\n\n"
+            finally:
+                closed.set()
+
+        response = await create_response(
+            generator=slow_then_gap(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+
+        iterator = response.body_iterator.__aiter__()
+        seen = []
+        while "data: first\n\n" not in seen:
+            seen.append(await iterator.__anext__())
+        assert await iterator.__anext__() == SSE_KEEPALIVE_COMMENT
+        await response.body_iterator.aclose()
+
+        assert closed.is_set()
+        assert self._pending_tasks_since(before) == []
+
+    async def test_resolved_interval_is_what_arms_the_timer(self, monkeypatch):
+        """A resolved interval that never reaches the timer would flood the client
+        with comments; nothing else pins the value actually passed to asyncio.wait."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 2.0, raising=False)
+        import litellm.proxy.common_request_processing as crp
+
+        timeouts = []
+        real_wait = asyncio.wait
+
+        async def recording_wait(aws, **kwargs):
+            if "timeout" in kwargs:
+                timeouts.append(kwargs["timeout"])
+            return await real_wait(aws, **kwargs)
+
+        monkeypatch.setattr(crp.asyncio, "wait", recording_wait)
+
+        response = await create_response(
+            generator=self._gen_with_midstream_gap(5.0),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert timeouts, "the keepalive timer never armed"
+        assert set(timeouts) == {2.0}
+        # A 5s gap at a 2s interval yields two comments, not a flood.
+        assert 2 <= chunks.count(SSE_KEEPALIVE_COMMENT) <= 3
+
+    async def test_empty_stream_after_a_slow_first_chunk_wait_terminates(self, monkeypatch):
+        """Reaches the body-is-None teardown organically: the fetch resolves as
+        StopAsyncIteration after the keepalive loop, so no body was ever built."""
+        monkeypatch.setattr(litellm, "sse_keepalive_interval_seconds", 1.0, raising=False)
+        closed = asyncio.Event()
+
+        async def stall_then_end():
+            try:
+                await asyncio.sleep(2.2)
+                return
+                yield  # pragma: no cover
+            finally:
+                closed.set()
+
+        response = await create_response(
+            generator=stall_then_end(),
+            media_type="text/event-stream",
+            headers={},
+            request=self._request_never_disconnects(),
+        )
+        chunks = await self._collect(response)
+
+        assert chunks and set(chunks) == {SSE_KEEPALIVE_COMMENT}
+        assert closed.is_set()
 
     async def test_midstream_upstream_exception_still_propagates(self, monkeypatch):
         """The keepalive wrapper must not swallow a mid-stream provider failure."""
