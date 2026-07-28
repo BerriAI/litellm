@@ -1928,12 +1928,21 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
                 "https://example.com/prefix/v2/trace/otlp",
                 "https://example.com/prefix/v2/trace/otlp",
             ),
+            (
+                "https://app.langtrace.ai/api/trace",
+                "https://app.langtrace.ai/api/trace",
+            ),
+            (
+                "https://app.langtrace.ai/api/trace/",
+                "https://app.langtrace.ai/api/trace",
+            ),
         ]
     )
     def test_normalize_traces_nonstandard_otlp_ingest_urls_unchanged(
         self, input_url: str, expected: str
     ) -> None:
-        """Splunk-style /v2/trace/otlp endpoints must not get /v1/traces appended."""
+        """Vendor full-path ingest URLs (Splunk /v2/trace/otlp, Langtrace /api/trace)
+        must not get /v1/traces appended — that 404s."""
         otel = OpenTelemetry()
         self.assertEqual(
             otel._normalize_otel_endpoint(input_url, "traces"),
@@ -5852,3 +5861,45 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                         exporter="console", attributes=attributes
                     )
                 )
+
+
+class LangtraceV1ConfigTest(unittest.TestCase):
+    def test_langtrace_uses_live_host_and_x_api_key_header(self):
+        """Regression: litellm hardcoded the stale https://langtrace.ai/api/trace (now 404)
+        with header ``api_key=``. The live ingest is https://app.langtrace.ai/api/trace and
+        the auth header is ``x-api-key``. Pins both so the stale values can't return."""
+        import litellm
+        import litellm.litellm_core_utils.litellm_logging as ll
+        from litellm.integrations.opentelemetry import OpenTelemetry
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        saved = {
+            k: os.environ.get(k)
+            for k in (
+                "LANGTRACE_API_KEY",
+                "LITELLM_OTEL_V2",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+            )
+        }
+        try:
+            ll._in_memory_loggers.clear()  # force a fresh build, not a cached logger
+            os.environ["LANGTRACE_API_KEY"] = "lt-test"
+            os.environ.pop("LITELLM_OTEL_V2", None)
+            is_otel_v2_enabled.cache_clear()
+            litellm.credential_list = []
+            logger = ll._init_custom_logger_compatible_class("langtrace", None, None)
+            assert isinstance(logger, OpenTelemetry)
+            self.assertEqual(
+                logger.config.endpoint, "https://app.langtrace.ai/api/trace"
+            )
+            self.assertEqual(
+                os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"], "x-api-key=lt-test"
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()
+            ll._in_memory_loggers.clear()
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
