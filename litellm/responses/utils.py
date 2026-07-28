@@ -7,6 +7,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Sequence,
     Type,
     Union,
     cast,
@@ -185,19 +186,26 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def get_requested_response_api_optional_param(
         params: Dict[str, Any],
+        allowed_openai_params: Sequence[str] | None = None,
     ) -> ResponsesAPIOptionalRequestParams:
         """
-        Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams.
+        Filter parameters to only include those defined in ResponsesAPIOptionalRequestParams,
+        plus any request/deployment level `allowed_openai_params` the caller opted into.
 
         Args:
             params: Dictionary of parameters to filter
+            allowed_openai_params: Extra request fields to keep even though they are not
+                part of the Responses API spec
 
         Returns:
             ResponsesAPIOptionalRequestParams instance with only the valid parameters
         """
+        from litellm.types.utils import all_litellm_params
         from litellm.utils import PreProcessNonDefaultParams
 
-        valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
+        valid_keys = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams)) | frozenset(
+            param for param in allowed_openai_params or () if param not in all_litellm_params
+        )
         custom_llm_provider = params.pop("custom_llm_provider", None)
         special_params = params.pop("kwargs", {})
 

@@ -247,6 +247,84 @@ async def test_aresponses_keeps_include_obfuscation_in_stream_options():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_allowed_openai_params_forwards_extension_param():
+    """
+    allowed_openai_params must preserve request fields that are not part of the
+    Responses API spec, so OpenAI-compatible upstreams that require them still
+    receive them. Regression test for https://github.com/BerriAI/litellm/issues/34926
+    """
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(
+            _minimal_responses_api_payload("resp_allowed_params_test", "gpt-5.5"), 200
+        )
+
+        await litellm.aresponses(
+            model="openai/gpt-5.5",
+            api_key="fake-api-key",
+            input="ping",
+            allowed_openai_params=["client_metadata"],
+            client_metadata={"probe": "keep-me"},
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert request_body["client_metadata"] == {"probe": "keep-me"}
+
+
+@pytest.mark.asyncio
+async def test_aresponses_drops_extension_param_without_allowlist():
+    """Without an allowlist, unknown extension params stay off the wire."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(
+            _minimal_responses_api_payload("resp_no_allowlist_test", "gpt-5.5"), 200
+        )
+
+        await litellm.aresponses(
+            model="openai/gpt-5.5",
+            api_key="fake-api-key",
+            input="ping",
+            client_metadata={"probe": "keep-me"},
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert "client_metadata" not in request_body
+
+
+@pytest.mark.asyncio
+async def test_aresponses_allowed_openai_params_cannot_leak_litellm_params():
+    """allowed_openai_params must never promote internal litellm params (e.g. credentials) into the request body."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(
+            _minimal_responses_api_payload("resp_no_credential_leak_test", "gpt-5.5"), 200
+        )
+
+        await litellm.aresponses(
+            model="openai/gpt-5.5",
+            api_key="fake-api-key",
+            input="ping",
+            allowed_openai_params=["api_key", "api_base"],
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert "api_key" not in request_body
+        assert "api_base" not in request_body
+
+
+@pytest.mark.asyncio
 async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service_tier(
     monkeypatch,
 ):
