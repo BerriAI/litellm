@@ -55,10 +55,10 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_base_prefers_environment(self, authenticator):
         with patch.dict(
             os.environ,
-            {"GITHUB_COPILOT_API_BASE": "https://configured.githubcopilot.example"},
+            {"GITHUB_COPILOT_API_BASE": "https://api.enterprise.githubcopilot.com"},
             clear=True,
         ):
-            assert authenticator.get_api_base() == "https://configured.githubcopilot.example"
+            assert authenticator.get_api_base() == "https://api.enterprise.githubcopilot.com"
 
     @pytest.mark.parametrize(
         "api_base",
@@ -67,6 +67,7 @@ class TestGitHubCopilotAuthenticator:
             "https://user:password@api.githubcopilot.com",
             "https://api.githubcopilot.com?tenant=example",
             "https://api.githubcopilot.com#fragment",
+            "https://attacker.example.com",
         ),
     )
     def test_get_api_base_rejects_insecure_configuration(self, authenticator, api_base):
@@ -77,12 +78,57 @@ class TestGitHubCopilotAuthenticator:
             assert authenticator.get_api_base() is None
 
         mock_warning.assert_called_once_with(
-            "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTPS URL without credentials, query, or fragment"
+            "Ignoring GITHUB_COPILOT_API_BASE because it is not a trusted HTTPS GitHub Copilot endpoint"
         )
 
     def test_get_api_base_uses_default_when_unconfigured(self, authenticator):
         with patch.dict(os.environ, {}, clear=True):
             assert authenticator.get_api_base() is None
+
+    def test_get_api_base_trusts_enterprise_oauth_domain(self, authenticator):
+        environment = {
+            "GITHUB_COPILOT_API_BASE": "https://copilot-api.company.ghe.com",
+            "GITHUB_COPILOT_DEVICE_CODE_URL": "https://company.ghe.com/login/device/code",
+            "GITHUB_COPILOT_ACCESS_TOKEN_URL": "https://company.ghe.com/login/oauth/access_token",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            assert authenticator.get_api_base() == "https://copilot-api.company.ghe.com"
+
+    def test_get_api_base_trusts_explicit_allowed_host(self, authenticator):
+        environment = {
+            "GITHUB_COPILOT_API_BASE": "https://copilot-proxy.example.com",
+            "GITHUB_COPILOT_ALLOWED_API_HOSTS": "copilot-proxy.example.com",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            assert authenticator.get_api_base() == "https://copilot-proxy.example.com"
+
+    def test_get_api_base_prefers_trusted_deployment_endpoint(self, authenticator):
+        with patch.dict(
+            os.environ,
+            {"GITHUB_COPILOT_API_BASE": "https://api.individual.githubcopilot.com"},
+            clear=True,
+        ):
+            assert (
+                authenticator.get_api_base("https://api.enterprise.githubcopilot.com")
+                == "https://api.enterprise.githubcopilot.com"
+            )
+
+    def test_get_api_base_falls_back_from_untrusted_deployment_endpoint(self, authenticator):
+        with (
+            patch.dict(
+                os.environ,
+                {"GITHUB_COPILOT_API_BASE": "https://api.individual.githubcopilot.com"},
+                clear=True,
+            ),
+            patch("litellm.llms.github_copilot.authenticator.verbose_logger.warning") as mock_warning,
+        ):
+            assert (
+                authenticator.get_api_base("https://attacker.example.com") == "https://api.individual.githubcopilot.com"
+            )
+
+        mock_warning.assert_called_once_with(
+            "Ignoring deployment api_base because it is not a trusted HTTPS GitHub Copilot endpoint"
+        )
 
     def test_get_github_headers(self, authenticator):
         headers = authenticator._get_github_headers()

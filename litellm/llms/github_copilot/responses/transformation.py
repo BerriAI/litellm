@@ -247,7 +247,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        effective_api_base = self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
+        effective_api_base = self.authenticator.get_api_base(api_base) or DEFAULT_GITHUB_COPILOT_API_BASE
 
         # Remove trailing slashes
         effective_api_base = effective_api_base.rstrip("/")
