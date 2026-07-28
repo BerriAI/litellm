@@ -7,6 +7,7 @@ Callback to log events to a Generic API Endpoint
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -200,15 +201,10 @@ class GenericAPILogger(CustomBatchLogger):
         try:
             await self.periodic_flush()
         except asyncio.CancelledError:
-            try:
+            # suppress(Exception) leaves a nested CancelledError (a BaseException) free to
+            # propagate, so a second cancellation during the final flush is still honored.
+            with contextlib.suppress(Exception):
                 await self.flush_queue()
-            except asyncio.CancelledError:
-                # A second cancellation during the final flush is still a
-                # cancellation; propagate it instead of swallowing it below.
-                raise
-            except Exception:
-                # Best-effort: never let a final-flush error mask the cancellation.
-                pass
             raise
 
     def shutdown(self) -> None:
