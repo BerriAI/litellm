@@ -15,7 +15,7 @@ import click
 import httpx
 import pytest
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
@@ -31,6 +31,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
+from litellm.proxy.common_request_processing import SSE_KEEPALIVE_COMMENT
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
@@ -10604,3 +10605,69 @@ async def test_startup_survives_database_read_failure_for_coordination_redis():
         )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_queue_streaming_routes_through_create_response():
+    """/queue/chat/completions returned a bare StreamingResponse, bypassing
+    create_response — so it got no keepalive on a slow first token, and neither
+    the error-only-stream nor the disconnect-during-TTFT contract applied."""
+    litellm.sse_keepalive_interval_seconds = 1.0
+    try:
+
+        async def slow_first_token():
+            await asyncio.sleep(2.2)
+            yield "data: first\n\n"
+            yield "data: [DONE]\n\n"
+
+        router = MagicMock()
+        router.schedule_acompletion = AsyncMock(return_value=MagicMock())
+
+        body = json.dumps({"model": "gpt-3.5-turbo", "stream": True, "priority": 0}).encode()
+        sent_body = False
+
+        async def receive():
+            # Deliver the body once, then block: request.json() consumes the body
+            # and create_response's disconnect arm then awaits the same channel.
+            nonlocal sent_body
+            if not sent_body:
+                sent_body = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await asyncio.Event().wait()
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+                "path": "/queue/chat/completions",
+            },
+            receive=receive,
+        )
+
+        with (
+            patch.object(proxy_server_module, "llm_router", router),
+            patch.object(
+                proxy_server_module,
+                "async_data_generator",
+                lambda **kwargs: slow_first_token(),
+            ),
+        ):
+            response = await proxy_server_module.async_queue_request(
+                request=request,
+                fastapi_response=Response(),
+                model=None,
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+            )
+
+        chunks = [chunk async for chunk in response.body_iterator]
+
+        assert SSE_KEEPALIVE_COMMENT in chunks
+        assert chunks.index(SSE_KEEPALIVE_COMMENT) < chunks.index("data: first\n\n")
+        assert [c for c in chunks if c != SSE_KEEPALIVE_COMMENT] == [
+            "data: first\n\n",
+            "data: [DONE]\n\n",
+        ]
+    finally:
+        litellm.sse_keepalive_interval_seconds = None

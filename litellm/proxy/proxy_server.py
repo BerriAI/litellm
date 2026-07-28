@@ -13409,14 +13409,16 @@ async def async_queue_request(
         response = await llm_router.schedule_acompletion(**data)
 
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
-            return StreamingResponse(
-                async_data_generator(
+            return await create_response(
+                generator=async_data_generator(
                     user_api_key_dict=user_api_key_dict,
                     response=response,
                     request_data=data,
                     request=request,
                 ),
                 media_type="text/event-stream",
+                headers={},
+                request=request,
             )
 
         fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
