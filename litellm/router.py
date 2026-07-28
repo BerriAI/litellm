@@ -10488,33 +10488,75 @@ class Router:
 
         object_models = set(getattr(user_api_key_auth, "models", []) or [])
         object_team_models = set(getattr(user_api_key_auth, "team_models", []) or [])
-        allowed_models = object_models | object_team_models
+        allowed_access_groups = self.required_model_access_groups(
+            model=model,
+            allowed_models=frozenset(object_models | object_team_models),
+            team_id=request_team_id,
+        )
+        if allowed_access_groups is None:
+            return healthy_deployments
+
+        return [
+            deployment
+            for deployment in healthy_deployments
+            if set((deployment.get("model_info") or {}).get("access_groups") or []) & allowed_access_groups
+        ]
+
+    def required_model_access_groups(
+        self,
+        model: str,
+        allowed_models: frozenset[str],
+        team_id: str | None = None,
+    ) -> frozenset[str] | None:
+        """
+        Access groups a caller's request for ``model`` must be served by, or None when
+        the caller's grants do not constrain which deployment of ``model`` is used.
+        """
         if not allowed_models:
-            return healthy_deployments
+            return None
 
-        # If caller has direct model/wildcard/all-proxy access, do not constrain
-        # deployment choice by access group.
         if model in allowed_models or "*" in allowed_models or "all-proxy-models" in allowed_models:
-            return healthy_deployments
+            return None
 
-        access_groups_for_model = self.get_model_access_groups(model_name=model, team_id=request_team_id)
+        access_groups_for_model = self.get_model_access_groups(model_name=model, team_id=team_id)
         if len(access_groups_for_model) == 0:
-            return healthy_deployments
+            return None
 
-        allowed_access_groups = set(access_groups_for_model.keys()) & allowed_models
-        if not allowed_access_groups:
-            # No overlap means this request was not authorized via model access
-            # group membership for this model, so do not force group filtering.
-            return healthy_deployments
+        # No overlap means this request was not authorized via model access group
+        # membership for this model, so do not force group filtering.
+        return frozenset(access_groups_for_model.keys()) & allowed_models or None
 
-        filtered_deployments = []
-        for deployment in healthy_deployments:
-            deployment_model_info = deployment.get("model_info") or {}
-            deployment_access_groups = set(deployment_model_info.get("access_groups", []) or [])
-            if deployment_access_groups & allowed_access_groups:
-                filtered_deployments.append(deployment)
+    def deployment_within_model_access_groups(
+        self,
+        model_id: str,
+        allowed_models: frozenset[str],
+        team_id: str | None = None,
+    ) -> bool:
+        """
+        Whether a caller granted ``allowed_models`` may act on one specific deployment.
 
-        return filtered_deployments
+        Managed resource ids (batches, files) name the deployment directly, so callers
+        reach a deployment without going through model-group selection and its access
+        group filtering; this applies the same restriction to that deployment.
+        """
+        deployment = self.get_model_info(id=model_id)
+        if deployment is None:
+            return True
+
+        model_name = deployment.get("model_name")
+        if not isinstance(model_name, str):
+            return True
+
+        allowed_access_groups = self.required_model_access_groups(
+            model=model_name,
+            allowed_models=allowed_models,
+            team_id=team_id,
+        )
+        if allowed_access_groups is None:
+            return True
+
+        deployment_access_groups = set((deployment.get("model_info") or {}).get("access_groups") or [])
+        return bool(deployment_access_groups & allowed_access_groups)
 
     async def async_get_healthy_deployments(
         self,

@@ -4762,3 +4762,78 @@ async def test_skip_user_budget_on_team_key_flag_restores_old_behavior():
             request=MagicMock(spec=Request),
         )
     assert result is True
+
+
+def _shared_name_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-fake"},
+                "model_info": {"access_groups": ["group-a"]},
+            },
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-fake"},
+                "model_info": {"access_groups": ["group-b"], "mode": "batch"},
+            },
+        ]
+    )
+
+
+def _unified_batch_id_for(model_id: str) -> str:
+    import base64
+
+    return base64.b64encode(f"litellm_proxy;model_id:{model_id};llm_batch_id:provider-batch-id".encode()).decode()
+
+
+class TestCheckManagedResourceDeploymentAccess:
+    """A managed batch id names its deployment directly, so retrieve/cancel skip the
+    router's access-group filtering; the caller must still be scoped to that deployment."""
+
+    def _deployment_ids(self, llm_router):
+        return tuple(deployment["model_info"]["id"] for deployment in llm_router.model_list)
+
+    def test_denies_sibling_deployment_sharing_the_model_name(self):
+        from litellm.proxy.auth.auth_checks import check_managed_resource_deployment_access
+
+        llm_router = _shared_name_router()
+        _, group_b_deployment_id = self._deployment_ids(llm_router)
+
+        with pytest.raises(ProxyException) as exc_info:
+            check_managed_resource_deployment_access(
+                request_data={"batch_id": _unified_batch_id_for(group_b_deployment_id)},
+                route="/v1/batches/{batch_id}",
+                valid_token=UserAPIKeyAuth(token="k1", models=["group-a"]),
+                llm_router=llm_router,
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+        assert group_b_deployment_id in exc_info.value.message
+
+    def test_allows_deployment_in_callers_access_group(self):
+        from litellm.proxy.auth.auth_checks import check_managed_resource_deployment_access
+
+        llm_router = _shared_name_router()
+        _, group_b_deployment_id = self._deployment_ids(llm_router)
+
+        check_managed_resource_deployment_access(
+            request_data={"batch_id": _unified_batch_id_for(group_b_deployment_id)},
+            route="/v1/batches/{batch_id}",
+            valid_token=UserAPIKeyAuth(token="k1", team_models=["group-b"]),
+            llm_router=llm_router,
+        )
+
+    def test_allows_any_deployment_when_caller_is_granted_the_model_name(self):
+        from litellm.proxy.auth.auth_checks import check_managed_resource_deployment_access
+
+        llm_router = _shared_name_router()
+        for deployment_id in self._deployment_ids(llm_router):
+            check_managed_resource_deployment_access(
+                request_data={"batch_id": _unified_batch_id_for(deployment_id)},
+                route="/v1/batches/{batch_id}",
+                valid_token=UserAPIKeyAuth(token="k1", models=["shared-model"]),
+                llm_router=llm_router,
+            )

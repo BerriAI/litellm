@@ -22,6 +22,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
     get_key_tag_rpm_limit,
+    get_deployment_ids_from_request,
     get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
@@ -566,6 +567,26 @@ def test_get_model_from_request_keeps_unresolvable_managed_batch_model_id():
             llm_router=llm_router,
         )
         == "unknown-deployment-id"
+    )
+
+
+def test_get_deployment_ids_from_request_returns_deployment_named_by_batch_id():
+    llm_router = _managed_batch_router()
+    model_id = llm_router.model_list[0]["model_info"]["id"]
+
+    assert get_deployment_ids_from_request(
+        request_data={"batch_id": _unified_batch_id(model_id)},
+        route="/v1/batches/{batch_id}",
+    ) == (model_id,)
+
+
+def test_get_deployment_ids_from_request_ignores_plain_model_requests():
+    assert (
+        get_deployment_ids_from_request(
+            request_data={"model": "bedrock-batch-model"},
+            route="/v1/chat/completions",
+        )
+        == ()
     )
 
 

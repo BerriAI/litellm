@@ -1475,6 +1475,49 @@ def _extract_models_from_managed_resource_id(
     return _dedupe_model_candidates(candidates)
 
 
+def _unified_batch_deployment_id(resource_id: str) -> str | None:
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+        get_model_id_from_unified_batch_id,
+    )
+
+    unified_file_id = _is_base64_encoded_unified_file_id(resource_id)
+    return get_model_id_from_unified_batch_id(unified_file_id) if unified_file_id else None
+
+
+def _unified_resource_deployment_id(resource_id: str) -> str | None:
+    from litellm.llms.base_llm.managed_resources.utils import parse_unified_id
+
+    parsed_id = parse_unified_id(resource_id)
+    model_id = parsed_id.get("model_id") if parsed_id else None
+    return model_id if isinstance(model_id, str) else None
+
+
+def get_deployment_ids_from_request(request_data: Mapping[str, object], route: str) -> tuple[str, ...]:
+    """
+    Deployment ids the request names directly through a managed resource id (batch, file).
+
+    Model-access checks run on model names, so these are needed separately to keep a
+    caller from reaching a deployment it is not granted through a sibling deployment
+    that shares the model name.
+    """
+    if not _route_uses_model_routing_sources(route=route):
+        return ()
+
+    resource_ids = (request_data.get(field) for field in _MODEL_ROUTING_ID_FIELDS)
+    deployment_ids = (
+        deployment_id
+        for resource_id in resource_ids
+        if isinstance(resource_id, str) and resource_id
+        for deployment_id in (
+            _unified_batch_deployment_id(resource_id),
+            _unified_resource_deployment_id(resource_id),
+        )
+        if deployment_id
+    )
+    return tuple(dict.fromkeys(deployment_ids))
+
+
 def _resolve_model_id_with_router(model_id: Optional[str], llm_router: Optional[Router]) -> Optional[str]:
     if model_id is None or llm_router is None:
         return model_id

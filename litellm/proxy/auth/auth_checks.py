@@ -13,7 +13,7 @@ import asyncio
 import math
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -103,7 +103,11 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template
+from .auth_utils import (
+    get_deployment_ids_from_request,
+    get_model_from_request,
+    get_request_route_template,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -558,6 +562,14 @@ async def common_checks(
                     llm_router=llm_router,
                 ):
                     raise
+
+    with tracer.trace("litellm.proxy.auth.common_checks.check_managed_resource_deployment_access"):
+        check_managed_resource_deployment_access(
+            request_data=request_body,
+            route=route,
+            valid_token=valid_token,
+            llm_router=llm_router,
+        )
 
     # 2.2. If team member has per-member model scope, enforce it
     if _model and team_object and valid_token and valid_token.user_id:
@@ -3234,6 +3246,50 @@ async def can_team_access_model(
                     object_type="team",
                 )
         raise
+
+
+def check_managed_resource_deployment_access(
+    request_data: Mapping[str, object],
+    route: str,
+    valid_token: UserAPIKeyAuth | None,
+    llm_router: Router | None,
+) -> None:
+    """
+    Enforce access-group scope on the deployment a managed resource id names.
+
+    Batch and file ids carry the deployment they were created on, so retrieve and
+    cancel bypass model-group selection and the access-group filtering the router
+    applies there. Without this, a caller granted one access group could act on a
+    sibling deployment that only shares the model name.
+    """
+    if llm_router is None or valid_token is None:
+        return
+
+    allowed_models = frozenset(valid_token.models or []) | frozenset(valid_token.team_models or [])
+    denied_deployment_id = next(
+        (
+            deployment_id
+            for deployment_id in get_deployment_ids_from_request(request_data=request_data, route=route)
+            if not llm_router.deployment_within_model_access_groups(
+                model_id=deployment_id,
+                allowed_models=allowed_models,
+                team_id=valid_token.team_id,
+            )
+        ),
+        None,
+    )
+    if denied_deployment_id is None:
+        return
+
+    raise ProxyException(
+        message=(
+            f"Not allowed to access the deployment this resource was created on. "
+            f"Allowed models={sorted(allowed_models)}. Tried to access deployment={denied_deployment_id}"
+        ),
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=status.HTTP_403_FORBIDDEN,
+    )
 
 
 async def get_authorized_resources_from_key_access_groups(
