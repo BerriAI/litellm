@@ -4356,25 +4356,9 @@ export interface paths {
         };
         /**
          * Get Global Activity
-         * @description Get number of cache hits, vs misses
-         *
-         *     {
-         *         "daily_data": [
-         *                 const chartdata = [
-         *                 {
-         *                     date: 'Jan 22',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 2000
-         *                 },
-         *                 {
-         *                     date: 'Jan 23',
-         *                     cache_hits: 10,
-         *                     llm_api_calls: 12
-         *                 },
-         *         ],
-         *         "sum_cache_hits": 20,
-         *         "sum_llm_api_calls": 2012
-         *     }
+         * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
+         *     cache hits vs successful LLM API requests vs failed requests, plus totals
+         *     for the stat cards and the available key-alias/model filter options.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -21740,6 +21724,48 @@ export interface components {
             successful_updates: number;
             /** Total Requested */
             total_requested: number;
+        };
+        /** CacheActivityFilterOptions */
+        CacheActivityFilterOptions: {
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Models */
+            models: string[];
+        };
+        /** CacheActivityGroup */
+        CacheActivityGroup: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Call Type */
+            call_type: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Generated Completion Tokens */
+            generated_completion_tokens: number;
+        };
+        /** CacheActivityResponse */
+        CacheActivityResponse: {
+            filter_options: components["schemas"]["CacheActivityFilterOptions"];
+            /** Groups */
+            groups: components["schemas"]["CacheActivityGroup"][];
+            totals: components["schemas"]["CacheActivityTotals"];
+        };
+        /** CacheActivityTotals */
+        CacheActivityTotals: {
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Hit Ratio */
+            cache_hit_ratio: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Cached Completion Tokens */
+            cached_completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
         };
         /** CachePingResponse */
         CachePingResponse: {
@@ -40618,11 +40644,15 @@ export interface operations {
     };
     get_global_activity_global_activity_cache_hits_get: {
         parameters: {
-            query?: {
+            query: {
                 /** @description Time from which to start viewing spend */
-                start_date?: string | null;
+                start_date: string;
                 /** @description Time till which to view spend */
-                end_date?: string | null;
+                end_date: string;
+                /** @description Only include spend from these key aliases */
+                key_aliases?: string[] | null;
+                /** @description Only include spend for these models */
+                models?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -40636,7 +40666,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                    "application/json": components["schemas"]["CacheActivityResponse"];
                 };
             };
             /** @description Validation Error */

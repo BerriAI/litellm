@@ -19,13 +19,28 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { RefreshCw } from "lucide-react";
-import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/networking";
+import { cachingHealthCheckCall } from "@/components/networking";
+import { useCacheActivity, type CacheActivityGroup } from "@/app/(dashboard)/hooks/caching/useCacheActivity";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
-import { REQUEST_SERIES, summarizeCacheActivity, type CacheActivityRow, type CacheChartDatum } from "./cache_data";
 import CacheSettings from "./cache_settings";
 import CoordinationRedisSettings from "./coordination_redis_settings";
+
+const REQUEST_SERIES = {
+  apiRequests: "LLM API requests",
+  cacheHits: "Cache hit",
+  failed: "Failed requests",
+} as const;
+
+const toChartDatum = (group: CacheActivityGroup) => ({
+  name: group.call_type,
+  [REQUEST_SERIES.apiRequests]: group.api_requests,
+  [REQUEST_SERIES.cacheHits]: group.cache_hits,
+  [REQUEST_SERIES.failed]: group.failed_requests,
+  "Cached Completion Tokens": group.cached_completion_tokens,
+  "Generated Completion Tokens": group.generated_completion_tokens,
+});
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -78,13 +93,8 @@ const deepParse = (input: any) => {
 };
 
 const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
-  const [filteredData, setFilteredData] = useState<CacheChartDatum[]>([]);
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
-  const [data, setData] = useState<CacheActivityRow[]>([]);
-  const [cachedResponses, setCachedResponses] = useState("0");
-  const [cachedTokens, setCachedTokens] = useState("0");
-  const [cacheHitRatio, setCacheHitRatio] = useState("0");
 
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
@@ -94,70 +104,24 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
-  useEffect(() => {
-    if (!accessToken || !dateValue) {
-      return;
-    }
-    const fetchData = async () => {
-      const response = await adminGlobalCacheActivity(
-        accessToken,
-        formatDateWithoutTZ(dateValue.from),
-        formatDateWithoutTZ(dateValue.to),
-      );
-      setData(response);
-    };
-    fetchData();
-
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
-  }, [accessToken]);
-
-  const uniqueApiKeys = Array.from(new Set(data.map((item) => item?.api_key ?? "")));
-  const uniqueModels = Array.from(new Set(data.map((item) => item?.model ?? "")));
-  const uniqueCallTypes = Array.from(new Set(data.map((item) => item?.call_type ?? "")));
-
-  const updateCachingData = async (startTime: Date | undefined, endTime: Date | undefined) => {
-    if (!startTime || !endTime || !accessToken) {
-      return;
-    }
-
-    let new_cache_data = await adminGlobalCacheActivity(
-      accessToken,
-      formatDateWithoutTZ(startTime),
-      formatDateWithoutTZ(endTime),
-    );
-
-    setData(new_cache_data);
-  };
+  const { data: activity, refetch } = useCacheActivity({
+    startDate: formatDateWithoutTZ(dateValue.from),
+    endDate: formatDateWithoutTZ(dateValue.to),
+    keyAliases: selectedApiKeys,
+    models: selectedModels,
+  });
 
   useEffect(() => {
-    let newData: CacheActivityRow[] = data;
-    if (selectedApiKeys.length > 0) {
-      newData = newData.filter((item) => selectedApiKeys.includes(item.api_key));
-    }
+    setLastRefreshed(new Date().toLocaleString());
+  }, []);
 
-    if (selectedModels.length > 0) {
-      newData = newData.filter((item) => selectedModels.includes(item.model));
-    }
-
-    const summary = summarizeCacheActivity(newData);
-
-    setCachedResponses(valueFormatterNumbers(summary.cacheHits));
-    setCachedTokens(valueFormatterNumbers(summary.cachedCompletionTokens));
-    const allRequests = summary.cacheHits + summary.llmApiRequests + summary.failedRequests;
-    if (allRequests > 0) {
-      setCacheHitRatio(((summary.cacheHits / allRequests) * 100).toFixed(2));
-    } else {
-      setCacheHitRatio("0");
-    }
-
-    setFilteredData(summary.chartData);
-  }, [selectedApiKeys, selectedModels, dateValue, data]);
+  const uniqueApiKeys = activity?.filter_options.key_aliases ?? [];
+  const uniqueModels = activity?.filter_options.models ?? [];
+  const chartData = (activity?.groups ?? []).map(toChartDatum);
 
   const handleRefreshClick = () => {
-    // Update the 'lastRefreshed' state to the current date and time
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    refetch();
+    setLastRefreshed(new Date().toLocaleString());
   };
 
   const runCachingHealthCheck = async () => {
@@ -188,10 +152,12 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     }
   };
 
+  const totals = activity?.totals;
+  const hasRequests = totals != null && totals.api_requests + totals.cache_hits + totals.failed_requests > 0;
   const statCards = [
-    { label: "Cache Hit Ratio", value: `${cacheHitRatio}%` },
-    { label: "Cache Hits", value: cachedResponses },
-    { label: "Cached Completion Tokens", value: cachedTokens },
+    { label: "Cache Hit Ratio", value: `${hasRequests ? totals.cache_hit_ratio.toFixed(2) : "0"}%` },
+    { label: "Cache Hits", value: valueFormatterNumbers(totals?.cache_hits ?? 0) },
+    { label: "Cached Completion Tokens", value: valueFormatterNumbers(totals?.cached_completion_tokens ?? 0) },
   ];
 
   return (
@@ -311,7 +277,6 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
-                  updateCachingData(value.from, value.to);
                 }}
               />
             </div>
@@ -335,7 +300,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               </CardHeader>
               <CardContent>
                 <BarChart
-                  data={filteredData}
+                  data={chartData}
                   stack={true}
                   index="name"
                   valueFormatter={valueFormatterNumbers}
@@ -354,7 +319,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               </CardHeader>
               <CardContent>
                 <BarChart
-                  data={filteredData}
+                  data={chartData}
                   stack={true}
                   index="name"
                   valueFormatter={valueFormatterNumbers}

@@ -4,38 +4,50 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CacheDashboard from "./cache_dashboard";
 
-const { adminGlobalCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
-  adminGlobalCacheActivity: vi.fn(),
+const { useCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
+  useCacheActivity: vi.fn(),
   cachingHealthCheckCall: vi.fn(),
 }));
 
 vi.mock("@/components/networking", () => ({
-  adminGlobalCacheActivity,
   cachingHealthCheckCall,
 }));
 
-const cacheActivity = [
-  {
-    api_key: "sk-1",
-    model: "gpt-5.1",
-    call_type: "acompletion",
-    total_rows: 1500,
-    cache_hit_true_rows: 300,
-    failed_rows: 200,
-    cached_completion_tokens: 12000,
-    generated_completion_tokens: 48000,
+vi.mock("@/app/(dashboard)/hooks/caching/useCacheActivity", () => ({
+  useCacheActivity,
+}));
+
+const cacheActivity = {
+  groups: [
+    {
+      call_type: "acompletion",
+      api_requests: 1000,
+      cache_hits: 300,
+      failed_requests: 200,
+      cached_completion_tokens: 12000,
+      generated_completion_tokens: 48000,
+    },
+    {
+      call_type: "aembedding",
+      api_requests: 550,
+      cache_hits: 100,
+      failed_requests: 50,
+      cached_completion_tokens: 2000,
+      generated_completion_tokens: 9000,
+    },
+  ],
+  totals: {
+    api_requests: 1550,
+    cache_hits: 400,
+    failed_requests: 250,
+    cached_completion_tokens: 14000,
+    cache_hit_ratio: (400 / 2200) * 100,
   },
-  {
-    api_key: "sk-2",
-    model: "text-embedding-3-large",
-    call_type: "aembedding",
-    total_rows: 700,
-    cache_hit_true_rows: 100,
-    failed_rows: 50,
-    cached_completion_tokens: 2000,
-    generated_completion_tokens: 9000,
+  filter_options: {
+    key_aliases: ["my-key", "Unnamed Key"],
+    models: ["gpt-5.1", "text-embedding-3-large"],
   },
-];
+};
 
 const renderDashboard = () =>
   renderWithProviders(
@@ -77,7 +89,7 @@ const legendFillByCategory = (card: HTMLElement) =>
 describe("CacheDashboard cache analytics charts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    adminGlobalCacheActivity.mockResolvedValue(cacheActivity);
+    useCacheActivity.mockReturnValue({ data: cacheActivity, refetch: vi.fn() });
   });
 
   it("renders both chart card titles", async () => {
@@ -156,10 +168,21 @@ describe("CacheDashboard cache analytics charts", () => {
     }
   });
 
-  it("keeps failed requests in the cache hit ratio denominator", async () => {
+  it("renders the server-computed cache hit ratio", async () => {
     renderDashboard();
 
     expect(await screen.findByText("18.18%")).toBeInTheDocument();
+  });
+
+  it("passes the date range and selected filters to the activity query", () => {
+    renderDashboard();
+
+    expect(useCacheActivity).toHaveBeenCalledWith({
+      startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      keyAliases: [],
+      models: [],
+    });
   });
 
   it("formats y-axis ticks with compact notation", async () => {
