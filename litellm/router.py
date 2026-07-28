@@ -4475,6 +4475,11 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data = deployment["litellm_params"].copy()
+            # `silent_model` is a router-level traffic-mirroring directive, not
+            # a provider parameter. It must not leak into the underlying API
+            # call (it breaks Responses / Anthropic Messages with
+            # "unexpected keyword argument 'silent_model'"). See #34890.
+            data.pop("silent_model", None)
             model_name = data["model"]
             self.total_calls[model_name] += 1
 

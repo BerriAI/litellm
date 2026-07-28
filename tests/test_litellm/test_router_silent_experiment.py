@@ -281,3 +281,59 @@ def test_router_silent_experiment_completion():
         assert silent_call[1]["model"] == "openai/gpt-4"
         # Verify model_group is set to the silent model name for correct metric attribution
         assert silent_call[1]["metadata"]["model_group"] == "silent-model"
+
+
+async def test_silent_model_not_leaked_into_generic_api_call():
+    """
+    Regression test for #34890.
+
+    `aresponses` and `anthropic_messages` route through
+    `_ageneric_api_call_with_fallbacks_helper`, which spreads the deployment's
+    `litellm_params` into the call to the underlying provider function. The
+    router-level `silent_model` directive must be stripped there, otherwise the
+    primary Responses / Messages request fails with
+    "unexpected keyword argument 'silent_model'".
+    """
+    model_list = [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {
+                "model": "openai/primary-model",
+                "api_key": "fake-key",
+                "silent_model": "silent-model",
+            },
+        },
+    ]
+    router = Router(model_list=model_list)
+
+    deployment = {
+        "model_name": "primary-model",
+        "litellm_params": {
+            "model": "openai/primary-model",
+            "api_key": "fake-key",
+            "silent_model": "silent-model",
+        },
+        "model_info": {"id": "test-deployment-id"},
+    }
+
+    captured = {}
+
+    async def fake_original_function(**kwargs):
+        captured.update(kwargs)
+        return litellm.ModelResponse(choices=[{"message": {"content": "ok"}}])
+
+    with patch.object(
+        router, "async_get_available_deployment", AsyncMock(return_value=deployment)
+    ), patch.object(
+        router, "async_routing_strategy_pre_call_checks", AsyncMock(return_value=None)
+    ), patch.object(
+        router, "_get_client", MagicMock(return_value=None)
+    ):
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="primary-model",
+            original_generic_function=fake_original_function,
+            input="Reply only OK",
+        )
+
+    # The router-level directive must not reach the provider call.
+    assert "silent_model" not in captured
