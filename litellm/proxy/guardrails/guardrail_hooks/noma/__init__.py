@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
 
+from pydantic import TypeAdapter
+
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .noma import NomaGuardrail
@@ -34,8 +36,28 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _noma_callback
 
 
+_END_OF_STREAM_ONLY_ADAPTER: TypeAdapter[bool | None] = TypeAdapter(bool | None)
+_SAMPLING_RATE_ADAPTER: TypeAdapter[int | None] = TypeAdapter(int | None)
+
+
+def _get_config_value(litellm_params: "LitellmParams", optional_params: object, attribute_name: str) -> object:
+    if optional_params is not None:
+        value = getattr(optional_params, attribute_name, None)
+        if value is not None:
+            return value
+    return getattr(litellm_params, attribute_name, None)
+
+
 def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
+
+    optional_params = getattr(litellm_params, "optional_params", None)
+    end_of_stream_only = _END_OF_STREAM_ONLY_ADAPTER.validate_python(
+        _get_config_value(litellm_params, optional_params, "streaming_end_of_stream_only")
+    )
+    sampling_rate = _SAMPLING_RATE_ADAPTER.validate_python(
+        _get_config_value(litellm_params, optional_params, "streaming_sampling_rate")
+    )
 
     _noma_v2_callback = NomaV2Guardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -44,6 +66,8 @@ def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardra
         application_id=litellm_params.application_id,
         monitor_mode=litellm_params.monitor_mode,
         block_failures=litellm_params.block_failures,
+        streaming_end_of_stream_only=end_of_stream_only,
+        streaming_sampling_rate=sampling_rate,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )
