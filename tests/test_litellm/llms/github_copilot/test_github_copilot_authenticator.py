@@ -73,6 +73,17 @@ class TestGitHubCopilotAuthenticator:
         ):
             assert authenticator.get_api_base() == "https://api.enterprise.githubcopilot.com"
 
+    def test_get_api_base_ignores_invalid_legacy_cache(self, authenticator):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("builtins.open", mock_open(read_data="not-json")),
+            patch("litellm.llms.github_copilot.authenticator.verbose_logger.warning") as mock_warning,
+        ):
+            assert authenticator.get_api_base() is None
+
+        assert mock_warning.call_count == 1
+        assert "Error reading legacy GitHub Copilot API endpoint" in mock_warning.call_args.args[0]
+
     def test_deprecated_api_key_url_warns(self):
         with (
             patch.dict(
