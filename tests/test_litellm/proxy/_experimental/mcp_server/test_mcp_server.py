@@ -4519,6 +4519,7 @@ def test_tool_name_matches_case_insensitive():
         server_name="per_store",
         url="http://127.0.0.1:5115/mcp",
         transport=MCPTransport.http,
+        spec_path="/specs/petstore.yaml",
     )
 
     # Test case 1: Unprefixed tool name with camelCase in filter list
@@ -4597,6 +4598,7 @@ def test_filter_tools_by_allowed_tools_case_insensitive():
         name="per_store",
         server_name="per_store",
         transport=MCPTransport.http,
+        spec_path="/specs/petstore.yaml",
         allowed_tools=["addPet", "updatePet", "findPetsByStatus"],
     )
 
@@ -8080,12 +8082,19 @@ class TestListFiltersHonorThePrefixBoundary:
 
         assert not _tool_name_matches(f"{self.SERVER_ID}-read_wiki_contents", ["read_wiki_structure"], server)
 
-    def test_match_is_still_case_insensitive(self):
+    def test_case_folding_applies_to_openapi_servers_and_not_to_native_ones(self):
+        # Registration rewrites operationIds through sanitize_openapi_tool_name, so
+        # folding recovers a spec-spelled entry on an OpenAPI server. A native server
+        # gets none of it: routing dispatches two names differing only in case as two
+        # tools, so one policy must not decide both.
         from litellm.proxy._experimental.mcp_server.server import _tool_name_matches
 
-        server = self._alias_less_server()
+        native = self._alias_less_server()
+        openapi = self._alias_less_server(spec_path="/specs/petstore.yaml")
 
-        assert _tool_name_matches(f"{self.SERVER_ID}-findPetsByStatus", ["findpetsbystatus"], server)
+        assert _tool_name_matches(f"{self.SERVER_ID}-findPetsByStatus", ["findpetsbystatus"], openapi)
+        assert not _tool_name_matches(f"{self.SERVER_ID}-findPetsByStatus", ["findpetsbystatus"], native)
+        assert _tool_name_matches(f"{self.SERVER_ID}-findpetsbystatus", ["findpetsbystatus"], native)
 
     def test_alias_form_entry_matches_a_tool_published_under_the_short_prefix(self, monkeypatch):
         # Routing accepts the alias form, so an entry stored before short
@@ -8111,6 +8120,10 @@ class TestListFiltersHonorThePrefixBoundary:
 
         A spelling the blocklist enforces but the filter misses leaves a blocked
         tool advertised; the reverse hides a tool that would have been callable.
+        Every spelling routing registers bans, and its upper-cased form bans nothing,
+        because a tool's identity is its exact name; asserting the verdict and not only
+        the agreement is what keeps this from passing on a matcher that answers wrongly
+        but consistently.
         """
         from mcp.types import Tool as MCPTool
 
@@ -8146,14 +8159,14 @@ class TestListFiltersHonorThePrefixBoundary:
 
         published = MCPTool(name="eiG-read_wiki_contents", description="", inputSchema={"type": "object"})
         for spelling in registered:
-            for entry in (spelling, spelling.upper()):
+            for entry, expected in ((spelling, True), (spelling.upper(), False)):
                 server = _server(disallowed_tools=[entry])
 
                 refused = not manager.check_allowed_or_banned_tools("read_wiki_contents", server)
                 hidden = filter_tools_by_allowed_tools([published], server) == []
 
-                assert refused, entry
-                assert hidden, entry
+                assert refused == hidden, entry
+                assert refused is expected, entry
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
