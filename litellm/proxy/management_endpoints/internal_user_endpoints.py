@@ -1198,6 +1198,35 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+def _newly_armed_user_ids(non_default_values: dict[str, Any], user_rows: list[Any]) -> list[str]:
+    new_duration: str | None = non_default_values.get("budget_duration")
+    if new_duration is None or non_default_values.get("spend") is not None:
+        return []
+    from litellm.proxy.common_utils.timezone_utils import is_budget_window_newly_armed
+
+    armed: list[str] = []
+    for row in user_rows:
+        user_id: str | None = getattr(row, "user_id", None)
+        existing_duration: str | None = getattr(row, "budget_duration", None)
+        existing_reset_at: datetime | None = getattr(row, "budget_reset_at", None)
+        if user_id and is_budget_window_newly_armed(
+            new_duration=new_duration,
+            existing_duration=existing_duration,
+            existing_reset_at=existing_reset_at,
+        ):
+            armed.append(user_id)
+    return armed
+
+
+async def _invalidate_user_spend_counters(user_ids: list[str]) -> None:
+    if not user_ids:
+        return
+    from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+    for user_id in user_ids:
+        await _invalidate_spend_counter(counter_key=f"spend:user:{user_id}")
+
+
 def _reset_spend_if_budget_window_newly_armed(non_default_values: dict, existing_user_row: "BaseModel | None") -> None:
     if existing_user_row is None or "budget_duration" not in non_default_values:
         return
@@ -1635,6 +1664,7 @@ async def bulk_user_update(
         successful_updates = 0
         failed_updates = 0
         results: List[UserUpdateResult] = []
+        newly_armed_user_ids = _newly_armed_user_ids(non_default_values, all_users_in_db)
 
         try:
             # Perform bulk database update
@@ -1643,17 +1673,34 @@ async def bulk_user_update(
                 data=non_default_values,  # Update all users
             )
 
+            if newly_armed_user_ids:
+                await UserRepository(prisma_client).table.update_many(
+                    where={"user_id": {"in": newly_armed_user_ids}},
+                    data={"spend": 0.0},
+                )
+
+            _newly_armed_lookup = set(newly_armed_user_ids)
+
             # Create individual success results
             for user in all_users_in_db:
+                _applied_values = (
+                    {**non_default_values, "spend": 0.0} if user.user_id in _newly_armed_lookup else non_default_values
+                )
                 results.append(
                     UserUpdateResult(
                         user_id=user.user_id,
                         user_email=user.user_email,
                         success=True,
-                        updated_user={"user_id": user.user_id, **non_default_values},
+                        updated_user={"user_id": user.user_id, **_applied_values},
                     )
                 )
                 successful_updates += 1
+
+            await _invalidate_user_spend_counters(
+                [user.user_id for user in all_users_in_db if user.user_id]
+                if non_default_values.get("spend") is not None
+                else newly_armed_user_ids
+            )
 
             # Create single audit log entry for bulk operation
             try:
