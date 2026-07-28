@@ -1,17 +1,12 @@
 """
 Best-effort construction of Responses API objects from raw provider payloads.
 
-Providers deviate from the OpenAI Responses spec often enough that strict
-pydantic validation fails (missing ``output``, a ``usage`` block with unexpected
-fields, ...). Callers used to fall back to ``model_construct``, which skips
-validation *and* nested model coercion, so ``response.usage`` stayed a plain
-dict and ``response.output`` could be missing entirely. Everything downstream
-reads those attributes as declared (``ResponsesAPIResponse.usage`` is a
-``ResponseAPIUsage``, ``.output`` is a list), so the fallback produced objects
-that violate their own type and blew up with ``AttributeError`` mid-stream.
-
-These helpers keep the declared shape intact even when validation fails, so the
-fallback stays a degraded-data path instead of a crash path.
+When a provider payload fails strict validation, callers fall back to
+``model_construct``, which skips nested model coercion and leaves ``usage`` as a
+plain dict and ``output`` missing. Downstream code reads those attributes as
+declared, so such objects raise ``AttributeError`` mid-stream. These helpers keep
+the declared shape intact so the fallback stays a degraded-data path rather than
+a crash path
 """
 
 from collections.abc import Callable, Mapping
@@ -26,11 +21,7 @@ _FIELD_MAPPING_ADAPTER = TypeAdapter(dict[str, object])
 
 
 def construct_responses_api_response(payload: Mapping[str, object]) -> ResponsesAPIResponse:
-    """Build a ``ResponsesAPIResponse``, validating when possible.
-
-    On validation failure, fields required by the model are defaulted and
-    ``usage`` is coerced, so attribute access on the result behaves as declared.
-    """
+    """Validate a raw response payload, coercing ``output`` and ``usage`` when validation fails"""
     try:
         return ResponsesAPIResponse.model_validate(dict(payload))
     except ValidationError:
@@ -54,12 +45,7 @@ def construct_responses_api_stream_event(
     event_model: type[BaseLiteLLMOpenAIResponseObject],
     payload: Mapping[str, object],
 ) -> BaseLiteLLMOpenAIResponseObject:
-    """Build a Responses API streaming event without validation.
-
-    Terminal events (``response.completed`` / ``.failed`` / ``.incomplete``)
-    declare a ``ResponsesAPIResponse``; ``model_construct`` alone would leave it
-    as the raw dict, so construct that nested object explicitly.
-    """
+    """Build a streaming event without validation, keeping its nested ``response`` typed"""
     construct: Callable[..., BaseLiteLLMOpenAIResponseObject] = event_model.model_construct
     response_payload = _as_field_mapping(payload.get("response"))
     if response_payload is None:
@@ -68,7 +54,6 @@ def construct_responses_api_stream_event(
 
 
 def _construct_usage(usage: object) -> ResponseAPIUsage | None:
-    """Coerce a raw ``usage`` payload into ``ResponseAPIUsage``, or drop it."""
     if usage is None or isinstance(usage, ResponseAPIUsage):
         return usage
     usage_fields = _as_field_mapping(usage)
@@ -92,7 +77,6 @@ def _construct_usage(usage: object) -> ResponseAPIUsage | None:
 
 
 def _as_field_mapping(value: object) -> Mapping[str, object] | None:
-    """Validate an untyped payload into a string-keyed field mapping."""
     try:
         return _FIELD_MAPPING_ADAPTER.validate_python(value)
     except ValidationError:

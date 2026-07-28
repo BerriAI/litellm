@@ -1,11 +1,10 @@
 """
 Regression tests for GitHub issue #34754.
 
-Providers whose Responses API payloads fail strict validation used to be built
-with bare ``model_construct``, leaving ``event.response`` as a raw dict and
-``response.usage`` unparsed. Consumers read those as declared, so streaming
-requests died with ``AttributeError: 'dict' object has no attribute 'usage'``
-(HTTP 500 mid-stream) or silently dropped the SpendLogs entry.
+Providers whose Responses API payloads fail strict validation used to be built with bare
+``model_construct``, leaving ``event.response`` as a raw dict and ``response.usage`` unparsed. Consumers
+read those as declared, so streaming requests died with ``AttributeError: 'dict' object has no attribute
+'usage'`` (HTTP 500 mid-stream) or silently dropped the SpendLogs entry
 """
 
 import datetime
@@ -22,8 +21,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 
-# `response.completed` payload that fails validation: `output` is required by
-# ResponsesAPIResponse but plenty of providers omit it.
 DICT_FORMAT_COMPLETED_CHUNK = {
     "type": "response.completed",
     "response": {
@@ -87,7 +84,7 @@ def test_valid_payload_is_validated_not_constructed():
     )
 
     assert isinstance(response.usage, ResponseAPIUsage)
-    assert response.model_fields_set  # validated instance, not a bare model_construct
+    assert response.model_fields_set
 
 
 def test_streaming_event_response_is_not_a_dict():
