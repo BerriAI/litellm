@@ -391,7 +391,7 @@ class RedisCache(BaseCache):
             # Fallback for unparseable versions (e.g., "v7.0.0", "latest")
             return DEFAULT_REDIS_MAJOR_VERSION
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key, value, raise_on_error: bool = False, **kwargs):
         ttl = self.get_ttl(**kwargs)
         print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}")
         key = self.check_and_fix_namespace(key=key)
@@ -410,6 +410,8 @@ class RedisCache(BaseCache):
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             print_verbose(f"litellm.caching.caching: set() - Got exception from REDIS : {str(e)}")
+            if raise_on_error:
+                raise
 
     def increment_cache(self, key, value: int, ttl: Optional[float] = None, **kwargs) -> int:
         _redis_client = self.redis_client

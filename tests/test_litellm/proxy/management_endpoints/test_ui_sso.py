@@ -2252,7 +2252,10 @@ class TestCLIKeyRegenerationFlow:
         _set_cli_sso_flow(login_id=login_id, cache=cache, flow=fresh_flow)
 
         redis_cache.set_cache.assert_called_once_with(
-            key=cache_key, value=json.dumps(fresh_flow), ttl=CLI_SSO_SESSION_TTL_SECONDS
+            key=cache_key,
+            value=json.dumps(fresh_flow),
+            ttl=CLI_SSO_SESSION_TTL_SECONDS,
+            raise_on_error=True,
         )
         cache.set_cache.assert_not_called()
 
@@ -2288,7 +2291,7 @@ class TestCLIKeyRegenerationFlow:
 
         redis_store: dict = {}
         redis_cache = MagicMock()
-        redis_cache.set_cache.side_effect = lambda key, value, ttl: redis_store.__setitem__(
+        redis_cache.set_cache.side_effect = lambda key, value, ttl, **kwargs: redis_store.__setitem__(
             key, str(value).encode("utf-8")
         )
         redis_cache.get_cache.side_effect = lambda key: RedisCache._get_cache_logic(
@@ -2362,6 +2365,58 @@ class TestCLIKeyRegenerationFlow:
 
         assert exc_info.value.status_code == 429
         mock_cache.set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_start_returns_503_when_redis_unreachable(self):
+        """
+        Regression: when a coordination Redis is configured but unreachable, the
+        rate-limit increment used to propagate the raw ConnectionError as a 500.
+        The endpoint must fail closed with a deliberate 503 instead.
+        """
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_start
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+        mock_cache = MagicMock()
+        mock_cache.increment_cache.side_effect = ConnectionError("Error 61 connecting to localhost:6379")
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_start(request=mock_request)
+
+        assert exc_info.value.status_code == 503
+        assert "Redis" in exc_info.value.detail
+        assert "unreachable" in exc_info.value.detail
+        mock_cache.set_cache.assert_not_called()
+
+    def test_set_cli_sso_flow_raises_503_when_redis_write_fails(self):
+        """
+        Regression: the Redis-authoritative flow write used to swallow connection
+        errors, storing the login session nowhere and deferring the failure to a
+        confusing 400 at poll time. A failed write must surface as a 503.
+        """
+        from litellm.proxy.management_endpoints.ui_sso import _set_cli_sso_flow
+
+        redis_cache = MagicMock()
+        redis_cache.set_cache.side_effect = ConnectionError("Error 61 connecting to localhost:6379")
+        cache = MagicMock()
+        cache.redis_cache = redis_cache
+
+        with pytest.raises(HTTPException) as exc_info:
+            _set_cli_sso_flow(
+                login_id="cli-redis_down_1234567890",
+                cache=cache,
+                flow={"poll_secret_hash": "hash"},
+            )
+
+        assert exc_info.value.status_code == 503
+        assert "Redis" in exc_info.value.detail
+        assert redis_cache.set_cache.call_args.kwargs["raise_on_error"] is True
+        cache.set_cache.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cli_sso_start_returns_verification_uri_complete_when_enabled(self):

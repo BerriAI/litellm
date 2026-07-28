@@ -58,6 +58,22 @@ def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
     mock_redis_client.delete.assert_called_once_with(expected_key)
 
 
+def test_set_cache_swallows_errors_by_default_and_raises_on_opt_in(monkeypatch, redis_no_ping):
+    """Sync set_cache is fire-and-forget for callers that tolerate a cold cache,
+    but callers whose data lives only in Redis (e.g. CLI SSO login sessions)
+    must be able to opt into hearing about a failed write."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_client = MagicMock()
+    mock_redis_client.set.side_effect = ConnectionError("connection refused")
+    redis_cache.redis_client = mock_redis_client
+
+    redis_cache.set_cache(key="some-key", value="some-value", ttl=60)
+
+    with pytest.raises(ConnectionError):
+        redis_cache.set_cache(key="some-key", value="some-value", ttl=60, raise_on_error=True)
+
+
 @pytest.mark.asyncio
 async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping):
     monkeypatch.setenv("REDIS_HOST", "my-fake-host")
