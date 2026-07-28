@@ -1,14 +1,18 @@
 import asyncio
 import copy
+import io
+import tempfile
 from types import SimpleNamespace
 from typing import Any, Dict
 
 import orjson
 import pytest
+from starlette.datastructures import UploadFile
 from starlette.requests import Request
 from starlette.responses import Response
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.image_endpoints import endpoints
 
 
@@ -115,3 +119,67 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
     assert response.headers.get("x-callback-test") == "value"
+
+
+@pytest.mark.asyncio
+async def test_image_edit_converts_style_image_upload_to_bytesio(monkeypatch):
+    """Bedrock Stability style-transfer needs a second image (``style_image``).
+
+    It must be converted from a Starlette ``UploadFile`` to a synchronously
+    readable file-like object before routing; a raw ``UploadFile`` has an async
+    ``.read()`` that the downstream transform reads synchronously, stringifying
+    the resulting coroutine into the base64 payload sent to Bedrock.
+    """
+    style_bytes = b"\x89PNG\r\n\x1a\nstyle-reference-bytes"
+    spool = tempfile.SpooledTemporaryFile()
+    spool.write(style_bytes)
+    spool.seek(0)
+    style_upload = UploadFile(file=spool, filename="style.png")
+
+    captured: Dict[str, Any] = {}
+
+    async def fake_base_process(self, **kwargs):
+        captured["data"] = self.data
+        return {"result": "ok"}
+
+    monkeypatch.setattr(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        fake_base_process,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/images/edits",
+        "headers": [(b"content-type", b"application/json")],
+    }
+    body = orjson.dumps(
+        {"prompt": "an apple", "model": "stability.stable-style-transfer"}
+    )
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(scope, receive)
+
+    result = await endpoints.image_edit_api(
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
+        image=None,
+        image_array=None,
+        mask=None,
+        mask_array=None,
+        style_image=[style_upload],
+        model="stability.stable-style-transfer",
+    )
+
+    assert result == {"result": "ok"}
+    routed_style_image = captured["data"]["style_image"]
+    assert isinstance(routed_style_image, list)
+    buffer = routed_style_image[0]
+    assert isinstance(buffer, io.BytesIO)
+    assert buffer.read() == style_bytes
