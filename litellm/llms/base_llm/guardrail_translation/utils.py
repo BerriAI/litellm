@@ -123,3 +123,19 @@ def openai_messages_without_tool(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
     return [m for m in messages if str((m or {}).get("role") or "").lower() != "tool"]
+
+
+def filter_messages_by_skip_flags(
+    guardrail_to_apply: Any, messages: list[AllMessageValues]
+) -> tuple[list[AllMessageValues], bool]:
+    system_filtered = (
+        openai_messages_without_system(messages)
+        if effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        else messages
+    )
+    fully_filtered = (
+        openai_messages_without_tool(system_filtered)
+        if effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        else system_filtered
+    )
+    return fully_filtered, len(fully_filtered) != len(messages)

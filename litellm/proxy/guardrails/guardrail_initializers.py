@@ -71,6 +71,8 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
         metadata=litellm_params.metadata,
         dev_info=litellm_params.dev_info,
         on_flagged=litellm_params.on_flagged,
+        skip_system_message_in_guardrail=litellm_params.skip_system_message_in_guardrail,
+        skip_tool_message_in_guardrail=litellm_params.skip_tool_message_in_guardrail,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_v2_callback)
     return _lakera_v2_callback

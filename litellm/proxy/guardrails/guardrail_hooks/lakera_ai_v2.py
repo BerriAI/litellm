@@ -8,6 +8,9 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    filter_messages_by_skip_flags,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -47,6 +50,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         metadata: Optional[Dict] = None,
         dev_info: Optional[bool] = True,
         on_flagged: Optional[str] = "block",
+        skip_system_message_in_guardrail: bool | None = None,
+        skip_tool_message_in_guardrail: bool | None = None,
         **kwargs,
     ):
         """
@@ -66,6 +71,8 @@ class LakeraAIGuardrail(CustomGuardrail):
             metadata: Optional[Dict] = None,
             dev_info: Optional[bool] = True,
             on_flagged: Optional[str] = "block", Action to take when content is flagged: "block" or "monitor"
+            skip_system_message_in_guardrail: Optional[bool] = None,
+            skip_tool_message_in_guardrail: Optional[bool] = None,
         """
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
@@ -75,9 +82,14 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.breakdown: Optional[bool] = breakdown
         self.metadata: Optional[Dict] = metadata
         self.dev_info: Optional[bool] = dev_info
+        self.skip_system_message_in_guardrail = skip_system_message_in_guardrail
+        self.skip_tool_message_in_guardrail = skip_tool_message_in_guardrail
         self.on_flagged = on_flagged or "block"
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
+
+    def _filter_skipped_messages(self, messages: list[AllMessageValues]) -> tuple[list[AllMessageValues], bool]:
+        return filter_messages_by_skip_flags(self, messages)
 
     async def call_v2_guard(
         self,
@@ -224,12 +236,25 @@ class LakeraAIGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return data
 
+        new_messages, messages_were_skipped = self._filter_skipped_messages(
+            new_messages  # pyright: ignore[reportArgumentType]  # build_inspection_messages returns plain dicts, not typed message unions
+        )
+        if not new_messages:
+            verbose_proxy_logger.warning(
+                "Lakera AI: not running guardrail. All inspectable text was excluded by "
+                "skip_system_message_in_guardrail/skip_tool_message_in_guardrail"
+            )
+            return data
+
         # Mask-in-place uses offsets returned by Lakera and can only
         # preserve non-text parts (images, audio, …) when the original
         # content is a plain string. For multimodal/Responses-API input
         # we degrade to block-on-detect so we never silently strip image
-        # parts while attempting to redact text.
-        is_multimodal_input = has_non_string_content(data)
+        # parts while attempting to redact text. The same applies when
+        # system/tool messages were skipped: masking would rewrite
+        # data["messages"] from the filtered subset, silently dropping the
+        # excluded messages from the actual outgoing request.
+        is_multimodal_input = has_non_string_content(data) or messages_were_skipped
 
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
@@ -295,9 +320,21 @@ class LakeraAIGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return
 
-        # See ``async_pre_call_hook`` — multimodal input degrades to
-        # block-on-detect because mask-in-place would drop image parts.
-        is_multimodal_input = has_non_string_content(data)
+        new_messages, messages_were_skipped = self._filter_skipped_messages(
+            new_messages  # pyright: ignore[reportArgumentType]  # build_inspection_messages returns plain dicts, not typed message unions
+        )
+        if not new_messages:
+            verbose_proxy_logger.warning(
+                "Lakera AI: not running guardrail. All inspectable text was excluded by "
+                "skip_system_message_in_guardrail/skip_tool_message_in_guardrail"
+            )
+            return
+
+        # Multimodal input degrades to block-on-detect because mask-in-place
+        # would drop image parts; skipped messages degrade the same way since
+        # writing the masked (filtered) list back would drop them from the
+        # outgoing request.
+        is_multimodal_input = has_non_string_content(data) or messages_were_skipped
 
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
