@@ -187,7 +187,11 @@ const menuGroups: MenuGroup[] = [
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: "Cost Optimization",
+        label: (
+          <span className="flex items-center gap-2">
+            Cost Optimization <BetaBadge />
+          </span>
+        ),
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {
@@ -348,8 +352,6 @@ const findMenuItemKey = (page: string): string => {
   return "api-keys";
 };
 
-const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : item.key);
-
 const SECTION_DISPLAY: Record<string, string> = {
   "AI GATEWAY": "AI Gateway",
   OBSERVABILITY: "Observability",
@@ -363,6 +365,8 @@ const prettify = (key: string): string =>
     .split(/[-_]/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+
+const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (page: string): { section: string | null; title: string } => {
