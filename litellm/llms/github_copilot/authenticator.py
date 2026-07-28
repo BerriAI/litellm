@@ -4,7 +4,7 @@ import time
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -17,6 +17,17 @@ from .common_utils import (
     GetDeviceCodeError,
     get_copilot_auth_headers,
 )
+
+
+class _LegacyCopilotEndpoints(TypedDict, total=False):
+    api: str
+
+
+class _LegacyCopilotTokenCache(TypedDict, total=False):
+    endpoints: _LegacyCopilotEndpoints
+
+
+_LEGACY_COPILOT_TOKEN_CACHE_ADAPTER = TypeAdapter(_LegacyCopilotTokenCache)
 
 # Constants (default values — overridable via environment variables at call time)
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
@@ -71,6 +82,14 @@ class Authenticator:
             self.token_dir,
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
+        self.legacy_api_key_file = os.path.join(
+            self.token_dir,
+            os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"),
+        )
+        if os.getenv("GITHUB_COPILOT_API_KEY_URL"):
+            verbose_logger.warning(
+                "GITHUB_COPILOT_API_KEY_URL is no longer used; LiteLLM sends the OAuth access token directly"
+            )
         self._ensure_token_dir()
 
     def get_access_token(self) -> str:
@@ -132,7 +151,18 @@ class Authenticator:
             )
 
     def get_api_base(self) -> str | None:
-        return os.getenv("GITHUB_COPILOT_API_BASE")
+        configured_api_base = os.getenv("GITHUB_COPILOT_API_BASE")
+        if configured_api_base:
+            return configured_api_base
+        try:
+            with open(self.legacy_api_key_file, "r") as legacy_api_key_file:
+                legacy_cache = _LEGACY_COPILOT_TOKEN_CACHE_ADAPTER.validate_json(legacy_api_key_file.read())
+        except IOError:
+            return None
+        except ValidationError as e:
+            verbose_logger.warning(f"Error reading legacy GitHub Copilot API endpoint: {str(e)}")
+            return None
+        return legacy_cache.get("endpoints", {}).get("api")
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
