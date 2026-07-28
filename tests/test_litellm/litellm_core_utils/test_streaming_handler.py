@@ -1553,6 +1553,8 @@ async def test_openrouter_streaming_usage_only_chunk_without_stream_options():
         pass
 
     mock_callback = MockCallback()
+    previous_success_callback = litellm.success_callback
+    previous_async_success_callback = litellm._async_success_callback
     litellm.success_callback = [mock_callback]
     litellm._async_success_callback = [mock_callback]
 
@@ -1581,9 +1583,19 @@ async def test_openrouter_streaming_usage_only_chunk_without_stream_options():
         logging_obj=stream_logging_obj,
     )
 
-    with patch.object(mock_callback, "async_log_success_event") as mock_success_event:
-        collected_chunks = [chunk async for chunk in response]
-        await asyncio.sleep(1)
+    success_logged = asyncio.Event()
+    try:
+        with patch.object(
+            mock_callback,
+            "async_log_success_event",
+            new_callable=AsyncMock,
+            side_effect=lambda *args, **kwargs: success_logged.set(),
+        ) as mock_success_event:
+            collected_chunks = [chunk async for chunk in response]
+            await asyncio.wait_for(success_logged.wait(), timeout=30)
+    finally:
+        litellm.success_callback = previous_success_callback
+        litellm._async_success_callback = previous_async_success_callback
 
     assert all(getattr(chunk, "usage", None) is None for chunk in collected_chunks)
 
