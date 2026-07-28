@@ -1507,6 +1507,74 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     assert usage_chunks[-1].usage.cost == 0.00025
 
 
+@pytest.mark.asyncio
+async def test_openrouter_streaming_usage_only_chunk_without_stream_options(
+    logging_obj: Logging,
+):
+    """
+    Regression: OpenRouter's post-finish chunk has `choices: []`. When the caller did not
+    pass stream_options.include_usage it was dropped before cost tracking, so the
+    provider-reported cost never reached the assembled response.
+    """
+    from litellm.cost_calculator import get_response_cost_from_hidden_params
+    from litellm.utils import ModelResponseListIterator
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056047,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(
+                finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant")
+            )
+        ],
+        usage=None,
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056048,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=None,
+    )
+    usage_only_chunk = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056049,
+        model="openrouter/claude",
+        choices=[],
+        usage=Usage(
+            completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+        ),
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[chunk1, chunk2, usage_only_chunk]
+        ),
+        model="openrouter/claude",
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+    )
+
+    collected_chunks = [chunk async for chunk in response]
+
+    assert all(getattr(chunk, "usage", None) is None for chunk in collected_chunks)
+
+    complete_response = litellm.stream_chunk_builder(
+        chunks=response.chunks,
+        messages=[{"role": "user", "content": "Hey"}],
+    )
+    assert complete_response is not None
+    assert complete_response.usage.cost == 0.00025
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    assert (
+        get_response_cost_from_hidden_params(complete_response._hidden_params) == 0.00025
+    )
+
+
 def test_openrouter_streaming_cost_propagates_to_hidden_params():
     """
     Verify that provider-reported cost from usage.cost flows into
