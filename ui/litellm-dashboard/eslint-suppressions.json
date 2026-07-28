@@ -2755,7 +2755,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 6
+      "count": 5
     }
   },
   "src/components/chat/MCPConnectPicker.tsx": {

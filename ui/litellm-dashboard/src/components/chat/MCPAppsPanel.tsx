@@ -124,7 +124,15 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
-  const unreachableOnConnect = (s: MCPServer) => !!connectMode && s.connected_app_reachable === false;
+  const connectUnavailabilityLabel = useCallback(
+    (s: MCPServer): string | null => {
+      if (!connectMode) return null;
+      if (isUnsupportedOnGatewayConnect(s.auth_type)) return "Not supported on this connection";
+      if (s.connected_app_reachable === false) return "Not available to connected apps";
+      return null;
+    },
+    [connectMode],
+  );
 
   const fetchLoadCancelledRef = useRef(false);
 
@@ -204,12 +212,17 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   useEffect(() => {
     if (oauthConnected.size === 0) return;
     const namesToAdd = serversRef.current
-      .filter((s) => oauthConnected.has(s.server_id) && !selectedServersRef.current.includes(nameOf(s)))
+      .filter(
+        (s) =>
+          oauthConnected.has(s.server_id) &&
+          !selectedServersRef.current.includes(nameOf(s)) &&
+          connectUnavailabilityLabel(s) === null,
+      )
       .map(nameOf);
     if (namesToAdd.length > 0) {
       onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
     }
-  }, [oauthConnected]);
+  }, [oauthConnected, connectUnavailabilityLabel]);
 
   const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {
@@ -223,6 +236,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       }
       return;
     }
+    const target = serversRef.current.find((s) => s.server_id === serverId || nameOf(s) === serverName);
+    if (target && connectUnavailabilityLabel(target) !== null) return;
     setTogglingOn((prev) => new Set(prev).add(serverName));
     try {
       const idToFetch = serverId ?? serverName;
@@ -246,18 +261,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   };
 
   const renderConnectionIndicator = (server: MCPServer) => {
-    if (connectMode && isUnsupportedOnGatewayConnect(server.auth_type)) {
+    const unavailabilityLabel = connectUnavailabilityLabel(server);
+    if (unavailabilityLabel !== null) {
       return (
-        <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">
-          Not supported on this connection
-        </span>
-      );
-    }
-    if (unreachableOnConnect(server)) {
-      return (
-        <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">
-          Not available to connected apps
-        </span>
+        <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">{unavailabilityLabel}</span>
       );
     }
     if (server.auth_type === AUTH_TYPE.OAUTH2) {
@@ -295,11 +302,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       !query.trim() ||
       name.toLowerCase().includes(query.toLowerCase()) ||
       (s.description ?? "").toLowerCase().includes(query.toLowerCase());
-    const matchesTab = activeTab === "all" || (selectedServers.includes(name) && !unreachableOnConnect(s));
+    const matchesTab =
+      activeTab === "all" || (selectedServers.includes(name) && connectUnavailabilityLabel(s) === null);
     return matchesQuery && matchesTab;
   });
 
-  const connectedCount = servers.filter((s) => selectedServers.includes(nameOf(s)) && !unreachableOnConnect(s)).length;
+  const connectedCount = servers.filter(
+    (s) => selectedServers.includes(nameOf(s)) && connectUnavailabilityLabel(s) === null,
+  ).length;
   const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
   if (detailServer) {
@@ -307,6 +317,59 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     const isConnected = selectedServers.includes(name);
     const isTogglingOn = togglingOn.has(name);
     const color = getAvatarColor(name);
+
+    const renderDetailAction = () => {
+      const unavailabilityLabel = connectUnavailabilityLabel(detailServer);
+      if (unavailabilityLabel !== null) {
+        return <span className="text-[13px] text-muted-foreground py-2.5 shrink-0">{unavailabilityLabel}</span>;
+      }
+      if (detailServer.auth_type !== AUTH_TYPE.OAUTH2) {
+        return (
+          <Button
+            variant={isConnected ? "outline" : "default"}
+            disabled={isTogglingOn}
+            onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
+            className="font-semibold h-[38px] min-w-[110px]"
+          >
+            {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+            {isConnected ? "Disconnect" : "Connect"}
+          </Button>
+        );
+      }
+      if (oauthConnected.has(detailServer.server_id)) {
+        return (
+          <Button
+            variant="destructive"
+            onClick={async () => {
+              try {
+                await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
+              } catch (_) {
+                // Ignore
+              }
+              setOauthConnected((prev) => {
+                const n = new Set(prev);
+                n.delete(detailServer.server_id);
+                return n;
+              });
+              onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
+            }}
+            className="font-semibold h-[38px] min-w-[110px]"
+          >
+            Disconnect
+          </Button>
+        );
+      }
+      return (
+        <OAuth2ConnectButton
+          server={detailServer}
+          accessToken={accessToken}
+          onConnect={(id) => {
+            setOauthConnected((prev) => new Set(prev).add(id));
+          }}
+          variant="button"
+        />
+      );
+    };
 
     return (
       <div className="w-full">
@@ -339,48 +402,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             <h2 className="m-0 mb-1 text-[22px] font-bold text-foreground">{name}</h2>
             <p className="m-0 text-sm text-muted-foreground">{detailServer.description ?? "MCP server"}</p>
           </div>
-          {detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
-            oauthConnected.has(detailServer.server_id) ? (
-              <Button
-                variant="destructive"
-                onClick={async () => {
-                  try {
-                    await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
-                  } catch (_) {
-                    // Ignore
-                  }
-                  setOauthConnected((prev) => {
-                    const n = new Set(prev);
-                    n.delete(detailServer.server_id);
-                    return n;
-                  });
-                  onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
-                }}
-                className="font-semibold h-[38px] min-w-[110px]"
-              >
-                Disconnect
-              </Button>
-            ) : (
-              <OAuth2ConnectButton
-                server={detailServer}
-                accessToken={accessToken}
-                onConnect={(id) => {
-                  setOauthConnected((prev) => new Set(prev).add(id));
-                }}
-                variant="button"
-              />
-            )
-          ) : (
-            <Button
-              variant={isConnected ? "outline" : "default"}
-              disabled={isTogglingOn}
-              onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
-              className="font-semibold h-[38px] min-w-[110px]"
-            >
-              {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
-              {isConnected ? "Disconnect" : "Connect"}
-            </Button>
-          )}
+          {renderDetailAction()}
         </div>
 
         <h3 className="m-0 mb-3 text-[15px] font-semibold text-foreground">Information</h3>
@@ -518,8 +540,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             const color = getAvatarColor(name);
             const isLeftCol = idx % 2 === 0;
             const count = toolCounts[name];
-            const unavailable =
-              (!!connectMode && isUnsupportedOnGatewayConnect(server.auth_type)) || unreachableOnConnect(server);
+            const unavailable = connectUnavailabilityLabel(server) !== null;
 
             return (
               <div

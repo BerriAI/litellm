@@ -129,6 +129,44 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     expect(toolCountFetchedIds).not.toContain("s-unreach");
   });
 
+  it("blocks connecting an unavailable server from the detail view in connect mode", async () => {
+    const detailServers = [
+      ...connectServers,
+      {
+        server_id: "s-unsup",
+        server_name: "unsupported_srv",
+        auth_type: "oauth2_token_exchange",
+        connected_app_reachable: true,
+      },
+    ] as MCPServer[];
+    vi.mocked(fetchMCPServers).mockResolvedValue(detailServers);
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+
+    renderConnectPanel(true);
+
+    fireEvent.click(await screen.findByText("unreachable_srv"));
+    expect(await screen.findByRole("heading", { name: "unreachable_srv" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+    expect(screen.getByText("Not available to connected apps")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    fireEvent.click(await screen.findByText("unsupported_srv"));
+    expect(await screen.findByRole("heading", { name: "unsupported_srv" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+    expect(screen.getByText("Not supported on this connection")).toBeInTheDocument();
+  });
+
+  it("keeps the detail-view Connect action outside connect mode", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue(connectServers);
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+
+    renderConnectPanel(false);
+
+    fireEvent.click(await screen.findByText("unreachable_srv"));
+    expect(await screen.findByRole("heading", { name: "unreachable_srv" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
+  });
+
   it("ignores the flag and skips no server outside connect mode", async () => {
     vi.mocked(fetchMCPServers).mockResolvedValue(connectServers);
     vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
