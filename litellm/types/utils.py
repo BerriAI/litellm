@@ -3393,6 +3393,7 @@ class LlmProviders(str, Enum):
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
     NEBIUS = "nebius"
+    CRUSOE = "crusoe"
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"

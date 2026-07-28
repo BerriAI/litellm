@@ -4281,6 +4281,13 @@ def get_optional_params(
             model=model,
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
+    elif custom_llm_provider == "crusoe":
+        optional_params = litellm.CrusoeConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+        )
     elif custom_llm_provider == "azure":
         _azure_detection_model = base_model or model
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=_azure_detection_model):
@@ -4765,6 +4772,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     # nebius
     elif llm_provider == "nebius":
         api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
+    # crusoe
+    elif llm_provider == "crusoe":
+        api_key = api_key or litellm.crusoe_key or get_secret("CRUSOE_API_KEY")
     # wandb
     elif llm_provider == "wandb":
         api_key = api_key or litellm.wandb_key or get_secret("WANDB_API_KEY")
@@ -6129,6 +6139,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif custom_llm_provider == "crusoe":
+            if "CRUSOE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("CRUSOE_API_KEY")
         elif custom_llm_provider == "wandb":
             if "WANDB_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7713,6 +7728,7 @@ class ProviderConfigManager:
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
+            LlmProviders.CRUSOE: (lambda: litellm.CrusoeConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
             LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
