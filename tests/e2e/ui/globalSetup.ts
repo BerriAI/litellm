@@ -8,6 +8,14 @@ async function globalSetup() {
   const browser = await chromium.launch();
   const rootPath = process.env.SERVER_ROOT_PATH ?? "";
 
+  // Create the artifact root before anything writes into it. storageState() does
+  // not create missing parents, so pointing E2E_UI_ARTIFACT_DIR at a path that
+  // does not exist yet would fail with ENOENT on the first role's snapshot,
+  // before any test ran. Playwright creates its own outputDir lazily, so this is
+  // the only place that has to do it. recursive:true makes it idempotent, and
+  // keeps the default "." a no-op.
+  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+
   // The Projects sidebar item is hidden unless the enterprise-gated
   // enable_projects_ui setting is on, and the seeded DB starts with it off.
   // The proxy runs with LITELLM_LICENSE in CI, so enable it the same way
