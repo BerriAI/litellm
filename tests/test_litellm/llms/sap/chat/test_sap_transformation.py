@@ -776,3 +776,23 @@ class TestSAPPromptCaching:
         assert template[0]["content"] == "part one\npart two"
         assert template[1]["content"] == "answer"
         assert template[2]["content"] == "tool result"
+
+    def test_content_shapes_accepted_by_the_content_validator(self):
+        from litellm.llms.sap.chat.models import SAPMessage
+
+        assert SAPMessage(role="system", content=[]).content == ""
+        assert SAPMessage(role="system", content={"type": "text", "text": "hi"}).content == "hi"
+        cached = SAPMessage(
+            role="system",
+            content={"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}},
+        )
+        assert [block.model_dump(by_alias=True, exclude_unset=True) for block in cached.content] == [
+            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+        ]
+        assert SAPMessage(
+            role="system",
+            content=["plain", {"type": "text", "text": ""}, {"type": "text", "text": "block"}],
+        ).content == "plain\nblock"
+
+        with pytest.raises(ValidationError):
+            SAPMessage(role="system", content=7)
