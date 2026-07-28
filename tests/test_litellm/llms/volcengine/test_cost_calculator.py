@@ -152,6 +152,50 @@ def test_seed_1_8_cached_tokens_use_cache_rate_but_still_select_input_tier() -> 
     assert math.isclose(prompt_cost, expected, rel_tol=1e-12)
 
 
+def test_output_only_usage_uses_first_pricing_tier() -> None:
+    usage = Usage(prompt_tokens=0, completion_tokens=100)
+    _, completion_cost = volcengine_cost_per_token(
+        model="doubao-seed-2-0-lite-260215",
+        usage=usage,
+    )
+
+    model_info = litellm.get_model_info(
+        model="doubao-seed-2-0-lite-260215",
+        custom_llm_provider="volcengine",
+    )
+    first_tier = model_info["tiered_pricing"][0]
+    assert math.isclose(
+        completion_cost,
+        100 * first_tier["output_cost_per_token"],
+        rel_tol=1e-12,
+    )
+
+
+def test_flat_pricing_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    model_info = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 2e-7,
+    }
+    monkeypatch.setattr(
+        "litellm.llms.volcengine.cost_calculator.get_model_info",
+        lambda **_: model_info,
+    )
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=20),
+    )
+
+    prompt_cost, completion_cost = volcengine_cost_per_token(
+        model="flat-priced-model",
+        usage=usage,
+    )
+
+    assert math.isclose(prompt_cost, (80 * 1e-6) + (20 * 2e-7), rel_tol=1e-12)
+    assert math.isclose(completion_cost, 50 * 2e-6, rel_tol=1e-12)
+
+
 def test_top_level_cost_calculator_routes_volcengine_to_tiered_calculator() -> None:
     prompt_cost, completion_cost = litellm.cost_per_token(
         model="doubao-seed-2-0-lite-260215",

@@ -21,9 +21,9 @@ def _cached_prompt_tokens(usage: Usage) -> int:
 
 
 def _select_pricing_tier(
-    tiered_pricing: list[dict] | None,
+    tiered_pricing: list[dict] | None,  # mutable-ok: shared tier helper accepts JSON-backed lists of dictionaries
     prompt_tokens: int,
-) -> dict | None:
+) -> dict | None:  # mutable-ok: returns the JSON-backed tier selected by the shared helper
     if not tiered_pricing:
         return None
 
@@ -35,7 +35,10 @@ def _select_pricing_tier(
     )
 
 
-def _output_rate(tier: dict, completion_tokens: int) -> float:
+def _output_rate(
+    tier: dict,  # mutable-ok: tier_rate accepts a JSON-backed dictionary
+    completion_tokens: int,
+) -> float:
     """Read the output rate, including Seed 1.8's short-output discount."""
     if completion_tokens > 200 and tier.get("output_cost_per_token_above_200_tokens") is not None:
         return tier_rate(tier, "output_cost_per_token_above_200_tokens")
