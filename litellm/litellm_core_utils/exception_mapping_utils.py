@@ -1157,8 +1157,8 @@ def _map_vertex_exception(
             litellm_debug_info=extra_information,
         )
     elif (
-        "The response was blocked." in error_str.lower()
-        or "Output blocked by content filtering policy" in error_str.lower()  # anthropic on vertex ai
+        "the response was blocked." in error_str.lower()
+        or "output blocked by content filtering policy" in error_str.lower()
     ):
         raise ContentPolicyViolationError(
             message=f"{custom_llm_provider.capitalize()}Exception ContentPolicyViolationError - {error_str}",
