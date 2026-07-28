@@ -1648,10 +1648,8 @@ async def generate_key_fn(
             route=KeyManagementRoutes.KEY_GENERATE,
         )
 
-        # Team-admin of the key's team or org-admin of that team's org may assign
-        # logging_exporters on team-owned keys. Personal keys (no team_table) stay
-        # proxy-admin only. Skip the role lookup when the field isn't in the payload
-        # to keep /key/generate cheap for the common case.
+        # logging_exporters on a key is proxy-admin only. Skip the check when the
+        # field isn't in the payload to keep /key/generate cheap for the common case.
         if data.logging_exporters is not None:
             validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
@@ -1832,10 +1830,8 @@ async def generate_service_account_key_fn(
         route=KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
     )
 
-    # Same logging_exporters gate as /key/generate. Without this, a caller
-    # eligible for service-account creation could set metadata.logging_exporters
-    # and route future traces to a destination they aren't allowed to assign
-    # (Veria F3). Skip the lookup unless the field is being written.
+    # Same logging_exporters gate as /key/generate: proxy-admin only. Skip the
+    # check unless the field is being written.
     from litellm.proxy.management_endpoints.logging_exporter_validation import (
         validate_logging_exporter_field,
     )
@@ -2627,24 +2623,10 @@ async def update_key_fn(  # noqa: C901  # single endpoint handling many optional
             prisma_client=prisma_client,
         )
 
-        # logging-exporters validation runs once the key's team is known so a
-        # team-admin or org-admin of that team can attach destinations. The
-        # validator no-ops when the effective value doesn't change; pass the
-        # stored column value so a non-admin cannot clear an admin-assigned one.
+        # logging_exporters is proxy-admin only. The validator no-ops when the
+        # effective value doesn't change; pass the stored column value so a
+        # non-admin cannot clear an admin-assigned one.
         if data.logging_exporters is not None:
-            _key_team_id = getattr(existing_key_row, "team_id", None)
-            _key_team = None
-            if _key_team_id is not None:
-                try:
-                    _key_team = await get_team_object(
-                        team_id=_key_team_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=user_api_key_dict.parent_otel_span,
-                        check_db_only=True,
-                    )
-                except HTTPException:
-                    _key_team = None
             validate_logging_exporter_field(
                 data.logging_exporters,
                 user_api_key_dict,

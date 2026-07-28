@@ -614,7 +614,6 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
             prisma_client=proxy_server.prisma_client,
             user_api_key_cache=proxy_server.user_api_key_cache,
             parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
-            check_db_only=True,
         )
     except HTTPException:
         return None
