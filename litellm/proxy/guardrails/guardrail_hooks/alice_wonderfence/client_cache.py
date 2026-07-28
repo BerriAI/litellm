@@ -12,12 +12,19 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ClientBuildSpec:
-    """How to construct a WonderFenceV2Client on a cache miss."""
+    """How to construct a WonderFenceV2Client on a cache miss.
+
+    ``platform`` is deliberately absent: it is a per-request analysis attribute
+    that belongs on ``AnalysisContext`` (set by ``build_analysis_context``), not
+    on the client constructor. The V2 client signature is
+    ``(api_key, base_url, *, api_timeout, connection_pool_limit)`` with no
+    ``platform`` parameter, so forwarding it here raised ``TypeError`` on every
+    scan.
+    """
 
     client_class: Callable[..., object]
     api_timeout: float
     api_base: str | None
-    platform: str | None
     connection_pool_limit: int | None
 
 
@@ -58,8 +65,6 @@ def get_or_create_client(
     }
     if spec.api_base:
         client_kwargs["base_url"] = spec.api_base
-    if spec.platform:
-        client_kwargs["platform"] = spec.platform
     if spec.connection_pool_limit is not None:
         client_kwargs["connection_pool_limit"] = spec.connection_pool_limit
 

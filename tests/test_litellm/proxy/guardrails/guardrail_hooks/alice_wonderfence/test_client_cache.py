@@ -101,8 +101,13 @@ async def test_get_client_forwards_config_to_v2_client(install_sdk_stub):
     assert captured[0]["api_key"] == "resolved-key"
     assert captured[0]["base_url"] == "https://wf.example.com"
     assert captured[0]["api_timeout"] == 15  # rounded to int
-    assert captured[0]["platform"] == "aws"
     assert captured[0]["connection_pool_limit"] == 42
+    # ``platform`` must NOT be forwarded to the V2 client: its constructor is
+    # (api_key, base_url, *, api_timeout, connection_pool_limit) and has no such
+    # parameter, so forwarding it raised TypeError on every scan. platform is a
+    # per-request analysis attribute that belongs on AnalysisContext instead
+    # (see test_build_analysis_context_sets_platform_on_context).
+    assert "platform" not in captured[0]
 
 
 # ----------------------------- initialization -----------------------------

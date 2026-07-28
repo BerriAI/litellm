@@ -13,11 +13,31 @@ from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing impor
     JOINER,
     RECONSTRUCT_MAX_CHARS,
     apply_response_verdicts,
+    build_analysis_context,
     check_scan_budget,
     function_definition_segments,
     reconstruct,
     tool_definition_segments,
 )
+
+
+# --------------- build_analysis_context: platform belongs on the context ---------------
+
+
+def test_build_analysis_context_sets_platform_on_context():
+    """platform is a per-request analysis attribute and must be set on the
+    AnalysisContext, NOT forwarded to the SDK client constructor (whose
+    signature has no platform param). Pairs with
+    test_get_client_forwards_config_to_v2_client asserting platform is not
+    passed to the client."""
+    captured: dict = {}
+
+    def context_class(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    build_analysis_context({"model": "gpt-4"}, "aws", context_class)
+    assert captured["platform"] == "aws"
 
 
 def _block(detections=None, correlation_ids=None):

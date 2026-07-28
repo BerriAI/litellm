@@ -188,7 +188,6 @@ class WonderFenceGuardrail(CustomGuardrail):
                 client_class=self._WonderFenceV2Client,
                 api_timeout=self.api_timeout,
                 api_base=self.api_base,
-                platform=self.platform,
                 connection_pool_limit=self._connection_pool_limit,
             ),
         )
