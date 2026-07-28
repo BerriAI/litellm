@@ -233,6 +233,42 @@ class TestBaseResponsesAPIStreamingIterator:
             # Verify no completed response was stored (since this is not a completed event)
             assert iterator.completed_response is None
 
+    def test_process_chunk_records_completion_start_time_once(self):
+        """Test _process_chunk records TTFT on the first emitted stream event."""
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.completion_start_time = None
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        mock_delta_event = Mock(spec=OutputTextDeltaEvent)
+        mock_delta_event.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        mock_delta_event.delta = "Hello"
+        mock_config.transform_streaming_response.return_value = mock_delta_event
+
+        iterator = BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5.5",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            litellm_metadata={"model_info": {"id": "model_123"}},
+            custom_llm_provider="openai",
+        )
+
+        test_chunk_data = {
+            "type": "response.output_text.delta",
+            "delta": "Hello",
+            "item_id": "item_123",
+            "output_index": 0,
+            "content_index": 0,
+        }
+
+        iterator._process_chunk(json.dumps(test_chunk_data))
+        iterator._process_chunk(json.dumps(test_chunk_data))
+
+        mock_logging_obj._update_completion_start_time.assert_called_once()
+
     def test_process_chunk_handles_invalid_json(self):
         """
         Test that _process_chunk gracefully handles invalid JSON.

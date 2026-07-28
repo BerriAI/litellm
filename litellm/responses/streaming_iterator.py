@@ -119,6 +119,7 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: Optional[bool] = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._completion_start_time_recorded = False
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -153,6 +154,23 @@ class BaseResponsesAPIStreamingIterator:
                 model=self.model or "",
                 llm_provider=self.custom_llm_provider or "",
             )
+
+    def _mark_completion_start_time(self) -> None:
+        if self._completion_start_time_recorded:
+            return
+        self._completion_start_time_recorded = True
+        completion_start_time = datetime.now()
+        update_completion_start_time = getattr(
+            self.logging_obj, "_update_completion_start_time", None
+        )
+        if callable(update_completion_start_time):
+            update_completion_start_time(completion_start_time)
+            return
+
+        self.logging_obj.completion_start_time = completion_start_time
+        self.logging_obj.model_call_details["completion_start_time"] = (
+            completion_start_time
+        )
 
     def _process_chunk(self, chunk) -> Optional[Any]:
         """Process a single chunk of data from the stream"""
@@ -296,6 +314,7 @@ class BaseResponsesAPIStreamingIterator:
                     else:
                         self._handle_logging_completed_response()
 
+                self._mark_completion_start_time()
                 return openai_responses_api_chunk
 
             return None
