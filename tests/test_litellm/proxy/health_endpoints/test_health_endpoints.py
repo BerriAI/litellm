@@ -2348,10 +2348,21 @@ async def test_health_readiness_returns_200_when_no_db_configured():
     assert result == {"status": "healthy", "db": "Not connected"}
 
 
-def _unreachable_prisma_client():
+def _unreachable_prisma_client(probe_timeout_seconds=5.0):
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock(side_effect=PrismaError("Can't reach database server"))
     mock_prisma.attempt_db_reconnect = AsyncMock(return_value=False)
+    mock_prisma.db_health_probe_timeout_seconds = probe_timeout_seconds
+    return mock_prisma
+
+
+def _slow_prisma_client(delay_seconds, probe_timeout_seconds):
+    async def _slow_health_check(*args, **kwargs):
+        await asyncio.sleep(delay_seconds)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=_slow_health_check)
+    mock_prisma.db_health_probe_timeout_seconds = probe_timeout_seconds
     return mock_prisma
 
 
@@ -2437,66 +2448,9 @@ async def test_health_readiness_bounds_db_probe_when_fallback_enabled():
     kubelet's timeoutSeconds and fail the probe on time whatever status code we
     would have produced. With the fallback enabled the lookup must give up and
     report 'disconnected' rather than wait for the DB to answer.
-    """
-    from fastapi import Response
 
-    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
-
-    async def _slow_health_check(*args, **kwargs):
-        await asyncio.sleep(0.3)
-
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=_slow_health_check)
-
-    _expire_db_health_cache()
-
-    response = Response()
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-        patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": "0.05"}),
-    ):
-        result = await health_readiness(response=response)
-
-    assert response.status_code == 200
-    assert result == {"status": "healthy", "db": "disconnected"}
-
-
-@pytest.mark.parametrize(
-    "raw_timeout, expected",
-    [
-        ("0.5", 0.5),
-        ("0.01", 0.1),
-        ("abc", 2.0),
-        ("", 2.0),
-        ("inf", 2.0),
-        ("-inf", 2.0),
-        ("nan", 2.0),
-    ],
-)
-def test_readiness_db_probe_timeout_rejects_unusable_overrides(raw_timeout, expected):
-    """
-    The override is read per probe on an unauthenticated endpoint, so a typo
-    must not propagate: an unhandled ValueError would 500 the probe and evict
-    the pod, which is the outage this whole path exists to prevent. 'inf' is
-    rejected too because it silently restores the unbounded wait.
-    """
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        _readiness_db_probe_timeout_seconds,
-    )
-
-    with patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": raw_timeout}):
-        assert _readiness_db_probe_timeout_seconds() == expected
-
-
-@pytest.mark.asyncio
-async def test_health_readiness_survives_malformed_probe_timeout_override():
-    """
-    End to end version of the above: a malformed override must still leave the
-    pod in rotation rather than turning the probe into a 500.
+    The budget comes from PrismaClient.db_health_probe_timeout_seconds, the same
+    knob the health watchdog uses, so tightening one tightens both.
     """
     from fastapi import Response
 
@@ -2506,12 +2460,14 @@ async def test_health_readiness_survives_malformed_probe_timeout_override():
 
     response = Response()
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", _unreachable_prisma_client()),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            _slow_prisma_client(delay_seconds=0.3, probe_timeout_seconds=0.05),
+        ),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": True},
         ),
-        patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": "not-a-number"}),
     ):
         result = await health_readiness(response=response)
 
@@ -2530,22 +2486,18 @@ async def test_health_readiness_does_not_bound_db_probe_when_fallback_disabled()
 
     from litellm.proxy.health_endpoints._health_endpoints import health_readiness
 
-    async def _slow_health_check(*args, **kwargs):
-        await asyncio.sleep(0.3)
-
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=_slow_health_check)
-
     _expire_db_health_cache()
 
     response = Response()
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            _slow_prisma_client(delay_seconds=0.3, probe_timeout_seconds=0.05),
+        ),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"allow_requests_on_db_unavailable": False},
         ),
-        patch.dict(os.environ, {"LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS": "0.05"}),
     ):
         result = await health_readiness(response=response)
 

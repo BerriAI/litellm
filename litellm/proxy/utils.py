@@ -4866,6 +4866,18 @@ class PrismaClient:
         finally:
             self._db_reconnect_lock.release()
 
+    @property
+    def db_health_probe_timeout_seconds(self) -> float:
+        """
+        How long a DB liveness probe may run before the caller gives up.
+
+        Set by ``PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS``. Exposed because
+        the readiness endpoint bounds its own ``SELECT 1`` with the same budget:
+        both are asking how long to wait on a liveness check, so an operator who
+        tightens one wants the other tightened too.
+        """
+        return self._db_health_watchdog_probe_timeout_seconds
+
     async def start_db_health_watchdog_task(self) -> None:
         """Start background tasks that monitor DB health:
         - A periodic SELECT 1 probe that triggers reconnect on network/connection failure.

@@ -1,13 +1,22 @@
 import asyncio
 import copy
 import logging
-import math
 import os
 import secrets
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, Literal, Optional, TypedDict, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    Literal,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -43,6 +52,9 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 #### Health ENDPOINTS ####
 
@@ -1315,10 +1327,6 @@ async def _db_health_readiness_check():
         return db_health_cache
 
 
-_DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS = 2.0
-_MIN_READINESS_DB_PROBE_TIMEOUT_SECONDS = 0.1
-
-
 def _readiness_ignores_db_outage() -> bool:
     """
     True when ``general_settings.allow_requests_on_db_unavailable`` is set.
@@ -1331,61 +1339,27 @@ def _readiness_ignores_db_outage() -> bool:
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
-def _readiness_db_probe_timeout_seconds() -> float:
-    """
-    Upper bound on the time the readiness probe may spend on the DB when the
-    worker is allowed to serve without it.
-
-    ``PrismaClient.health_check`` retries under ``backoff`` and its underlying
-    ``query_raw`` has no timeout of its own, so an unreachable DB can block
-    past the kubelet's ``timeoutSeconds`` and fail the probe on time no matter
-    what status code we would have returned.
-
-    A misconfigured override falls back to the default instead of propagating:
-    this runs per probe on an unauthenticated endpoint, so letting a typo raise
-    would 500 the probe and evict the pod, which is the very outage the
-    ``allow_requests_on_db_unavailable`` path exists to prevent. Non-finite
-    values are rejected for the same reason, since ``inf`` silently restores
-    the unbounded wait.
-    """
-    raw = os.getenv("LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS")
-    if raw is None:
-        return _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS
-
-    parsed = _parse_finite_float(raw)
-    if parsed is None:
-        verbose_proxy_logger.warning(
-            "LITELLM_READINESS_DB_PROBE_TIMEOUT_SECONDS=%r is not a finite number, using %ss",
-            raw,
-            _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS,
-        )
-        return _DEFAULT_READINESS_DB_PROBE_TIMEOUT_SECONDS
-
-    return max(_MIN_READINESS_DB_PROBE_TIMEOUT_SECONDS, parsed)
-
-
-def _parse_finite_float(raw: str) -> float | None:
-    try:
-        parsed = float(raw)
-    except ValueError:
-        return None
-    return parsed if math.isfinite(parsed) else None
-
-
-async def _readiness_db_status() -> str:
+async def _readiness_db_status(prisma_client: "PrismaClient") -> str:
     """
     DB status string for the readiness payload, for callers that already know a
     Prisma client is configured.
 
     When the worker may serve without the DB the lookup is bounded, because a
-    probe that answers late is indistinguishable from a probe that answers 503.
-    Reconnection is not lost by giving up early: ``_db_health_watchdog_loop``
-    owns it and runs on its own schedule.
+    probe that answers late is indistinguishable from a probe that answers 503:
+    ``PrismaClient.health_check`` retries under ``backoff`` over a ``query_raw``
+    that has no timeout of its own, so an unreachable DB can outlast the
+    kubelet's ``timeoutSeconds`` whatever status code we would have returned.
+
+    The bound reuses the watchdog's probe timeout because both answer the same
+    question, how long to wait on a DB liveness check, and an operator who
+    tightens one wants the other tightened too. Giving up early costs no
+    recovery either: ``_db_health_watchdog_loop`` owns reconnection and runs on
+    its own schedule.
     """
     if not _readiness_ignores_db_outage():
         return (await _db_health_readiness_check())["status"]
 
-    timeout_seconds = _readiness_db_probe_timeout_seconds()
+    timeout_seconds = prisma_client.db_health_probe_timeout_seconds
     try:
         db_health_status = await asyncio.wait_for(_db_health_readiness_check(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
@@ -1544,7 +1518,7 @@ async def _get_health_readiness_details(
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
-            db_status = await _readiness_db_status()
+            db_status = await _readiness_db_status(prisma_client)
             # A configured DB that is not reachable means the worker cannot
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
@@ -1641,7 +1615,7 @@ async def _resolve_public_readiness_db(response: Response) -> str:
     if prisma_client is None:
         return "Not connected"
 
-    db_status = await _readiness_db_status()
+    db_status = await _readiness_db_status(prisma_client)
     _apply_db_readiness_status(db_status, response)
     return db_status
 
