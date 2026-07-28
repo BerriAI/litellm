@@ -3537,13 +3537,13 @@ async def test_apply_guardrail_does_not_chunk_on_non_size_validation_error():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_too_large_on_single_item_propagates_original_error():
-    """A too-large error on content that is already down to a single item
-    cannot be bisected further; the original error must propagate rather than
-    looping or crashing."""
+async def test_apply_guardrail_too_large_on_unsplittable_text_propagates_original_error():
+    """A too-large error on content that has been bisected down to text too
+    short to split further (< 2 characters) must propagate the original error
+    rather than looping or crashing."""
     guardrail = _bedrock_guardrail_for_chunk_tests()
 
-    messages = [{"role": "user", "content": "one giant single block of text"}]
+    messages = [{"role": "user", "content": "a"}]
 
     mock_credentials = MagicMock()
     mock_credentials.access_key = "k"
@@ -3566,6 +3566,46 @@ async def test_apply_guardrail_too_large_on_single_item_propagates_original_erro
 
     assert mock_post.await_count == 1
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_too_large_on_single_item_splits_by_text_and_succeeds():
+    """A too-large error on content that is already down to a single content
+    item must be bisected by that item's own text (not abandoned), so an
+    oversized single message can still be scanned successfully in halves."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [{"role": "user", "content": "one giant single block of text"}]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    call_count = 0
+
+    async def _post_side_effect(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _too_large_validation_httpx_response()
+        return _passing_bedrock_httpx_response(f"half-{call_count}")
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        response = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    assert mock_post.await_count == 3
+    assert response.get("action") == "NONE"
 
 
 @pytest.mark.asyncio
@@ -3619,3 +3659,184 @@ async def test_apply_guardrail_chunk_retries_after_throttling_then_succeeds():
     mock_sleep.assert_awaited()
     output_texts = [o.get("text") for o in result.get("outputs") or []]
     assert output_texts == ["chunk-1", "chunk-2"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_chunking_logs_exactly_once_as_success():
+    """A too-large 400 that is recovered by chunking must not leave behind a
+    'guardrail_failed_to_respond' telemetry entry for the initial oversized
+    attempt: the whole logical request (1 too-large attempt + 2 chunk
+    attempts here) must produce exactly one standard-logging entry, and it
+    must reflect the eventual success, not the transient too-large failure."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [
+        {"role": "user", "content": "chunk one text"},
+        {"role": "user", "content": "chunk two text"},
+    ]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    call_count = 0
+
+    async def _post_side_effect(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _too_large_validation_httpx_response()
+        if call_count == 2:
+            return _passing_bedrock_httpx_response("chunk-1")
+        return _passing_bedrock_httpx_response("chunk-2")
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    assert call_count == 3
+    mock_log.assert_called_once()
+    assert mock_log.call_args.kwargs["guardrail_status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_unrecoverable_failure_logs_exactly_once_as_failed():
+    """A too-large error that cannot be recovered (chunking disabled by
+    contextual grounding) must still log exactly once, as a failure -- not be
+    silently dropped by the chunking telemetry consolidation."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "grounding_source", "text": "reference source text"}],
+        },
+        {"role": "user", "content": "what does the source say?"},
+    ]
+    model_response = ModelResponse()
+    model_response.choices = [
+        litellm.Choices(message=litellm.Message(content="a grounded answer", role="assistant"))
+    ]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
+        mock_post.return_value = _too_large_validation_httpx_response()
+
+        with pytest.raises(HTTPException):
+            await guardrail.make_bedrock_api_request(
+                source="OUTPUT",
+                messages=messages,
+                response=model_response,
+                request_data={"model": "bedrock-nova-micro"},
+            )
+
+    mock_post.assert_awaited_once()
+    mock_log.assert_called_once()
+    assert mock_log.call_args.kwargs["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_chunk_merge_preserves_masking_position():
+    """An earlier chunk that comes back clean (empty `outputs`) must not
+    shift a later chunk's masked text onto the wrong message. Regression for:
+    flattening outputs without positional metadata let a later chunk's PII
+    redaction get applied to the first message while the actual PII-bearing
+    message (in a later chunk) was forwarded unmasked."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=False,
+        mask_request_content=True,
+    )
+
+    request_data = {
+        "model": "bedrock-nova-micro",
+        "messages": [
+            {"role": "user", "content": "clean chunk with nothing to mask"},
+            {"role": "user", "content": "chunk with PII: John Doe"},
+        ],
+    }
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    call_count = 0
+
+    def _clean_httpx_response() -> MagicMock:
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"action": "NONE", "assessments": []}
+        return response
+
+    def _masked_httpx_response() -> MagicMock:
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": "chunk with PII: [NAME]"}],
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [{"type": "NAME", "match": "John Doe", "action": "ANONYMIZED"}]
+                    }
+                }
+            ],
+        }
+        return response
+
+    async def _post_side_effect(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _too_large_validation_httpx_response()
+        if call_count == 2:
+            return _clean_httpx_response()
+        return _masked_httpx_response()
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data=request_data,
+            call_type="acompletion",
+        )
+
+    assert call_count == 3
+    updated_messages = request_data["messages"]
+    assert updated_messages[0]["content"] == "clean chunk with nothing to mask"
+    assert updated_messages[1]["content"] == "chunk with PII: [NAME]"
