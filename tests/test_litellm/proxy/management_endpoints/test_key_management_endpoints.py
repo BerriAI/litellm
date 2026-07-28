@@ -11592,9 +11592,11 @@ class TestAllowedRoutesCallerPermission:
 
     @pytest.mark.asyncio
     async def test_non_admin_update_key_explicit_empty_allowed_routes_rejected(self):
-        """`update_key_fn` rejects a non-admin when `allowed_routes` is
-        present as `[]` in the request body. The value matches the model
-        default but `model_fields_set` distinguishes the two."""
+        """`update_key_fn` rejects a non-admin sending `allowed_routes: []`
+        when the key's existing `allowed_routes` was custom-restricted by an
+        admin (LIT-4139: clearing must not escape the sandbox). The value
+        matches the model default but `model_fields_set` distinguishes the
+        two."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             update_key_fn,
         )
@@ -11617,7 +11619,7 @@ class TestAllowedRoutesCallerPermission:
             patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
                 new_callable=AsyncMock,
-                return_value=MagicMock(),
+                return_value=MagicMock(allowed_routes=["/chat/completions"]),
             ),
         ):
             with pytest.raises(ProxyException) as exc_info:
@@ -11632,8 +11634,9 @@ class TestAllowedRoutesCallerPermission:
 
     @pytest.mark.asyncio
     async def test_non_admin_update_key_explicit_null_allowed_routes_rejected(self):
-        """`update_key_fn` rejects a non-admin when `allowed_routes` is
-        present as `null` in the request body."""
+        """`update_key_fn` rejects a non-admin sending `allowed_routes: null`
+        when the key's existing `allowed_routes` was custom-restricted by an
+        admin."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             update_key_fn,
         )
@@ -11656,7 +11659,7 @@ class TestAllowedRoutesCallerPermission:
             patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
                 new_callable=AsyncMock,
-                return_value=MagicMock(),
+                return_value=MagicMock(allowed_routes=["/chat/completions"]),
             ),
         ):
             with pytest.raises(ProxyException) as exc_info:
@@ -11832,6 +11835,334 @@ class TestAllowedRoutesCallerPermission:
             )
         assert exc_info.value.status_code == 403
         assert "allowed_routes" in str(exc_info.value.detail)
+
+    def test_helper_allows_preset_to_full_access_transition_for_non_admin(self):
+        """LIT-4891 regression: a non-admin key owner switching key_type from
+        "AI APIs" to "Full access" in the Admin UI sends `allowed_routes: []`
+        (the UI clears the field) to `/key/update`. When the key's existing
+        `allowed_routes` is itself a safe preset, the explicit clear is a
+        preset transition, not an escape from an admin sandbox, and must
+        pass. Covers the `[]` and `null` request shapes."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_allowed_routes_caller_permission,
+        )
+
+        for requested in ([], None):
+            _check_allowed_routes_caller_permission(
+                allowed_routes=requested,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                allowed_routes_was_provided=True,
+                existing_allowed_routes=["llm_api_routes"],
+            )
+
+    def test_helper_allows_full_access_to_preset_transition_for_non_admin(self):
+        """The reverse direction: an unrestricted (full access) key being
+        narrowed to a safe preset bucket by its owner must pass."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_allowed_routes_caller_permission,
+        )
+
+        _check_allowed_routes_caller_permission(
+            allowed_routes=["llm_api_routes"],
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="internal-user-123",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+            allowed_routes_was_provided=True,
+            existing_allowed_routes=[],
+        )
+
+    def test_helper_rejects_transition_away_from_admin_custom_routes(self):
+        """LIT-4139 invariant preserved: when the existing `allowed_routes`
+        contains anything outside the safe presets (an admin-set custom
+        sandbox), a non-admin may neither clear it nor swap it for a preset."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_allowed_routes_caller_permission,
+        )
+
+        for requested in ([], ["llm_api_routes"]):
+            with pytest.raises(HTTPException) as exc_info:
+                _check_allowed_routes_caller_permission(
+                    allowed_routes=requested,
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_id="internal-user-123",
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                    ),
+                    allowed_routes_was_provided=True,
+                    existing_allowed_routes=["/chat/completions"],
+                )
+            assert exc_info.value.status_code == 403
+
+    def test_helper_rejects_unsafe_preset_transition_target(self):
+        """A transition target outside the safe presets (management_routes)
+        stays admin-only even on an unrestricted key, matching the
+        `/key/generate` preset rules."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_allowed_routes_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_allowed_routes_caller_permission(
+                allowed_routes=["management_routes"],
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                allowed_routes_was_provided=True,
+                existing_allowed_routes=[],
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_helper_transition_requires_existing_routes_param(self):
+        """Call sites that do not pass `existing_allowed_routes` (generate,
+        service-account generate, regenerate) keep the strict LIT-4139
+        behavior: an explicit `[]` from a non-admin is rejected."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_allowed_routes_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_allowed_routes_caller_permission(
+                allowed_routes=[],
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                allowed_routes_was_provided=True,
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_helper_rejects_clearing_management_preset(self):
+        """`management_routes` is outside the safe presets on the EXISTING
+        side too: a non-admin cannot clear or downgrade a management-type
+        key, matching the create-path rule that management keys are
+        admin-granted."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_allowed_routes_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_allowed_routes_caller_permission(
+                allowed_routes=[],
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                allowed_routes_was_provided=True,
+                existing_allowed_routes=["management_routes"],
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_helper_rejects_unhashable_route_elements_with_403(self):
+        """`allowed_routes` elements are untyped in the request model, so a
+        non-admin can send unhashable garbage like `[{"x": 1}]`. The
+        transition branch must answer 403, not leak a TypeError (500) from
+        the frozenset membership check. Covers garbage on both sides."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _check_allowed_routes_caller_permission,
+        )
+
+        for requested, existing in (([{"x": 1}], []), ([], [{"x": 1}])):
+            with pytest.raises(HTTPException) as exc_info:
+                _check_allowed_routes_caller_permission(
+                    allowed_routes=requested,
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_id="internal-user-123",
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                    ),
+                    allowed_routes_was_provided=True,
+                    existing_allowed_routes=existing,
+                )
+            assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_non_admin_update_key_non_list_existing_routes_stays_strict(self):
+        """If the existing key row's `allowed_routes` is not a list (cannot
+        happen with the non-nullable String[] column, but pinned so the
+        permission fallback fails strict rather than open), the non-admin
+        explicit `[]` write keeps the LIT-4139 403."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            update_key_fn,
+        )
+
+        data = UpdateKeyRequest(key="sk-test", allowed_routes=[])
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_custom_key_update", None),
+            patch("litellm.proxy.proxy_server.llm_router", None),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
+                new_callable=AsyncMock,
+                return_value=MagicMock(allowed_routes="not-a-list"),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await update_key_fn(
+                    request=MagicMock(),
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                )
+        assert str(exc_info.value.code) == "403"
+        assert "allowed_routes" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_prepare_key_update_data_coerces_explicit_null_allowed_routes(self):
+        """An explicit `allowed_routes: null` means "clear the restriction".
+        The DB column is a non-nullable String[], so the update payload must
+        carry `[]`, not None."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            prepare_key_update_data,
+        )
+
+        data = UpdateKeyRequest(key="sk-test", allowed_routes=None)
+        assert "allowed_routes" in data.model_fields_set
+        data_json = await prepare_key_update_data(
+            data=data,
+            existing_key_row=MagicMock(team_id=None, metadata={}),
+        )
+        assert data_json["allowed_routes"] == []
+
+    @pytest.mark.asyncio
+    async def test_non_creator_owner_update_key_still_requires_admin_access(self, monkeypatch):
+        """The preset-transition carve-out is a field-level gate only; it must
+        not bypass the cross-key ownership rules. A non-admin who OWNS a key
+        but did not create it (admin-created personal key) still gets the
+        admin-access 403 on `/key/update`, exactly as before this fix."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            update_key_fn,
+        )
+
+        test_hashed_token = "b1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+        mock_existing_key = MagicMock()
+        mock_existing_key.token = test_hashed_token
+        mock_existing_key.user_id = "internal_user"
+        mock_existing_key.created_by = "admin-user"
+        mock_existing_key.team_id = None
+        mock_existing_key.max_budget = None
+        mock_existing_key.metadata = {}
+        mock_existing_key.allowed_routes = ["llm_api_routes"]
+
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+            return_value=MagicMock(team_id=None)
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
+            new_callable=AsyncMock,
+            return_value=mock_existing_key,
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await update_key_fn(
+                    request=MagicMock(query_params={}),
+                    data=UpdateKeyRequest(key=test_hashed_token, allowed_routes=[]),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                        api_key="sk-internal",
+                        user_id="internal_user",
+                    ),
+                    litellm_changed_by=None,
+                )
+        assert str(exc_info.value.code) == "403"
+        assert "team admins" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_non_admin_owner_update_key_preset_to_full_access_succeeds(self, monkeypatch):
+        """LIT-4891 end-to-end shape: `update_key_fn` succeeds for a non-admin
+        key owner sending `allowed_routes: []` on their own key whose existing
+        `allowed_routes` is the `llm_api_routes` preset (the exact payload the
+        Admin UI sends when switching Key Type to "Full access")."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            update_key_fn,
+        )
+
+        test_hashed_token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+
+        mock_existing_key = MagicMock()
+        mock_existing_key.token = test_hashed_token
+        mock_existing_key.user_id = "internal_user"
+        mock_existing_key.created_by = "internal_user"
+        mock_existing_key.team_id = None
+        mock_existing_key.project_id = None
+        mock_existing_key.max_budget = None
+        mock_existing_key.key_alias = None
+        mock_existing_key.models = []
+        mock_existing_key.metadata = {}
+        mock_existing_key.allowed_routes = ["llm_api_routes"]
+        mock_existing_key.model_dump.return_value = {
+            "token": test_hashed_token,
+            "user_id": "internal_user",
+            "team_id": None,
+        }
+
+        mock_prisma_client = AsyncMock()
+        mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+        mock_prisma_client.update_data = AsyncMock(return_value=MagicMock(token=test_hashed_token))
+        mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=mock_existing_key)
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+        monkeypatch.setattr("litellm.store_audit_logs", False)
+
+        async def _noop(**kwargs):
+            pass
+
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            _noop,
+        )
+
+        mock_request = MagicMock()
+        mock_request.query_params = {}
+        data = UpdateKeyRequest(key=test_hashed_token, allowed_routes=[])
+        assert "allowed_routes" in data.model_fields_set
+
+        result = await update_key_fn(
+            request=mock_request,
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+        )
+
+        assert result is not None
+        update_payload = mock_prisma_client.update_data.call_args.kwargs["data"]
+        assert update_payload["allowed_routes"] == []
 
 
 def test_jinja_prompt_manager_is_sandboxed():

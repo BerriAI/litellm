@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
@@ -540,10 +540,12 @@ def _check_allowed_routes_caller_permission(
     *,
     allowed_routes_was_provided: bool = False,
     allow_safe_presets: bool = False,
+    existing_allowed_routes: Sequence[str] | None = None,
 ) -> None:
     """
     Require PROXY_ADMIN when `allowed_routes` is present in the request body,
-    unless the caller went through the `key_type` preset flow.
+    unless the caller went through the `key_type` preset flow or is moving the
+    key between safe preset buckets.
 
     Raw-body call sites pass
     `allowed_routes_was_provided="allowed_routes" in data.model_fields_set` so a
@@ -555,6 +557,20 @@ def _check_allowed_routes_caller_permission(
     body, so `allowed_routes_was_provided` stays False and the safe-preset
     carve-out below accepts any list of tokens in
     `_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS`.
+
+    `/key/update` additionally passes `existing_allowed_routes` (the key's
+    current DB value): when both the requested value and the existing value
+    consist solely of safe preset tokens (either side may also be empty,
+    meaning unrestricted), the write is a key_type preset transition — e.g.
+    the Admin UI switching a key from "AI APIs" to "Full access" sends
+    `allowed_routes: []` — and this field-level gate lets it through. WHO may
+    perform the transition is enforced by the caller's downstream checks
+    (`can_team_member_execute_key_management_endpoint` and the
+    creator/ownership rules in `_validate_update_key_data`): the key's
+    creator-owner, a team admin, or a team member holding the `/key/update`
+    grant. A key whose existing value contains anything outside the safe
+    presets was route-restricted by an admin, so every non-admin write on it,
+    including clearing, stays rejected regardless of ownership.
     """
     if not allowed_routes_was_provided and not allowed_routes:
         return
@@ -564,6 +580,12 @@ def _check_allowed_routes_caller_permission(
         allow_safe_presets
         and allowed_routes
         and all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes)
+    ):
+        return
+    if (
+        existing_allowed_routes is not None
+        and all(isinstance(r, str) and r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in (allowed_routes or []))
+        and all(isinstance(r, str) and r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in existing_allowed_routes)
     ):
         return
     raise HTTPException(
@@ -1888,6 +1910,9 @@ async def prepare_key_update_data(
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
+    if "allowed_routes" in data_json and data_json["allowed_routes"] is None:
+        # The allowed_routes DB column is a non-nullable String[].
+        data_json["allowed_routes"] = []
     if (
         data.metadata is not None
         and data.metadata.get("service_account_id") is not None
@@ -2268,10 +2293,12 @@ async def _validate_update_key_data(
 
     _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
+    _existing_allowed_routes = getattr(existing_key_row, "allowed_routes", None)
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
         allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
+        existing_allowed_routes=(_existing_allowed_routes if isinstance(_existing_allowed_routes, list) else None),
     )
     _check_passthrough_routes_caller_permission(
         data=data,
