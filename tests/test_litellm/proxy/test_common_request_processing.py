@@ -2375,7 +2375,7 @@ class TestDDSpanTaggerTagRequest:
                 requested_model=None,
             )
 
-        mock_set_tag.assert_called_once_with("litellm_user_email", "user@example.com")
+        mock_set_tag.assert_called_once_with("litellm.user_email", "user@example.com")
 
     def test_no_user_email_tag_when_absent(self):
         """No user email tag when the authenticated identity has no email."""
@@ -2387,7 +2387,7 @@ class TestDDSpanTaggerTagRequest:
                 requested_model="gpt-4o",
             )
 
-        assert all(call.args[0] != "litellm_user_email" for call in mock_set_tag.call_args_list)
+        assert all(call.args[0] != "litellm.user_email" for call in mock_set_tag.call_args_list)
 
 
 class TestHasAttributeErrorInChain:
