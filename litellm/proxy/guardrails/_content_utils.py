@@ -32,7 +32,26 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
-TEXT_PART_TYPES: FrozenSet[str] = frozenset({"text", "input_text", "output_text"})
+TEXT_PART_TYPES: frozenset[str] = frozenset({"text", "input_text", "output_text", "summary_text"})
+
+
+def _iter_summary_texts(summary: Any) -> Iterator[str]:
+    """Yield text fragments from a ``reasoning`` item's ``summary`` list —
+    ``summary_text`` parts and bare strings; anything else is skipped."""
+    if not isinstance(summary, list):
+        return
+    for summary_part in summary:
+        if isinstance(summary_part, str):
+            if summary_part:
+                yield summary_part
+            continue
+        if not isinstance(summary_part, dict):
+            continue
+        if summary_part.get("type") in TEXT_PART_TYPES:
+            summary_text = summary_part.get("text")
+            if isinstance(summary_text, str) and summary_text:
+                yield summary_text
+
 
 # Responses-API item types whose ``output`` field carries user/tool text
 # that guardrails should inspect.  ``function_call_output`` is the
@@ -43,7 +62,12 @@ _OUTPUT_ITEM_TYPES: frozenset[str] = frozenset({"function_call_output", "custom_
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
-    multimodal list). Non-text parts (images, audio, …) are skipped."""
+    multimodal list). Non-text parts (images, audio, …) are skipped.
+
+    Also descends into ``reasoning`` items whose ``summary`` list may
+    contain ``summary_text`` parts carrying chain-of-thought text that
+    guardrails need to inspect/redact.
+    """
     if isinstance(content, str):
         if content:
             yield content
@@ -61,6 +85,10 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                 text = part.get("text")
                 if isinstance(text, str) and text:
                     yield text
+            elif part.get("type") == "reasoning":
+                # Reasoning items carry a ``summary`` list of
+                # ``{"type": "summary_text", "text": "..."}`` parts.
+                yield from _iter_summary_texts(part.get("summary"))
 
 
 def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
@@ -80,6 +108,13 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
             elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                 messages.append({"role": item.get("role") or "tool", "content": item["output"]})
+            elif item.get("type") == "reasoning":
+                # Reasoning items carry chain-of-thought text in their
+                # ``summary`` list.  Synthesise a message so guardrails
+                # can inspect/redact that text.
+                summary = item.get("summary")
+                if isinstance(summary, list):
+                    messages.append({"role": "assistant", "content": summary})
     return messages
 
 
@@ -112,6 +147,25 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
     """
     visited = 0
 
+    def _rewrite_summary(summary: list[Any]) -> list[Any]:
+        nonlocal visited
+        new_parts: List[Any] = []
+        for summary_part in summary:
+            if isinstance(summary_part, str) and summary_part:
+                visited += 1
+                new_parts.append(visit(summary_part))
+            elif (
+                isinstance(summary_part, dict)
+                and summary_part.get("type") in TEXT_PART_TYPES
+                and isinstance(summary_part.get("text"), str)
+                and summary_part["text"]
+            ):
+                visited += 1
+                new_parts.append({**summary_part, "text": visit(summary_part["text"])})
+            else:
+                new_parts.append(summary_part)
+        return new_parts
+
     def _rewrite_content(content: Any) -> Any:
         nonlocal visited
         if isinstance(content, str):
@@ -133,6 +187,10 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                 ):
                     visited += 1
                     new_parts.append({**part, "text": visit(part["text"])})
+                elif (
+                    isinstance(part, dict) and part.get("type") == "reasoning" and isinstance(part.get("summary"), list)
+                ):
+                    new_parts.append({**part, "summary": _rewrite_summary(part["summary"])})
                 else:
                     new_parts.append(part)
             return new_parts
@@ -165,6 +223,10 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                     item["content"] = _rewrite_content(item["content"])
                 elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                     item["output"] = _rewrite_content(item["output"])
+                elif item.get("type") == "reasoning":
+                    summary = item.get("summary")
+                    if isinstance(summary, list):
+                        item["summary"] = _rewrite_content(summary)
         return visited
 
     return visited
