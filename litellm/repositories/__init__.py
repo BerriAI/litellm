@@ -10,6 +10,9 @@ from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.password_reset_token_repository import (
+    PasswordResetTokenRepository,
+)
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -122,6 +125,7 @@ __all__ = [
     "ModelRepository",
     "ObjectPermissionRepository",
     "OrganizationRepository",
+    "PasswordResetTokenRepository",
     "ProjectRepository",
     "TeamRepository",
     "UserRepository",

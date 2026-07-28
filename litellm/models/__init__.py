@@ -26,6 +26,7 @@ from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.organization_membership import LiteLLM_OrganizationMembershipTable
+from litellm.models.password_reset_token import LiteLLM_PasswordResetToken
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.skills import LiteLLM_SkillsTable
 from litellm.models.spend_logs import LiteLLM_ErrorLogs, LiteLLM_SpendLogs
@@ -54,6 +55,7 @@ __all__ = [
     "LiteLLM_ObjectPermissionTable",
     "LiteLLM_OrganizationTable",
     "LiteLLM_OrganizationMembershipTable",
+    "LiteLLM_PasswordResetToken",
     "LiteLLM_ProjectTable",
     "LiteLLM_SkillsTable",
     "LiteLLM_ErrorLogs",
