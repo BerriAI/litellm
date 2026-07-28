@@ -163,3 +163,79 @@ async def test_validate_reset_token_invalid_returns_generic_400(mocker):
 
     assert response.status_code == 400
     assert response.json() == {"detail": {"error": "This link is invalid or has expired."}}
+
+
+def _install_tx_context(mock_prisma):
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=mock_prisma.db)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_prisma.db.tx = MagicMock(return_value=tx_cm)
+
+
+@pytest.mark.asyncio
+async def test_reset_password_happy_path(mocker):
+    mock_prisma = MagicMock()
+    now = datetime.now(timezone.utc)
+    token_row = MagicMock()
+    token_row.dict.return_value = {
+        "token_hash": hash_token("raw-token"),
+        "user_id": "user-1",
+        "requested_ip": None,
+        "created_at": now,
+        "expires_at": now.replace(year=now.year + 1),
+        "used_at": None,
+    }
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=token_row)
+    mock_prisma.db.litellm_passwordresettoken.update_many = AsyncMock(return_value=1)
+    mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=_mock_user())
+    _install_tx_context(mock_prisma)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    response = client.post(
+        "/user/reset_password", json={"token": "raw-token", "new_password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 200
+    mock_prisma.db.litellm_usertable.update.assert_awaited_once()
+    _, update_kwargs = mock_prisma.db.litellm_usertable.update.call_args
+    assert update_kwargs["data"]["password"] != "correct horse battery staple"
+
+
+@pytest.mark.asyncio
+async def test_reset_password_second_claim_fails(mocker):
+    """A token already marked used_at fails the atomic update_many (updated_count == 0)."""
+    mock_prisma = MagicMock()
+    now = datetime.now(timezone.utc)
+    token_row = MagicMock()
+    token_row.dict.return_value = {
+        "token_hash": hash_token("raw-token"),
+        "user_id": "user-1",
+        "requested_ip": None,
+        "created_at": now,
+        "expires_at": now.replace(year=now.year + 1),
+        "used_at": None,
+    }
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=token_row)
+    mock_prisma.db.litellm_passwordresettoken.update_many = AsyncMock(return_value=0)
+    _install_tx_context(mock_prisma)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    response = client.post(
+        "/user/reset_password", json={"token": "raw-token", "new_password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 400
+    mock_prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_password_expired_token_rejected(mocker):
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    response = client.post(
+        "/user/reset_password", json={"token": "expired-token", "new_password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 400

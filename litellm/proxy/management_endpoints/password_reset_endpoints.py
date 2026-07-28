@@ -122,3 +122,39 @@ async def validate_reset_password_token(token: str):
         raise HTTPException(status_code=400, detail={"error": _GENERIC_INVALID_TOKEN_MESSAGE})
 
     return {"user_email": user_obj.user_email}
+
+
+@router.post("/user/reset_password", include_in_schema=False)
+async def reset_password(data: ResetPasswordRequest):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
+
+    token_hash = hash_token(data.token)
+    now = litellm.utils.get_utc_datetime()
+
+    token_row = await PasswordResetTokenRepository(prisma_client).find_valid_by_hash(token_hash=token_hash, now=now)
+    if token_row is None:
+        raise HTTPException(status_code=400, detail={"error": _GENERIC_INVALID_TOKEN_MESSAGE})
+
+    hashed_pw = hash_password(data.new_password)
+
+    async with prisma_client.db.tx() as tx:
+        updated_count = await tx.litellm_passwordresettoken.update_many(
+            where={"token_hash": token_hash, "used_at": None},
+            data={"used_at": now},
+        )
+        if updated_count == 0:
+            raise HTTPException(status_code=400, detail={"error": _GENERIC_INVALID_TOKEN_MESSAGE})
+
+        user_obj = await tx.litellm_usertable.update(where={"user_id": token_row.user_id}, data={"password": hashed_pw})
+        if user_obj is None:
+            raise HTTPException(status_code=400, detail={"error": _GENERIC_INVALID_TOKEN_MESSAGE})
+
+        await tx.litellm_passwordresettoken.update_many(
+            where={"user_id": token_row.user_id, "used_at": None},
+            data={"used_at": now},
+        )
+
+    return {"message": "Password reset successfully. Please log in with your new password."}
