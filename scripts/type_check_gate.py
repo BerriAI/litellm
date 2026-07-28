@@ -305,6 +305,37 @@ def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None
     )
 
 
+def tightened_budget(
+    budget: Mapping[str, Mapping[str, int]],
+    current: Mapping[str, int],
+    slack: int,
+) -> dict[str, dict[str, int]]:
+    return {
+        code: {"limit": min(spec["limit"], current.get(code, 0) + slack)}
+        for code, spec in sorted(budget.items())
+    }
+
+
+def cmd_tighten(
+    current: Mapping[str, int], slack: int, budget_path: Path = BUDGET_PATH
+) -> None:
+    budget = json.loads(budget_path.read_text())
+    if is_vacuous_run(current, budget):
+        print(
+            f"FAIL: basedpyright produced no errors, but {budget_path.name} allows "
+            f"a nonzero total. The type checker almost certainly crashed or emitted "
+            f"nothing; refusing to tighten every limit down to the slack floor."
+        )
+        raise SystemExit(1)
+    updated = tightened_budget(budget, current, slack)
+    budget_path.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
+    removed = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
+    print(
+        f"Tightened basedpyright limits to head counts plus {slack} slack, "
+        f"removing {removed} errors of stale headroom across {len(updated)} rules"
+    )
+
+
 def cmd_check(base_ref: str) -> None:
     budget = json.loads(BUDGET_PATH.read_text())
     head = count_basedpyright(sys.stdin.read())
@@ -353,10 +384,17 @@ def cmd_check(base_ref: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
-    parser.add_argument("--update", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--update", action="store_true")
+    mode.add_argument("--tighten", action="store_true")
+    parser.add_argument("--slack", type=int, default=50)
     args = parser.parse_args()
+    if args.slack < 0:
+        parser.error("--slack must be >= 0")
     if args.update:
         cmd_update(count_basedpyright(sys.stdin.read()), args.base)
+    elif args.tighten:
+        cmd_tighten(count_basedpyright(sys.stdin.read()), args.slack)
     else:
         cmd_check(args.base)
 

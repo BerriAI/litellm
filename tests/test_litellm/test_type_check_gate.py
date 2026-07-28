@@ -287,3 +287,51 @@ def test_an_empty_base_pass_is_never_cached(tmp_path):
     assert gate.base_counts_cached("abc123", cache_dir=tmp_path, compute=crashed) == {}
     assert calls == ["abc123", "abc123"]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_tighten_collapses_stale_headroom_to_current_plus_slack():
+    budget = {"reportAny": {"limit": 34906}}
+    assert gate.tightened_budget(budget, {"reportAny": 24427}, 50) == {
+        "reportAny": {"limit": 24477}
+    }
+
+
+def test_tighten_never_raises_a_limit():
+    budget = {"reportAny": {"limit": 100}}
+    assert gate.tightened_budget(budget, {"reportAny": 90}, 50) == {
+        "reportAny": {"limit": 100}
+    }
+
+
+def test_tighten_floors_a_cleared_rule_at_the_slack():
+    budget = {"reportAny": {"limit": 100}, "reportCall": {"limit": 8}}
+    assert gate.tightened_budget(budget, {"reportAny": 0}, 50) == {
+        "reportAny": {"limit": 50},
+        "reportCall": {"limit": 8},
+    }
+
+
+def test_tighten_does_not_adopt_rules_outside_the_budget():
+    assert gate.tightened_budget({}, {"brand-new": 7}, 50) == {}
+
+
+def test_tighten_writes_only_lowered_limits(tmp_path):
+    budget_path = tmp_path / "budget.json"
+    budget_path.write_text(
+        json.dumps({"reportAny": {"limit": 100}, "reportCall": {"limit": 3}})
+    )
+    gate.cmd_tighten({"reportAny": 20, "reportCall": 5}, 10, budget_path=budget_path)
+    assert json.loads(budget_path.read_text()) == {
+        "reportAny": {"limit": 30},
+        "reportCall": {"limit": 3},
+    }
+
+
+def test_tighten_refuses_a_vacuous_run(tmp_path):
+    import pytest
+
+    budget_path = tmp_path / "budget.json"
+    budget_path.write_text(json.dumps({"reportAny": {"limit": 100}}))
+    with pytest.raises(SystemExit):
+        gate.cmd_tighten({}, 50, budget_path=budget_path)
+    assert json.loads(budget_path.read_text()) == {"reportAny": {"limit": 100}}
