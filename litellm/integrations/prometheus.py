@@ -69,6 +69,15 @@ else:
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
 
+# Tiers a caller may name in a request, across the providers that accept the
+# parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock and
+# Groq (subsets of those), Anthropic ("auto", "standard_only") and Vertex, which
+# maps "default" to "standard". Used to bound the caller-controlled fallback in
+# ``get_service_tier_from_standard_logging_payload``.
+KNOWN_REQUEST_SERVICE_TIERS = frozenset(
+    {"auto", "batch", "default", "flex", "priority", "scale", "standard", "standard_only"}
+)
+
 
 def _get_budget_metrics_per_request_timeout() -> float:
     raw = os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT")
@@ -4109,19 +4118,32 @@ def get_service_tier_from_standard_logging_payload(
     so latency and spend stay segmentable when the request said ``auto`` and the
     provider picked the concrete tier. Providers report the served tier either at
     the top level of the response (OpenAI, Bedrock, Groq) or on the usage object
-    (Anthropic); the requested value from the request params is the last resort,
-    which is what covers streaming responses that carry no served tier.
+    (Anthropic).
+
+    Streaming responses carry no served tier, so the requested tier is the
+    fallback. That value is caller-controlled and survives param mapping even
+    where the provider then ignores it (Bedrock and Groq accept the request and
+    drop an unrecognized tier), so it is only labelled when it names a known
+    tier; otherwise one caller could mint a Prometheus series per string. Values
+    the provider itself reports are not caller-controlled and stay unrestricted,
+    so a tier a provider adds later is still labelled correctly.
     """
     response = standard_logging_payload.get("response")
     usage_object = standard_logging_payload.get("metadata", {}).get("usage_object")
-    model_parameters = standard_logging_payload.get("model_parameters")
 
-    candidates: tuple[object, ...] = (
+    served_candidates: tuple[object, ...] = (
         response.get("service_tier") if isinstance(response, dict) else None,
         usage_object.get("service_tier") if isinstance(usage_object, dict) else None,
-        model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None,
     )
-    return next((tier for tier in candidates if isinstance(tier, str) and tier), None)
+    served_tier = next((tier for tier in served_candidates if isinstance(tier, str) and tier), None)
+    if served_tier is not None:
+        return served_tier
+
+    model_parameters = standard_logging_payload.get("model_parameters")
+    requested_tier = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
+    if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
+        return requested_tier
+    return None
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(

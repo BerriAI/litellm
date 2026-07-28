@@ -14,6 +14,7 @@ import datetime
 import pytest
 
 from litellm.integrations.prometheus import (
+    KNOWN_REQUEST_SERVICE_TIERS,
     PrometheusLogger,
     get_service_tier_from_standard_logging_payload,
 )
@@ -132,6 +133,37 @@ def test_requested_tier_used_when_no_served_tier():
     )
 
     assert get_service_tier_from_standard_logging_payload(payload) == "flex"
+
+
+def test_unrecognized_requested_tier_is_not_labelled():
+    """
+    A caller-supplied tier survives param mapping even where the provider then
+    ignores it (Bedrock and Groq drop an unrecognized tier and still answer), so
+    labelling it verbatim would let one caller mint a series per string.
+    """
+    payload = _standard_logging_payload(model_parameters={"service_tier": "attacker-controlled-a1b2c3"})
+
+    assert get_service_tier_from_standard_logging_payload(payload) is None
+
+
+def test_unrecognized_served_tier_is_labelled():
+    """
+    The tier a provider reports is not caller-controlled, so a tier added by a
+    provider after this release still gets labelled instead of being dropped.
+    """
+    payload = _standard_logging_payload(
+        response={"service_tier": "tier-added-by-provider-later"},
+        model_parameters={"service_tier": "auto"},
+    )
+
+    assert get_service_tier_from_standard_logging_payload(payload) == "tier-added-by-provider-later"
+
+
+@pytest.mark.parametrize("tier", sorted(KNOWN_REQUEST_SERVICE_TIERS))
+def test_every_known_requested_tier_is_labelled(tier):
+    payload = _standard_logging_payload(model_parameters={"service_tier": tier})
+
+    assert get_service_tier_from_standard_logging_payload(payload) == tier
 
 
 @pytest.mark.parametrize(
