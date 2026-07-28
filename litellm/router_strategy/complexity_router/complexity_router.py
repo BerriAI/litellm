@@ -753,31 +753,37 @@ class ComplexityRouter(CustomLogger):
             return pinned_model, "session_affinity_pin"
         return self.get_model_for_tier(classified_tier), "session_affinity_complexity_escalation"
 
-    def _more_severe_model(self, current_model: str, candidate_model: str) -> str:
-        """Return whichever of the two models maps to the more severe configured tier."""
-        current_tier = self._tier_for_model(current_model)
-        candidate_tier = self._tier_for_model(candidate_model)
-        if current_tier is None or candidate_tier is None:
-            return candidate_model
-        if TIER_SEVERITY_ORDER.index(current_tier) > TIER_SEVERITY_ORDER.index(candidate_tier):
-            return current_model
-        return candidate_model
+    def _session_pin_keys(self, cache_key: str) -> tuple[str, ...]:
+        """Per-tier pin keys for one session, ordered least to most severe."""
+        return tuple(f"{cache_key}:{tier.value}" for tier in TIER_SEVERITY_ORDER if tier.value in self.config.tiers)
+
+    async def _get_session_pin(self, cache_key: str) -> str | None:
+        """Read a session's pin as the most severe tier it has been routed to."""
+        keys = self._session_pin_keys(cache_key)
+        if not keys:
+            return None
+        cached = await self.litellm_router_instance.cache.async_batch_get_cache(keys=list(keys))
+        if not isinstance(cached, list):
+            return None
+        return next((model for model in reversed(cached) if isinstance(model, str)), None)
 
     async def _persist_session_pin(self, cache_key: str, routed_model: str) -> None:
-        """Write the session pin, refreshing its TTL, without ever lowering it.
+        """Record the model this turn served under the key for its own tier.
 
-        Concurrent turns in one session all resolve against the same cached pin and then
-        write back, so an unconditional write lets a turn that resolved before another
-        turn's escalation land last and revert the session to the weaker model. Re-reading
-        at write time and keeping the more severe tier makes the pin monotonic.
+        Holding the pin in a single key forces a read-modify-write, and concurrent turns in
+        one session can both read before either writes, so the weaker turn lands last and
+        reverts an escalation. Writing one key per tier drops the read: a turn only ever
+        touches the tier it served, and the session resolves to the most severe tier written,
+        which cannot fall while those keys live.
+
+        Skips models outside the configured tiers, which have no severity to resolve against.
         """
-        current_model = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
-        winner = (
-            self._more_severe_model(current_model, routed_model) if isinstance(current_model, str) else routed_model
-        )
+        tier = self._tier_for_model(routed_model)
+        if tier is None:
+            return
         await self.litellm_router_instance.cache.async_set_cache(
-            key=cache_key,
-            value=winner,
+            key=f"{cache_key}:{tier.value}",
+            value=routed_model,
             ttl=self.config.session_affinity_ttl_seconds,
         )
 
@@ -1027,8 +1033,8 @@ class ComplexityRouter(CustomLogger):
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         if cache_key is not None:
-            pinned_model = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
-            if isinstance(pinned_model, str):
+            pinned_model = await self._get_session_pin(cache_key)
+            if pinned_model is not None:
                 resolved_messages = self._resolve_messages(messages, request_kwargs)
                 user_message, system_prompt = (
                     self._extract_user_message_and_system_prompt(resolved_messages)
