@@ -5883,3 +5883,105 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
             "output_tokens_details": {"reasoning_tokens": 0},
         }
     )
+
+
+
+ANTHROPIC_GEO_RESPONSE = {
+    "id": "msg_geo",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-4-8",
+    "content": [{"type": "text", "text": "hi"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1000, "output_tokens": 1000},
+}
+
+
+def test_calculate_usage_falls_back_to_requested_inference_geo():
+    """
+    Anthropic does not echo ``inference_geo`` back on response usage, so the
+    region requested by the caller must be used for geo pricing.
+    """
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": 5},
+        reasoning_content=None,
+        inference_geo="us",
+    )
+
+    assert usage.inference_geo == "us"
+
+
+def test_calculate_usage_prefers_response_inference_geo_over_request():
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": 5, "inference_geo": "eu"},
+        reasoning_content=None,
+        inference_geo="us",
+    )
+
+    assert usage.inference_geo == "eu"
+
+
+def test_transform_response_populates_inference_geo_from_request():
+    """Regression: /chat/completions requests with inference_geo were billed without the geo uplift."""
+    import httpx
+
+    raw_response = httpx.Response(status_code=200, json=ANTHROPIC_GEO_RESPONSE)
+
+    model_response = AnthropicConfig().transform_response(
+        model="claude-opus-4-8",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"inference_geo": "us"},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert model_response.usage.inference_geo == "us"
+
+    model_info = litellm.get_model_info("claude-opus-4-8", custom_llm_provider="anthropic")
+    base_cost = 1000 * model_info["input_cost_per_token"] + 1000 * model_info["output_cost_per_token"]
+    geo_multiplier = model_info["provider_specific_entry"]["us"]
+
+    geo_cost = litellm.completion_cost(completion_response=model_response, model="claude-opus-4-8")
+    assert geo_cost == pytest.approx(base_cost * geo_multiplier)
+
+
+def test_transform_response_reads_inference_geo_from_litellm_params():
+    """Deployment-level `inference_geo` (litellm_params) must also reach the usage object."""
+    import httpx
+
+    raw_response = httpx.Response(status_code=200, json=ANTHROPIC_GEO_RESPONSE)
+
+    model_response = AnthropicConfig().transform_response(
+        model="claude-opus-4-8",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"inference_geo": "us"},
+        encoding=None,
+    )
+
+    assert model_response.usage.inference_geo == "us"
+
+
+def test_streaming_iterator_populates_inference_geo_from_request():
+    """Streamed usage chunks must carry the requested region for geo pricing."""
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    iterator = ModelResponseIterator(streaming_response=None, sync_stream=True, inference_geo="us")
+
+    chunk = iterator.chunk_parser(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 20},
+        }
+    )
+
+    assert chunk.usage.inference_geo == "us"

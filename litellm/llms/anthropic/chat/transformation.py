@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
@@ -2117,12 +2118,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return False
         return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
 
+    @staticmethod
+    def get_request_inference_geo(params: Mapping[str, Any] | None) -> str | None:
+        """
+        Read the region a request asked to be served from.
+
+        Anthropic echoes ``inference_geo`` on response usage for some surfaces but not all, and the
+        streamed usage LiteLLM reassembles can lose it, so the requested region keeps geo pricing
+        keyed on something when the response does not carry one.
+        """
+        if not params:
+            return None
+        value: Final = params.get("inference_geo")
+        return value if isinstance(value, str) and value else None
+
     def calculate_usage(
         self,
         usage_object: dict,
         reasoning_content: str | None,
         completion_response: dict | None = None,
         speed: str | None = None,
+        inference_geo: str | None = None,
     ) -> Usage:
         # NOTE: Sometimes the usage object has None set explicitly for token counts, meaning .get() & key access returns None, and we need to account for this
         raw_prompt_tokens: Final = usage_object.get("input_tokens", 0) or 0
@@ -2135,9 +2151,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         cache_creation_token_details: CacheCreationTokenDetails | None = None
         web_search_requests: int | None = None
         tool_search_requests: int | None = None
-        inference_geo: str | None = None
-        if "inference_geo" in _usage and _usage["inference_geo"] is not None:
-            inference_geo = _usage["inference_geo"]
+        resolved_inference_geo: Final = AnthropicConfig.get_request_inference_geo(_usage) or inference_geo
         service_tier: Final = cast(
             str | None,
             _usage.get("service_tier"),
@@ -2223,7 +2237,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if (web_search_requests is not None or tool_search_requests is not None)
                 else None
             ),
-            inference_geo=inference_geo,
+            inference_geo=resolved_inference_geo,
             speed=speed,
             service_tier=service_tier,
         )
@@ -2317,6 +2331,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_mode: bool | None = None,
         prefix_prompt: str | None = None,
         speed: str | None = None,
+        inference_geo: str | None = None,
         tool_name_reverse_map: dict[str, str] | None = None,
     ):
         _hidden_params: Final[dict] = {}
@@ -2405,6 +2420,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             reasoning_content=reasoning_content,
             completion_response=completion_response,
             speed=speed,
+            inference_geo=inference_geo,
         )
         setattr(model_response, "usage", usage)
 
@@ -2469,6 +2485,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         prefix_prompt: Final = self.get_prefix_prompt(messages=messages)
         speed: Final = optional_params.get("speed")
+        inference_geo: Final = self.get_request_inference_geo(optional_params) or self.get_request_inference_geo(
+            litellm_params
+        )
         tool_name_reverse_map: dict[str, str] | None = None
         if isinstance(litellm_params, dict):
             _candidate: Final = litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
@@ -2482,6 +2501,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_mode=json_mode,
             prefix_prompt=prefix_prompt,
             speed=speed,
+            inference_geo=inference_geo,
             tool_name_reverse_map=tool_name_reverse_map,
         )
         return model_response

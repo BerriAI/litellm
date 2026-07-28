@@ -1223,3 +1223,39 @@ def test_get_combined_tool_content_joins_many_custom_tool_input_fragments_in_ord
     assert isinstance(combined[1], ChatCompletionMessageCustomToolCall)
     assert combined[1].custom.name == "run_script"
     assert combined[1].custom.input == "".join(object_fragments)
+
+
+
+def test_inference_geo_preserved_across_streamed_usage_chunks():
+    """
+    Regression: reassembled streaming usage dropped inference_geo, so regional
+    pricing never applied to streamed Anthropic requests.
+    """
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="claude-opus-4-8",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=Usage(
+            completion_tokens=1, prompt_tokens=10, total_tokens=11, inference_geo="us"
+        ),
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="claude-opus-4-8",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(
+            completion_tokens=5, prompt_tokens=10, total_tokens=15, inference_geo="us"
+        ),
+    )
+
+    usage = ChunkProcessor(chunks=[chunk1, chunk2]).calculate_usage(
+        chunks=[chunk1, chunk2], model="claude-opus-4-8", completion_output="Hi"
+    )
+
+    assert usage.inference_geo == "us"
