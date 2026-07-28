@@ -3992,9 +3992,9 @@ def _init_custom_logger_compatible_class(
 
             otel_config = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint="https://app.langtrace.ai/api/trace",
+                endpoint="https://langtrace.ai/api/trace",
             )
-            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = f"x-api-key={os.getenv('LANGTRACE_API_KEY')}"
+            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = f"api_key={os.getenv('LANGTRACE_API_KEY')}"
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry) and callback.callback_name == "langtrace":
                     return callback  # type: ignore
