@@ -39,6 +39,8 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
+GROQ_COMPOUND_MODELS = frozenset({"compound", "compound-mini"})
+
 
 class GroqChatConfig(OpenAILikeChatConfig):
     frequency_penalty: Optional[int] = None
@@ -103,6 +105,12 @@ class GroqChatConfig(OpenAILikeChatConfig):
         except ValueError:
             pass
 
+        if not (
+            self._is_compound_model(model)
+            or litellm.supports_web_search(model=model, custom_llm_provider=self.custom_llm_provider)
+        ):
+            base_params.remove("web_search_options")
+
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_params.append("reasoning_effort")
@@ -110,6 +118,10 @@ class GroqChatConfig(OpenAILikeChatConfig):
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
 
         return base_params
+
+    @staticmethod
+    def _is_compound_model(model: str) -> bool:
+        return model.removeprefix("groq/") in GROQ_COMPOUND_MODELS
 
     @overload
     def _transform_messages(
@@ -246,7 +258,21 @@ class GroqChatConfig(OpenAILikeChatConfig):
                         "response_format", None
                     )  # only remove if it's a json_schema - handled via using groq's tool calling params.
                 # else: model supports native json_schema, let response_format pass through
+        web_search_options = non_default_params.pop("web_search_options", None)
         optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if web_search_options is None:
+            return optional_params
+
+        if web_search_options:
+            verbose_logger.info(
+                f"Groq web search enabled; ignoring unsupported web_search_options fields: {sorted(web_search_options)}"
+            )
+        if self._is_compound_model(model):
+            return optional_params
+        if not any(tool.get("type") == "browser_search" for tool in optional_params.get("tools") or []):
+            optional_params = self._add_tools_to_optional_params(
+                optional_params=optional_params, tools=[{"type": "browser_search"}]
+            )
 
         return optional_params
 

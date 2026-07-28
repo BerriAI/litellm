@@ -25708,6 +25708,11 @@
         "max_tokens": 32766,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -25724,6 +25729,11 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -25740,6 +25750,11 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
