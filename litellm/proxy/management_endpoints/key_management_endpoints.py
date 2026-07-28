@@ -4586,6 +4586,7 @@ async def _execute_virtual_key_regeneration(
             response=response,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
+            applied_values=_budget_window_audit_values(non_default_values),
         )
     )
     return response
