@@ -11071,6 +11071,7 @@ def _add_team_models_to_all_models(
     Add team models to all models
     """
     team_models: Dict[str, Set[str]] = {}
+    access_groups = llm_router.get_model_access_groups()
 
     for team_object in team_db_objects_typed:
         if (
@@ -11094,7 +11095,7 @@ def _add_team_models_to_all_models(
                     if can_add_model:
                         team_models.setdefault(model_id, set()).add(team_object.team_id)
         else:
-            for model_name in team_object.models:
+            for model_name in _resolve_models_with_access_groups(team_object.models, access_groups):
                 _models = llm_router.get_model_list(model_name=model_name, team_id=team_object.team_id)
                 if _models is not None:
                     for model in _models:
@@ -11220,9 +11221,13 @@ def get_direct_access_models(
     if SpecialModelNames.all_proxy_models.value in user_db_object.models:
         return llm_router.get_model_ids(exclude_team_models=True)
 
+    resolved_models = _resolve_models_with_access_groups(
+        user_db_object.models,
+        llm_router.get_model_access_groups(),
+    )
     return [
         model_id
-        for model in user_db_object.models
+        for model in resolved_models
         for deployment in (llm_router.get_model_list(model_name=model) or [])
         if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
     ]
@@ -11775,10 +11780,10 @@ def _paginate_models_response(
     }
 
 
-def _team_models_resolve_to_names(team_models: List[str], access_groups: Dict[str, Any]) -> List[str]:
-    """Expand team model entries (including access group names) to concrete model names."""
+def _resolve_models_with_access_groups(models: List[str], access_groups: Dict[str, Any]) -> List[str]:
+    """Expand model entries (including access group names) to concrete model names."""
     resolved: List[str] = []
-    for name in team_models:
+    for name in models:
         if name in access_groups:
             resolved.extend(access_groups[name])
         else:
@@ -11837,7 +11842,7 @@ async def _gather_team_accessible_model_ids(
 
     try:
         if team_object.models and SpecialModelNames.all_proxy_models.value not in team_object.models:
-            _resolved_names = _team_models_resolve_to_names(team_object.models, access_groups)
+            _resolved_names = _resolve_models_with_access_groups(team_object.models, access_groups)
             db_models = await ModelRepository(prisma_client).table.find_many(
                 where={"model_name": {"in": _resolved_names}}
             )
