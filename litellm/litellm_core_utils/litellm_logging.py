@@ -1709,6 +1709,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 results=result,
             )
 
+        elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):
+            logging_result = ResponseAPILoggingUtils.build_response_from_websocket_events(events=result) or result
+
         elif (
             self.call_type == CallTypes.llm_passthrough_route.value
             or self.call_type == CallTypes.allm_passthrough_route.value

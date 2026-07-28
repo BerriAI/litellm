@@ -14,7 +14,7 @@ from typing import (
     overload,
 )
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -1091,3 +1091,58 @@ class ResponseAPILoggingUtils:
             setattr(chat_usage, "cost", response_api_usage.cost)
 
         return chat_usage
+
+    @staticmethod
+    def build_response_from_websocket_events(
+        events: Iterable[Any],
+    ) -> ResponsesAPIResponse | None:
+        """
+        Build a single ``ResponsesAPIResponse`` from the events collected on a
+        Responses API WebSocket connection so token usage and cost are logged
+        the same way as the HTTP ``/v1/responses`` path.
+
+        WebSocket logging dispatches the raw list of forwarded events. Without
+        this the logging pipeline sees a bare ``list``, extracts no usage, and
+        records zero tokens even though ``response.completed`` carries real
+        usage. Usage is summed across every terminal event (a connection may
+        serve multiple sequential requests); the remaining fields come from the
+        last terminal response. Returns ``None`` when no terminal event with a
+        response object is present.
+        """
+        terminal_responses = tuple(
+            event["response"]
+            for event in events
+            if isinstance(event, dict)
+            and event.get("type") in ("response.completed", "response.incomplete")
+            and isinstance(event.get("response"), dict)
+        )
+        if not terminal_responses:
+            return None
+
+        usages = tuple(response["usage"] for response in terminal_responses if isinstance(response.get("usage"), dict))
+        input_tokens = sum(usage.get("input_tokens") or 0 for usage in usages)
+        output_tokens = sum(usage.get("output_tokens") or 0 for usage in usages)
+        total_tokens = sum(usage.get("total_tokens") or 0 for usage in usages)
+
+        response_dict = {
+            "id": "",
+            "created_at": 0,
+            "output": [],
+            **terminal_responses[-1],
+            **(
+                {
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens or (input_tokens + output_tokens),
+                    }
+                }
+                if usages
+                else {}
+            ),
+        }
+        try:
+            return ResponsesAPIResponse(**response_dict)
+        except ValidationError as e:
+            verbose_logger.debug("could not build ResponsesAPIResponse from websocket events: %s", e)
+            return None
