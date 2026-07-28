@@ -202,7 +202,12 @@ class GenericAPILogger(CustomBatchLogger):
         except asyncio.CancelledError:
             try:
                 await self.flush_queue()
+            except asyncio.CancelledError:
+                # A second cancellation during the final flush is still a
+                # cancellation; propagate it instead of swallowing it below.
+                raise
             except Exception:
+                # Best-effort: never let a final-flush error mask the cancellation.
                 pass
             raise
 
