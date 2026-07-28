@@ -695,7 +695,16 @@ class ResetBudgetJob:
         reset_at_str = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        # reset_at may carry a non-UTC offset (e.g. +09:00 when
+        # litellm_settings.timezone is Asia/Tokyo). Convert to UTC before
+        # stripping tzinfo, otherwise the local wall-clock value is compared
+        # against naive UTC `now` and the reset fires late by the offset
+        # (#34896).
+        reset_at = (
+            datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
+            .astimezone(timezone.utc)
+            .replace(tzinfo=None)
+        )
         if reset_at > now:
             return False
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.0)
