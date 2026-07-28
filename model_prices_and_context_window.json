@@ -46260,18 +46260,6 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
-    "greenpt/gemma4": {
-        "input_cost_per_token": 5.6885e-07,
-        "litellm_provider": "greenpt",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "output_cost_per_token": 1.70655e-06,
-        "source": "https://docs.greenpt.ai/pricing",
-        "supports_reasoning": true,
-        "supports_vision": true
-    },
     "greenpt/glm-5.2": {
         "input_cost_per_token": 1.501764e-06,
         "litellm_provider": "greenpt",
