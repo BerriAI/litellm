@@ -191,6 +191,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 if cfg.get("executableId") == "orchestration":
                     valid.append((dep["deploymentUrl"], dep["createdAt"]))
             # newest first
+        if not valid:
+            raise GenAIHubOrchestrationError(
+                status_code=404,
+                message=(
+                    "No orchestration deployment found in SAP AI Core resource group "
+                    f"'{self.resource_group}'. Create/start an orchestration deployment "
+                    "in SAP AI Launchpad, then retry."
+                ),
+            )
         return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
 
     @classmethod

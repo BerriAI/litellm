@@ -8,6 +8,7 @@ import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
+from litellm.types.utils import Usage
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
@@ -46,6 +47,25 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
+    def _validate_chunk(payload: dict) -> OpenAIChatCompletionChunk:
+        """
+        Validate an OpenAI-shaped dict into a chunk, normalizing fields that would
+        otherwise break downstream serialization:
+          - drop the empty `logprobs` ({}) the orchestration service sends on every choice
+          - replace the raw openai-SDK usage object (deferred-build pydantic model whose
+            serializer is still a MockValSer) with litellm's Usage, so nested
+            model_dump() calls in the streaming handler don't raise
+            "'MockValSer' object is not an instance of 'SchemaSerializer'"
+        """
+        for choice in payload.get("choices") or []:
+            if isinstance(choice, dict) and not choice.get("logprobs"):
+                choice.pop("logprobs", None)
+        chunk = OpenAIChatCompletionChunk.model_validate(payload)
+        if chunk.usage is not None:
+            chunk.usage = Usage(**chunk.usage.model_dump())
+        return chunk
+
+    @staticmethod
     def _from_orchestration_result(evt: dict) -> Optional[OpenAIChatCompletionChunk]:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
@@ -54,7 +74,7 @@ class _StreamParser:
         if not orc:
             return None
 
-        return OpenAIChatCompletionChunk.model_validate(
+        return _StreamParser._validate_chunk(
             {
                 "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
                 "object": orc.get("object") or "chat.completion.chunk",
@@ -92,7 +112,7 @@ class _StreamParser:
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(fr)
+            return _StreamParser._validate_chunk(fr)
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -100,7 +120,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(event_obj)
+            return _StreamParser._validate_chunk(event_obj)
 
         # Unknown / heartbeat / metrics
         return None
