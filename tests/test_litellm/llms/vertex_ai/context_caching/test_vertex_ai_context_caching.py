@@ -1881,12 +1881,9 @@ class TestVertexAIGlobalLocation:
                 "global-aiplatform" not in url
             ), "URL should not contain 'global-aiplatform' prefix"
 
-    def test_gemini_context_caching_with_custom_api_base_passes_model(self):
-        """Gemini context caching with custom api_base must pass model to _check_custom_proxy.
-
-        Regression test for https://github.com/BerriAI/litellm/issues/23846
-        Previously model was hardcoded to None, causing ValueError when api_base was set.
-        """
+    def test_gemini_context_caching_with_custom_api_base_uses_collection_endpoint(
+        self,
+    ):
         caching = ContextCachingEndpoints()
 
         auth_header, url = caching._get_token_and_url_context_caching(
@@ -1899,8 +1896,8 @@ class TestVertexAIGlobalLocation:
             model="gemini-1.5-pro",
         )
 
-        assert "models/gemini-1.5-pro" in url
-        assert url.startswith("https://my-proxy.example.com/")
+        assert auth_header == {"x-goog-api-key": "test-key"}
+        assert url == "https://my-proxy.example.com/cachedContents"
 
     def test_gemini_context_caching_without_api_base_ignores_model(self):
         """Without custom api_base, model param is not needed (default URL is used)."""

@@ -75,6 +75,9 @@ class ContextCachingEndpoints(VertexBase):
             base_url = get_vertex_base_url(vertex_location)
             url = f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
 
+        if custom_llm_provider == "gemini" and api_base:
+            return auth_header, f"{api_base.rstrip('/')}/{endpoint}"
+
         return self._check_custom_proxy(
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
