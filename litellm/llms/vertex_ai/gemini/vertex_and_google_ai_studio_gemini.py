@@ -2581,11 +2581,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # See: https://github.com/BerriAI/litellm/issues/34914
         service_tier = optional_params.get("service_tier")
         provider = litellm_params.get("custom_llm_provider")
-        if (
-            isinstance(service_tier, str)
-            and service_tier in ("priority", "flex")
-            and provider != "gemini"
-        ):
+        if isinstance(service_tier, str) and service_tier in ("priority", "flex") and provider != "gemini":
             default_headers["X-Vertex-AI-LLM-Request-Type"] = "shared"
             default_headers["X-Vertex-AI-LLM-Shared-Request-Type"] = service_tier
 
