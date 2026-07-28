@@ -1,3 +1,5 @@
+from typing import Iterator
+
 import pytest
 
 import litellm
@@ -11,15 +13,11 @@ def config() -> AzureOpenAIGPT5Config:
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
-    assert "reasoning_effort" in config.get_supported_openai_params(
-        model="gpt5_series/my-deployment"
-    )
+    assert "reasoning_effort" in config.get_supported_openai_params(model="gpt5_series/my-deployment")
 
 
 def test_azure_gpt5_allows_tool_choice_for_deployment_names():
-    supported_params = litellm.get_supported_openai_params(
-        model="gpt-5-chat-2025-08-07", custom_llm_provider="azure"
-    )
+    supported_params = litellm.get_supported_openai_params(model="gpt-5-chat-2025-08-07", custom_llm_provider="azure")
     assert supported_params is not None
     assert "tool_choice" in supported_params
     # gpt-5-chat* should not be treated as a GPT-5 reasoning model
@@ -71,9 +69,7 @@ def test_azure_gpt5_codex_model_detection(config: AzureOpenAIGPT5Config):
 def test_azure_gpt5_codex_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
     """Test that Azure GPT-5-Codex supports reasoning_effort parameter."""
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-codex")
-    assert "reasoning_effort" in config.get_supported_openai_params(
-        model="gpt5_series/gpt-5-codex"
-    )
+    assert "reasoning_effort" in config.get_supported_openai_params(model="gpt5_series/gpt-5-codex")
 
 
 def test_azure_gpt5_codex_maps_max_tokens(config: AzureOpenAIGPT5Config):
@@ -299,3 +295,146 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+@pytest.fixture()
+def deployment_capability_override() -> Iterator[None]:
+    """Register a deployment-name-keyed capability override, as the router does.
+
+    Router._create_deployment registers per-deployment ``model_info`` under the
+    backend model name (``azure/<deployment>``), while Azure capability lookups
+    resolve against ``base_model``.  This fixture reproduces that registration so
+    tests can assert the override is honoured.
+    """
+    original_model_cost = litellm.model_cost.copy()
+    litellm.register_model(
+        model_cost={
+            "azure/gpt-5.6-luna-dz": {"supports_none_reasoning_effort": False},
+            "azure/gpt-5-none-enabled-dz": {"supports_none_reasoning_effort": True},
+        }
+    )
+    yield
+    litellm.model_cost = original_model_cost
+
+
+def test_azure_gpt5_deployment_override_disables_flexible_temperature(
+    config: AzureOpenAIGPT5Config, deployment_capability_override: None
+):
+    """A per-deployment supports_none_reasoning_effort=false must drop temperature.
+
+    The registry entry for the base_model (azure/gpt-5.6-luna) sets the capability
+    to true, so without honouring the deployment override the temperature is
+    forwarded and Azure rejects the request with a 400.
+    """
+    assert litellm.model_cost["azure/gpt-5.6-luna"]["supports_none_reasoning_effort"] is True
+
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.2},
+        optional_params={},
+        model="azure/gpt-5.6-luna",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+        deployment_model="gpt-5.6-luna-dz",
+    )
+    assert "temperature" not in params
+
+
+def test_azure_gpt5_deployment_override_raises_without_drop_params(
+    config: AzureOpenAIGPT5Config, deployment_capability_override: None
+):
+    """With drop_params disabled the override must surface as an UnsupportedParamsError."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.2},
+            optional_params={},
+            model="azure/gpt-5.6-luna",
+            drop_params=False,
+            api_version="2025-01-01-preview",
+            deployment_model="gpt-5.6-luna-dz",
+        )
+
+
+def test_azure_gpt5_deployment_override_enables_flexible_temperature(
+    config: AzureOpenAIGPT5Config, deployment_capability_override: None
+):
+    """A per-deployment supports_none_reasoning_effort=true must allow temperature.
+
+    The base_model here (azure/gpt-5) does not support reasoning_effort='none', so
+    the temperature is only preserved when the deployment override is honoured.
+    """
+    assert not litellm.model_cost["azure/gpt-5"].get("supports_none_reasoning_effort")
+
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.3},
+        optional_params={},
+        model="azure/gpt-5",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+        deployment_model="gpt-5-none-enabled-dz",
+    )
+    assert params["temperature"] == 0.3
+
+
+def test_azure_gpt5_without_deployment_override_uses_base_model(
+    config: AzureOpenAIGPT5Config, deployment_capability_override: None
+):
+    """A deployment without an explicit override must keep using base_model capabilities.
+
+    Guards the base_model resolution added in #31243 against regression.
+    """
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.2},
+        optional_params={},
+        model="azure/gpt-5.6-luna",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+        deployment_model="gpt-5.6-luna-no-override-dz",
+    )
+    assert params["temperature"] == 0.2
+
+
+def test_azure_gpt5_temperature_one_survives_deployment_override(
+    config: AzureOpenAIGPT5Config, deployment_capability_override: None
+):
+    """temperature=1 is the Azure default and must never be dropped."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 1},
+        optional_params={},
+        model="azure/gpt-5.6-luna",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+        deployment_model="gpt-5.6-luna-dz",
+    )
+    assert params["temperature"] == 1
+
+
+def test_get_optional_params_honours_deployment_override(
+    deployment_capability_override: None,
+):
+    """End-to-end through get_optional_params, which is what the proxy calls.
+
+    Covers the deployment identity being threaded through the azure branch rather
+    than collapsed into ``base_model or model``.
+    """
+    params = litellm.utils.get_optional_params(
+        model="gpt-5.6-luna-dz",
+        custom_llm_provider="azure",
+        base_model="azure/gpt-5.6-luna",
+        temperature=0.2,
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_get_optional_params_without_override_keeps_temperature(
+    deployment_capability_override: None,
+):
+    """Sibling control: an unoverridden deployment still resolves via base_model."""
+    params = litellm.utils.get_optional_params(
+        model="gpt-5.6-terra-dz",
+        custom_llm_provider="azure",
+        base_model="azure/gpt-5.6-terra",
+        temperature=0.2,
+        drop_params=True,
+    )
+    assert params["temperature"] == 0.2

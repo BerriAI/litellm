@@ -115,21 +115,48 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
-    def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
+    def _deployment_capability_override(cls, deployment_model: str, key: str) -> Optional[bool]:
+        """Resolve an explicitly configured capability for a deployment name.
+
+        Per-deployment ``model_info`` overrides are registered in the cost map under
+        the backend deployment name, while capability lookups for Azure resolve
+        against ``base_model``.  This returns the explicitly configured value for
+        ``key`` (``True`` or ``False``), or ``None`` when the deployment carries no
+        explicit setting and the ``base_model`` entry should be used instead.
+        """
+        if _supports_factory(model=deployment_model, custom_llm_provider=None, key=key):
+            return True
+        if _is_explicitly_disabled_factory(model=deployment_model, custom_llm_provider=None, key=key):
+            return False
+        return None
+
+    @classmethod
+    def _supports_reasoning_effort_level(cls, model: str, level: str, deployment_model: Optional[str] = None) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
         Looks up ``supports_{level}_reasoning_effort`` in the model map via
         the shared ``_supports_factory`` helper.
         Returns False for unknown models (safe fallback).
+
+        When ``deployment_model`` is given and carries an explicit setting for the
+        capability, that per-deployment override wins over ``model`` (which is the
+        ``base_model`` for Azure deployments).
         """
+        key = f"supports_{level}_reasoning_effort"
+        if deployment_model is not None and deployment_model != model:
+            override = cls._deployment_capability_override(deployment_model, key)
+            if override is not None:
+                return override
         return _supports_factory(
             model=model,
             custom_llm_provider=None,
-            key=f"supports_{level}_reasoning_effort",
+            key=key,
         )
 
     @classmethod
-    def _is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
+    def _is_reasoning_effort_level_explicitly_disabled(
+        cls, model: str, level: str, deployment_model: Optional[str] = None
+    ) -> bool:
         """Return True only when the model map explicitly sets the capability to False.
 
         Unlike ``_supports_reasoning_effort_level`` (which requires an explicit True),
@@ -138,11 +165,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         supported (i.e. this method returns False = not disabled).
 
         Use this for opt-out checks where unknown models should be allowed through.
+
+        When ``deployment_model`` is given and carries an explicit setting for the
+        capability, that per-deployment override wins over ``model``.
         """
+        key = f"supports_{level}_reasoning_effort"
+        if deployment_model is not None and deployment_model != model:
+            override = cls._deployment_capability_override(deployment_model, key)
+            if override is not None:
+                return override is False
         return _is_explicitly_disabled_factory(
             model=model,
             custom_llm_provider=None,
-            key=f"supports_{level}_reasoning_effort",
+            key=key,
         )
 
     def get_supported_openai_params(self, model: str) -> list:
@@ -194,6 +229,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        deployment_model: Optional[str] = None,
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
@@ -224,7 +261,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
         if effective_effort == "xhigh":
             # xhigh is an opt-in capability: only allow if model explicitly supports it.
-            if not self._supports_reasoning_effort_level(model, effective_effort):
+            if not self._supports_reasoning_effort_level(model, effective_effort, deployment_model):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                     optional_params.pop("reasoning_effort", None)
@@ -238,7 +275,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             # the model map explicitly sets supports_{level}_reasoning_effort=false.
             # Example: gpt-5.5-pro only accepts {medium, high, xhigh}, so it sets
             # supports_low_reasoning_effort=false (and supports_minimal=false).
-            if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort):
+            if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort, deployment_model):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                     optional_params.pop("reasoning_effort", None)
@@ -256,7 +293,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
-        supports_none = self._supports_reasoning_effort_level(model, "none")
+        supports_none = self._supports_reasoning_effort_level(model, "none", deployment_model)
         if supports_none:
             sampling_params = ["logprobs", "top_logprobs", "top_p"]
             has_sampling = any(p in non_default_params for p in sampling_params)

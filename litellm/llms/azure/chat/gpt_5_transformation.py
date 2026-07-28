@@ -1,6 +1,6 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from typing import List
+from typing import List, Optional
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -19,7 +19,20 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
-    def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
+    def _normalize_azure_model_name(cls, model: str) -> str:
+        """Resolve an Azure model or deployment name to its cost-map key.
+
+        Strips the ``gpt5_series/`` routing prefix and prepends ``azure/`` so the
+        lookup finds e.g. ``azure/gpt-5.1`` in model_prices_and_context_window.json.
+        """
+        if model.startswith(cls.GPT5_SERIES_ROUTE):
+            return "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
+        if not model.startswith("azure/"):
+            return "azure/" + model
+        return model
+
+    @classmethod
+    def _supports_reasoning_effort_level(cls, model: str, level: str, deployment_model: Optional[str] = None) -> bool:
         """Override to handle gpt5_series/ prefix used for Azure routing.
 
         The parent class calls ``_supports_factory(model, custom_llm_provider=None)``
@@ -27,11 +40,22 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         entry. Strip the prefix and prepend ``azure/`` so the lookup finds
         ``azure/gpt-5.1`` in model_prices_and_context_window.json.
         """
-        if model.startswith(cls.GPT5_SERIES_ROUTE):
-            model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
-        elif not model.startswith("azure/"):
-            model = "azure/" + model
-        return super()._supports_reasoning_effort_level(model, level)
+        return super()._supports_reasoning_effort_level(
+            cls._normalize_azure_model_name(model),
+            level,
+            cls._normalize_azure_model_name(deployment_model) if deployment_model is not None else None,
+        )
+
+    @classmethod
+    def _is_reasoning_effort_level_explicitly_disabled(
+        cls, model: str, level: str, deployment_model: Optional[str] = None
+    ) -> bool:
+        """Override to handle gpt5_series/ prefix and Azure cost-map key resolution."""
+        return super()._is_reasoning_effort_level_explicitly_disabled(
+            cls._normalize_azure_model_name(model),
+            level,
+            cls._normalize_azure_model_name(deployment_model) if deployment_model is not None else None,
+        )
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
@@ -92,13 +116,15 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         model: str,
         drop_params: bool,
         api_version: str = "",
+        *,
+        deployment_model: Optional[str] = None,
     ) -> dict:
         reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(reasoning_effort_value)
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
-        supports_none = self._supports_reasoning_effort_level(model, "none")
+        supports_none = self._supports_reasoning_effort_level(model, "none", deployment_model)
 
         if effective_effort == "none" and not supports_none:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
@@ -126,6 +152,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            deployment_model=deployment_model,
         )
 
         # Only drop reasoning_effort='none' for models that don't support it
