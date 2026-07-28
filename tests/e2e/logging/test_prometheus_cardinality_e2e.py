@@ -11,9 +11,9 @@ the aliases and fail here.
 Scraping goes through ``transport.probe`` (raw text) and is parsed with
 prometheus_client. ``/metrics`` is per-pod behind a round-robin LB and the metric
 is eventually consistent (it increments on the success-logging callback), so the
-poll re-drives each still-missing alias with fresh traffic (bounded per alias to
-cap provider spend; scrapes continue to the deadline regardless since counters
-persist on whichever pod served them) and unions the aliases seen across scrapes.
+poll unions the aliases seen across scrapes until the deadline: counters persist
+on whichever pod served the driver call, so repeated scrapes converge without
+re-sending any billable traffic.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ DRIVER_MODEL = "gemini-2.5-flash"
 REQUESTS_METRIC = "litellm_requests_metric_total"
 ALIAS_LABEL = "api_key_alias"
 DISTINCT_KEYS = 3
-MAX_DRIVER_CALLS_PER_ALIAS = 4
 
 
 def _aliases_in_metric(exposition: str, metric: str, label: str) -> frozenset[str]:
@@ -52,39 +51,24 @@ class TestPrometheusPerKeyCardinality:
         self, client: LoggingClient, resources: ResourceManager
     ) -> None:
         aliases = tuple(f"e2e-prom-{unique_marker()}" for _ in range(DISTINCT_KEYS))
-
-        def provisioned_key(alias: str) -> str:
+        for alias in aliases:
             key = client.key_with_alias(alias, models=[DRIVER_MODEL])
-            resources.defer(lambda: client.delete_key(key))
-            return key
-
-        def drive(alias: str, key: str) -> None:
-            response = client.chat(key, DRIVER_MODEL, f"reply with one word {alias} {unique_marker()}")
+            resources.defer(lambda k=key: client.delete_key(k))
+            response = client.chat(key, DRIVER_MODEL, f"reply with one word {alias}")
             assert response.model, f"driver call for {alias} returned no model: {response}"
-
-        keys_by_alias = {alias: provisioned_key(alias) for alias in aliases}
-        for alias, key in keys_by_alias.items():
-            drive(alias, key)
 
         wanted = frozenset(aliases)
         deadline = time.monotonic() + client.proxy.poll_timeout
         seen: frozenset[str] = frozenset()
-        drive_counts = dict.fromkeys(aliases, 1)
         while time.monotonic() < deadline:
             seen = seen | _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
             if wanted <= seen:
                 break
-            redriven = tuple(
-                alias for alias in sorted(wanted - seen) if drive_counts[alias] < MAX_DRIVER_CALLS_PER_ALIAS
-            )
-            for alias in redriven:
-                drive(alias, keys_by_alias[alias])
-            drive_counts = {alias: count + (alias in redriven) for alias, count in drive_counts.items()}
             time.sleep(client.proxy.poll_interval)
 
         missing = wanted - seen
         assert not missing, (
             f"{REQUESTS_METRIC} never exposed a per-key series for aliases {sorted(missing)} "
-            f"on any scraped pod within the deadline despite repeated driver calls; "
+            f"on any scraped pod within the deadline; "
             f"each distinct {ALIAS_LABEL} must grow its own series"
         )
