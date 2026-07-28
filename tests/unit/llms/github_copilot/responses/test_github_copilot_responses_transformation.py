@@ -64,13 +64,11 @@ class TestGithubCopilotResponsesAPITransformation:
             f"Expected GitHub Copilot responses endpoint, got {url}"
         )
 
-        # Test with custom api_base (overrides authenticator)
-        custom_url = config.get_complete_url(api_base="https://custom.githubcopilot.com", litellm_params={})
-        assert custom_url == "https://custom.githubcopilot.com/responses", f"Expected custom endpoint, got {custom_url}"
+        custom_url = config.get_complete_url(api_base="https://untrusted.example.com", litellm_params={})
+        assert custom_url == "https://api.individual.githubcopilot.com/responses"
 
-        # Test with trailing slash
-        url_with_slash = config.get_complete_url(api_base="https://api.githubcopilot.com/", litellm_params={})
-        assert url_with_slash == "https://api.githubcopilot.com/responses", "Should handle trailing slash"
+        url_with_slash = config.get_complete_url(api_base="https://untrusted.example.com/", litellm_params={})
+        assert url_with_slash == "https://api.individual.githubcopilot.com/responses"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_default_headers(self, mock_authenticator_class, monkeypatch):
