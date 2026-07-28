@@ -122,13 +122,20 @@ class TestGenericAPILoggerCaching:
         }
         logger = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
 
+        flushed = asyncio.Event()
+
         async def _raise_on_flush():
+            flushed.set()
             raise Exception("boom")
 
         logger.flush_queue = _raise_on_flush
+        # Let the flush task reach its first await; cancelling a task that never started
+        # skips _run_periodic_flush entirely and the final-flush path goes untested.
+        await asyncio.sleep(0)
 
         logger.shutdown()
 
         with contextlib.suppress(asyncio.CancelledError):
             await logger._flush_task
+        assert flushed.is_set()
         assert logger._flush_task.cancelled() is True
