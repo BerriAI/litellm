@@ -14045,6 +14045,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/{team_id}/callback/{callback_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Team Callback
+         * @description Delete a single logging callback from a team, leaving the team's other callbacks untouched
+         *
+         *     Parameters:
+         *     - team_id (str, required): The unique identifier for the team
+         *     - callback_name (str, required): The name of the callback to remove, as passed to `POST /team/{team_id}/callback` (e.g. "langsmith")
+         *
+         *     Every entry registered under `callback_name` is removed, regardless of its `callback_type`
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Returns 404 if the team has no callback registered under that name
+         */
+        delete: operations["delete_team_callback_team__team_id__callback__callback_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/{team_id}/disable_logging": {
         parameters: {
             query?: never;
@@ -51192,6 +51225,41 @@ export interface operations {
                 "application/json": components["schemas"]["AddTeamCallback"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_team_callback_team__team_id__callback__callback_name__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                team_id: string;
+                callback_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

@@ -21,6 +21,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     add_team_callbacks,
+    delete_team_callback,
     disable_team_logging,
     get_team_callbacks,
 )
@@ -459,3 +460,163 @@ async def test_add_team_callbacks_writes_encrypted_callback_vars(monkeypatch):
     recovered = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-lf-real-secret"
     assert recovered["langfuse_public_key"] == "pk-lf-real-public"
+
+
+@pytest.mark.asyncio
+async def test_delete_team_callback_removes_only_named_callback(monkeypatch):
+    """delete_team_callback must drop every entry for one name and leave the rest intact."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    mock_prisma = _patch_prisma(
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langsmith",
+                        "callback_type": "success",
+                        "callback_vars": {"langsmith_api_key": "ls-success"},
+                    },
+                    {
+                        "callback_name": "langsmith",
+                        "callback_type": "failure",
+                        "callback_vars": {"langsmith_api_key": "ls-failure"},
+                    },
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success",
+                        "callback_vars": {"langfuse_secret_key": "sk-keep-me"},
+                    },
+                ]
+            },
+        )
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        response = await delete_team_callback(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            callback_name="langsmith",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    assert response["data"]["remaining_callback_names"] == ["langfuse"]
+
+    written = json.loads(
+        mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"]
+    )
+    assert [entry["callback_name"] for entry in written["logging"]] == ["langfuse"]
+
+    from litellm.proxy.common_utils.callback_utils import decrypt_callback_vars
+
+    recovered = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
+    assert recovered["langfuse_secret_key"] == "sk-keep-me"
+
+
+@pytest.mark.asyncio
+async def test_delete_team_callback_unknown_name_returns_404():
+    mock_prisma = _patch_prisma(
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success",
+                        "callback_vars": {},
+                    }
+                ]
+            },
+        )
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await delete_team_callback(
+                http_request=MagicMock(spec=Request),
+                team_id="team-1",
+                callback_name="langsmith",
+                user_api_key_dict=_admin_auth(),
+                litellm_changed_by=None,
+            )
+
+    assert exc.value.status_code == 404
+    mock_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_team_callback_rejects_unauthorized_caller(
+    patched_prisma, unauthorized_caller
+):
+    with pytest.raises(HTTPException) as exc:
+        await delete_team_callback(
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            callback_name="langsmith",
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_team_callback_audit_log_redacts_secrets(monkeypatch):
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    mock_prisma = _patch_prisma(
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langsmith",
+                        "callback_type": "success",
+                        "callback_vars": {"langsmith_api_key": "ls-secret"},
+                    }
+                ]
+            },
+        )
+    )
+
+    audit_calls = []
+
+    async def capture(request_data):
+        audit_calls.append(request_data)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.master_key", None),
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new=capture,
+        ),
+    ):
+        await delete_team_callback(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            callback_name="langsmith",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+        import asyncio
+
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    assert len(audit_calls) == 1
+    log = audit_calls[0]
+    assert log.table_name == LitellmTableNames.TEAM_TABLE_NAME
+    assert log.object_id == "team-1"
+    before = json.loads(log.before_value)
+    after = json.loads(log.updated_values)
+    assert "ls-secret" not in log.before_value
+    assert "langsmith_api_key" in before["metadata"]["logging"][0]["callback_vars"]
+    assert after["metadata"]["logging"] == []

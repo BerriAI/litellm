@@ -9,7 +9,7 @@ import copy
 import json
 import traceback
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
@@ -266,6 +266,106 @@ async def add_team_callbacks(
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.delete(
+    "/team/{team_id}/callback/{callback_name}",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def delete_team_callback(
+    http_request: Request,
+    team_id: str,
+    callback_name: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    litellm_changed_by: Annotated[
+        str | None,
+        Header(
+            description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability"
+        ),
+    ] = None,
+):
+    """
+    Delete a single logging callback from a team, leaving the team's other callbacks untouched
+
+    Parameters:
+    - team_id (str, required): The unique identifier for the team
+    - callback_name (str, required): The name of the callback to remove, as passed to `POST /team/{team_id}/callback` (e.g. "langsmith")
+
+    Every entry registered under `callback_name` is removed, regardless of its `callback_type`
+
+    Example curl:
+    ```
+    curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith' \
+        -H 'Authorization: Bearer sk-1234'
+    ```
+
+    Returns 404 if the team has no callback registered under that name
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    _existing_team = await prisma_client.get_data(team_id=team_id, table_name="team", query_type="find_unique")
+    if _existing_team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team id = {team_id} does not exist."},
+        )
+
+    await _verify_team_access(
+        team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    team_metadata = _existing_team.metadata
+    existing_callbacks = team_metadata.get("logging")
+    if not isinstance(existing_callbacks, list):
+        existing_callbacks = []
+
+    remaining_callbacks = tuple(
+        callback
+        for callback in existing_callbacks
+        if not (isinstance(callback, dict) and callback.get("callback_name") == callback_name)
+    )
+    if len(remaining_callbacks) == len(existing_callbacks):
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"callback_name = {callback_name} is not registered for team_id = {team_id}."},
+        )
+
+    before_metadata = copy.deepcopy(team_metadata)
+    updated_metadata = encrypt_callback_vars({**team_metadata, "logging": list(remaining_callbacks)})
+
+    await TeamRepository(prisma_client).table.update(
+        where={"team_id": team_id},
+        data={"metadata": json.dumps(updated_metadata)},
+    )
+
+    await _emit_team_callback_audit_log(
+        team_id=team_id,
+        before_metadata=before_metadata,
+        after_metadata=updated_metadata,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+
+    return {
+        "status": "success",
+        "message": f"Callback {callback_name} deleted for team {team_id}",
+        "data": {
+            "team_id": team_id,
+            "remaining_callback_names": [
+                callback.get("callback_name") for callback in remaining_callbacks if isinstance(callback, dict)
+            ],
+        },
+    }
 
 
 @router.post(
