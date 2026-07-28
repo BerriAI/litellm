@@ -5527,6 +5527,32 @@ async def test_override_user_param_user_id_no_authenticated_user():
 
 
 @pytest.mark.asyncio
+async def test_override_user_param_warns_when_identity_unavailable(caplog):
+    import logging
+
+    data = {"model": "gpt-3.5-turbo", "user": "client-bob"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id=None,
+        metadata={},
+        team_metadata={},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await add_litellm_data_to_request(
+            data=data,
+            request=_make_chat_request_mock(),
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={"override_user_param": "user_id"},
+            version="test-version",
+        )
+
+    assert any("override_user_param" in r.message and "no authenticated identity" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_override_user_param_key_hash(monkeypatch):
     from litellm.proxy._types import hash_token
 

@@ -1475,6 +1475,11 @@ async def add_litellm_data_to_request(
             data["user"] = stampable_hash
     elif _override_user_param == "user_id" and user_api_key_dict.user_id is not None:
         data["user"] = user_api_key_dict.user_id
+    elif _override_user_param is not None:
+        verbose_proxy_logger.warning(
+            "override_user_param=%r is set but no authenticated identity is available; passing through client-supplied user value",
+            _override_user_param,
+        )
 
     data["secret_fields"] = SecretFields(raw_headers=_raw_headers)
 
