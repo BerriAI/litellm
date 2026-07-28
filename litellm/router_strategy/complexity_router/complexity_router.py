@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+import time
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Union, cast
 
 from pydantic import BaseModel
@@ -498,6 +500,9 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: dict,
     ) -> str:
         if not self.config.plugins:
+            warm_pick = await self._warm_aware_pick(self._tier_pools().get(tier.value, []), request_kwargs)
+            if warm_pick is not None:
+                return warm_pick
             return self.get_model_for_tier(tier)
 
         from litellm.types.router import RoutingContext
@@ -520,7 +525,41 @@ class ComplexityRouter(CustomLogger):
             # silently bypassed. Raise instead, matching the Router-level plugin
             # pipeline's own fail-closed behavior for the same situation.
             raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
+        warm_pick = await self._warm_aware_pick(context.candidate_models, request_kwargs)
+        if warm_pick is not None:
+            return warm_pick
         return self._pick_from_tier_value(context.candidate_models, tier_key)
+
+    async def _warm_aware_pick(self, pool: Sequence[str], request_kwargs: Mapping[str, object]) -> str | None:
+        config = self.config.cache_warming
+        if not config.enabled or len(pool) <= 1:
+            return None
+        session_id = get_session_id_from_request_kwargs(request_kwargs)
+        if session_id is None:
+            return None
+        store = self.get_cache_warming_store()
+        if store is None or store.redis_cache is None:
+            return None
+        from litellm.router_strategy.complexity_router.cache_warming.types import WARM_FRESHNESS_SLACK_SECONDS
+
+        caller_scope = get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
+        record_key = store.record_key(self.model_name, caller_scope, session_id)
+        record = await store.get_record(record_key)
+        if record is None:
+            return None
+        warmth = await store.get_warmth(record_key, tuple(pool))
+        now = time.time()
+        freshness_window = config.refresh_interval_seconds + WARM_FRESHNESS_SLACK_SECONDS
+        warmed = frozenset(model for model, warmed_at in warmth.items() if now - warmed_at <= freshness_window)
+        served = (
+            frozenset((record.served_model,))
+            if now - record.last_activity <= config.idle_timeout_seconds
+            else frozenset[str]()
+        )
+        candidates = tuple(model for model in pool if model in warmed | served)
+        if not candidates:
+            return None
+        return random.choice(candidates)
 
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:

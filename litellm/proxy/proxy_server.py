@@ -567,6 +567,7 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
+from litellm.router_strategy.complexity_router.cache_warming.refresher import CacheWarmingRefresher
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
@@ -1106,6 +1107,7 @@ async def proxy_startup_event(app: FastAPI):
                 await _tagged.strategy.load_state_from_db(prisma_client)
                 _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
+    asyncio.create_task(_complexity_cache_warming_loop())
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -3316,6 +3318,29 @@ async def _adaptive_router_flusher_loop():
             raise
         except Exception:
             verbose_proxy_logger.exception("adaptive_router flusher iteration failed")
+
+
+_COMPLEXITY_CACHE_WARMING_TICK_SECONDS = 30
+
+
+async def _complexity_cache_warming_loop(refresher: CacheWarmingRefresher | None = None):
+    global llm_router, prisma_client
+    active_refresher = refresher if refresher is not None else CacheWarmingRefresher()
+    while True:
+        try:
+            await asyncio.sleep(_COMPLEXITY_CACHE_WARMING_TICK_SECONDS)
+            router = llm_router
+            if router is None:
+                continue
+            await active_refresher.run_tick(
+                llm_router=router,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                prisma_client=prisma_client,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001  # one failed tick must never kill the warming loop
+            verbose_proxy_logger.exception("complexity_router cache warming tick failed")
 
 
 async def _run_background_health_check():

@@ -8,6 +8,7 @@ Pins covered:
 - ``_get_endpoint_exception_status``
 - ``_write_health_state_to_router_cache``
 - ``_adaptive_router_flusher_loop``
+- ``_complexity_cache_warming_loop``
 - ``_run_background_health_check``
 """
 
@@ -22,6 +23,7 @@ import pytest
 import litellm.proxy.proxy_server as proxy_server
 from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
+    _complexity_cache_warming_loop,
     _get_endpoint_exception_status,
     _get_process_rss_mb,
     _run_background_health_check,
@@ -425,6 +427,91 @@ async def test_adaptive_router_flusher_loop_times_out_when_sleep_real(monkeypatc
 
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(_adaptive_router_flusher_loop(), timeout=0.2)
+
+
+# ---------------------------------------------------------------------------
+# _complexity_cache_warming_loop
+# ---------------------------------------------------------------------------
+
+
+class _RecordingRefresher:
+    def __init__(self, fail_on_call: int | None = None):
+        self.calls: list[dict] = []
+        self.fail_on_call = fail_on_call
+
+    async def run_tick(self, *, llm_router, pod_lock_manager, prisma_client):
+        self.calls.append(
+            {"llm_router": llm_router, "pod_lock_manager": pod_lock_manager, "prisma_client": prisma_client}
+        )
+        if self.fail_on_call == len(self.calls):
+            raise RuntimeError("tick boom")
+
+
+def _cancel_sleep_after(monkeypatch, iterations: int, on_call=None):
+    call_count = {"n": 0}
+    _real_sleep = asyncio.sleep
+
+    async def _short_sleep(_seconds):
+        call_count["n"] += 1
+        if on_call is not None:
+            on_call(call_count["n"])
+        if call_count["n"] > iterations:
+            raise asyncio.CancelledError()
+        await _real_sleep(0)
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _short_sleep)
+
+
+@pytest.mark.asyncio
+async def test_complexity_cache_warming_loop_survives_tick_exception(monkeypatch):
+    refresher = _RecordingRefresher(fail_on_call=1)
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    _cancel_sleep_after(monkeypatch, iterations=2)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _complexity_cache_warming_loop(refresher=refresher)
+
+    assert len(refresher.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_complexity_cache_warming_loop_noop_while_router_none_and_resolves_router_fresh(monkeypatch):
+    refresher = _RecordingRefresher()
+    fake_router = MagicMock()
+    fake_prisma = MagicMock()
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+
+    def _swap_router_in(call_number: int):
+        if call_number == 2:
+            monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+
+    _cancel_sleep_after(monkeypatch, iterations=2, on_call=_swap_router_in)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _complexity_cache_warming_loop(refresher=refresher)
+
+    assert len(refresher.calls) == 1
+    assert refresher.calls[0]["llm_router"] is fake_router
+    assert refresher.calls[0]["prisma_client"] is fake_prisma
+    assert (
+        refresher.calls[0]["pod_lock_manager"]
+        is proxy_server.proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+    )
+
+
+@pytest.mark.asyncio
+async def test_complexity_cache_warming_loop_is_infinite(monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    _real_sleep = asyncio.sleep
+
+    async def _instant_sleep(_seconds):
+        await _real_sleep(0)
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _instant_sleep)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(_complexity_cache_warming_loop(refresher=_RecordingRefresher()), timeout=0.2)
 
 
 # ---------------------------------------------------------------------------
