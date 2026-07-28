@@ -80,7 +80,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "azure/"
         return ("gpt-5" in model and not _normalized.startswith("gpt-5-chat")) or "gpt5_series" in model
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str, deployment_model: Optional[str] = None) -> List[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
 
         Azure OpenAI GPT-5.2/5.4 models support logprobs, unlike OpenAI's GPT-5.
@@ -91,7 +91,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         - Azure returns logprobs successfully despite Microsoft's general
           documentation stating reasoning models don't support it.
         """
-        params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
+        params = OpenAIGPT5Config.get_supported_openai_params(self, model=model, deployment_model=deployment_model)
 
         # Azure supports tool_choice for GPT-5 deployments, but the base GPT-5 config
         # can drop it when the deployment name isn't in the OpenAI model registry.
@@ -101,7 +101,9 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
-        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
+        if self._supports_reasoning_effort_level(model, "none", deployment_model) and not self.is_model_gpt_5_2_model(
+            model
+        ):
             params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
         elif self.is_model_gpt_5_2_model(model):
             azure_supported_params = ["logprobs", "top_logprobs"]

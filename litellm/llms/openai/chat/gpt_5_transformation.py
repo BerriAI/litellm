@@ -1,6 +1,6 @@
 """Support for OpenAI gpt-5 model family."""
 
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import litellm
 from litellm.utils import (
@@ -180,7 +180,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             key=key,
         )
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str, deployment_model: Optional[str] = None) -> List[str]:
         if self.is_model_gpt_5_search_model(model):
             return [
                 "max_tokens",
@@ -218,7 +218,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         ]
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"
-        if not self._supports_reasoning_effort_level(model, "none"):
+        if not self._supports_reasoning_effort_level(model, "none", deployment_model):
             non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
 
         return [param for param in base_gpt_series_params if param not in non_supported_params]
@@ -331,9 +331,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                         ).format(temperature_value),
                         status_code=400,
                     )
-        return super()._map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=drop_params,
-        )
+        supported_openai_params = self.get_supported_openai_params(model=model, deployment_model=deployment_model)
+        return {
+            **optional_params,
+            **{k: v for k, v in non_default_params.items() if k in supported_openai_params},
+        }

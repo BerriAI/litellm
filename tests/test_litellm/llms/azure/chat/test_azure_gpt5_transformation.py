@@ -438,3 +438,74 @@ def test_get_optional_params_without_override_keeps_temperature(
         drop_params=True,
     )
     assert params["temperature"] == 0.2
+
+
+@pytest.fixture()
+def sampling_capability_override() -> Iterator[None]:
+    """Register a deployment that enables reasoning_effort='none' over a base model without it."""
+    original_model_cost = litellm.model_cost.copy()
+    litellm.register_model(model_cost={"azure/gpt-5-sampling-dz": {"supports_none_reasoning_effort": True}})
+    yield
+    litellm.model_cost = original_model_cost
+
+
+def test_azure_gpt5_deployment_override_allows_top_p(config: AzureOpenAIGPT5Config, sampling_capability_override: None):
+    """A deployment enabling none-effort must have top_p honoured, not stripped.
+
+    top_p is only supported when reasoning_effort='none' is available.  The base
+    model (azure/gpt-5) does not support it, so the parameter survives only when the
+    supported-parameter list is resolved with the deployment override applied.
+    """
+    assert not litellm.model_cost["azure/gpt-5"].get("supports_none_reasoning_effort")
+
+    params = config.map_openai_params(
+        non_default_params={"top_p": 0.5},
+        optional_params={},
+        model="azure/gpt-5",
+        drop_params=True,
+        api_version="2025-01-01-preview",
+        deployment_model="gpt-5-sampling-dz",
+    )
+    assert params["top_p"] == 0.5
+
+
+def test_azure_gpt5_supported_params_reflect_deployment_override(
+    config: AzureOpenAIGPT5Config, sampling_capability_override: None
+):
+    """get_supported_openai_params must reflect the deployment override.
+
+    Guards the pre-mapping validation path, which filters parameters before the
+    request-mapping gates run.
+    """
+    assert "top_p" not in config.get_supported_openai_params(model="azure/gpt-5")
+    assert "top_p" in config.get_supported_openai_params(model="azure/gpt-5", deployment_model="gpt-5-sampling-dz")
+
+
+def test_get_optional_params_honours_deployment_override_for_top_p(
+    sampling_capability_override: None,
+):
+    """End-to-end: top_p survives for an overriding deployment through get_optional_params."""
+    params = litellm.utils.get_optional_params(
+        model="gpt-5-sampling-dz",
+        custom_llm_provider="azure",
+        base_model="azure/gpt-5",
+        top_p=0.5,
+        drop_params=True,
+    )
+    assert params["top_p"] == 0.5
+
+
+def test_azure_gpt5_logprobs_still_gated_by_model_version(
+    config: AzureOpenAIGPT5Config, sampling_capability_override: None
+):
+    """logprobs stays gated on gpt-5.2+ regardless of the capability override.
+
+    Azure has only verified logprobs for gpt-5.2 and newer, and that rule keys off the
+    model version rather than the reasoning-effort capability.  A registry gpt-5.1
+    entry behaves identically, so the override must not widen logprobs support.
+    """
+    assert "logprobs" not in config.get_supported_openai_params(model="azure/gpt-5.1")
+    assert "logprobs" not in config.get_supported_openai_params(
+        model="azure/gpt-5", deployment_model="gpt-5-sampling-dz"
+    )
+    assert "logprobs" in config.get_supported_openai_params(model="azure/gpt-5.2")
