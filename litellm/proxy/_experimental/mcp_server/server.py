@@ -3133,7 +3133,13 @@ if MCP_AVAILABLE:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
     ) -> ReadResourceResult:
-        """Read resource contents from upstream MCP servers."""
+        """Read resource contents from upstream MCP servers.
+
+        Resource URIs are opaque and carry no server prefix (unlike tool and prompt names), so the
+        owning server is found by asking each allowed server in turn and keeping the first response
+        that actually holds the resource. The last candidate's failure propagates so the caller sees
+        a real upstream error instead of a synthetic one.
+        """
 
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
@@ -3146,32 +3152,35 @@ if MCP_AVAILABLE:
                 detail="User not allowed to read this resource.",
             )
 
-        if len(allowed_mcp_servers) != 1:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Multiple MCP servers configured; read_resource currently supports exactly one allowed server."
-                ),
+        async def read_from(server: MCPServer) -> ReadResourceResult:
+            server_auth_header, extra_headers = _prepare_mcp_server_headers(
+                server=server,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_auth_header=mcp_auth_header,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
 
-        server = allowed_mcp_servers[0]
+            return await global_mcp_server_manager.read_resource_from_server(
+                server=server,
+                url=url,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
+            )
 
-        server_auth_header, extra_headers = _prepare_mcp_server_headers(
-            server=server,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            mcp_auth_header=mcp_auth_header,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            user_api_key_auth=user_api_key_auth,
-        )
+        for server in allowed_mcp_servers[:-1]:
+            try:
+                result = await read_from(server)
+            except Exception as e:  # noqa: BLE001  # any upstream failure means this is not the owning server
+                verbose_logger.debug("MCP read_resource - server %s could not serve %s: %s", server.name, url, str(e))
+                continue
 
-        return await global_mcp_server_manager.read_resource_from_server(
-            server=server,
-            url=url,
-            mcp_auth_header=server_auth_header,
-            extra_headers=extra_headers,
-            raw_headers=raw_headers,
-        )
+            if result.contents:
+                return result
+
+        return await read_from(allowed_mcp_servers[-1])
 
     def _get_standard_logging_mcp_tool_call(
         name: str,
