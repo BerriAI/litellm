@@ -178,17 +178,24 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
 
 export const CLAUDE_CODE_MARKETPLACE_NAME = "litellm";
 
+export const CLAUDE_CODE_MARKETPLACE_PATH = "/claude-code/marketplace.json";
+
 export const formatInstallCommand = (plugin: { name: string }): string => {
   return `/plugin install ${plugin.name}@${CLAUDE_CODE_MARKETPLACE_NAME}`;
 };
 
-export const formatMarketplaceSettingsSnippet = (proxyOrigin: string) => {
+export const formatClaudeCodeMarketplaceUrl = (proxyBaseUrl: string): string => {
+  const normalizedBase = proxyBaseUrl.trim().replace(/\/+$/, "");
+  return normalizedBase ? `${normalizedBase}${CLAUDE_CODE_MARKETPLACE_PATH}` : CLAUDE_CODE_MARKETPLACE_PATH;
+};
+
+export const formatMarketplaceSettingsSnippet = (proxyBaseUrl: string) => {
   return {
     extraKnownMarketplaces: {
       [CLAUDE_CODE_MARKETPLACE_NAME]: {
         source: {
           source: "url" as const,
-          url: `${proxyOrigin}/claude-code/marketplace.json`,
+          url: formatClaudeCodeMarketplaceUrl(proxyBaseUrl),
         },
       },
     },

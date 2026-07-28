@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ArrowLeftOutlined, CopyOutlined, CheckOutlined, LinkOutlined } from "@ant-design/icons";
+import { getProxyBaseUrl } from "@/components/networking";
 import { formatInstallCommand, formatMarketplaceSettingsSnippet } from "./helpers";
 import { Plugin } from "./types";
 
@@ -30,8 +31,8 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
   })();
 
   const installCommand = formatInstallCommand(skill);
-  const proxyOrigin = typeof window !== "undefined" ? window.location.origin : "<proxy-url>";
-  const settingsSnippet = JSON.stringify(formatMarketplaceSettingsSnippet(proxyOrigin), null, 2);
+  const proxyBaseUrl = getProxyBaseUrl() || "<proxy-url>";
+  const settingsSnippet = JSON.stringify(formatMarketplaceSettingsSnippet(proxyBaseUrl), null, 2);
 
   const copySettingsSnippet = () => {
     copyToClipboard(settingsSnippet, "settings");

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatInstallCommand,
+  formatClaudeCodeMarketplaceUrl,
   formatMarketplaceSettingsSnippet,
   extractCategories,
   validatePluginName,
@@ -35,6 +36,26 @@ describe("formatInstallCommand", () => {
   });
 });
 
+describe("formatClaudeCodeMarketplaceUrl", () => {
+  it("appends the marketplace path to the resolved proxy base", () => {
+    expect(formatClaudeCodeMarketplaceUrl("http://localhost:4000")).toBe(
+      "http://localhost:4000/claude-code/marketplace.json",
+    );
+  });
+
+  it("preserves a server root path prefix on the proxy base", () => {
+    expect(formatClaudeCodeMarketplaceUrl("https://proxy.example.com/litellm")).toBe(
+      "https://proxy.example.com/litellm/claude-code/marketplace.json",
+    );
+  });
+
+  it("trims trailing slashes before appending the marketplace path", () => {
+    expect(formatClaudeCodeMarketplaceUrl("http://localhost:4000/")).toBe(
+      "http://localhost:4000/claude-code/marketplace.json",
+    );
+  });
+});
+
 describe("formatMarketplaceSettingsSnippet", () => {
   it("uses litellm as the marketplace key and nests source as an object", () => {
     expect(formatMarketplaceSettingsSnippet("http://localhost:4000")).toEqual({
@@ -57,6 +78,12 @@ describe("formatMarketplaceSettingsSnippet", () => {
     expect(typeof marketplaces.litellm.source).toBe("object");
     expect(marketplaces.litellm.source).not.toBe("url");
     expect(marketplaces.litellm.source.url).toBe("https://proxy.example.com/claude-code/marketplace.json");
+  });
+
+  it("uses the proxy base with a root path prefix", () => {
+    expect(
+      formatMarketplaceSettingsSnippet("https://proxy.example.com/api/v1").extraKnownMarketplaces.litellm.source.url,
+    ).toBe("https://proxy.example.com/api/v1/claude-code/marketplace.json");
   });
 });
 
