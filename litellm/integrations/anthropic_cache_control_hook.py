@@ -10,6 +10,7 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 """
 
 import copy
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
@@ -33,6 +34,9 @@ else:
 # Anthropic (and Bedrock Claude) reject requests with more than 4 cache_control
 # breakpoints: "A maximum of 4 blocks with cache_control may be provided."
 MAX_CACHE_CONTROL_BLOCKS = 4
+
+# Providers whose transform turns a tool-level cache_control into a provider cache breakpoint
+TOOL_CACHE_CONTROL_PROVIDERS = frozenset(("bedrock", "bedrock_converse"))
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -297,6 +301,51 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
         return processed_messages, processed_system, remaining_points
+
+    @staticmethod
+    def apply_tool_config_injection_points(
+        tools: Sequence[Mapping[str, Any]] | None,
+        non_default_params: Mapping[str, Any],
+        custom_llm_provider: str | None,
+    ) -> tuple[Sequence[Mapping[str, Any]] | None, Mapping[str, Any]]:
+        """Move a Bedrock ``tool_config`` injection point onto the tools themselves.
+
+        The Bedrock transform turns a tool-level ``cache_control`` into a
+        ``cachePoint`` tool block, so carrying the breakpoint on the tool
+        produces the same request while making it visible to logging callbacks,
+        which log ``optional_params["tools"]`` (see issue #34758). Returns the
+        tools and params to use; the tool_config point is dropped from the
+        params it stamps so the transform doesn't append a second cachePoint.
+
+        Stands down when the trailing tool is a pre-formatted Bedrock tool block
+        (e.g. ``systemTool``), which the transform passes through untouched and
+        would therefore drop the stamp, and when the client already marked that
+        tool; in both cases the transform's trailing cachePoint still applies.
+        """
+        points: Sequence[CacheControlInjectionPoint] = non_default_params.get("cache_control_injection_points") or ()
+        if not tools or custom_llm_provider not in TOOL_CACHE_CONTROL_PROVIDERS:
+            return tools, non_default_params
+
+        tool_config_points = tuple(point for point in points if point.get("location") == "tool_config")
+        if not tool_config_points:
+            return tools, non_default_params
+
+        last_tool = tools[-1]
+        if not isinstance(last_tool, dict) or not ("function" in last_tool or "input_schema" in last_tool):
+            return tools, non_default_params
+
+        remaining_points = tuple(point for point in points if point.get("location") != "tool_config")
+        updated_params = (
+            {**non_default_params, "cache_control_injection_points": remaining_points}
+            if remaining_points
+            else {key: value for key, value in non_default_params.items() if key != "cache_control_injection_points"}
+        )
+
+        if last_tool.get("cache_control") is not None:
+            return tools, updated_params
+
+        control = {**(tool_config_points[0].get("control") or {}), "type": "ephemeral"}
+        return [*tools[:-1], {**last_tool, "cache_control": control}], updated_params
 
     @staticmethod
     def _default_control() -> ChatCompletionCachedContent:

@@ -5161,6 +5161,17 @@ def completion(  # type: ignore
         if not _should_allow_input_examples(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_input_examples_from_tools(tools=tools)
 
+        (
+            tools_with_cache_control,
+            params_with_cache_control,
+        ) = AnthropicCacheControlHook.apply_tool_config_injection_points(
+            tools=tools,
+            non_default_params=non_default_params,
+            custom_llm_provider=custom_llm_provider,
+        )
+        tools = None if tools_with_cache_control is None else [*tools_with_cache_control]
+        non_default_params = {**params_with_cache_control}
+
         if provider_specific_header is not None:
             headers.update(
                 ProviderSpecificHeaderUtils.get_provider_specific_headers(
