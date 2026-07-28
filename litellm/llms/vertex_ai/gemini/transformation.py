@@ -1231,14 +1231,13 @@ def transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
+        # Vertex AI: skip serviceTier in body — tier routing is via headers
+        # set in validate_environment(). See: https://github.com/BerriAI/litellm/issues/34914
         if service_tier := optional_params.pop("service_tier", None):
-            if isinstance(service_tier, str):
-                if service_tier.lower() == "default":
-                    data["serviceTier"] = "standard"
-                else:
-                    data["serviceTier"] = service_tier.lower()
-            else:
-                data["serviceTier"] = service_tier
+            if custom_llm_provider == LlmProviders.GEMINI and isinstance(service_tier, str):
+                normalized: Final = service_tier.lower().removeprefix("service_tier_")
+                if normalized in ("priority", "flex", "standard"):
+                    data["serviceTier"] = normalized
 
         if continuation_token := optional_params.pop("continuation_token", None):
             data["continuationToken"] = continuation_token
