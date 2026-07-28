@@ -184,6 +184,31 @@ def _iter_responses_api_output_text(response: ResponsesAPIResponse) -> Iterator[
         yield from _iter_function_fragments(item)
 
 
+def _iter_anthropic_output_text(content: Any) -> Iterator[str]:
+    """Yield text and tool-call payloads from an Anthropic ``/v1/messages`` reply.
+
+    The non-streaming ``/v1/messages`` response reaches the hook as a native
+    dict whose generated text lives in ``content[].text`` and whose tool calls
+    live in ``content[].input`` (``type == "tool_use"``); neither is reachable
+    via the Chat-Completions ``choices`` or the Responses-API ``output`` shapes.
+    """
+    if not isinstance(content, list):
+        return
+    for block in content:
+        block_type = _item_get(block, "type")
+        if block_type == "text":
+            text = _item_get(block, "text")
+            if isinstance(text, str) and text:
+                yield text
+        elif block_type == "tool_use":
+            name = _item_get(block, "name")
+            if isinstance(name, str) and name:
+                yield name
+            tool_input = _item_get(block, "input")
+            if isinstance(tool_input, dict) and tool_input:
+                yield json.dumps(tool_input, sort_keys=True)
+
+
 class AkamaiRuleTriggered(TypedDict, total=False):
     action: str
     category: str
@@ -276,6 +301,8 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
             return get_content_from_model_response(response)
         if isinstance(response, ResponsesAPIResponse):
             return "\n".join(_iter_responses_api_output_text(response))
+        if isinstance(response, dict) and response.get("type") == "message":
+            return "\n".join(_iter_anthropic_output_text(response.get("content")))
         return ""
 
     async def _detect(
@@ -390,19 +417,34 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
         return response
 
     @classmethod
-    def _streaming_output_text(cls, chunks: list) -> str:
+    def _streaming_output_text(cls, chunks: list, request_data: dict) -> str:
         """Extract inspectable output text from a fully buffered stream.
 
         Chat streams (``ModelResponse`` / ``ModelResponseStream`` chunks) are
         assembled with ``stream_chunk_builder``. Responses-API streams instead
         emit events, the terminal one of which carries the complete
         ``ResponsesAPIResponse``; reuse ``_output_text`` on it so streamed
-        Responses output and tool calls are inspected as well.
+        Responses output and tool calls are inspected as well. Anthropic
+        ``/v1/messages`` streams arrive as raw SSE ``bytes``; the shared
+        passthrough assembler rebuilds them into a ``ModelResponse`` so streamed
+        Anthropic text and tool calls are inspected through the same path.
         """
         if isinstance(chunks[0], (ModelResponse, ModelResponseStream)):
             from litellm.main import stream_chunk_builder
 
             assembled = stream_chunk_builder(chunks=chunks)
+            return cls._output_text(assembled) if isinstance(assembled, ModelResponse) else ""
+
+        if isinstance(chunks[0], (bytes, str)):
+            from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+                AnthropicPassthroughLoggingHandler,
+            )
+
+            assembled = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=chunks,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                model=str(request_data.get("model") or ""),
+            )
             return cls._output_text(assembled) if isinstance(assembled, ModelResponse) else ""
 
         for chunk in reversed(chunks):
@@ -429,7 +471,7 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
         try:
             await self._detect(
                 client_request_id=self._client_request_id(request_data),
-                llm_output=self._streaming_output_text(chunks),
+                llm_output=self._streaming_output_text(chunks, request_data),
             )
         except HTTPException as exc:
             error_obj = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}

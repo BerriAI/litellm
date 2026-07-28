@@ -736,3 +736,74 @@ async def test_streaming_hook_blocks_responses_api_stream():
     # the Responses events are withheld; only the SSE block is emitted
     assert all(not isinstance(chunk, (OutputTextDeltaEvent, ResponseCompletedEvent)) for chunk in yielded)
     assert len(yielded) == 1 and "Blocked by Akamai Firewall for AI" in yielded[0]
+
+
+@pytest.mark.asyncio
+async def test_output_hook_inspects_anthropic_messages_response():
+    """Regression: /v1/messages returns a native Anthropic dict, not a ModelResponse.
+
+    Before the fix ``_output_text`` returned "" for that shape, so the generated
+    text and tool_use arguments were released without a detect request. Both the
+    text block and the tool_use input must be sent to Akamai and blocked.
+    """
+    guardrail = _init("post_call")
+    data = {"litellm_call_id": "req-1", "guardrails": ["akamai-guard"], "messages": [{"role": "user", "content": "hi"}]}
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [
+            {"type": "text", "text": "here is the plan"},
+            {"type": "tool_use", "id": "tu1", "name": "exfiltrate", "input": {"secret": "AKIA-super-secret"}},
+        ],
+        "stop_reason": "end_turn",
+    }
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(BLOCK_BODY)),
+    ) as mock_post:
+        with pytest.raises(HTTPException):
+            await guardrail.async_post_call_success_hook(
+                data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+    llm_output = mock_post.call_args.kwargs["json"]["llmOutput"]
+    assert "here is the plan" in llm_output
+    assert "AKIA-super-secret" in llm_output
+    assert "exfiltrate" in llm_output
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_anthropic_messages_stream():
+    """A streamed /v1/messages reply arrives as raw Anthropic SSE bytes.
+
+    Those bytes are not ModelResponse chunks nor Responses events, so before the
+    fix the stream was released uninspected. The shared passthrough assembler
+    must rebuild them into a ModelResponse, the generated text scanned, and a
+    blocking verdict withhold the bytes before delivery.
+    """
+    guardrail = _init("post_call")
+    request_data = {"litellm_call_id": "req-1", "guardrails": ["akamai-guard"], "model": "claude-sonnet-4-6"}
+    events = [
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"here is a SECRET_STREAM_PAYLOAD"}}\n\n',
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=AsyncMock(return_value=_response(BLOCK_BODY)),
+    ) as mock_post:
+        yielded = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_aiter(events), request_data=request_data
+            )
+        ]
+
+    assert "SECRET_STREAM_PAYLOAD" in mock_post.call_args.kwargs["json"]["llmOutput"]
+    # none of the raw Anthropic SSE bytes are delivered
+    assert all(not isinstance(chunk, (bytes, bytearray)) for chunk in yielded)
+    assert len(yielded) == 1 and "Blocked by Akamai Firewall for AI" in yielded[0]
