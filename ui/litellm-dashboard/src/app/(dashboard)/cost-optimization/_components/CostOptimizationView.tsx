@@ -6,7 +6,6 @@ import { Alert, Tabs } from "antd";
 
 import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
-import AutorouterTab from "./AutorouterTab";
 import PromptCachingTab from "./PromptCachingTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
 
@@ -31,11 +30,6 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
       children: <PromptCompressionTab accessToken={accessToken} />,
     },
     {
-      key: "autorouter",
-      label: "Autorouter",
-      children: <AutorouterTab accessToken={accessToken} userId={userId} userRole={userRole} />,
-    },
-    {
       key: "caching",
       label: "Prompt Caching",
       children: <PromptCachingTab accessToken={accessToken} activity={activity} />,
@@ -50,7 +44,8 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
           <h1 className="text-xl font-semibold text-foreground">Cost Optimization</h1>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Track and configure the mechanisms that save you money: prompt compression, prompt caching, and auto routing
+          Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers
+          live on the Router Settings page
         </p>
       </div>
 

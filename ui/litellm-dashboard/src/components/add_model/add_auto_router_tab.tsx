@@ -1,13 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Radio, Badge, Space, Modal } from "antd";
-import type { FormInstance } from "antd";
-import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
-import { Text, TextInput } from "@tremor/react";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
+import { TextInput } from "@tremor/react";
 import { modelAvailableCall } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import RouterConfigBuilder from "./RouterConfigBuilder";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   DEFAULT_ADAPTIVE_WEIGHTS,
@@ -22,26 +19,21 @@ import {
   getSemanticConfigError,
 } from "./build_complexity_router_config";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
-import { getSemanticRouterError } from "./build_semantic_router_validation";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import NotificationManager from "../molecules/notifications_manager";
 
 interface AddAutoRouterTabProps {
-  form: FormInstance;
   handleOk: () => void;
   accessToken: string;
   userRole: string;
 }
 
-type RouterType = "recommended" | "semantic";
-
 const { Title } = Typography;
 
-const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, accessToken, userRole }) => {
+const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ handleOk, accessToken, userRole }) => {
+  const [form] = Form.useForm();
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-
-  const [routerType, setRouterType] = useState<RouterType>("recommended");
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
@@ -55,9 +47,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
-
-  // Semantic router config (existing)
-  const [routerConfig, setRouterConfig] = useState<any>(null);
 
   const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
@@ -169,40 +158,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       });
   };
 
-  const submitSemanticRouter = (name: string) => {
-    const validationError = getSemanticRouterError({
-      defaultModel: form.getFieldValue("auto_router_default_model"),
-      embeddingModel: form.getFieldValue("auto_router_embedding_model"),
-      routerConfig,
-    });
-    if (validationError) {
-      NotificationManager.fromBackend(validationError);
-      return;
-    }
-
-    form.setFieldsValue({
-      custom_llm_provider: "auto_router",
-      model: name,
-      api_key: "not_required_for_auto_router",
-    });
-
-    form
-      .validateFields()
-      .then((values) => {
-        const submitValues = {
-          ...values,
-          auto_router_name: name,
-          auto_router_config: routerConfig,
-          model_type: "semantic_router",
-        };
-        handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
-      })
-      .catch((error) => {
-        console.error("Validation failed:", error);
-        NotificationManager.fromBackend("Please fill in all required fields");
-      });
-  };
-
   const handleAutoRouterSubmit = () => {
     const name = form.getFieldValue("auto_router_name");
     if (!name) {
@@ -212,11 +167,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       return;
     }
 
-    if (routerType === "recommended") {
-      submitRecommendedRouter(name);
-    } else {
-      submitSemanticRouter(name);
-    }
+    submitRecommendedRouter(name);
   };
 
   const handleTestConnection = () => {
@@ -239,53 +190,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
 
   return (
     <>
-      <Title level={2}>Add Auto Router</Title>
-      <Text className="text-gray-600 mb-6">
-        Create an auto router that automatically selects the best model based on request complexity or semantic
-        matching. Use in place of a single default model.
-      </Text>
-
-      <Card className="mb-4">
-        <div className="mb-4">
-          <Text className="text-sm font-medium mb-2 block">Router Type</Text>
-          <Radio.Group
-            value={routerType}
-            onChange={(e) => {
-              setRouterType(e.target.value);
-              setShowValidationErrors(false);
-            }}
-            className="w-full"
-          >
-            <Space direction="vertical" className="w-full">
-              <Radio value="recommended" className="w-full">
-                <div className="flex items-center gap-2">
-                  <ThunderboltOutlined className="text-yellow-500" />
-                  <span className="font-medium">Auto-Router v2</span>
-                  <Badge
-                    count="Recommended"
-                    style={{ backgroundColor: "#52c41a", fontSize: "10px", padding: "0 6px" }}
-                  />
-                </div>
-                <div className="text-xs text-gray-500 ml-6 mt-1">
-                  Routes by request complexity across four tiers, with optional keyword-to-tier overrides and semantic
-                  keyword matching. No training data needed.
-                </div>
-              </Radio>
-              <Radio value="semantic" className="w-full mt-2">
-                <div className="flex items-center gap-2">
-                  <BranchesOutlined className="text-blue-500" />
-                  <span className="font-medium">Semantic Router [to be deprecated]</span>
-                </div>
-                <div className="text-xs text-gray-500 ml-6 mt-1">
-                  Routes based on semantic similarity to example utterances. Requires an embedding model and example
-                  utterances.
-                </div>
-              </Radio>
-            </Space>
-          </Radio.Group>
-        </div>
-      </Card>
-
       <Card>
         <Form
           form={form}
@@ -305,73 +209,26 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             <TextInput placeholder="e.g., smart_router, auto_router_1" />
           </Form.Item>
 
-          {routerType === "recommended" ? (
-            <div className="w-full mb-4">
-              <ComplexityRouterConfig
-                modelInfo={modelInfo}
-                value={complexityRouterConfig}
-                onChange={setComplexityRouterConfig}
-                customTechnicalKeywords={customTechnicalKeywords}
-                onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
-                keywordTierRules={keywordTierRules}
-                onKeywordTierRulesChange={setKeywordTierRules}
-                semanticMatchingEnabled={semanticMatchingEnabled}
-                onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
-                embeddingModel={embeddingModel}
-                onEmbeddingModelChange={setEmbeddingModel}
-                matchThreshold={matchThreshold}
-                onMatchThresholdChange={setMatchThreshold}
-                escalationKeywords={escalationKeywords}
-                onEscalationKeywordsChange={setEscalationKeywords}
-                showValidationErrors={showValidationErrors}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="w-full mb-4">
-                <RouterConfigBuilder
-                  modelInfo={modelInfo}
-                  value={routerConfig}
-                  onChange={(config) => {
-                    setRouterConfig(config);
-                    form.setFieldValue("auto_router_config", config);
-                  }}
-                />
-              </div>
-
-              <Form.Item
-                rules={[{ required: true, message: "Default model is required" }]}
-                label="Default Model"
-                name="auto_router_default_model"
-                tooltip="Fallback model to use when auto routing logic cannot determine the best model"
-                labelCol={{ span: 10 }}
-                labelAlign="left"
-              >
-                <AntdSelect
-                  placeholder="Select a default model"
-                  options={modelGroupOptions}
-                  style={{ width: "100%" }}
-                  showSearch
-                />
-              </Form.Item>
-
-              <Form.Item
-                rules={[{ required: true, message: "Embedding model is required" }]}
-                label="Embedding Model"
-                name="auto_router_embedding_model"
-                tooltip="Embedding model to use for semantic routing decisions"
-                labelCol={{ span: 10 }}
-                labelAlign="left"
-              >
-                <AntdSelect
-                  placeholder="Select an embedding model"
-                  options={modelGroupOptions}
-                  style={{ width: "100%" }}
-                  showSearch
-                />
-              </Form.Item>
-            </>
-          )}
+          <div className="w-full mb-4">
+            <ComplexityRouterConfig
+              modelInfo={modelInfo}
+              value={complexityRouterConfig}
+              onChange={setComplexityRouterConfig}
+              customTechnicalKeywords={customTechnicalKeywords}
+              onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+              keywordTierRules={keywordTierRules}
+              onKeywordTierRulesChange={setKeywordTierRules}
+              semanticMatchingEnabled={semanticMatchingEnabled}
+              onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+              embeddingModel={embeddingModel}
+              onEmbeddingModelChange={setEmbeddingModel}
+              matchThreshold={matchThreshold}
+              onMatchThresholdChange={setMatchThreshold}
+              escalationKeywords={escalationKeywords}
+              onEscalationKeywordsChange={setEscalationKeywords}
+              showValidationErrors={showValidationErrors}
+            />
+          </div>
 
           <div className="flex items-center my-4">
             <div className="grow border-t border-gray-200"></div>
@@ -408,7 +265,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
             </Tooltip>
             <div className="space-x-2">
-              {routerType === "recommended" && (
+              {
                 <Button
                   data-testid="auto-router-test-connect-btn"
                   onClick={handleTestConnection}
@@ -416,7 +273,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
                 >
                   Test Connection
                 </Button>
-              )}
+              }
               <Button
                 type="primary"
                 onClick={() => {

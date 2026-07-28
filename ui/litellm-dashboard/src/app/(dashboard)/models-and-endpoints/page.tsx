@@ -8,12 +8,14 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import BetaBadge from "@/components/BetaBadge";
 import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
 import ModelInfoView from "@/components/model_info_view";
 import TeamInfoView from "@/components/team/TeamInfo";
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
 import AllModelsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AllModelsPanel";
+import AutoRoutersTabPanel from "@/app/(dashboard)/models-and-endpoints/panels/AutoRoutersTabPanel";
 import AddModelPanel from "@/app/(dashboard)/models-and-endpoints/panels/AddModelPanel";
 import LlmCredentialsPanel from "@/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel";
 import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/PassThroughPanel";
@@ -24,6 +26,7 @@ import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceD
 
 type ModelTabSlug =
   | "add"
+  | "auto-routers"
   | "llm-credentials"
   | "pass-through"
   | "health"
@@ -35,6 +38,7 @@ const BASE_TAB_KEY = "all-models";
 
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
+  "auto-routers": "Auto-Routers",
   "llm-credentials": "LLM Credentials",
   "pass-through": "Pass-Through Endpoints",
   health: "Health Status",
@@ -47,6 +51,8 @@ const renderPanel = (key: string) => {
   switch (key) {
     case BASE_TAB_KEY:
       return <AllModelsPanel />;
+    case "auto-routers":
+      return <AutoRoutersTabPanel />;
     case "add":
       return <AddModelPanel />;
     case "llm-credentials":
@@ -89,6 +95,7 @@ export default function ModelsAndEndpointsPage() {
     () => [
       "",
       ...(shouldHideAddModelTab ? [] : (["add"] as const)),
+      ...(isAdmin ? (["auto-routers"] as const) : []),
       ...(isAdmin
         ? (["llm-credentials", "pass-through", "health", "retry-settings", "model-group-alias", "price-data"] as const)
         : []),
@@ -97,11 +104,24 @@ export default function ModelsAndEndpointsPage() {
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
+  // Auto-Routers carries a Beta badge; BetaBadge honours the admin setting that hides these.
+  const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
+    if (!slug) return allModelsLabel;
+    if (slug === "auto-routers") {
+      return (
+        <span className="flex items-center gap-2">
+          {TAB_LABELS[slug]} <BetaBadge />
+        </span>
+      );
+    }
+    return TAB_LABELS[slug];
+  };
+
   const tabItems = visibleSlugs.map((slug) => {
     const key = slug || BASE_TAB_KEY;
     return {
       key,
-      label: slug ? TAB_LABELS[slug] : allModelsLabel,
+      label: tabLabel(slug),
       children: key === activeKey ? renderPanel(key) : null,
     };
   });
