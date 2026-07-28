@@ -5,6 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from typing import (
+    Mapping,
     TYPE_CHECKING,
     Any,
     AsyncIterator,
@@ -43,6 +44,7 @@ from litellm.types.llms.openai import (
     Reasoning,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
+    ResponseText,
 )
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
@@ -298,6 +300,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return input_items, instructions
 
+    @staticmethod
+    def _merge_text_param(existing_text: Mapping[str, Any] | None, updates: Mapping[str, Any]) -> "ResponseText":
+        """Merge updates into the Responses API ``text`` param.
+
+        ``response_format`` writes ``text.format`` and ``verbosity`` writes
+        ``text.verbosity``; merging keeps both regardless of the order the
+        optional params are processed in.
+        """
+        merged = dict(existing_text or {})  # mutable-ok: shallow merge of the two text-param writers
+        merged.update(updates)
+        return cast("ResponseText", merged)  # cast-ok: format/verbosity are disjoint ResponseText keys
+
     def _map_optional_params_to_responses_api_request(
         self,
         optional_params: dict,
@@ -316,7 +330,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = text_format  # type: ignore
+                    responses_api_request["text"] = self._merge_text_param(
+                        responses_api_request.get("text"), text_format
+                    )
+            elif key == "verbosity":
+                # Chat Completions `verbosity` maps to `text.verbosity` on the
+                # Responses API.
+                responses_api_request["text"] = self._merge_text_param(
+                    responses_api_request.get("text"), {"verbosity": value}
+                )
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = (  # type: ignore[assignment]
                     self._normalize_tool_choice_for_responses_api(value)
