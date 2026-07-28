@@ -8,7 +8,6 @@ import pytest
 from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.chunked_evaluation import (
     MAX_PROMPT_CHARS,
     SegmentVerdict,
-    WindowConfig,
     _split_text,
     evaluate_segments,
 )
@@ -99,7 +98,7 @@ async def test_mask_rejoins_masked_owned_regions_into_full_segment():
 
     chunks = _split_text(segment, 20)
     assert len(chunks) > 1
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=20, windows=WindowConfig(overlap=0))
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=20, overlap=0)
     assert verdicts[0].action == "MASK"
     assert verdicts[0].masked_text == segment.replace("SECRET", "[X]")
     assert verdicts[0].masked_chunks is not None
@@ -115,7 +114,7 @@ async def test_unmasked_chunks_keep_original_text_on_rejoin():
     async def evaluate(text):
         return _result("MASK", action_text=text.replace("w0", "[X]")) if "w0 " in text else _result("")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=20, windows=WindowConfig(overlap=0))
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=20, overlap=0)
     assert verdicts[0].action == "MASK"
     assert verdicts[0].masked_text == segment.replace("w0", "[X]", 1)
 
@@ -191,7 +190,7 @@ async def test_block_phrase_split_across_chunk_seam_is_detected():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCK ME" in text else "")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6))
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=6)
     assert verdicts[0].action == "BLOCK"
 
 
@@ -204,7 +203,7 @@ async def test_no_overlap_lets_seam_phrase_evade():
     async def evaluate(text):
         return _result("BLOCK" if "BLOCK ME" in text else "")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, windows=WindowConfig(overlap=0))
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=0)
     assert verdicts[0].action == ""
 
 
@@ -235,7 +234,7 @@ async def test_mask_straddling_a_seam_fails_closed_as_block():
         # it; the redaction lands in the prefix bytes -> fail closed.
         return _result("MASK", action_text=text.replace("SECRET HERE", "[X]")) if "SECRET HERE" in text else _result("")
 
-    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, windows=WindowConfig(overlap=6))
+    verdicts = await evaluate_segments([segment], evaluate, max_chars=12, overlap=6)
     assert verdicts[0].action == "BLOCK"
 
 

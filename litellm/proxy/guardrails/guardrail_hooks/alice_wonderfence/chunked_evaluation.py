@@ -38,26 +38,6 @@ class SegmentVerdict:
     masked_chunks: list[tuple[str, str]] | None = None
 
 
-@dataclass(frozen=True)
-class WindowConfig:
-    """Tuning for the chunk-seam overlap.
-
-    ``overlap`` sizes the read-only prefix each chunk carries from the previous
-    owned region (see ``_overlap_chunks``). There are no cross-segment windows:
-    on the request side message parts are concatenated into one joined document
-    before scanning (so their junctions are interior chunk seams); on the
-    response side each segment is an independent choice or tool-call arg that the
-    model never concatenates.
-    """
-
-    overlap: int = CHUNK_OVERLAP_CHARS
-
-
-# Shared default so the ``evaluate_segments`` signature has a plain-name default
-# (no call in the argument default); safe to share since ``WindowConfig`` is frozen.
-_DEFAULT_WINDOW_CONFIG = WindowConfig()
-
-
 def _split_text(text: str, max_chars: int) -> list[str]:
     """Split ``text`` into <= ``max_chars`` chunks with ``"".join(chunks) == text``.
 
@@ -154,7 +134,7 @@ async def evaluate_segments(
     evaluate: Callable[[str], Awaitable[Any]],
     max_chars: int = MAX_PROMPT_CHARS,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
-    windows: WindowConfig = _DEFAULT_WINDOW_CONFIG,
+    overlap: int = CHUNK_OVERLAP_CHARS,
 ) -> list[SegmentVerdict]:
     """Evaluate every segment (chunked) in parallel; return one verdict per segment.
 
@@ -169,7 +149,9 @@ async def evaluate_segments(
 
     The request side passes a single joined document here (one segment) so the
     common case is one call; the response side passes one segment per choice /
-    tool-call arg. There is no cross-segment window (see ``WindowConfig``).
+    tool-call arg. There is no cross-segment overlap: message parts are already
+    joined into one document on the request side, and response choices are
+    independent.
     """
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -178,7 +160,7 @@ async def evaluate_segments(
             return await evaluate(text)
 
     # Keep each chunk's scan input (prefix + owned) within the prompt limit.
-    ov = min(windows.overlap, max_chars // 2)
+    ov = min(overlap, max_chars // 2)
     seg_chunks = [_overlap_chunks(s, max_chars, ov) for s in segments]
 
     index: list[tuple[int, int]] = []
