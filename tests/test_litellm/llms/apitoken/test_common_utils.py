@@ -34,7 +34,10 @@ from litellm.llms.apitoken.common_utils import build_messages_url
             "https://api.apitoken.sale/v1/messages",
         ),
         # self-hosted gateway on a sub-path
-        ("https://gateway.example.com/proxy", "https://gateway.example.com/proxy/v1/messages"),
+        (
+            "https://gateway.example.com/proxy",
+            "https://gateway.example.com/proxy/v1/messages",
+        ),
     ],
 )
 def test_build_messages_url(api_base, expected):

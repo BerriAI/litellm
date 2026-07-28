@@ -7,7 +7,7 @@ The request/response protocol is identical to Anthropic's; only the API base
 URL and the API key environment variable differ.
 """
 
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -66,7 +66,7 @@ class ApiTokenChatConfig(AnthropicConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
-        litellm_params: Union[dict, object],
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
