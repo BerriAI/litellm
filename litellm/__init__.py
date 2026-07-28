@@ -660,6 +660,7 @@ stability_models: Set = set()
 github_copilot_models: Set = set()
 chatgpt_models: Set = set()
 minimax_models: Set = set()
+apitoken_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
@@ -933,6 +934,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             chatgpt_models.add(key)
         elif value.get("litellm_provider") == "minimax":
             minimax_models.add(key)
+        elif value.get("litellm_provider") == "apitoken":
+            apitoken_models.add(key)
         elif value.get("litellm_provider") == "aws_polly":
             aws_polly_models.add(key)
         elif value.get("litellm_provider") == "gigachat":
@@ -1167,6 +1170,7 @@ models_by_provider: dict = {
     "github_copilot": github_copilot_models,
     "chatgpt": chatgpt_models,
     "minimax": minimax_models,
+    "apitoken": apitoken_models,
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
@@ -1481,6 +1485,7 @@ if TYPE_CHECKING:
     )
     from .llms.empower.chat.transformation import EmpowerChatConfig as EmpowerChatConfig
     from .llms.minimax.chat.transformation import MinimaxChatConfig as MinimaxChatConfig
+    from .llms.apitoken.chat.transformation import ApiTokenChatConfig as ApiTokenChatConfig
     from .llms.aiohttp_openai.chat.transformation import (
         AiohttpOpenAIChatConfig as AiohttpOpenAIChatConfig,
     )

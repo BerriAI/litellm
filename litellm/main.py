@@ -2701,6 +2701,63 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     return response
 
 
+def _complete_apitoken(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion = ctx.acompletion
+    api_base = ctx.api_base
+    api_key = ctx.api_key
+    client = ctx.client
+    custom_llm_provider = ctx.custom_llm_provider
+    custom_prompt_dict = ctx.custom_prompt_dict
+    headers = ctx.headers
+    litellm_params = ctx.litellm_params
+    logger_fn = ctx.logger_fn
+    logging = ctx.logging
+    messages = ctx.messages
+    model = ctx.model
+    model_response = ctx.model_response
+    optional_params = ctx.optional_params
+    timeout = ctx.timeout
+
+    api_key = api_key or get_secret_str("APITOKEN_API_KEY") or litellm.api_key
+    custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+    # apiToken.sale serves the Anthropic Messages API - call /v1/messages
+    api_base = cast(
+        Optional[str],
+        api_base or litellm.api_base or get_secret("APITOKEN_API_BASE") or "https://api.apitoken.sale/v1/messages",
+    )
+
+    if api_base is not None and not api_base.endswith("/v1/messages"):
+        api_base += "/v1/messages"
+
+    response = anthropic_chat_completions.completion(
+        model=model,
+        messages=messages,
+        api_base=api_base,
+        acompletion=acompletion,
+        custom_prompt_dict=litellm.custom_prompt_dict,
+        model_response=model_response,
+        print_verbose=print_verbose,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        logger_fn=logger_fn,
+        encoding=_get_encoding(),  # for calculating input/output tokens
+        api_key=api_key,
+        logging_obj=logging,
+        headers=headers,
+        timeout=timeout,
+        client=client,
+        custom_llm_provider=custom_llm_provider,
+    )
+    if optional_params.get("stream", False) or acompletion is True:
+        ## LOGGING
+        logging.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=response,
+        )
+    return response
+
+
 def _complete_nlp_cloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
@@ -5530,6 +5587,8 @@ def completion(  # type: ignore
             response = _complete_cometapi(_dispatch_ctx)
         elif custom_llm_provider == "minimax":
             response = _complete_minimax(_dispatch_ctx)
+        elif custom_llm_provider == "apitoken":
+            response = _complete_apitoken(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
         elif (

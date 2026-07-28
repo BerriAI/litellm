@@ -521,6 +521,7 @@ LITELLM_CHAT_PROVIDERS = [
     "text-completion-inception",
     "deepseek",
     "tencent",
+    "apitoken",
     "sambanova",
     "maritalk",
     "cloudflare",

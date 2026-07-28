@@ -307,6 +307,9 @@ def get_llm_provider(
                     elif endpoint == "api.minimax.io/v1" or endpoint == "api.minimaxi.com/v1":
                         custom_llm_provider = "minimax"
                         dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
+                    elif endpoint == "api.apitoken.sale" or endpoint == "https://api.apitoken.sale":
+                        custom_llm_provider = "apitoken"
+                        dynamic_api_key = get_secret_str("APITOKEN_API_KEY")
                     elif endpoint == "platform.publicai.co/v1":
                         custom_llm_provider = "publicai"
                         dynamic_api_key = get_secret_str("PUBLICAI_API_KEY")
