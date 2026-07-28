@@ -2718,16 +2718,20 @@ def _complete_apitoken(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     optional_params = ctx.optional_params
     timeout = ctx.timeout
 
+    from litellm.llms.apitoken.common_utils import (
+        APITOKEN_API_BASE,
+        build_messages_url,
+    )
+
     api_key = api_key or get_secret_str("APITOKEN_API_KEY") or litellm.api_key
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
     # apiToken.sale serves the Anthropic Messages API - call /v1/messages
-    api_base = cast(
-        Optional[str],
-        api_base or litellm.api_base or get_secret("APITOKEN_API_BASE") or "https://api.apitoken.sale/v1/messages",
+    api_base = build_messages_url(
+        cast(
+            str,
+            api_base or litellm.api_base or get_secret("APITOKEN_API_BASE") or APITOKEN_API_BASE,
+        )
     )
-
-    if api_base is not None and not api_base.endswith("/v1/messages"):
-        api_base += "/v1/messages"
 
     response = anthropic_chat_completions.completion(
         model=model,

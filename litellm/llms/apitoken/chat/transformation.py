@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Union
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.apitoken.common_utils import APITOKEN_API_BASE, build_messages_url
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -42,7 +43,7 @@ class ApiTokenChatConfig(AnthropicConfig):
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> str:
         """Get apiToken.sale API base URL. Defaults to https://api.apitoken.sale."""
-        return api_base or get_secret_str("APITOKEN_API_BASE") or "https://api.apitoken.sale"
+        return api_base or get_secret_str("APITOKEN_API_BASE") or APITOKEN_API_BASE
 
     def get_complete_url(
         self,
@@ -57,14 +58,7 @@ class ApiTokenChatConfig(AnthropicConfig):
         Get the complete URL for the apiToken.sale request.
         Override to ensure we use apiToken.sale's endpoint, not Anthropic's.
         """
-        base_url = self.get_api_base(api_base=api_base)
-
-        if base_url.endswith("/v1/messages"):
-            return base_url
-
-        if base_url.endswith("/"):
-            return f"{base_url}v1/messages"
-        return f"{base_url}/v1/messages"
+        return build_messages_url(self.get_api_base(api_base=api_base))
 
     def validate_environment(
         self,

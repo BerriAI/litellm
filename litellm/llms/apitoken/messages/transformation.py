@@ -9,6 +9,11 @@ import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.apitoken.common_utils import (
+    APITOKEN_API_BASE,
+    APITOKEN_MESSAGES_PATH,
+    build_messages_url,
+)
 from litellm.secret_managers.main import get_secret_str
 
 
@@ -48,7 +53,11 @@ class ApiTokenMessagesConfig(AnthropicMessagesConfig):
         Get apiToken.sale API base URL.
         Defaults to https://api.apitoken.sale/v1/messages
         """
-        return api_base or get_secret_str("APITOKEN_API_BASE") or "https://api.apitoken.sale/v1/messages"
+        return (
+            api_base
+            or get_secret_str("APITOKEN_API_BASE")
+            or f"{APITOKEN_API_BASE}{APITOKEN_MESSAGES_PATH}"
+        )
 
     def get_complete_url(
         self,
@@ -63,14 +72,4 @@ class ApiTokenMessagesConfig(AnthropicMessagesConfig):
         Get the complete URL for the apiToken.sale API.
         Override to ensure we use apiToken.sale's endpoint, not Anthropic's.
         """
-        base_url = self.get_api_base(api_base=api_base)
-
-        # If the base URL already includes the full path, return it
-        if base_url.endswith("/v1/messages"):
-            return base_url
-
-        # Otherwise append the messages endpoint
-        if base_url.endswith("/"):
-            return f"{base_url}v1/messages"
-        else:
-            return f"{base_url}/v1/messages"
+        return build_messages_url(self.get_api_base(api_base=api_base))
