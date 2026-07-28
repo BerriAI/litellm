@@ -459,3 +459,117 @@ async def test_add_team_callbacks_writes_encrypted_callback_vars(monkeypatch):
     recovered = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-lf-real-secret"
     assert recovered["langfuse_public_key"] == "pk-lf-real-public"
+
+
+@pytest.mark.asyncio
+async def test_get_team_callbacks_returns_callbacks_written_by_add_team_callbacks(monkeypatch):
+    """Regression: callbacks registered via POST land in metadata["logging"], so a
+    GET that only reads metadata["callback_settings"] reports an empty list."""
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    metadata = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "langsmith",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langsmith_api_key": "lsv2-real-secret",
+                        "langsmith_project": "tenant-project",
+                    },
+                },
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "failure",
+                    "callback_vars": {"langfuse_public_key": "pk-lf-real"},
+                },
+            ]
+        }
+    )
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=metadata))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        response = await get_team_callbacks(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+        )
+
+    assert response["data"]["success_callbacks"] == ["langsmith"]
+    assert response["data"]["failure_callbacks"] == ["langfuse"]
+    assert response["data"]["callback_vars"] == {
+        "langsmith_api_key": "***REDACTED***",
+        "langsmith_project": "tenant-project",
+        "langfuse_public_key": "***REDACTED***",
+    }
+    assert "lsv2-real-secret" not in json.dumps(response)
+    assert "pk-lf-real" not in json.dumps(response)
+
+
+@pytest.mark.asyncio
+async def test_get_team_callbacks_merges_callback_settings_and_logging():
+    """Teams configured through the older callback_settings shape keep working, and
+    a team carrying both shapes reports the union."""
+    metadata = {
+        "callback_settings": {
+            "success_callback": ["gcs_bucket"],
+            "failure_callback": [],
+            "callback_vars": {"gcs_bucket_name": "team-bucket"},
+        },
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_type": "success_and_failure",
+                "callback_vars": {"langsmith_project": "tenant-project"},
+            },
+            {"callback_name": "not-a-valid-entry"},
+        ],
+    }
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=metadata))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        response = await get_team_callbacks(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+        )
+
+    assert response["data"]["success_callbacks"] == ["gcs_bucket", "langsmith"]
+    assert response["data"]["failure_callbacks"] == ["langsmith"]
+    assert response["data"]["callback_vars"] == {
+        "gcs_bucket_name": "team-bucket",
+        "langsmith_project": "tenant-project",
+    }
+
+
+@pytest.mark.asyncio
+async def test_disable_team_logging_clears_logging_entries():
+    """disable_team_logging must clear the `logging` slot too: that is the slot
+    request-time callback resolution reads, so leaving it populated keeps the
+    team's callbacks running (and visible on the GET) after a disable."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langsmith",
+                "callback_type": "success",
+                "callback_vars": {"langsmith_project": "tenant-project"},
+            }
+        ]
+    }
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=metadata))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        await disable_team_logging(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert written["logging"] == []
+    assert written["callback_settings"]["success_callback"] == []

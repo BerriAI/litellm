@@ -8,7 +8,9 @@ import asyncio
 import copy
 import json
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from functools import reduce
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -27,7 +29,15 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+from litellm.proxy.common_utils.callback_utils import (
+    decrypt_callback_vars,
+    encrypt_callback_vars,
+    is_sensitive_callback_key,
+)
+from litellm.proxy.litellm_pre_call_utils import (
+    _get_validated_callback_metadata,
+    convert_key_logging_metadata_to_callback,
+)
 from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
@@ -62,6 +72,56 @@ def _redact_callback_secrets(metadata: Any) -> Any:
     if isinstance(callback_settings, dict) and isinstance(callback_settings.get("callback_vars"), dict):
         callback_settings["callback_vars"] = {k: _CALLBACK_VARS_REDACTED for k in callback_settings["callback_vars"]}
     return redacted
+
+
+def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
+    """Collapse a team's stored callback config into a single view.
+
+    Team callbacks live in two different metadata slots: ``logging`` holds
+    the ``AddTeamCallback`` entries written by ``POST /team/{id}/callback``
+    (and is what request-time resolution in ``litellm_pre_call_utils`` and
+    the Admin UI read), while ``callback_settings`` holds the older
+    ``TeamCallbackMetadata`` shape used by config-driven setups and
+    ``disable_team_logging``. Reading only one of them reports nothing for
+    teams configured through the other.
+
+    Credential-bearing ``callback_vars`` are stored encrypted; they are
+    decrypted here only so the sensitive ones can be reported as redacted
+    rather than as opaque ciphertext, while non-secret vars (project names,
+    bucket names, hosts) come back usable.
+    """
+    if not isinstance(team_metadata, dict):
+        return TeamCallbackMetadata()
+    decrypted = decrypt_callback_vars(team_metadata)
+    callback_settings = decrypted.get("callback_settings")
+    base = TeamCallbackMetadata(**callback_settings) if isinstance(callback_settings, dict) else TeamCallbackMetadata()
+    logging_entries = decrypted.get("logging")
+    callbacks = (
+        tuple(
+            callback
+            for entry in logging_entries
+            if isinstance(entry, dict)
+            for callback in (_get_validated_callback_metadata(item=entry, source="team-level"),)
+            if callback is not None
+        )
+        if isinstance(logging_entries, list)
+        else ()
+    )
+    resolved = reduce(
+        lambda acc, callback: convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=acc),
+        callbacks,
+        base,
+    )
+    return resolved.model_copy(update={"callback_vars": _redact_sensitive_callback_vars(resolved.callback_vars)})
+
+
+def _redact_sensitive_callback_vars(callback_vars: Mapping[str, str] | None) -> Mapping[str, str]:
+    if not callback_vars:
+        return {}
+    return {
+        key: (_CALLBACK_VARS_REDACTED if is_sensitive_callback_key(key) else value)
+        for key, value in callback_vars.items()
+    }
 
 
 def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
@@ -331,6 +391,8 @@ async def disable_team_logging(
 
         # Update metadata
         team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        if "logging" in team_metadata:
+            team_metadata["logging"] = []
         team_metadata = encrypt_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)
 
@@ -442,12 +504,7 @@ async def get_team_callbacks(
             user_api_key_dict=user_api_key_dict,
         )
 
-        # Retrieve team callback settings from metadata
-        team_metadata = _existing_team.metadata
-        team_callback_settings = team_metadata.get("callback_settings", {})
-
-        # Convert to TeamCallbackMetadata object for consistent structure
-        team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
+        team_callback_settings_obj = _resolve_team_callbacks(_existing_team.metadata)
 
         return {
             "status": "success",
