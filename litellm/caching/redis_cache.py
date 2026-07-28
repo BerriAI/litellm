@@ -40,7 +40,7 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from redis.asyncio import Redis, RedisCluster
+    from redis.asyncio import BlockingConnectionPool, Redis, RedisCluster
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
 
@@ -48,12 +48,14 @@ if TYPE_CHECKING:
     cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     async_redis_cluster_client = RedisCluster
+    async_redis_conn_pool = BlockingConnectionPool
     Span = Union[_Span, Any]
 else:
     pipeline = Any
     cluster_pipeline = Any
     async_redis_client = Any
     async_redis_cluster_client = Any
+    async_redis_conn_pool = Any
     Span = Any
 
 
@@ -94,6 +96,14 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         return " <- ".join(function_names)
     except Exception:
         return "unknown"
+
+
+def _running_event_loop_id() -> int | None:
+    """Identity of the running event loop, or None when called outside one."""
+    try:
+        return id(asyncio.get_running_loop())
+    except RuntimeError:
+        return None
 
 
 class RedisCircuitBreaker:
@@ -232,7 +242,8 @@ class RedisCache(BaseCache):
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_async_client: Optional[Union[async_redis_client, async_redis_cluster_client]] = None
         self.redis_kwargs = redis_kwargs
-        self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
+        self.async_redis_conn_pool: async_redis_conn_pool | None = get_redis_connection_pool(**redis_kwargs)
+        self._async_conn_pool_loop_id: int | None = _running_event_loop_id()
 
         # redis namespaces
         self.namespace = namespace
@@ -331,21 +342,34 @@ class RedisCache(BaseCache):
         kwargs_hash = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
         return f"async-redis-client-{kwargs_hash}"
 
+    def _get_async_conn_pool(self) -> async_redis_conn_pool | None:
+        """
+        Return this instance's connection pool, rebuilding it only when there is no
+        pool yet or the existing one belongs to a different event loop.
+        """
+        from .._redis import get_redis_connection_pool
+
+        loop_id = _running_event_loop_id()
+        if self.async_redis_conn_pool is None or loop_id != self._async_conn_pool_loop_id:
+            self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
+            self._async_conn_pool_loop_id = loop_id
+        return self.async_redis_conn_pool
+
     def init_async_client(
         self,
     ) -> Union[async_redis_client, async_redis_cluster_client]:
         from litellm import in_memory_llm_clients_cache
 
-        from .._redis import get_redis_async_client, get_redis_connection_pool
+        from .._redis import get_redis_async_client
 
         cache_key = self._get_async_client_cache_key()
         cached_client = in_memory_llm_clients_cache.get_cache(key=cache_key)
         if cached_client is not None:
             redis_async_client = cast(Union[async_redis_client, async_redis_cluster_client], cached_client)
         else:
-            # Create new connection pool and client for current event loop
-            self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
-            redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
+            redis_async_client = get_redis_async_client(
+                connection_pool=self._get_async_conn_pool(), **self.redis_kwargs
+            )
             in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis_async_client)
 
         self.redis_async_client = redis_async_client  # type: ignore
