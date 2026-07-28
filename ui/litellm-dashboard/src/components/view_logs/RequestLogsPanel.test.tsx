@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { LogEntry } from "./columns";
@@ -22,10 +22,56 @@ vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
 }));
 
 vi.mock("./LogDetailsDrawer", () => ({
-  LogDetailsDrawer: function LogDetailsDrawerMock({ open }: { open: boolean }) {
-    return <div data-testid="log-details-drawer">{open ? "open" : "closed"}</div>;
+  LogDetailsDrawer: function LogDetailsDrawerMock({
+    open,
+    logEntry,
+    sessionId,
+    onClose,
+  }: {
+    open: boolean;
+    logEntry?: { request_id: string } | null;
+    sessionId?: string | null;
+    onClose: () => void;
+  }) {
+    return (
+      <div data-testid="log-details-drawer" data-log-id={logEntry?.request_id ?? ""} data-session-id={sessionId ?? ""}>
+        {open ? "open" : "closed"}
+        <button type="button" onClick={onClose}>
+          close-drawer
+        </button>
+      </div>
+    );
   },
 }));
+
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  const { useSyncExternalStore } = await import("react");
+  return {
+    ...actual,
+    useSearchParams: () => {
+      const search = useSyncExternalStore(
+        (onChange: () => void) => {
+          window.addEventListener("test-locationchange", onChange);
+          return () => window.removeEventListener("test-locationchange", onChange);
+        },
+        () => window.location.search,
+      );
+      return new URLSearchParams(search);
+    },
+  };
+});
+
+const originalPushState = window.history.pushState.bind(window.history);
+beforeAll(() => {
+  window.history.pushState = (data, unused, url) => {
+    originalPushState(data, unused, url);
+    window.dispatchEvent(new Event("test-locationchange"));
+  };
+});
+afterAll(() => {
+  window.history.pushState = originalPushState;
+});
 
 import { uiSpendLogsCall } from "../networking";
 
@@ -73,6 +119,7 @@ describe("RequestLogsPanel", () => {
     vi.clearAllMocks();
     sessionStorage.clear();
     testQueryClient.clear();
+    window.history.replaceState(null, "", "/logs/");
     respondWith([]);
   });
 
@@ -181,6 +228,87 @@ describe("RequestLogsPanel", () => {
           .utc(call.end_date, "YYYY-MM-DD HH:mm:ss")
           .diff(moment.utc(call.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
         expect(diff).toBeGreaterThanOrEqual(24 * 60 * 60);
+      });
+    });
+  });
+
+  describe("shareable log links (?log_id=)", () => {
+    const drawer = () => screen.getByTestId("log-details-drawer");
+
+    it("clicking a row writes ?log_id=<request_id> to the URL and opens the drawer", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-1" })]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(row("req-1")).not.toBeNull());
+      await user.click(row("req-1") as HTMLElement);
+
+      expect(new URLSearchParams(window.location.search).get("log_id")).toBe("req-1");
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+        expect(drawer()).toHaveAttribute("data-log-id", "req-1");
+      });
+    });
+
+    it("opens the drawer on load when ?log_id= matches a log in the loaded page", async () => {
+      window.history.replaceState(null, "", "/logs/?log_id=req-2");
+      respondWith([logEntry({ request_id: "req-1" }), logEntry({ request_id: "req-2" })]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+        expect(drawer()).toHaveAttribute("data-log-id", "req-2");
+      });
+    });
+
+    it("fetches the log by request_id and opens the drawer when it is not in the loaded page", async () => {
+      window.history.replaceState(null, "", "/logs/?log_id=req-old");
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
+        params?.request_id === "req-old"
+          ? { data: [logEntry({ request_id: "req-old" })], total: 1, page: 1, page_size: 1, total_pages: 1 }
+          : { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
+      );
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+        expect(drawer()).toHaveAttribute("data-log-id", "req-old");
+      });
+
+      const byIdCall = vi
+        .mocked(uiSpendLogsCall)
+        .mock.calls.find(([options]) => options.params?.request_id === "req-old")?.[0];
+      if (!byIdCall) throw new Error("expected a by-id uiSpendLogsCall");
+      expect(byIdCall.page).toBe(1);
+      expect(byIdCall.page_size).toBe(1);
+    });
+
+    it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {
+      const user = userEvent.setup();
+      respondWith([logEntry({ request_id: "req-1" })]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(row("req-1")).not.toBeNull());
+      await user.click(row("req-1") as HTMLElement);
+      await waitFor(() => expect(drawer()).toHaveTextContent("open"));
+
+      await user.click(screen.getByRole("button", { name: "close-drawer" }));
+
+      expect(new URLSearchParams(window.location.search).get("log_id")).toBeNull();
+      await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
+    });
+
+    it("opens a deep-linked multi-call session log in session mode", async () => {
+      window.history.replaceState(null, "", "/logs/?log_id=req-llm");
+      respondWith([
+        logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+      ]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+        expect(drawer()).toHaveAttribute("data-log-id", "req-llm");
+        expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
       });
     });
   });
