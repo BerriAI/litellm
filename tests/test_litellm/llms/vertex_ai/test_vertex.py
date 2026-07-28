@@ -3,6 +3,9 @@ import json
 import os
 import sys
 
+import pytest
+from litellm.exceptions import RateLimitError, BadRequestError
+from litellm.litellm_core_utils.exception_mapping_utils import _map_vertex_exception
 from dotenv import load_dotenv
 
 import litellm.litellm_core_utils
@@ -1592,3 +1595,25 @@ def test_system_prompt_only_adds_blank_user_message():
     #########################################################
     assert len(data["system_instruction"]) == 1
     assert data["system_instruction"]["parts"][0]["text"] == SYSTEM_INSTRUCTION
+
+
+
+def test_gemini_429_with_403_in_retry_delay():
+    from litellm.exceptions import RateLimitError
+    from litellm.litellm_core_utils.exception_mapping_utils import _map_vertex_exception
+
+    mock_error_str = (
+        '{"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota). '
+        'Please retry in 18.403478473s.", "status": "RESOURCE_EXHAUSTED"}}'
+    )
+
+    with pytest.raises(RateLimitError):
+        _map_vertex_exception(
+            original_exception=Exception(mock_error_str),
+            custom_llm_provider="vertex_ai",
+            model="gemini-1.5-pro",
+            extra_information={},
+            error_str=mock_error_str,
+            exception_type="RateLimitError",
+            exception_provider="vertex_ai",
+        )

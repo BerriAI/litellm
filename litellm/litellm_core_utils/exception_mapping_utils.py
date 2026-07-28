@@ -1120,7 +1120,29 @@ def _map_vertex_exception(
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
         )
-    elif "403" in error_str:
+    elif (
+            "429 quota exceeded" in error_str.lower()
+            or "quota exceeded for" in error_str.lower()
+            or "resource exhausted" in error_str.lower()
+            or "resource has been exhausted" in error_str.lower()
+            or "status_code=429" in error_str.lower()
+            or "indexerror: list index out of range" in error_str.lower()
+            or "429 unable to submit request because the service is temporarily out of capacity." in error_str.lower()
+        ):
+            raise RateLimitError(
+                message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
+                model=model,
+                llm_provider=custom_llm_provider,
+                litellm_debug_info=extra_information,
+                response=httpx.Response(
+                    status_code=429,
+                    request=httpx.Request(
+                        method="POST",
+                        url=" https://cloud.google.com/vertex-ai/",
+                    ),
+                ),
+            )
+    elif "403" in error_str.lower():
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
             model=model,
@@ -1135,8 +1157,8 @@ def _map_vertex_exception(
             litellm_debug_info=extra_information,
         )
     elif (
-        "The response was blocked." in error_str
-        or "Output blocked by content filtering policy" in error_str  # anthropic on vertex ai
+        "The response was blocked." in error_str.lower()
+        or "Output blocked by content filtering policy" in error_str.lower()  # anthropic on vertex ai
     ):
         raise ContentPolicyViolationError(
             message=f"{custom_llm_provider.capitalize()}Exception ContentPolicyViolationError - {error_str}",
@@ -1151,26 +1173,7 @@ def _map_vertex_exception(
                 ),
             ),
         )
-    elif (
-        "429 Quota exceeded" in error_str
-        or "Quota exceeded for" in error_str
-        or "Resource exhausted" in error_str
-        or "IndexError: list index out of range" in error_str
-        or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
-    ):
-        raise RateLimitError(
-            message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
-            model=model,
-            llm_provider=custom_llm_provider,
-            litellm_debug_info=extra_information,
-            response=httpx.Response(
-                status_code=429,
-                request=httpx.Request(
-                    method="POST",
-                    url=" https://cloud.google.com/vertex-ai/",
-                ),
-            ),
-        )
+    
     elif (
         isinstance(getattr(original_exception, "status_code", None), int)
         and 500 <= original_exception.status_code < 600
