@@ -384,7 +384,7 @@ async def test_route_request_with_router_settings_override():
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
             "routing_strategy": "least-busy",
-            # This setting should be ignored (not in per_request_settings list)
+            # applied by rewriting the model, never forwarded as a router kwarg
             "model_group_alias": {"alias": "real_model"},
         },
     }
@@ -404,6 +404,7 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["routing_strategy"] == "least-busy"
     # Verify unsupported settings were NOT merged
     assert "model_group_alias" not in call_kwargs
+    assert call_kwargs["model"] == "gpt-3.5-turbo"
     # Verify router_settings_override was removed from data
     assert "router_settings_override" not in call_kwargs
 
@@ -469,6 +470,81 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["num_retries"] == 10
     # Key/team timeout should be applied since not in request
     assert call_kwargs["timeout"] == 30
+
+
+def _router_with_two_model_groups():
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "group-a",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "fake",
+                    "mock_response": "from-group-a",
+                },
+            },
+            {
+                "model_name": "group-b",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake",
+                    "mock_response": "from-group-b",
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "alias_map",
+    [
+        {"group-a": "group-b"},
+        {"group-a": {"model": "group-b", "hidden": True}},
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_applies_model_group_alias_from_router_settings_override(alias_map):
+    """
+    Key/team level ``router_settings.model_group_alias`` must rewrite the model group,
+    the same way the global ``router_settings.model_group_alias`` does. Regression test
+    for the alias being silently dropped because it is not a per-request Router kwarg.
+    """
+    router = _router_with_two_model_groups()
+    data = {
+        "model": "group-a",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {"model_group_alias": alias_map},
+    }
+
+    response = await (await route_request(data, router, None, "acompletion"))
+
+    assert response.choices[0].message.content == "from-group-b"
+    assert response.model == "gpt-4o-mini"
+
+
+@pytest.mark.parametrize(
+    "alias_map",
+    [
+        {"some-other-group": "group-b"},
+        {"group-a": ["group-b"]},
+        "not-a-map",
+        {},
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_leaves_model_untouched_for_irrelevant_or_malformed_alias(alias_map):
+    router = _router_with_two_model_groups()
+    data = {
+        "model": "group-a",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {"model_group_alias": alias_map},
+    }
+
+    response = await (await route_request(data, router, None, "acompletion"))
+
+    assert response.choices[0].message.content == "from-group-a"
 
 
 def test_mock_testing_kwarg_names_matches_dataclass():

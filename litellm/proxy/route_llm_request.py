@@ -3,10 +3,12 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional
 
 import httpx
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import _is_proxy_admin_request
+from litellm.types.router import RouterModelGroupAliasItem
 
 # Router-internal mock_testing_* flag names — kept in sync with
 # ``litellm.types.router.MockRouterTestingParams`` by the test
@@ -26,6 +28,41 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+_MODEL_GROUP_ALIAS_ADAPTER = TypeAdapter(dict[str, str | RouterModelGroupAliasItem])
+
+
+def _resolve_per_request_model_group_alias(override_settings: Mapping[str, object], model: object) -> str | None:
+    """
+    Resolve ``model`` through a ``model_group_alias`` map coming from key/team level
+    ``router_settings``.
+
+    Returns the aliased model group name, or None when there is nothing to rewrite.
+    """
+    if not isinstance(model, str):
+        return None
+
+    raw_alias_map = override_settings.get("model_group_alias")
+    if not raw_alias_map:
+        return None
+
+    try:
+        alias_map = _MODEL_GROUP_ALIAS_ADAPTER.validate_python(raw_alias_map)
+    except ValidationError:
+        from litellm._logging import verbose_proxy_logger
+
+        verbose_proxy_logger.warning(
+            "Ignoring malformed model_group_alias in key/team router_settings: %s",
+            raw_alias_map,
+        )
+        return None
+
+    alias_item = alias_map.get(model)
+    if alias_item is None:
+        return None
+
+    return alias_item if isinstance(alias_item, str) else alias_item["model"]
 
 
 def _route_user_config_request(data: dict, route_type: str):
@@ -445,6 +482,10 @@ async def route_request(
         for key in per_request_settings:
             if key in override_settings and key not in data:
                 data[key] = override_settings[key]
+
+        aliased_model = _resolve_per_request_model_group_alias(override_settings, data.get("model"))
+        if aliased_model is not None:
+            data["model"] = aliased_model
 
         # Use main router with overridden kwargs
         if llm_router is not None:
