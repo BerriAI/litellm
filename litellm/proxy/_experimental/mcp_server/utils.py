@@ -343,14 +343,30 @@ def match_known_tool_name(tool_name: str, server: MCPServer, names: Iterable[str
     """Return the entry of ``names`` that denotes ``tool_name`` on ``server``, else ``None``.
 
     The single question every tool-name-keyed site asks: the allow list, the deny list,
-    ``allowed_params`` and the discovery filter. Matching spans every spelling routing
-    accepts and ignores case, so discovery hides exactly what dispatch refuses. Callers
-    read the returned entry rather than testing a container's values, which is what stops
-    an explicitly empty ``allowed_params`` list from reading as "nothing configured".
+    ``allowed_params`` and the discovery filter, so discovery hides exactly what dispatch
+    refuses. It spans every spelling routing accepts and no more. A tool's identity is its
+    exact name, because routing dispatches two names differing only in case as two tools,
+    and folding case here would let one policy decide both.
+
+    OpenAPI servers are the exception, and not a fuzzy one. ``_register_openapi_tools``
+    rewrites every operationId through ``sanitize_openapi_tool_name``, so configuration
+    holding the spec's own spelling never equals the registered name; replaying that exact
+    rewrite on the entry recovers the link. It cannot merge identities, because every name
+    it produces is lowercased, so no two tools on such a server differ only in case.
+
+    Callers read the returned entry rather than testing a container's values, which is what
+    stops an explicitly empty ``allowed_params`` list from reading as "nothing configured".
     """
-    entries = {name.casefold(): name for name in names}
-    spellings = map(str.casefold, iter_known_tool_name_spellings(tool_name, server))
-    return next((entries[spelling] for spelling in spellings if spelling in entries), None)
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+        sanitize_openapi_tool_name,
+    )
+
+    spellings = set(iter_known_tool_name_spellings(tool_name, server))
+    exact = next((name for name in names if name in spellings), None)
+    if exact is not None or not getattr(server, "spec_path", None):
+        return exact
+    sanitized = {sanitize_openapi_tool_name(spelling) for spelling in spellings}
+    return next((name for name in names if sanitize_openapi_tool_name(name) in sanitized), None)
 
 
 def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
