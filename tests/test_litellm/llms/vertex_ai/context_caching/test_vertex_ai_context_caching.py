@@ -1881,26 +1881,46 @@ class TestVertexAIGlobalLocation:
                 "global-aiplatform" not in url
             ), "URL should not contain 'global-aiplatform' prefix"
 
-    def test_gemini_context_caching_with_custom_api_base_passes_model(self):
-        """Gemini context caching with custom api_base must pass model to _check_custom_proxy.
+    @pytest.mark.parametrize(
+        "api_base",
+        ["https://my-proxy.example.com/v1beta", "https://my-proxy.example.com/v1beta/"],
+    )
+    def test_gemini_context_caching_with_custom_api_base_uses_collection_endpoint(self, api_base):
+        """Regression test for https://github.com/BerriAI/litellm/issues/34872
 
-        Regression test for https://github.com/BerriAI/litellm/issues/23846
-        Previously model was hardcoded to None, causing ValueError when api_base was set.
+        cachedContents is a collection endpoint (model goes in the request body), so a custom
+        Gemini api_base must not get the model-action treatment (`/models/{model}:cachedContents`),
+        and auth must stay the x-goog-api-key header dict rather than a stringified Bearer value.
         """
         caching = ContextCachingEndpoints()
 
         auth_header, url = caching._get_token_and_url_context_caching(
             gemini_api_key="test-key",
             custom_llm_provider="gemini",
-            api_base="https://my-proxy.example.com",
+            api_base=api_base,
             vertex_project=None,
             vertex_location=None,
             vertex_auth_header=None,
-            model="gemini-1.5-pro",
+            model="gemini-3-pro-preview",
         )
 
-        assert "models/gemini-1.5-pro" in url
-        assert url.startswith("https://my-proxy.example.com/")
+        assert url == "https://my-proxy.example.com/v1beta/cachedContents"
+        assert "models/" not in url
+        assert auth_header == {"x-goog-api-key": "test-key"}
+
+    def test_gemini_context_caching_with_custom_api_base_requires_api_key(self):
+        caching = ContextCachingEndpoints()
+
+        with pytest.raises(ValueError, match="Missing Gemini API key"):
+            caching._get_token_and_url_context_caching(
+                gemini_api_key=None,
+                custom_llm_provider="gemini",
+                api_base="https://my-proxy.example.com/v1beta",
+                vertex_project=None,
+                vertex_location=None,
+                vertex_auth_header=None,
+                model="gemini-3-pro-preview",
+            )
 
     def test_gemini_context_caching_without_api_base_ignores_model(self):
         """Without custom api_base, model param is not needed (default URL is used)."""

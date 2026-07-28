@@ -61,9 +61,14 @@ class ContextCachingEndpoints(VertexBase):
         """
         auth_header: Optional[str]
         if custom_llm_provider == "gemini":
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}".format(endpoint)
+            if api_base and gemini_api_key is None:
+                raise ValueError(
+                    "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
+                )
+            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            base_url = api_base.rstrip("/") if api_base else "https://generativelanguage.googleapis.com/v1beta"
+            return auth_header, "{}/{}".format(base_url, endpoint)
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
