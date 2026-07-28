@@ -569,6 +569,7 @@ class ChunkProcessor:
         # lost and 1h cache writes get billed at the 5m rate.
         cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         cost: Optional[float] = None
+        inference_geo: str | None = None
 
         for chunk in chunks:
             usage_chunk = self._extract_usage_chunk(chunk)
@@ -627,6 +628,10 @@ class ChunkProcessor:
                 if usage_chunk_dict["cost"] is not None:
                     cost = usage_chunk_dict["cost"]
 
+                chunk_inference_geo = getattr(usage_chunk, "inference_geo", None)
+                if isinstance(chunk_inference_geo, str) and chunk_inference_geo:
+                    inference_geo = chunk_inference_geo
+
         prompt_tokens_details = self._attach_cache_creation_token_details(
             prompt_tokens_details, cache_creation_token_details
         )
@@ -647,6 +652,7 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
+            inference_geo=inference_geo,
         )
 
     @staticmethod
@@ -746,6 +752,7 @@ class ChunkProcessor:
             "prompt_tokens_details"
         ]
         cost: Optional[float] = calculated_usage_per_chunk["cost"]
+        inference_geo: str | None = calculated_usage_per_chunk["inference_geo"]
 
         try:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
@@ -806,9 +813,11 @@ class ChunkProcessor:
         if cost is not None:
             setattr(returned_usage, "cost", cost)
 
+        extra_usage_fields = {"inference_geo": inference_geo} if inference_geo is not None else {}
+
         # Return a new usage object with the new values
 
-        returned_usage = Usage(**returned_usage.model_dump())
+        returned_usage = Usage(**returned_usage.model_dump(), **extra_usage_fields)
 
         return returned_usage
 

@@ -2192,3 +2192,155 @@ class TestAnthropicResponseCostRecordedOnModelCallDetails:
             logging_obj.model_call_details["response_cost"] == kwargs["response_cost"]
         )
         assert logging_obj.model_call_details["response_cost"] > 0
+
+
+class TestPassthroughInferenceGeo:
+    """
+    Anthropic never echoes `inference_geo` back on response usage, so pass-through
+    requests routed to a paid region were priced without their geo multiplier.
+    The requested region must be carried onto the usage object instead.
+    """
+
+    _MODEL = "claude-opus-4-8"
+
+    @staticmethod
+    def _sse(data: dict) -> bytes:
+        return f"event: {data['type']}\ndata: {json.dumps(data)}\n\n".encode()
+
+    @classmethod
+    def _chunks(cls) -> list:
+        frames = [
+            cls._sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_geo",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": cls._MODEL,
+                        "content": [],
+                        "stop_reason": None,
+                        "usage": {"input_tokens": 1000, "output_tokens": 1},
+                    },
+                }
+            ),
+            cls._sse(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                }
+            ),
+            cls._sse(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Hello"},
+                }
+            ),
+            cls._sse({"type": "content_block_stop", "index": 0}),
+            cls._sse(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {"output_tokens": 1000},
+                }
+            ),
+            cls._sse({"type": "message_stop"}),
+        ]
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        return PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames)
+
+    def _run_streaming_handler(self, request_body: dict):
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            EndpointType,
+        )
+
+        logging_obj = LiteLLMLoggingObj(
+            model=self._MODEL,
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="1245",
+        )
+        logging_obj.model_call_details["stream"] = True
+
+        return AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body=request_body,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            all_chunks=self._chunks(),
+            end_time=datetime.now(),
+        )
+
+    def test_streaming_usage_carries_requested_inference_geo(self):
+        result = self._run_streaming_handler(
+            {"model": self._MODEL, "stream": True, "inference_geo": "us"}
+        )
+
+        assert result["result"].usage.inference_geo == "us"
+
+    def test_streaming_usage_without_requested_geo_stays_unset(self):
+        result = self._run_streaming_handler({"model": self._MODEL, "stream": True})
+
+        assert result["result"].usage.get("inference_geo") is None
+
+    def test_streaming_response_cost_includes_geo_multiplier(self):
+        geo_cost = self._run_streaming_handler(
+            {"model": self._MODEL, "stream": True, "inference_geo": "us"}
+        )["kwargs"]["response_cost"]
+        base_cost = self._run_streaming_handler(
+            {"model": self._MODEL, "stream": True}
+        )["kwargs"]["response_cost"]
+
+        assert geo_cost == pytest.approx(base_cost * 1.1)
+
+    def test_usage_only_fallback_carries_requested_inference_geo(self):
+        response = (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=self._chunks(),
+                model=self._MODEL,
+                request_inference_geo="us",
+            )
+        )
+
+        assert response is not None
+        assert response.usage.inference_geo == "us"
+
+    def test_provider_reported_geo_wins_over_requested_geo(self):
+        chunks = [
+            self._sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_geo",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": self._MODEL,
+                        "content": [],
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 1,
+                            "inference_geo": "eu",
+                        },
+                    },
+                }
+            ),
+        ]
+
+        response = (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=chunks, model=self._MODEL, request_inference_geo="us"
+            )
+        )
+
+        assert response is not None
+        assert response.usage.inference_geo == "eu"

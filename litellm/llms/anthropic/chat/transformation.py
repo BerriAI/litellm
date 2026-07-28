@@ -6,6 +6,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Mapping,
     NoReturn,
     Optional,
     Tuple,
@@ -2122,12 +2123,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             compaction_blocks,
         )
 
+    @staticmethod
+    def get_request_inference_geo(params: Mapping[str, Any] | None) -> str | None:
+        """
+        Read the region a request asked to be served from.
+
+        Anthropic accepts ``inference_geo`` on the request but does not echo it back on response usage,
+        so the requested region is the only signal geo pricing can key on.
+        """
+        if not params:
+            return None
+        value = params.get("inference_geo")
+        return value if isinstance(value, str) and value else None
+
     def calculate_usage(
         self,
         usage_object: dict,
         reasoning_content: Optional[str],
         completion_response: Optional[dict] = None,
         speed: Optional[str] = None,
+        inference_geo: str | None = None,
     ) -> Usage:
         # NOTE: Sometimes the usage object has None set explicitly for token counts, meaning .get() & key access returns None, and we need to account for this
         raw_prompt_tokens = usage_object.get("input_tokens", 0) or 0
@@ -2140,9 +2155,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         web_search_requests: Optional[int] = None
         tool_search_requests: Optional[int] = None
-        inference_geo: Optional[str] = None
-        if "inference_geo" in _usage and _usage["inference_geo"] is not None:
-            inference_geo = _usage["inference_geo"]
+        resolved_inference_geo = AnthropicConfig.get_request_inference_geo(_usage) or inference_geo
         service_tier = cast(
             str | None,
             _usage.get("service_tier"),
@@ -2228,7 +2241,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if (web_search_requests is not None or tool_search_requests is not None)
                 else None
             ),
-            inference_geo=inference_geo,
+            inference_geo=resolved_inference_geo,
             speed=speed,
             service_tier=service_tier,
         )
@@ -2322,6 +2335,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_mode: Optional[bool] = None,
         prefix_prompt: Optional[str] = None,
         speed: Optional[str] = None,
+        inference_geo: str | None = None,
         tool_name_reverse_map: Optional[Dict[str, str]] = None,
     ):
         _hidden_params: Dict = {}
@@ -2410,6 +2424,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             reasoning_content=reasoning_content,
             completion_response=completion_response,
             speed=speed,
+            inference_geo=inference_geo,
         )
         setattr(model_response, "usage", usage)
 
@@ -2474,6 +2489,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         prefix_prompt = self.get_prefix_prompt(messages=messages)
         speed = optional_params.get("speed")
+        inference_geo = self.get_request_inference_geo(optional_params) or self.get_request_inference_geo(
+            litellm_params
+        )
         tool_name_reverse_map: Optional[Dict[str, str]] = None
         if isinstance(litellm_params, dict):
             _candidate = litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
@@ -2487,6 +2505,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_mode=json_mode,
             prefix_prompt=prefix_prompt,
             speed=speed,
+            inference_geo=inference_geo,
             tool_name_reverse_map=tool_name_reverse_map,
         )
         return model_response
