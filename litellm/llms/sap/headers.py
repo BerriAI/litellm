@@ -1,21 +1,22 @@
 from typing import Mapping
 
+
 _SAP_RESERVED_HEADERS = frozenset(
-    {
+    (
         "authorization",
         "ai-resource-group",
         "content-type",
         "ai-client-type",
-    }
+    )
 )
 
 
 def merge_sap_request_headers(
     provider_headers: Mapping[str, str],
     caller_headers: Mapping[str, str] | None,
-) -> dict[str, str]:
+) -> Mapping[str, str]:
     if not caller_headers:
-        return dict(provider_headers)
+        return provider_headers
 
     safe_caller_headers = {
         key: value for key, value in caller_headers.items() if key.lower() not in _SAP_RESERVED_HEADERS
