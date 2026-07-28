@@ -49546,6 +49546,10 @@ export interface operations {
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
+                /** @description Filter logs by call type (e.g., acompletion) */
+                call_type?: string | null;
+                /** @description Filter logs by response-cache outcome: true for cache hits, false for misses */
+                cache_hit?: boolean | null;
                 /** @description Filter logs by error code (e.g., '404', '500') */
                 error_code?: string | null;
                 /** @description Filter logs by error message (partial string match) */
@@ -49654,6 +49658,10 @@ export interface operations {
                 key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
+                /** @description Filter logs by call type (e.g., acompletion) */
+                call_type?: string | null;
+                /** @description Filter logs by response-cache outcome: true for cache hits, false for misses */
+                cache_hit?: boolean | null;
                 /** @description Filter logs by error code (e.g., '404', '500') */
                 error_code?: string | null;
                 /** @description Filter logs by error message (partial string match) */

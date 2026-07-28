@@ -1,8 +1,8 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "../../../../../tests/test-utils";
-import CacheDashboard from "./cache_dashboard";
+import CacheDashboard, { buildLogsDrilldownUrl } from "./cache_dashboard";
 
 const { useCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
   useCacheActivity: vi.fn(),
@@ -11,6 +11,7 @@ const { useCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
 
 vi.mock("@/components/networking", () => ({
   cachingHealthCheckCall,
+  serverRootPath: "/",
 }));
 
 vi.mock("@/app/(dashboard)/hooks/caching/useCacheActivity", () => ({
@@ -196,5 +197,60 @@ describe("CacheDashboard cache analytics charts", () => {
 
     expect(compactTicks(requestsCard).length).toBeGreaterThan(0);
     expect(compactTicks(tokensCard)).toContain("60K");
+  });
+});
+
+describe("cache chart drill-down into the Logs page", () => {
+  const range = { startDate: "2026-07-20", endDate: "2026-07-27" };
+
+  it("maps a failed-requests slice to a status=failure logs link scoped to the bar's call type", () => {
+    const url = buildLogsDrilldownUrl({ name: "anthropic_messages", categoryClicked: "Failed requests" }, range);
+
+    expect(url).toBe(
+      "/ui/logs?call_type=anthropic_messages&status=failure&start_time=2026-07-20T00%3A00&end_time=2026-07-27T23%3A59",
+    );
+  });
+
+  it("maps a cache-hit slice to cache_hit=true", () => {
+    const url = buildLogsDrilldownUrl({ name: "acompletion", categoryClicked: "Cache hit" }, range);
+
+    expect(url).toContain("cache_hit=true");
+    expect(url).not.toContain("status=");
+  });
+
+  it("maps an api-requests slice to successful cache misses", () => {
+    const url = buildLogsDrilldownUrl({ name: "acompletion", categoryClicked: "LLM API requests" }, range);
+
+    expect(url).toContain("status=success");
+    expect(url).toContain("cache_hit=false");
+  });
+
+  it("omits call_type for the Unknown bucket since those rows have an empty call_type", () => {
+    const url = buildLogsDrilldownUrl({ name: "Unknown", categoryClicked: "Failed requests" }, range);
+
+    expect(url).not.toContain("call_type");
+    expect(url).toContain("status=failure");
+  });
+
+  it("navigates to the logs page when a requests-chart bar is clicked", async () => {
+    useCacheActivity.mockReturnValue({ data: cacheActivity, refetch: vi.fn() });
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign, search: "" });
+
+    renderWithProviders(
+      <CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />,
+    );
+    await screen.findByText("Cache Hits vs API Requests");
+    await waitFor(() => {
+      expect(document.querySelectorAll("path.recharts-rectangle").length).toBeGreaterThan(0);
+    });
+
+    const requestsCard = screen.getByText("Cache Hits vs API Requests").closest('[data-slot="card"]') as HTMLElement;
+    fireEvent.click(requestsCard.querySelector("path.recharts-rectangle")!);
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(String(assign.mock.calls[0][0])).toContain("/logs?call_type=acompletion");
+
+    vi.unstubAllGlobals();
   });
 });

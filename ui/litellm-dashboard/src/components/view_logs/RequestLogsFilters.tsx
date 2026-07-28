@@ -320,6 +320,32 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
           placeholder="Enter public model or search tool…"
         />
       </DataTableFilterField>
+
+      <DataTableFilterField label="Call Type">
+        <Input
+          value={valueOf(LOG_FILTER_IDS.CALL_TYPE)}
+          onChange={(event) => set(LOG_FILTER_IDS.CALL_TYPE, emptyToUndefined(event.target.value))}
+          placeholder="e.g. acompletion…"
+        />
+      </DataTableFilterField>
+
+      <DataTableFilterField label="Cache Hit">
+        <Select
+          value={valueOf(LOG_FILTER_IDS.CACHE_HIT) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CACHE_HIT)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.CACHE_HIT, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Requests" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_VALUE}>All Requests</SelectItem>
+            <SelectItem value="true">Cache Hit</SelectItem>
+            <SelectItem value="false">Cache Miss</SelectItem>
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
     </>
   );
 }

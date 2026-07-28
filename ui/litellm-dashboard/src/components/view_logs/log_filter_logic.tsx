@@ -29,6 +29,8 @@ export const LOG_FILTER_IDS = {
   PUBLIC_MODEL_OR_SEARCH_TOOL: "model",
   REQUEST_ID: "request_id",
   USER_ID: "user_id",
+  CALL_TYPE: "call_type",
+  CACHE_HIT: "cache_hit",
 } as const;
 
 export const LOG_FILTER_LABELS: Record<string, string> = {
@@ -42,6 +44,32 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
   [LOG_FILTER_IDS.MODEL_ID]: "Model",
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
+  [LOG_FILTER_IDS.CALL_TYPE]: "Call Type",
+  [LOG_FILTER_IDS.CACHE_HIT]: "Cache Hit",
+};
+
+export interface LogsUrlSeed {
+  columnFilters: ColumnFiltersState;
+  startTime: string | null;
+  endTime: string | null;
+}
+
+export const readLogsUrlSeed = (search: string): LogsUrlSeed => {
+  const params = new URLSearchParams(search);
+  const columnFilters = Object.values(LOG_FILTER_IDS).flatMap((id) => {
+    const value = params.get(id)?.trim();
+    return value ? [{ id, value }] : [];
+  });
+  return {
+    columnFilters,
+    startTime: params.get("start_time"),
+    endTime: params.get("end_time"),
+  };
+};
+
+const parseCacheHitFilter = (value: string | undefined): "true" | "false" | undefined => {
+  if (value === "true" || value === "false") return value;
+  return undefined;
 };
 
 export interface LogsWindow {
@@ -173,6 +201,8 @@ export function useLogFilterLogic({
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
           error_code: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_CODE),
           error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
+          call_type: getFilterValue(columnFilters, LOG_FILTER_IDS.CALL_TYPE),
+          cache_hit: parseCacheHitFilter(getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_HIT)),
           sort_by: sortBy,
           sort_order: sortOrder,
         },

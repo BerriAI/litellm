@@ -90,6 +90,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         "model_id": "model_id",
         "model_group": "model_group",
         "end_user": "end_user",
+        "call_type": "call_type",
     }
     date_bounds: dict = {}
     metadata_conds: list = []
@@ -109,6 +110,10 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["OR"] = where.get("OR", []) + [{"multi_team": True}]
         elif "status = 'success'" in cond:
             where["OR"] = where.get("OR", []) + [{"status": "success"}]
+        elif cond == "cache_hit = 'True'":
+            where["cache_hit"] = {"is_hit": True}
+        elif cond == "cache_hit IS DISTINCT FROM 'True'":
+            where["cache_hit"] = {"is_hit": False}
         elif sess:
             where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
         elif status:
@@ -611,6 +616,88 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["total"] == 1
     assert len(data["data"]) == 1
     assert data["data"][0]["user"] == "test_user_1"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_call_type(client, monkeypatch):
+    now = datetime.datetime.now(timezone.utc).isoformat()
+    mock_spend_logs = [
+        {"request_id": "req1", "call_type": "acompletion", "spend": 0.05, "startTime": now},
+        {"request_id": "req2", "call_type": "anthropic_messages", "spend": 0.10, "startTime": now},
+    ]
+
+    def filter_by_call_type(where):
+        call_type = where.get("call_type")
+        if call_type is None:
+            return mock_spend_logs
+        return [log for log in mock_spend_logs if log["call_type"] == call_type]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_call_type),
+    )
+
+    start_date, end_date = _default_date_range()
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "call_type": "anthropic_messages",
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["data"][0]["request_id"] == "req2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cache_hit_query,expected_request_ids",
+    [
+        ("true", {"req-hit"}),
+        ("false", {"req-false", "req-empty", "req-null"}),
+    ],
+)
+async def test_ui_view_spend_logs_with_cache_hit(client, monkeypatch, cache_hit_query, expected_request_ids):
+    now = datetime.datetime.now(timezone.utc).isoformat()
+    mock_spend_logs = [
+        {"request_id": "req-hit", "cache_hit": "True", "spend": 0.0, "startTime": now},
+        {"request_id": "req-false", "cache_hit": "False", "spend": 0.05, "startTime": now},
+        {"request_id": "req-empty", "cache_hit": "", "spend": 0.05, "startTime": now},
+        {"request_id": "req-null", "cache_hit": None, "spend": 0.05, "startTime": now},
+    ]
+
+    def filter_by_cache_hit(where):
+        condition = where.get("cache_hit")
+        if condition is None:
+            return mock_spend_logs
+        if condition["is_hit"]:
+            return [log for log in mock_spend_logs if log["cache_hit"] == "True"]
+        return [log for log in mock_spend_logs if log["cache_hit"] != "True"]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_cache_hit),
+    )
+
+    start_date, end_date = _default_date_range()
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "cache_hit": cache_hit_query,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert {log["request_id"] for log in data["data"]} == expected_request_ids
 
 
 @pytest.mark.asyncio

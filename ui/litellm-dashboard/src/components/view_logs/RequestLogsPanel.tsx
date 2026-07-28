@@ -17,6 +17,7 @@ import {
   formatLogsWindow,
   getLogsWindowEndBound,
   LOG_FILTER_IDS,
+  readLogsUrlSeed,
   useLogFilterLogic,
 } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
@@ -41,13 +42,18 @@ interface SessionComposition {
 }
 
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
+  const [urlSeed] = useState(() => readLogsUrlSeed(typeof window === "undefined" ? "" : window.location.search));
+  const seededWindow = urlSeed.startTime !== null && urlSeed.endTime !== null;
+
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(urlSeed.columnFilters);
 
-  const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-  const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
-  const [isCustomDate, setIsCustomDate] = useState(false);
+  const [startTime, setStartTime] = useState<string>(
+    urlSeed.startTime ?? moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"),
+  );
+  const [endTime, setEndTime] = useState<string>(urlSeed.endTime ?? moment().format("YYYY-MM-DDTHH:mm"));
+  const [isCustomDate, setIsCustomDate] = useState(seededWindow);
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>(DEFAULT_INTERVAL);
 
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
@@ -56,6 +62,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
+    if (seededWindow) return false;
     const storedValue = sessionStorage.getItem("isLiveTail");
     return storedValue !== null ? JSON.parse(storedValue) : true;
   });

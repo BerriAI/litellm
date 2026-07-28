@@ -13,6 +13,7 @@ import {
   LIVE_TAIL_INTERVAL_MS,
   LOG_FILTER_IDS,
   LOGS_WINDOW_TICK_MS,
+  readLogsUrlSeed,
   useLogFilterLogic,
   type PaginatedResponse,
 } from "./log_filter_logic";
@@ -87,6 +88,8 @@ describe("useLogFilterLogic", () => {
       { id: LOG_FILTER_IDS.ERROR_CODE, value: "429", param: "error_code" },
       { id: LOG_FILTER_IDS.ERROR_MESSAGE, value: "rate limited", param: "error_message" },
       { id: LOG_FILTER_IDS.USER_ID, value: "user-9", param: "user_id" },
+      { id: LOG_FILTER_IDS.CALL_TYPE, value: "anthropic_messages", param: "call_type" },
+      { id: LOG_FILTER_IDS.CACHE_HIT, value: "true", param: "cache_hit" },
     ];
 
     it.each(cases)("sends $id as $param", async ({ id, value, param }) => {
@@ -109,6 +112,13 @@ describe("useLogFilterLogic", () => {
       expect(params?.team_id).toBeUndefined();
       expect(params?.api_key).toBeUndefined();
       expect(params?.error_code).toBeUndefined();
+    });
+
+    it("drops a cache_hit filter value that is not true or false", async () => {
+      renderFilterHook({ columnFilters: [{ id: LOG_FILTER_IDS.CACHE_HIT, value: "maybe" }] });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params?.cache_hit).toBeUndefined();
     });
   });
 
@@ -292,5 +302,35 @@ describe("formatLogsWindow preset end bound", () => {
     expect(formatLogsWindow("2026-07-23T00:00", "2026-07-24T06:00", true, bound).end_date).toBe(
       moment("2026-07-24T06:00").utc().format("YYYY-MM-DD HH:mm:ss"),
     );
+  });
+});
+
+describe("readLogsUrlSeed", () => {
+  it("seeds column filters from known filter params and ignores unrelated ones", () => {
+    const seed = readLogsUrlSeed("?status=failure&call_type=anthropic_messages&cache_hit=true&page_size=50&foo=bar");
+
+    expect(seed.columnFilters).toEqual(
+      expect.arrayContaining([
+        { id: LOG_FILTER_IDS.STATUS, value: "failure" },
+        { id: LOG_FILTER_IDS.CALL_TYPE, value: "anthropic_messages" },
+        { id: LOG_FILTER_IDS.CACHE_HIT, value: "true" },
+      ]),
+    );
+    expect(seed.columnFilters).toHaveLength(3);
+  });
+
+  it("captures the seeded time window", () => {
+    const seed = readLogsUrlSeed("?start_time=2026-07-20T00:00&end_time=2026-07-27T23:59");
+
+    expect(seed.startTime).toBe("2026-07-20T00:00");
+    expect(seed.endTime).toBe("2026-07-27T23:59");
+  });
+
+  it("returns an empty seed for an empty query string", () => {
+    expect(readLogsUrlSeed("")).toEqual({ columnFilters: [], startTime: null, endTime: null });
+  });
+
+  it("skips blank filter values", () => {
+    expect(readLogsUrlSeed("?status=&call_type=%20%20").columnFilters).toEqual([]);
   });
 });

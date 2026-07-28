@@ -1660,6 +1660,10 @@ async def ui_view_spend_logs(
     model_group: str | None = fastapi.Query(default=None, description="Filter logs by model group"),
     key_alias: str | None = fastapi.Query(default=None, description="Filter logs by key alias"),
     end_user: str | None = fastapi.Query(default=None, description="Filter logs by end user"),
+    call_type: str | None = fastapi.Query(default=None, description="Filter logs by call type (e.g., acompletion)"),
+    cache_hit: bool | None = fastapi.Query(
+        default=None, description="Filter logs by response-cache outcome: true for cache hits, false for misses"
+    ),
     error_code: str | None = fastapi.Query(default=None, description="Filter logs by error code (e.g., '404', '500')"),
     error_message: str | None = fastapi.Query(
         default=None, description="Filter logs by error message (partial string match)"
@@ -1796,6 +1800,9 @@ async def ui_view_spend_logs(
         if model_group is not None:
             where_conditions["model_group"] = model_group
 
+        if call_type is not None:
+            where_conditions["call_type"] = call_type
+
         # Build metadata filters
         metadata_filters = []
         if key_alias is not None:
@@ -1917,6 +1924,7 @@ async def ui_view_spend_logs(
             ("model_id", "model_id"),
             ("model_group", "model_group"),
             ("end_user", "end_user"),
+            ("call_type", "call_type"),
         ]:
             val = where_conditions.get(wc_key)
             if val is not None and isinstance(val, str):
@@ -1946,6 +1954,14 @@ async def ui_view_spend_logs(
                 sql_conditions.append(f"status = ${p}")
                 sql_params.append(status_filter)
                 p += 1
+
+        # Cache hit filter - only a literal 'True' is a hit; '', 'False', and
+        # NULL are all misses, so the miss side must be NULL-safe.
+        if cache_hit is not None:
+            if cache_hit:
+                sql_conditions.append("cache_hit = 'True'")
+            else:
+                sql_conditions.append("cache_hit IS DISTINCT FROM 'True'")
 
         # Spend range
         if min_spend is not None:

@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RefreshCw } from "lucide-react";
 import { cachingHealthCheckCall } from "@/components/networking";
 import { useCacheActivity, type CacheActivityGroup } from "@/app/(dashboard)/hooks/caching/useCacheActivity";
+import { migratedHref } from "@/utils/migratedPages";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
@@ -41,6 +42,31 @@ const toChartDatum = (group: CacheActivityGroup) => ({
   "Cached Completion Tokens": group.cached_completion_tokens,
   "Generated Completion Tokens": group.generated_completion_tokens,
 });
+
+const UNKNOWN_CALL_TYPE = "Unknown";
+
+export const buildLogsDrilldownUrl = (
+  clicked: { name: string; categoryClicked: string },
+  range: { startDate: string | undefined; endDate: string | undefined },
+): string => {
+  const params = new URLSearchParams();
+  if (clicked.name !== UNKNOWN_CALL_TYPE) {
+    params.set("call_type", clicked.name);
+  }
+  if (clicked.categoryClicked === REQUEST_SERIES.failed) {
+    params.set("status", "failure");
+  }
+  if (clicked.categoryClicked === REQUEST_SERIES.cacheHits) {
+    params.set("cache_hit", "true");
+  }
+  if (clicked.categoryClicked === REQUEST_SERIES.apiRequests) {
+    params.set("status", "success");
+    params.set("cache_hit", "false");
+  }
+  if (range.startDate) params.set("start_time", `${range.startDate}T00:00`);
+  if (range.endDate) params.set("end_time", `${range.endDate}T23:59`);
+  return `${migratedHref("logs")}?${params.toString()}`;
+};
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
@@ -307,6 +333,15 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                   categories={[REQUEST_SERIES.apiRequests, REQUEST_SERIES.cacheHits, REQUEST_SERIES.failed]}
                   colors={["sky", "teal", "red"]}
                   yAxisWidth={48}
+                  className="cursor-pointer"
+                  onValueChange={(clicked) =>
+                    window.location.assign(
+                      buildLogsDrilldownUrl(clicked, {
+                        startDate: formatDateWithoutTZ(dateValue.from),
+                        endDate: formatDateWithoutTZ(dateValue.to),
+                      }),
+                    )
+                  }
                 />
               </CardContent>
             </Card>
