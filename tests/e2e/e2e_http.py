@@ -137,6 +137,7 @@ class StreamingResponse(BaseModel):
     # quota) arrive as SSE error events inside an otherwise-successful response;
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
+    stream_done: bool = False
 
     @property
     def ok(self) -> bool:
@@ -408,6 +409,7 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
     chunks = 0
     stream_error: str | None = None
     stream_events: list[str] = []
+    stream_done = False
     for line in lines:
         if not line:
             continue
@@ -415,7 +417,9 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         decoded_line = line.decode(errors="replace")
         if decoded_line.startswith("data: "):
             payload = decoded_line.removeprefix("data: ")
-            if payload != "[DONE]":
+            if payload == "[DONE]":
+                stream_done = True
+            else:
                 stream_events.append(payload)
         if stream_error is None and (
             line.startswith(b"event: error")
@@ -433,6 +437,7 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         body="<streamed>",
         chunks=chunks,
         stream_events=stream_events,
+        stream_done=stream_done,
         stream_error=stream_error,
     )
 
@@ -480,14 +485,15 @@ def upload[R: BaseModel](
     filename: str,
     content: bytes,
     file_content_type: str = "application/jsonl",
+    file_field: str = "file",
     params: BaseModel | None = None,
     response_type: type[R],
     timeout: float = 60.0,
 ) -> Result[R]:
-    """Multipart POST for file-bearing routes (/v1/files, /v1/audio/transcriptions).
-    Form fields come from `form`, the file bytes are sent as the `file` part with
-    `file_content_type`, and `params` carries any query routing (e.g. ?model=).
-    requests sets the multipart Content-Type itself."""
+    """Multipart POST for file-bearing routes (/v1/files, /v1/audio/transcriptions,
+    /v1/images/edits). Form fields come from `form`, the file bytes are sent as the
+    `file_field` part with `file_content_type`, and `params` carries any query
+    routing (e.g. ?model=). requests sets the multipart Content-Type itself."""
     dumped: dict[str, object] = form.model_dump(by_alias=True, exclude_none=True)
     data = {key: str(value) for key, value in dumped.items()}
     try:
@@ -496,7 +502,7 @@ def upload[R: BaseModel](
             headers=_headers(headers),
             params=_params(params),
             data=data,
-            files={"file": (filename, content, file_content_type)},
+            files={file_field: (filename, content, file_content_type)},
             timeout=timeout,
         )
     except requests.RequestException as exc:

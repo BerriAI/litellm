@@ -1612,6 +1612,35 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
+    async def dispatch_failure_handlers(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        prefer_async_handlers: bool = False,
+    ) -> None:
+        """Route failure logging to async and/or sync handlers for this request.
+
+        Mirrors ``dispatch_success_handlers``: the sync ``failure_handler`` never runs
+        concurrently with ``async_failure_handler`` on the shared logging object, so the
+        two paths cannot mutate it at the same time. ``prefer_async_handlers`` only
+        bypasses the sync-SDK-only shortcut (e.g. ``async for`` on a stream from
+        ``completion()``); legacy string callbacks still run via
+        ``executor.submit(failure_handler)`` when configured.
+        """
+        litellm_params = self.model_call_details.get("litellm_params", {}) or {}
+        sync_sdk = self._is_sync_litellm_request(litellm_params)
+        passthrough = self.call_type == CallTypes.pass_through.value
+        if sync_sdk and not prefer_async_handlers and not passthrough:
+            self.failure_handler(exception, traceback_exception)
+            return
+
+        await self.async_failure_handler(exception, traceback_exception)
+
+        if not self._should_run_sync_failure_callbacks_for_async_calls():
+            return
+
+        executor.submit(self.failure_handler, exception, traceback_exception)
+
     def should_run_logging(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
@@ -1849,7 +1878,14 @@ class Logging(LiteLLMLoggingBaseClass):
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = standard_logging_object
             else:
-                self.model_call_details["response_cost"] = None
+                # Streaming reaches here before its cost is known, so the cost
+                # is seeded to None, but only when nothing has already
+                # established one. A stream that assembles into a response
+                # object recomputes the cost right after this; a pass-through
+                # stream cannot (its body is opaque) and carries the cost its
+                # upstream reported in the response headers, which an
+                # unconditional reset would discard.
+                self.model_call_details.setdefault("response_cost", None)
 
             result = self._transform_usage_objects(result=result)
 
@@ -3075,6 +3111,24 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_success_callbacks = self._remove_internal_custom_logger_callbacks(_combined_sync_callbacks)
         _filtered_success_callbacks = self._remove_internal_litellm_callbacks(_filtered_success_callbacks)
         return len(_filtered_success_callbacks) > 0
+
+    def _should_run_sync_failure_callbacks_for_async_calls(self) -> bool:
+        """
+        Returns:
+            - bool: True if sync failure callbacks should be run for async calls. eg. `langfuse`, `s3`
+
+        Mirrors ``_should_run_sync_callbacks_for_async_calls`` but reads the failure
+        callback lists. Gating the legacy sync ``failure_handler`` on the success lists
+        would drop sync failure callbacks for any caller that configures only failure
+        callbacks, so streaming errors would be logged nowhere.
+        """
+        _combined_sync_callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_failure_callbacks,
+            global_callbacks=litellm.failure_callback,
+        )
+        _filtered_failure_callbacks = self._remove_internal_custom_logger_callbacks(_combined_sync_callbacks)
+        _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
+        return len(_filtered_failure_callbacks) > 0
 
     def get_combined_callback_list(self, dynamic_success_callbacks: Optional[List], global_callbacks: List) -> List:
         if dynamic_success_callbacks is None:
@@ -5498,18 +5552,6 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         masking_fn = metadata.pop("langfuse_masking_function", None)
         if callable(masking_fn):
             litellm_params["_langfuse_masking_function"] = masking_fn
-        litellm_params["metadata"] = metadata
-
-    ## check user_api_key_metadata for sensitive logging keys
-    cleaned_user_api_key_metadata = {}
-    if "user_api_key_metadata" in metadata and isinstance(metadata["user_api_key_metadata"], dict):
-        for k, v in metadata["user_api_key_metadata"].items():
-            if k == "logging":  # prevent logging user logging keys
-                cleaned_user_api_key_metadata[k] = "scrubbed_by_litellm_for_sensitive_keys"
-            else:
-                cleaned_user_api_key_metadata[k] = v
-
-        metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
         litellm_params["metadata"] = metadata
 
     return litellm_params

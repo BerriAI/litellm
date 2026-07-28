@@ -11,20 +11,21 @@ POST /v1/tool/policy            - Update the input_policy / output_policy for a 
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from itertools import groupby
 from typing import TYPE_CHECKING, Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import TOOL_SPEND_TOP_TOOLS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import (
+    DailyToolSpendRepository,
     SpendLogsRepository,
     SpendLogToolIndexRepository,
 )
@@ -141,53 +142,18 @@ def _parse_day_start(value: str | None) -> datetime | None:
         )
 
 
-class _ToolSpendRow(BaseModel):
-    date: str
+class _ToolSpendSums(BaseModel):
+    spend: float = 0.0
+    total_tokens: int = 0
+    request_count: int = 0
+
+
+class _TopToolRow(BaseModel):
     tool_name: str
-    call_count: int
-    spend: float
-    total_tokens: int
+    sums: _ToolSpendSums = Field(alias="_sum")
 
 
-class _RequestTotalRow(BaseModel):
-    total_spend: float
-
-
-_TOOL_SPEND_ROWS = TypeAdapter(list[_ToolSpendRow])
-_REQUEST_TOTAL_ROWS = TypeAdapter(list[_RequestTotalRow])
-
-
-def _summarize_tool(name: str, grp: tuple[_ToolSpendRow, ...]) -> ToolSpendEntry:
-    return ToolSpendEntry(
-        tool_name=name,
-        spend=sum(r.spend for r in grp),
-        call_count=sum(r.call_count for r in grp),
-        total_tokens=sum(r.total_tokens for r in grp),
-    )
-
-
-def _build_tool_spend_response(
-    rows: list[_ToolSpendRow],
-    total_spend: float,
-    start_date: str,
-    end_date: str,
-) -> ToolSpendResponse:
-    daily = [
-        ToolSpendDailyEntry(date=r.date, tool_name=r.tool_name, spend=r.spend, call_count=r.call_count) for r in rows
-    ]
-    grouped = groupby(sorted(rows, key=lambda r: r.tool_name), key=lambda r: r.tool_name)
-    by_tool = sorted(
-        (_summarize_tool(name, tuple(grp)) for name, grp in grouped),
-        key=lambda e: e.spend,
-        reverse=True,
-    )
-    return ToolSpendResponse(
-        by_tool=by_tool,
-        daily=daily,
-        total_spend=total_spend,
-        start_date=start_date,
-        end_date=end_date,
-    )
+_TOP_TOOL_ROWS = TypeAdapter(list[_TopToolRow])
 
 
 @router.get(
@@ -204,11 +170,16 @@ async def get_tool_spend(
     """
     Spend attributed to each tool over a date range, for the Cost Optimization dashboard.
 
-    Joins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to
-    ``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools
-    counts its full spend toward each of those tools, so per-tool numbers are
-    attributions. ``total_spend`` is the deduplicated spend of every request that
-    called at least one tool in the window, so it never double counts.
+    Reads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked
+    tools only (MCP tool calls and response tool_calls; declaring a tool without
+    invoking it does not count). A request that invoked multiple tools counts its
+    full spend toward each of them, so per-tool numbers are attributions and do not
+    sum to a deduplicated total.
+
+    ``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in
+    SQL, and ``daily`` covers only those tools, so the response is bounded by
+    days x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many
+    distinct tool names exist.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -224,50 +195,46 @@ async def get_tool_spend(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    now = datetime.now(timezone.utc)
-    end_day = _parse_day_start(end_date)
-    start_dt = _parse_day_start(start_date) or ((end_day or now) - timedelta(days=30))
-    end_exclusive = (end_day + timedelta(days=1)) if end_day else now
+    end_day = _parse_day_start(end_date) or datetime.now(timezone.utc)
+    start_day = _parse_day_start(start_date) or end_day - timedelta(days=30)
+    start_str = start_day.strftime("%Y-%m-%d")
+    end_str = end_day.strftime("%Y-%m-%d")
+    date_window = {"date": {"gte": start_str, "lte": end_str}}
 
-    rows = await prisma_client.db.query_raw(
-        """
-        SELECT to_char(ti.start_time, 'YYYY-MM-DD') AS date,
-               ti.tool_name AS tool_name,
-               COUNT(*)::int AS call_count,
-               COALESCE(SUM(sl.spend), 0)::double precision AS spend,
-               COALESCE(SUM(sl.total_tokens), 0)::bigint AS total_tokens
-        FROM "LiteLLM_SpendLogToolIndex" ti
-        JOIN "LiteLLM_SpendLogs" sl ON sl.request_id = ti.request_id
-        WHERE ti.start_time >= ($1::timestamptz AT TIME ZONE 'UTC')
-          AND ti.start_time < ($2::timestamptz AT TIME ZONE 'UTC')
-        GROUP BY date, ti.tool_name
-        ORDER BY date ASC, spend DESC
-        """,
-        start_dt.isoformat(),
-        end_exclusive.isoformat(),
-    )
-    totals = await prisma_client.db.query_raw(
-        """
-        SELECT COALESCE(SUM(sl.spend), 0)::double precision AS total_spend
-        FROM "LiteLLM_SpendLogs" sl
-        WHERE EXISTS (
-            SELECT 1
-            FROM "LiteLLM_SpendLogToolIndex" ti
-            WHERE ti.request_id = sl.request_id
-              AND ti.start_time >= ($1::timestamptz AT TIME ZONE 'UTC')
-              AND ti.start_time < ($2::timestamptz AT TIME ZONE 'UTC')
+    table = DailyToolSpendRepository(prisma_client).table
+    top_tools = _TOP_TOOL_ROWS.validate_python(
+        await table.group_by(
+            by=["tool_name"],
+            sum={"spend": True, "total_tokens": True, "request_count": True},
+            where=date_window,
+            order={"_sum": {"spend": "desc"}},
+            take=TOOL_SPEND_TOP_TOOLS,
         )
-        """,
-        start_dt.isoformat(),
-        end_exclusive.isoformat(),
+        or []
     )
-    total_rows = _REQUEST_TOTAL_ROWS.validate_python(totals or [])
-    return _build_tool_spend_response(
-        rows=_TOOL_SPEND_ROWS.validate_python(rows or []),
-        total_spend=total_rows[0].total_spend if total_rows else 0.0,
-        start_date=start_dt.strftime("%Y-%m-%d"),
-        end_date=(end_day or now).strftime("%Y-%m-%d"),
+    by_tool = [
+        ToolSpendEntry(
+            tool_name=row.tool_name,
+            spend=row.sums.spend,
+            call_count=row.sums.request_count,
+            total_tokens=row.sums.total_tokens,
+        )
+        for row in top_tools
+    ]
+
+    daily_rows = (
+        await table.find_many(
+            where={**date_window, "tool_name": {"in": [row.tool_name for row in top_tools]}},
+            order=[{"date": "asc"}, {"spend": "desc"}],
+        )
+        if top_tools
+        else []
     )
+    daily = [
+        ToolSpendDailyEntry(date=row.date, tool_name=row.tool_name, spend=row.spend, call_count=row.request_count)
+        for row in daily_rows
+    ]
+    return ToolSpendResponse(by_tool=by_tool, daily=daily, start_date=start_str, end_date=end_str)
 
 
 @router.get(
@@ -368,7 +335,8 @@ async def get_tool_usage_logs(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).
+    Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).
+    Declaring a tool in a request body without the model invoking it does not create an entry.
     """
     from litellm.proxy.proxy_server import prisma_client
 

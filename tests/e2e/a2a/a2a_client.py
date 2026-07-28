@@ -11,12 +11,13 @@ here because only this suite uses them.
 
 from __future__ import annotations
 
+import time
 import warnings
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from e2e_http import NoBody, Result, get_external, is_ok
+from e2e_http import NoBody, Result, Success, get_external, is_ok
 from proxy_client import ProxyClient
 
 
@@ -191,11 +192,52 @@ class A2ATaskStatus(BaseModel):
     message: A2AResponseMessage | None = None
 
 
+class A2AListingLocation(BaseModel):
+    """Only the location fields a test reads back off a returned listing."""
+
+    un_locode: str | None = None
+
+
+class A2AListing(BaseModel):
+    """A single property card from the agent's `search_results` artifact; only the
+    identity/location fields a test asserts on are modelled."""
+
+    raia_id: str
+    property_type: str | None = None
+    service_type: str | None = None
+    location: A2AListingLocation = A2AListingLocation()
+
+
+class A2ASearchResults(BaseModel):
+    """The DataPart payload the property agent's `search_properties` skill returns:
+    the run count plus the listing cards themselves. Proof the tool actually ran and
+    matched, not just that the task completed with some text."""
+
+    total: int
+    count: int
+    listings: list[A2AListing] = []
+
+
+class A2AArtifactPart(BaseModel):
+    kind: str | None = None
+    data: A2ASearchResults | None = None
+
+
+class A2AArtifact(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_id: str | None = Field(default=None, alias="artifactId")
+    name: str | None = None
+    parts: list[A2AArtifactPart] = []
+
+
 class A2AResult(BaseModel):
     """A message/send result. In 0.3 the message fields sit directly on the result
     (`kind`/`role`/`parts`); in 1.0 they are nested under `message`; a real agent that
-    runs a task replies with a `task` whose agent text lives on `status.message`.
-    `text` reads the agent's reply from whichever shape the served version produced."""
+    runs a task replies with a `task` whose agent text lives on `status.message` and
+    whose tool output lives on `artifacts`. `text` reads the agent's reply from
+    whichever shape the served version produced; `search_results` reads the tool's
+    structured output when the agent ran a skill."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -205,6 +247,7 @@ class A2AResult(BaseModel):
     parts: list[A2AResponsePart] = []
     message: A2AResponseMessage | None = None
     status: A2ATaskStatus | None = None
+    artifacts: list[A2AArtifact] = []
 
     @property
     def text(self) -> str:
@@ -221,6 +264,14 @@ class A2AResult(BaseModel):
     @property
     def is_nested_v1_shape(self) -> bool:
         return self.message is not None
+
+    @property
+    def search_results(self) -> A2ASearchResults | None:
+        for artifact in self.artifacts:
+            for part in artifact.parts:
+                if part.data is not None:
+                    return part.data
+        return None
 
 
 class A2AError(BaseModel):
@@ -240,12 +291,46 @@ class A2AClient:
     proxy: ProxyClient
 
     def register_agent(self, body: AgentRegisterBody) -> Result[AgentResponse]:
-        return self.proxy.transport.post(
+        """Register an agent and, on success, wait until the data plane serves it.
+
+        /v1/agents is a control-plane route; the /a2a/{agent_id} routes that serve
+        the card and run message/send are data plane, and only see the agent after
+        the next DB reload. A card read or message/send issued the instant this
+        returns can therefore 404 on the agent it just created. Waiting here keeps
+        every caller from having to poll, the same way ProxyClient.create_model
+        waits for a new model to become servable.
+        """
+        result = self.proxy.transport.post(
             "/v1/agents",
             headers=self.proxy.transport.master,
             json=body,
             response_type=AgentResponse,
         )
+        if isinstance(result, Success):
+            self._await_agent_servable(result.data.agent_id)
+        return result
+
+    def _await_agent_servable(self, agent_id: str) -> None:
+        """Block until the data plane serves `agent_id`'s card, or fail loudly at
+        poll_timeout (a real propagation problem, surfaced here rather than as a
+        downstream 404 on whichever /a2a call the test happened to make first)."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.proxy.transport.get(
+                f"/a2a/{agent_id}/.well-known/agent-card.json",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=ServedAgentCard,
+            )
+            if isinstance(result, Success):
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"agent {agent_id!r} was registered but never became servable on the "
+                    f"data plane within {self.proxy.poll_timeout}s of POST /v1/agents "
+                    f"(control/data-plane propagation issue); last card read: {result}"
+                )
+            time.sleep(self.proxy.poll_interval)
 
     def get_agent(self, agent_id: str) -> Result[AgentResponse]:
         return self.proxy.transport.get(
