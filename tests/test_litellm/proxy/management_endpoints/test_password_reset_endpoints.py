@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from litellm.proxy.proxy_server import app
+from litellm.proxy.utils import hash_token
 
 client = TestClient(app)
 
@@ -127,3 +128,38 @@ async def test_forgot_password_no_proxy_base_url_same_response_no_email_sent(moc
     }
     mock_send_email.assert_not_awaited()
     mock_prisma.db.litellm_passwordresettoken.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_reset_token_valid(mocker):
+    mock_prisma = MagicMock()
+    now = datetime.now(timezone.utc)
+    token_row = MagicMock()
+    token_row.dict.return_value = {
+        "token_hash": hash_token("raw-token"),
+        "user_id": "user-1",
+        "requested_ip": None,
+        "created_at": now,
+        "expires_at": now.replace(year=now.year + 1),
+        "used_at": None,
+    }
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=token_row)
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=_mock_user())
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    response = client.get("/user/reset_password/validate", params={"token": "raw-token"})
+
+    assert response.status_code == 200
+    assert response.json() == {"user_email": "alice@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_validate_reset_token_invalid_returns_generic_400(mocker):
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_passwordresettoken.find_unique = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    response = client.get("/user/reset_password/validate", params={"token": "bogus"})
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": {"error": "This link is invalid or has expired."}}

@@ -101,3 +101,24 @@ async def forgot_password(data: ForgotPasswordRequest, request: Request):
         verbose_proxy_logger.warning("Password reset email not sent, SMTP misconfigured: %s", e)
 
     return {"message": _GENERIC_FORGOT_PASSWORD_MESSAGE}
+
+
+@router.get("/user/reset_password/validate", include_in_schema=False)
+async def validate_reset_password_token(token: str):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
+
+    token_repo = PasswordResetTokenRepository(prisma_client)
+    now = litellm.utils.get_utc_datetime()
+    token_row = await token_repo.find_valid_by_hash(token_hash=hash_token(token), now=now)
+
+    if token_row is None:
+        raise HTTPException(status_code=400, detail={"error": _GENERIC_INVALID_TOKEN_MESSAGE})
+
+    user_obj = await UserRepository(prisma_client).table.find_unique(where={"user_id": token_row.user_id})
+    if user_obj is None:
+        raise HTTPException(status_code=400, detail={"error": _GENERIC_INVALID_TOKEN_MESSAGE})
+
+    return {"user_email": user_obj.user_email}
