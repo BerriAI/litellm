@@ -75,12 +75,95 @@ from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
+# After /model/new, poll the data plane until the model is listed (or fail).
+# Shorter than poll_timeout (spend/log read-backs ~120s); longer than a single
+# request. 40s is the harness middle ground: happy path returns on the first
+# poll, a stuck reload fails in under a minute instead of two.
+MODEL_SERVABLE_TIMEOUT = 40.0
+MODEL_SERVABLE_INTERVAL = 2.0
+# Cap each /v1/models poll so one slow request cannot outlast the budget.
+# Clamped further to remaining deadline inside await_servable.
+MODEL_SERVABLE_REQUEST_TIMEOUT = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class Servable:
+    """The data plane listed the model within the deadline."""
+
+
+@dataclass(frozen=True, slots=True)
+class NotServable:
+    """The deadline passed without the data plane listing the model.
+
+    `last_result` is the final /v1/models read, so the caller can tell "the proxy
+    answered but omitted the model" (propagation) from "the read itself failed"
+    (network/auth) when reporting."""
+
+    last_result: Result[ModelsListResponse] | None
+
+
+ServableOutcome = Servable | NotServable
+
+
+def await_servable(
+    list_models: Callable[[float], Result[ModelsListResponse]],
+    *,
+    model_name: str,
+    timeout: float,
+    interval: float,
+    request_timeout: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> ServableOutcome:
+    """Poll `list_models` until the data plane lists `model_name` or `timeout` elapses.
+
+    `list_models` receives the per-poll request timeout, clamped to the remaining
+    deadline so a slow final poll cannot overrun the overall budget. Clock and sleep
+    are injected so this is exercised without wall-clock waits. Always polls at least
+    once when the loop starts with a positive budget."""
+    deadline = now() + timeout
+    last_result: Result[ModelsListResponse] | None = None
+    while True:
+        remaining = deadline - now()
+        if remaining <= 0 and last_result is not None:
+            return NotServable(last_result=last_result)
+        poll_timeout = min(request_timeout, remaining) if remaining > 0 else request_timeout
+        last_result = list_models(poll_timeout)
+        if isinstance(last_result, Success) and any(
+            entry.id == model_name for entry in last_result.data.data
+        ):
+            return Servable()
+        if now() + interval >= deadline:
+            return NotServable(last_result=last_result)
+        sleep(interval)
+
+
+def servable_timeout_message(
+    *,
+    model_name: str,
+    timeout: float,
+    last_result: Result[ModelsListResponse] | None,
+) -> str:
+    last_error = (
+        f"; last /v1/models poll did not succeed: {last_result}"
+        if last_result is not None and not isinstance(last_result, Success)
+        else ""
+    )
+    return (
+        f"model {model_name!r} was created but never became servable on the data "
+        f"plane within {timeout}s of /model/new (control/data-plane propagation or "
+        f"STORE_MODEL_IN_DB reload issue){last_error}"
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class ProxyClient:
     transport: Transport
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
+    model_servable_timeout: float = MODEL_SERVABLE_TIMEOUT
+    model_servable_interval: float = MODEL_SERVABLE_INTERVAL
+    model_servable_request_timeout: float = MODEL_SERVABLE_REQUEST_TIMEOUT
 
     # ---- keys / customers (satisfies lifecycle.ResourceClient) ----------
 
@@ -167,7 +250,12 @@ class ProxyClient:
         this returns can race the reload and 400 with "Invalid model name passed".
         We therefore poll the data-plane /v1/models until the model appears before
         handing back, so callers can invoke it immediately. In the monolithic case
-        it is already present on the first poll, so this adds one request."""
+        it is already present on the first poll, so this adds one request.
+
+        The wait is bounded by `model_servable_timeout` rather than the much longer
+        `poll_timeout` used for batched read-backs, so a stuck reload fails in under
+        a minute instead of two. Happy path still returns as soon as /v1/models lists
+        the model (usually the first poll)."""
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
@@ -185,32 +273,34 @@ class ProxyClient:
 
     def _await_model_servable(self, model_name: str) -> None:
         """Block until the data plane lists `model_name`, or fail loudly if it does
-        not within poll_timeout (a real propagation/config problem, surfaced here
-        instead of as a downstream "Invalid model name passed")."""
-        deadline = time.monotonic() + self.poll_timeout
-        last_result: Result[ModelsListResponse] | None = None
-        while time.monotonic() < deadline:
-            last_result = self.transport.get(
+        not within model_servable_timeout (a real propagation/config problem,
+        surfaced here instead of as a downstream "Invalid model name passed")."""
+        outcome = await_servable(
+            lambda poll_timeout: self.transport.get(
                 "/v1/models",
                 headers=self.transport.master,
                 params=NoBody(),
                 response_type=ModelsListResponse,
-            )
-            if isinstance(last_result, Success) and any(
-                entry.id == model_name for entry in last_result.data.data
-            ):
+                timeout=poll_timeout,
+            ),
+            model_name=model_name,
+            timeout=self.model_servable_timeout,
+            interval=self.model_servable_interval,
+            request_timeout=self.model_servable_request_timeout,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        match outcome:
+            case Servable():
                 return
-            time.sleep(self.poll_interval)
-        last_error = (
-            f"; last /v1/models poll did not succeed: {last_result}"
-            if last_result is not None and not isinstance(last_result, Success)
-            else ""
-        )
-        raise AssertionError(
-            f"model {model_name!r} was created but never became servable on the data "
-            f"plane within {self.poll_timeout}s of /model/new (control/data-plane "
-            f"propagation or STORE_MODEL_IN_DB reload issue){last_error}"
-        )
+            case NotServable(last_result=last_result):
+                raise AssertionError(
+                    servable_timeout_message(
+                        model_name=model_name,
+                        timeout=self.model_servable_timeout,
+                        last_result=last_result,
+                    )
+                )
 
     def update_model(self, model_id: str, litellm_params: LiteLLMParamsBody) -> None:
         """Merge `litellm_params` over the deployment `model_id`'s stored params via
