@@ -5,7 +5,7 @@ This is an enterprise feature and requires a premium license.
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
@@ -19,7 +19,7 @@ from fastapi import (
     Request,
     Response,
 )
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypedDict, assert_never
 
 import litellm
@@ -419,6 +419,30 @@ def _normalized_member_type(member: SCIMMember) -> str | None:
     return normalized or None
 
 
+_JSON_OBJECT_ADAPTER = TypeAdapter(Dict[str, object])
+
+
+def _json_object_fields(raw: object) -> Mapping[str, object] | None:
+    """A typed, read-only view of a JSON object, or None when it is not one."""
+    try:
+        return _JSON_OBJECT_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+
+
+def _team_metadata_has_scim_provenance(team_metadata: object) -> bool:
+    """Whether a group write from the identity provider left its mark on this team.
+
+    ``SCIM_TEAM_DATA_METADATA_KEY`` counts because PUT has been writing it since
+    long before the explicit marker, so a team the identity provider already
+    syncs is recognized without waiting to be written again.
+    """
+    fields = _json_object_fields(team_metadata)
+    if fields is None:
+        return False
+    return bool(fields.get(SCIM_MANAGED_TEAM_METADATA_KEY)) or fields.get(SCIM_TEAM_DATA_METADATA_KEY) is not None
+
+
 async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient) -> _ClassifiedGroupMember:
     """
     Decide what a single SCIM group member refers to.
@@ -436,8 +460,10 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
       ``direct`` for ``User.groups``), and dropping a live user over one would
       revoke that user's team access on the next full sync.
     - an id that names an existing team is dropped only when the member arrives
-      untyped, which is how Okta sends nested groups. An id the IdP called a User
-      is a user even if some team happens to share the id.
+      untyped, which is how Okta sends nested groups, and only when that team is
+      one the identity provider writes. An id the IdP called a User is a user
+      even if some team happens to share the id, and a team created here rather
+      than through SCIM is not evidence of anything about the member.
     """
     value = _member_value(member)
     member_type = _normalized_member_type(member)
@@ -454,7 +480,7 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
 
     if member_type is None:
         team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": value})
-        if team is not None:
+        if team is not None and _team_metadata_has_scim_provenance(team.metadata):
             return _SkippedGroupMember(value=value, reason="existing_team")
 
     return _UnknownMember(value=value)
@@ -1497,10 +1523,10 @@ def _parse_member_entry(entry: object) -> SCIMMember | None:
     if isinstance(entry, str):
         return SCIMMember(value=entry)
 
-    if not isinstance(entry, dict):
+    fields = _json_object_fields(entry)
+    if fields is None:
         return None
 
-    fields: dict[str, object] = dict(entry)
     entry_value = fields.get("value")
     if not entry_value:
         return None
@@ -2010,6 +2036,7 @@ async def create_group(
                 team_id=team_id,
                 team_alias=group.displayName,
                 members_with_roles=members_with_roles,
+                metadata={SCIM_MANAGED_TEAM_METADATA_KEY: True},
             ),
             http_request=Request(scope={"type": "http", "path": "/scim/v2/Groups"}),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
@@ -2052,7 +2079,11 @@ async def update_group(
 
         # Prepare update data
         existing_metadata = existing_team.metadata if existing_team.metadata else {}
-        updated_metadata = {**existing_metadata, "scim_data": group.model_dump()}
+        updated_metadata = {
+            **existing_metadata,
+            SCIM_TEAM_DATA_METADATA_KEY: group.model_dump(),
+            SCIM_MANAGED_TEAM_METADATA_KEY: True,
+        }
 
         update_data = {
             "team_alias": group.displayName,
@@ -2155,8 +2186,7 @@ async def _process_group_patch_operations(
     update_data: Dict[str, Any] = {}
 
     # Create a fresh copy of existing metadata to avoid Prisma issues
-    existing_metadata = existing_team.metadata or {}
-    metadata = dict(existing_metadata) if existing_metadata else {}
+    metadata = {**(existing_team.metadata or {}), SCIM_MANAGED_TEAM_METADATA_KEY: True}
 
     # Track member changes. members_with_roles is the source of truth for team
     # membership; the legacy `members` column is not populated by team creation
@@ -2211,9 +2241,7 @@ async def _process_group_patch_operations(
             else:
                 metadata[path] = value
 
-    # Include metadata in update data if it exists
-    if metadata:
-        update_data["metadata"] = metadata
+    update_data["metadata"] = metadata
 
     member_replace_present = any(
         op.op == "replace" and (op.path or "").lower().startswith("members") for op in patch_ops.Operations

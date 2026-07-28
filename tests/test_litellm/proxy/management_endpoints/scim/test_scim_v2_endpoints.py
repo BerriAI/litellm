@@ -38,6 +38,8 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
+    SCIM_MANAGED_TEAM_METADATA_KEY,
+    SCIM_TEAM_DATA_METADATA_KEY,
     SCIMGroup,
     SCIMMember,
     SCIMPatchOp,
@@ -3530,8 +3532,20 @@ async def test_process_group_patch_replace_empty_value_does_not_use_path_filter(
     assert final_members == set()
 
 
-def _member_resolution_prisma(mocker, *, users: set, teams: set):
-    """Prisma mock where only the given ids resolve to a user row / team row."""
+def _member_resolution_prisma(mocker, *, users: set, teams: set, unmanaged_teams: frozenset = frozenset()):
+    """Prisma mock where only the given ids resolve to a user row / team row.
+
+    ``teams`` are teams a SCIM group write created, so they carry provenance;
+    ``unmanaged_teams`` resolve too but look like a team an admin created here.
+    """
+
+    def team_row(team_id: str) -> LiteLLM_TeamTable | None:
+        if team_id in teams:
+            return LiteLLM_TeamTable(team_id=team_id, metadata={SCIM_MANAGED_TEAM_METADATA_KEY: True})
+        if team_id in unmanaged_teams:
+            return LiteLLM_TeamTable(team_id=team_id, metadata={})
+        return None
+
     prisma_client = mocker.MagicMock()
     prisma_client.db = mocker.MagicMock()
     prisma_client.db.litellm_usertable = mocker.MagicMock()
@@ -3541,11 +3555,7 @@ def _member_resolution_prisma(mocker, *, users: set, teams: set):
         )
     )
     prisma_client.db.litellm_teamtable = mocker.MagicMock()
-    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        side_effect=lambda where: (
-            LiteLLM_TeamTable(team_id=where["team_id"]) if where["team_id"] in teams else None
-        )
-    )
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=lambda where: team_row(where["team_id"]))
     return prisma_client
 
 
@@ -4067,6 +4077,195 @@ async def test_process_group_patch_operations_skips_non_user_member_types(
 
     create_user_mock.assert_not_called()
     assert final_members == set()
+
+
+@pytest.mark.parametrize(
+    "team_metadata, expect_provisioned",
+    [
+        ({SCIM_MANAGED_TEAM_METADATA_KEY: True}, False),
+        ({SCIM_TEAM_DATA_METADATA_KEY: {"displayName": "Child.Apps"}}, False),
+        ({}, True),
+        (None, True),
+        ({SCIM_MANAGED_TEAM_METADATA_KEY: False}, True),
+        ({SCIM_TEAM_DATA_METADATA_KEY: None}, True),
+    ],
+    ids=[
+        "scim-managed",
+        "legacy-scim-data",
+        "admin-created",
+        "no-metadata",
+        "marker-unset",
+        "legacy-key-without-value",
+    ],
+)
+@pytest.mark.asyncio
+async def test_process_group_patch_team_match_needs_scim_provenance(
+    mocker, scim_upsert_user_enabled, team_metadata, expect_provisioned
+):
+    """A bare member id that names a team is only evidence of a nested group when the
+    identity provider is what wrote that team. Teams created here can share an id with
+    a real user, and skipping those members stops provisioning them entirely."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "child-team"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[],
+    )
+    prisma_client = _member_resolution_prisma(mocker, users=set(), teams=set())
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="child-team", metadata=team_metadata)
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="child-team", key="new-key")),
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=prisma_client,
+    )
+
+    assert create_user_mock.called is expect_provisioned
+    assert final_members == ({"child-team"} if expect_provisioned else set())
+
+
+@pytest.mark.asyncio
+async def test_create_group_strict_mode_rejects_id_matching_admin_created_team(mocker, scim_upsert_user_disabled):
+    """Strict mode drops nested groups but reports unknown users. A team an admin
+    created here says nothing about the member, so the member is an unknown user."""
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id="parent-group",
+        displayName="Parent Group",
+        members=[SCIMMember(value="admin-team")],
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(
+            return_value=_member_resolution_prisma(
+                mocker, users=set(), teams=set(), unmanaged_teams=frozenset({"admin-team"})
+            )
+        ),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await create_group(group=scim_group)
+
+    assert int(exc_info.value.code) == 400
+    assert "admin-team" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_create_group_stamps_scim_provenance(mocker, scim_upsert_user_enabled):
+    """The provenance the classifier reads only exists if the group writes stamp it;
+    a SCIM-created team that carries no mark looks admin-created forever after."""
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id="child-group",
+        displayName="Child.Apps",
+        members=[],
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=_member_resolution_prisma(mocker, users=set(), teams=set())),
+    )
+    new_team_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=mocker.MagicMock()),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+
+    await create_group(group=scim_group)
+
+    assert new_team_mock.call_args.kwargs["data"].metadata == {SCIM_MANAGED_TEAM_METADATA_KEY: True}
+
+
+@pytest.mark.asyncio
+async def test_update_group_stamps_scim_provenance(mocker, scim_upsert_user_enabled):
+    """A PUT full sync adopts a team the identity provider now owns, and the stamp has
+    to land alongside the existing metadata rather than replacing it."""
+    import json
+
+    group_id = "child-group"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Child.Apps",
+        members=[],
+        members_with_roles=[],
+        metadata={"existing_key": "kept"},
+    )
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Child.Apps",
+        members=[],
+    )
+
+    prisma_client = _member_resolution_prisma(mocker, users=set(), teams=set())
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_team_exists",
+        AsyncMock(return_value=existing_team),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group),
+    )
+
+    await update_group(group_id=group_id, group=scim_group)
+
+    written = json.loads(prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"])
+    assert written[SCIM_MANAGED_TEAM_METADATA_KEY] is True
+    assert written["existing_key"] == "kept"
+    assert SCIM_TEAM_DATA_METADATA_KEY in written
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_stamps_scim_provenance(mocker, scim_upsert_user_enabled):
+    """PATCH is how Okta adopts a group, so a membership-only patch has to stamp the
+    team too; otherwise the group it manages never gains provenance."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "real-user"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[],
+        metadata={"existing_key": "kept"},
+    )
+
+    update_data, _, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(mocker, users={"real-user"}, teams=set()),
+    )
+
+    assert update_data["metadata"][SCIM_MANAGED_TEAM_METADATA_KEY] is True
+    assert update_data["metadata"]["existing_key"] == "kept"
 
 
 @pytest.mark.parametrize("member_type", ["direct", "Device"])
