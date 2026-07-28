@@ -2120,13 +2120,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def get_request_inference_geo(params: Mapping[str, Any] | None) -> str | None:
-        """
-        Read the region a request asked to be served from.
-
-        Anthropic echoes ``inference_geo`` on response usage for some surfaces but not all, and the
-        streamed usage LiteLLM reassembles can lose it, so the requested region keeps geo pricing
-        keyed on something when the response does not carry one.
-        """
         if not params:
             return None
         value: Final = params.get("inference_geo")
