@@ -5228,7 +5228,7 @@ async def test_resolve_logging_exporters_team_level(_seeded_logging_credentials,
     assert {d["endpoint"] for d in destinations} == {
         "https://cloud.langfuse.com/api/public/otel"
     }
-    assert backends == ["langfuse_otel"]
+    assert backends == ("langfuse_otel",)
 
 
 @pytest.mark.asyncio
@@ -5259,7 +5259,7 @@ async def test_resolve_logging_exporters_carries_arize_project(
     _patch_identity(monkeypatch, team=["arize-prod"])
     destinations, _ = await _resolve_logging_exporters(_auth())
 
-    assert destinations == [
+    assert destinations == (
         {
             "callback_name": "arize",
             "endpoint": "https://otlp.arize.com/v1",
@@ -5268,8 +5268,8 @@ async def test_resolve_logging_exporters_carries_arize_project(
                 "model_id": "tenant-arize",
                 "arize.project.name": "tenant-arize",
             },
-        }
-    ]
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -5279,7 +5279,7 @@ async def test_resolve_logging_exporters_empty_without_assignment(
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
     destinations, backends = await _resolve_logging_exporters(_auth())
-    assert destinations == [] and backends == []
+    assert destinations == () and backends == ()
 
 
 @pytest.mark.asyncio
@@ -5291,7 +5291,7 @@ async def test_resolve_logging_exporters_skips_unknown_and_provider_creds(
     # unknown name + a provider credential (not credential_type=logging) -> nothing
     _patch_identity(monkeypatch, team=["does-not-exist", "openai-key"])
     destinations, backends = await _resolve_logging_exporters(_auth())
-    assert destinations == [] and backends == []
+    assert destinations == () and backends == ()
 
 
 @pytest.mark.asyncio
@@ -5560,7 +5560,7 @@ async def test_resolve_auto_enable_empty_access_is_deny_all(monkeypatch):
     try:
         for auth in (_auth(team_id="team-x"), _auth(org_id="org-y"), _auth()):
             destinations, _ = await _resolve_logging_exporters(auth)
-            assert destinations == []
+            assert destinations == ()
     finally:
         litellm.credential_list = original
 
@@ -5597,7 +5597,7 @@ async def test_resolve_logging_exporters_access_default_deny(
     destinations, backends = await _resolve_logging_exporters(
         _auth(team_id="team-eu", org_id="org-eu")
     )
-    assert destinations == [] and backends == []
+    assert destinations == () and backends == ()
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,7 @@ from litellm.integrations.weave.weave_otel import _get_weave_authorization_heade
 LOGGING_CREDENTIAL_NAME_KEY = LITELLM_LOGGING_CREDENTIAL_NAME_KEY
 
 
-def _parse_header_string(raw: str) -> dict[str, str]:
+def _parse_header_string(raw: str) -> Mapping[str, str]:
     pairs = (item.split("=", 1) for item in raw.split(",") if "=" in item)
     return {key.strip(): value.strip() for key, value in pairs}
 
@@ -103,7 +103,7 @@ def _generic_destination(values: Mapping[str, str]) -> OtelDestination | None:
     return OtelDestination(endpoint=endpoint, headers=_parse_header_string(values.get("otel_headers", "")))
 
 
-_ADAPTERS: dict[str, Callable[[Mapping[str, str]], OtelDestination | None]] = {
+_ADAPTERS: Mapping[str, Callable[[Mapping[str, str]], OtelDestination | None]] = {
     "langfuse_otel": _langfuse_destination,
     "arize": _arize_destination,
     "weave_otel": _weave_destination,

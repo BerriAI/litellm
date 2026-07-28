@@ -37,11 +37,6 @@ from litellm import (
     turn_off_message_logging,
 )
 from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
-from litellm.exceptions import (
-    BudgetExceededError,
-    validate_rate_limit_category,
-    validate_rate_limit_type,
-)
 from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
@@ -55,6 +50,11 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     _select_model_name_for_cost_calc,
+)
+from litellm.exceptions import (
+    BudgetExceededError,
+    validate_rate_limit_category,
+    validate_rate_limit_type,
 )
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -3418,6 +3418,7 @@ def _get_masked_values(
         "credentials",
         "password",
         "passwd",
+        "otel_headers",
     ]
 
     def _mask_value(v: Any) -> Any:

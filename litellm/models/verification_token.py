@@ -5,6 +5,7 @@ Canonical definition for ``litellm_verificationtoken``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Dict, List, Optional, Union
 
@@ -54,7 +55,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     access_group_ids: Optional[List[str]] = None
-    logging_exporters: list[str] | None = None
+    logging_exporters: Sequence[str] | None = None
     rotation_count: Optional[int] = 0
     auto_rotate: Optional[bool] = False
     rotation_interval: Optional[str] = None

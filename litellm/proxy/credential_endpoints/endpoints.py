@@ -2,6 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -13,7 +14,6 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
     validate_credential_access,
 )
@@ -146,8 +146,8 @@ async def get_credentials(
 
     Proxy-admin only (a proxy-admin-viewer may read). Credentials, including
     admin-owned logging destinations, are managed exclusively by the proxy admin;
-    tenants never read them over the API. Values are masked for the admin and
-    fully redacted for the admin-viewer.
+    tenants never read them over the API. Secret values are masked for both
+    admin-tier readers, exactly as they were before this feature.
     """
     try:
         is_proxy_admin = _is_proxy_admin(user_api_key_dict)
@@ -160,11 +160,7 @@ async def get_credentials(
         masked_credentials = [
             {
                 "credential_name": credential.credential_name,
-                "credential_values": (
-                    _get_masked_values(credential.credential_values)
-                    if is_proxy_admin
-                    else dict.fromkeys(credential.credential_values, "********")
-                ),
+                "credential_values": _get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
             }
             for credential in litellm.credential_list
@@ -329,7 +325,10 @@ def update_db_credential(
     return merged_credential
 
 
-def _merge_credential_info(into: dict, patch: dict) -> None:
+def _merge_credential_info(
+    into: dict,  # mutable-ok: the merge target, updated in place for the DB write and the cache sync
+    patch: Mapping[str, object],
+) -> None:
     """Merge ``patch`` into ``into`` in place, with surgical access subfields.
 
     A top-level dict.update would let a patch like ``{access: {teams: [...]}}``

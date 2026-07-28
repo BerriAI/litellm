@@ -4,6 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
+from collections.abc import Awaitable, Sequence
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import HTTPException, Request
@@ -111,6 +112,7 @@ if TYPE_CHECKING:
     from litellm.models.credentials import CredentialItem
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import PolicyMatchContext
+    from litellm.types.utils import OtelDestinationParams
 
     ProxyConfig = _ProxyConfig
 else:
@@ -620,7 +622,7 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     return getattr(team_obj, "organization_id", None)
 
 
-async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_id: str | None) -> set:
+async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_id: str | None) -> frozenset[str]:
     """The union of admin-assigned exporter names across the request's identity chain.
 
     Each level is read from its own ``logging_exporters`` column: the key via
@@ -641,64 +643,67 @@ async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_i
 
     prisma_client = proxy_server.prisma_client
     if prisma_client is None:
-        return set()
+        return frozenset()
     cache = proxy_server.user_api_key_cache
     span = getattr(user_api_key_dict, "parent_otel_span", None)
-    names: set = set()
 
-    def _add(obj: object) -> None:
+    def _assigned(obj: object) -> tuple[str, ...]:
         assigned = getattr(obj, "logging_exporters", None)
         if isinstance(assigned, (list, tuple)):
-            names.update(str(name) for name in assigned)
+            return tuple(str(name) for name in assigned)
+        return ()
 
-    if user_api_key_dict.token:
+    async def _level(lookup: "Awaitable[object]") -> tuple[str, ...]:
         try:
-            _add(
-                await get_key_object(
-                    hashed_token=user_api_key_dict.token,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=cache,
-                    parent_otel_span=span,
-                    proxy_logging_obj=proxy_server.proxy_logging_obj,
-                )
-            )
+            return _assigned(await lookup)
         except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
-            pass
+            return ()
 
-    if user_api_key_dict.team_id:
-        try:
-            _add(
-                await get_team_object(
-                    team_id=user_api_key_dict.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=cache,
-                    parent_otel_span=span,
-                    proxy_logging_obj=proxy_server.proxy_logging_obj,
-                )
+    key_names = (
+        await _level(
+            get_key_object(
+                hashed_token=user_api_key_dict.token,
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+                parent_otel_span=span,
+                proxy_logging_obj=proxy_server.proxy_logging_obj,
             )
-        except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
-            pass
-
-    if org_id:
-        try:
-            _add(
-                await get_org_object(
-                    org_id=org_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=cache,
-                    parent_otel_span=span,
-                    proxy_logging_obj=proxy_server.proxy_logging_obj,
-                )
+        )
+        if user_api_key_dict.token
+        else ()
+    )
+    team_names = (
+        await _level(
+            get_team_object(
+                team_id=user_api_key_dict.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+                parent_otel_span=span,
+                proxy_logging_obj=proxy_server.proxy_logging_obj,
             )
-        except Exception:  # noqa: BLE001  # best-effort identity enrichment; a failed lookup must not block the request
-            pass
-
-    return names
+        )
+        if user_api_key_dict.team_id
+        else ()
+    )
+    org_names = (
+        await _level(
+            get_org_object(
+                org_id=org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+                parent_otel_span=span,
+                proxy_logging_obj=proxy_server.proxy_logging_obj,
+            )
+        )
+        if org_id
+        else ()
+    )
+    return frozenset((*key_names, *team_names, *org_names))
 
 
 async def _resolve_logging_exporters(
     user_api_key_dict: UserAPIKeyAuth,
-) -> "tuple[list, list]":
+) -> "tuple[tuple[OtelDestinationParams, ...], tuple[str, ...]]":
     """Resolve the destinations this request fans out to, as (destinations, backends).
 
     ``credential_info.access`` gates every destination: empty access grants no one, so
@@ -758,7 +763,7 @@ async def _resolve_logging_exporters(
         )
         for backend, destination in built
     }
-    destinations = [
+    destinations: tuple[OtelDestinationParams, ...] = tuple(
         {
             "callback_name": backend,
             "endpoint": destination.endpoint,
@@ -766,8 +771,8 @@ async def _resolve_logging_exporters(
             "resource_attributes": destination.resource_attributes,
         }
         for backend, destination in deduped.values()
-    ]
-    backends = list(dict.fromkeys(backend for backend, _ in deduped.values()))
+    )
+    backends = tuple(dict.fromkeys(backend for backend, _ in deduped.values()))
     return destinations, backends
 
 
@@ -784,7 +789,7 @@ def _request_destination_from_raw(item: object) -> "OtelDestination | None":
         return None
 
 
-def _set_request_otel_destinations(destinations: list) -> None:
+def _set_request_otel_destinations(destinations: Sequence[object]) -> None:
     from litellm.integrations.otel.plumbing.context import set_request_destinations
 
     set_request_destinations(
@@ -793,9 +798,9 @@ def _set_request_otel_destinations(destinations: list) -> None:
 
 
 async def _apply_admin_logging_exporters(
-    data: dict,
+    data: dict,  # mutable-ok: registers the resolved backends on data's success/failure_callback in place
     user_api_key_dict: UserAPIKeyAuth,
-    cached_destinations: "list | None" = None,
+    cached_destinations: "Sequence[object] | None" = None,
 ) -> None:
     """Anchor the resolved fan-out destinations on the request context and activate
     their backends.
@@ -811,8 +816,8 @@ async def _apply_admin_logging_exporters(
     resolver runs here.
     """
     if cached_destinations is not None:
-        destinations = list(cached_destinations)
-        backends = list(
+        destinations = tuple(cached_destinations)
+        backends = tuple(
             dict.fromkeys(
                 str(d["callback_name"]) for d in destinations if isinstance(d, dict) and d.get("callback_name")
             )

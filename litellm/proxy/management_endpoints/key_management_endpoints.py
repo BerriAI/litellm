@@ -18,7 +18,7 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
@@ -3621,7 +3621,7 @@ async def generate_key_helper_fn(
     rotation_interval: Optional[str] = None,
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
-    logging_exporters: list | None = None,  # admin-owned OTEL destinations (credential names)
+    logging_exporters: Sequence[str] | None = None,  # admin-owned OTEL destinations (credential names)
     budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client

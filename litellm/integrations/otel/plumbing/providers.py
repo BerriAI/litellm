@@ -1,5 +1,6 @@
 """Provider / exporter factory + the Baggage span processor."""
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from opentelemetry import _logs, baggage, metrics
@@ -136,7 +137,7 @@ def default_otlp_kind_for_backend(callback_name: "str | None") -> str:
     return "otlp_grpc" if callback_name in _GRPC_BACKENDS else "otlp_http"
 
 
-def destination_resource_attrs(destination: "OtelDestination") -> dict[str, str]:
+def destination_resource_attrs(destination: "OtelDestination") -> Mapping[str, str]:
     """The backend-required Resource attributes a destination carries on every span.
 
     Backend-agnostic: each backend's destination builder (``presets.destinations``)

@@ -13,20 +13,10 @@ from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
-from litellm.integrations.otel.plumbing.context import (
-    is_recordable_span,
-    mcp_message_transport_span,
-    request_root_span,
-    resolve_mcp_span_context,
-    resolve_parent_context,
-    resolve_request_span_context,
-    set_request_baggage,
-    set_request_root_span,
-)
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.model.baggage import promoted_baggage
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -42,6 +32,18 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
+from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
+from litellm.integrations.otel.model.utils import to_ns
+from litellm.integrations.otel.plumbing.context import (
+    is_recordable_span,
+    mcp_message_transport_span,
+    request_root_span,
+    resolve_mcp_span_context,
+    resolve_parent_context,
+    resolve_request_span_context,
+    set_request_baggage,
+    set_request_root_span,
+)
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
 from litellm.integrations.otel.plumbing.metrics import (
     GenAIMetricRecorder,
@@ -56,8 +58,6 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
-from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
-from litellm.integrations.otel.model.utils import to_ns
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
@@ -165,12 +165,12 @@ class OpenTelemetryV2(CustomLogger):
             event_recorder=self._init_events(logger_provider),
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
-        self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
+        self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         # call_ids for which the LLM-call span has already been emitted; lets
         # _close_llm_call no-op on duplicate callbacks (success + failure both
         # firing, or success firing twice) instead of double-exporting the
         # deferred-emit span. Bounded LRU, same size as _open_llm_calls.
-        self._closed_call_ids: "OrderedDict[str, None]" = OrderedDict()
+        self._closed_call_ids: OrderedDict[str, None] = OrderedDict()  # mutable-ok: bounded LRU of emitted call ids
         self._init_otel_logger_on_litellm_proxy()
 
     def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":

@@ -62,7 +62,9 @@ class TenantTracerCache:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
-        self._providers: OrderedDict[tuple[object, ...], TracerProvider] = OrderedDict()
+        self._providers: OrderedDict[tuple[object, ...], TracerProvider] = (
+            OrderedDict()
+        )  # mutable-ok: bounded LRU tracer-provider cache
 
     def _evict_if_full(self) -> None:
         """Drop the least-recently-used provider when over capacity, without a
@@ -98,7 +100,7 @@ class TenantTracerCache:
 
     def _group_by_resource(
         self, destinations: "tuple[OtelDestination, ...]"
-    ) -> "list[tuple[tuple[tuple[str, str], ...], list[OtelDestination]]]":
+    ) -> "tuple[tuple[tuple[tuple[str, str], ...], tuple[OtelDestination, ...]], ...]":
         """Destinations grouped by their backend-required Resource attributes.
 
         The key is a stable sorted tuple of ``destination_resource_attrs`` items.
@@ -110,16 +112,18 @@ class TenantTracerCache:
             destination_resource_attrs,
         )
 
-        groups: OrderedDict[tuple[tuple[str, str], ...], list[OtelDestination]] = OrderedDict()
+        groups: OrderedDict[tuple[tuple[str, str], ...], list[OtelDestination]] = (
+            OrderedDict()
+        )  # mutable-ok: insertion-order grouping accumulator, frozen before return
         for destination in destinations:
             key = tuple(sorted(destination_resource_attrs(destination).items()))
             groups.setdefault(key, []).append(destination)
-        return sorted(groups.items())
+        return tuple((key, tuple(group)) for key, group in sorted(groups.items()))
 
     def _tracer_for_group(
         self,
         resource_key: "tuple[tuple[str, str], ...]",
-        group: "list[OtelDestination]",
+        group: "tuple[OtelDestination, ...]",
         *,
         include_base: bool,
     ) -> Tracer:
@@ -310,7 +314,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def __init__(self, owner_callback_name: str | None) -> None:
         self._owner = owner_callback_name
-        self._processors: OrderedDict[tuple, SpanProcessor] = OrderedDict()
+        self._processors: OrderedDict[tuple, SpanProcessor] = (
+            OrderedDict()
+        )  # mutable-ok: bounded LRU span-processor cache
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         return None

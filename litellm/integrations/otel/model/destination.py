@@ -7,6 +7,8 @@ request's identity chain, and the v2 logger exports through it. Every OTEL backe
 per-backend field mapping lives in ``litellm.integrations.otel.presets.destinations``.
 """
 
+from collections.abc import Mapping
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -14,8 +16,8 @@ class OtelDestination(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     endpoint: str
-    headers: dict[str, str] = Field(default_factory=dict)
-    resource_attributes: dict[str, str] = Field(default_factory=dict)
+    headers: Mapping[str, str] = Field(default_factory=dict)
+    resource_attributes: Mapping[str, str] = Field(default_factory=dict)
     # The OTEL backend (callback_name) this destination belongs to, so a request
     # that fans out across backends routes each destination to the logger that
     # owns its attribute vocabulary. None for the legacy single-destination path.

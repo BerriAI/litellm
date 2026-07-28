@@ -7,6 +7,8 @@ the destination's own ``credential_info.access``; the resolver
 (``litellm_pre_call_utils``) evaluates that at request time.
 """
 
+from collections.abc import Mapping, Sequence
+
 from fastapi import HTTPException, status
 
 import litellm
@@ -15,7 +17,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 LOGGING_EXPORTERS_KEY = "logging_exporters"
 
 
-def validate_credential_access(credential_info: dict | None) -> None:
+def validate_credential_access(credential_info: Mapping[str, object] | None) -> None:
     """Validate ``credential_info.access`` shape when the write sets one.
 
     No-op when ``access`` is absent. Otherwise it must be an object whose ``global`` (if
@@ -50,7 +52,7 @@ def validate_credential_access(credential_info: dict | None) -> None:
         )
 
 
-def _logging_credentials_by_name() -> dict[str, dict]:
+def _logging_credentials_by_name() -> Mapping[str, Mapping[str, object]]:
     return {
         credential.credential_name: (credential.credential_info or {})
         for credential in litellm.credential_list
@@ -58,8 +60,8 @@ def _logging_credentials_by_name() -> dict[str, dict]:
     }
 
 
-def _logging_credential_names() -> set[str]:
-    return set(_logging_credentials_by_name())
+def _logging_credential_names() -> frozenset[str]:
+    return frozenset(_logging_credentials_by_name())
 
 
 def _validate_exporters_shape_and_names(exporters: object) -> None:
@@ -84,8 +86,8 @@ def _validate_exporters_shape_and_names(exporters: object) -> None:
 
 
 def _exporter_value_changes(
-    requested_metadata: dict | None,
-    existing_metadata: dict | None,
+    requested_metadata: Mapping[str, object] | None,
+    existing_metadata: Mapping[str, object] | None,
 ) -> bool:
     """True if the effective ``metadata.logging_exporters`` value would change.
 
@@ -111,14 +113,17 @@ def _exporter_value_changes(
         return True
     if not new_has and existing_has:
         return True
-    return requested_metadata.get(LOGGING_EXPORTERS_KEY) != existing
+    new_value = requested_metadata.get(LOGGING_EXPORTERS_KEY)
+    if isinstance(new_value, (list, tuple)) and isinstance(existing, (list, tuple)):
+        return tuple(new_value) != tuple(existing)
+    return new_value != existing
 
 
 def validate_logging_exporter_field(
-    requested_exporters: list | None,
+    requested_exporters: Sequence[str] | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
-    existing_exporters: list | None = None,
+    existing_exporters: Sequence[str] | None = None,
 ) -> None:
     """Authorize a typed ``logging_exporters`` write (proxy-admin only).
 
@@ -139,10 +144,10 @@ def validate_logging_exporter_field(
 
 
 def validate_logging_exporter_assignment(
-    metadata: dict | None,
+    metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
-    existing_metadata: dict | None = None,
+    existing_metadata: Mapping[str, object] | None = None,
 ) -> None:
     """Validate a ``metadata.logging_exporters`` write on key / team / org endpoints.
 
