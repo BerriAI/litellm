@@ -94,6 +94,22 @@ class TestGitHubCopilotAuthenticator:
         with patch.dict(os.environ, environment, clear=True):
             assert authenticator.get_api_base() == "https://copilot-api.company.ghe.com"
 
+    def test_get_api_base_rejects_other_oauth_subdomains(self, authenticator):
+        environment = {
+            "GITHUB_COPILOT_API_BASE": "https://evil.company.ghe.com",
+            "GITHUB_COPILOT_DEVICE_CODE_URL": "https://company.ghe.com/login/device/code",
+            "GITHUB_COPILOT_ACCESS_TOKEN_URL": "https://company.ghe.com/login/oauth/access_token",
+        }
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch("litellm.llms.github_copilot.authenticator.verbose_logger.warning") as mock_warning,
+        ):
+            assert authenticator.get_api_base() is None
+
+        mock_warning.assert_called_once_with(
+            "Ignoring GITHUB_COPILOT_API_BASE because it is not a trusted HTTPS GitHub Copilot endpoint"
+        )
+
     def test_get_api_base_trusts_explicit_allowed_host(self, authenticator):
         environment = {
             "GITHUB_COPILOT_API_BASE": "https://copilot-proxy.example.com",
