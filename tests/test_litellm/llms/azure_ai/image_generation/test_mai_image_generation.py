@@ -36,11 +36,15 @@ class TestAzureMAIImageGeneration:
             "azure_ai/MAI-Image-2.5"
         )
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2.5-Flash")
+        assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2.5-Pro")
+        assert AzureFoundryMAIImageGenerationConfig.is_mai_model(
+            "azure_ai/MAI-Image-2.5-Pro"
+        )
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2e")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("flux.2-pro")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-DS-R1")
 
-    def test_mai_flash_and_2e_model_pricing_in_cost_map(self):
+    def test_mai_flash_pro_and_2e_model_pricing_in_cost_map(self):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -51,6 +55,15 @@ class TestAzureMAIImageGeneration:
         assert flash_info["input_cost_per_token"] == 1.75e-06
         assert flash_info["input_cost_per_image_token"] == 1.75e-06
         assert flash_info["output_cost_per_image_token"] == 3.3e-05
+
+        pro_info = litellm.get_model_info(
+            model="azure_ai/MAI-Image-2.5-Pro",
+            custom_llm_provider="azure_ai",
+        )
+        assert pro_info["input_cost_per_token"] == 5e-06
+        assert pro_info["input_cost_per_image_token"] == 8e-06
+        assert pro_info["output_cost_per_image_token"] == 4.7e-05
+        assert pro_info["output_cost_per_image"] == 0.05
 
         image_2e_info = litellm.get_model_info(
             model="azure_ai/MAI-Image-2e",
