@@ -42,3 +42,12 @@ def test_mistral_get_outputText_empty_choices():
         AmazonMistralConfig.get_outputText(
             completion_response={"choices": []}, model_response=model_response
         )
+
+
+def test_mistral_get_outputText_empty_outputs():
+    model_response = ModelResponse()
+
+    with pytest.raises(BedrockError):
+        AmazonMistralConfig.get_outputText(
+            completion_response={"outputs": []}, model_response=model_response
+        )

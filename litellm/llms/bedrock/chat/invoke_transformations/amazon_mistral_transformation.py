@@ -102,7 +102,7 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
         if "choices" in completion_response and len(completion_response["choices"]) > 0:
             outputText = completion_response["choices"][0]["message"]["content"]
             model_response.choices[0].finish_reason = completion_response["choices"][0]["finish_reason"]
-        elif "outputs" in completion_response:
+        elif "outputs" in completion_response and len(completion_response["outputs"]) > 0:
             outputText = completion_response["outputs"][0]["text"]
             model_response.choices[0].finish_reason = completion_response["outputs"][0]["stop_reason"]
         else:
