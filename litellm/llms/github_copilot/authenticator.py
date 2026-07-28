@@ -25,6 +25,10 @@ DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
 
 
+def _use_oauth_token() -> bool:
+    return os.getenv("GITHUB_COPILOT_USE_OAUTH_TOKEN", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Authenticator:
     def __init__(self) -> None:
         """Initialize the GitHub Copilot authenticator with configurable token paths."""
@@ -87,6 +91,8 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
+        if _use_oauth_token():
+            return self.get_access_token()
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info = json.load(f)
@@ -136,6 +142,8 @@ class Authenticator:
         Returns:
             Optional[str]: The GitHub Copilot API endpoint, or None if not found.
         """
+        if _use_oauth_token():
+            return os.getenv("GITHUB_COPILOT_API_BASE")
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info: Final = json.load(f)
