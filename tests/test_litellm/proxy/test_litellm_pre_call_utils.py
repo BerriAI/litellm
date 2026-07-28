@@ -5457,3 +5457,213 @@ def test_get_sanitized_user_information_from_key_drops_callback_config():
     # UserAPIKeyAuth is the live auth object; the per-key callbacks are resolved
     # from it during pre-call, so it must not be mutated by building the log view
     assert "logging" in (user_api_key_dict.metadata or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override_mode, client_user, expected_user",
+    [
+        ("user_id", "client-bob", "authenticated-alice"),
+        ("user_id", None, "authenticated-alice"),
+        (None, "client-bob", "client-bob"),
+        (None, None, None),
+    ],
+    ids=[
+        "user_id-client_sets_user-uses_authenticated",
+        "user_id-client_omits_user-uses_authenticated",
+        "none-client_sets_user-preserves_client",
+        "none-client_omits_user-no_user",
+    ],
+)
+async def test_override_user_param(override_mode, client_user, expected_user):
+    data = {"model": "gpt-3.5-turbo"}
+    if client_user is not None:
+        data["user"] = client_user
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="authenticated-alice",
+        metadata={},
+        team_metadata={},
+    )
+
+    general_settings = {}
+    if override_mode is not None:
+        general_settings["override_user_param"] = override_mode
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings=general_settings,
+        version="test-version",
+    )
+
+    assert updated.get("user") == expected_user
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_user_id_no_authenticated_user():
+    data = {"model": "gpt-3.5-turbo", "user": "client-bob"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id=None,
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"override_user_param": "user_id"},
+        version="test-version",
+    )
+
+    assert updated.get("user") == "client-bob"
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_key_hash(monkeypatch):
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", False)
+
+    raw_key = "sk-override-key-hash-test"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o", "user": "client-bob"}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"override_user_param": "key_hash"},
+        version="test-version",
+    )
+
+    assert updated["user"] == hash_token(raw_key)
+    assert updated["user"] != "client-bob"
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_user_id_beats_header_user():
+    data = {"model": "gpt-3.5-turbo"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="authenticated-alice",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(
+            "/v1/chat/completions",
+            {"Content-Type": "application/json", "X-User-Id": "header-charlie"},
+        ),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={
+            "override_user_param": "user_id",
+            "user_header_name": "X-User-Id",
+        },
+        version="test-version",
+    )
+
+    assert updated.get("user") == "authenticated-alice"
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_key_hash_supersedes_legacy_setting(monkeypatch):
+    """override_user_param=key_hash works even when legacy overwrite_user_with_key_hash is False."""
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", False)
+
+    raw_key = "sk-supersede-legacy-test"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o", "user": "client-bob"}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"override_user_param": "key_hash"},
+        version="test-version",
+    )
+
+    assert updated["user"] == hash_token(raw_key)
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_key_hash_no_stampable_key_preserves_client():
+    """key_hash mode with a non-stampable key (e.g. JWT) must not clobber client user."""
+    user_api_key_dict = UserAPIKeyAuth(api_key="jwt-token-value")
+    user_api_key_dict.via_virtual_key = False
+    data = {"model": "gpt-4o", "user": "client-bob"}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"override_user_param": "key_hash"},
+        version="test-version",
+    )
+
+    assert updated.get("user") == "client-bob"
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_key_hash_stamps_when_client_omits_user(monkeypatch):
+    from litellm.proxy._types import hash_token
+
+    monkeypatch.setattr(litellm, "overwrite_user_with_key_hash", False)
+
+    raw_key = "sk-key-hash-no-client-user"
+    user_api_key_dict = UserAPIKeyAuth(api_key=raw_key)
+    user_api_key_dict.via_virtual_key = True
+    data = {"model": "gpt-4o"}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"override_user_param": "key_hash"},
+        version="test-version",
+    )
+
+    assert updated["user"] == hash_token(raw_key)
+
+
+@pytest.mark.asyncio
+async def test_override_user_param_none_general_settings():
+    """general_settings=None must not crash; behaves like no override."""
+    data = {"model": "gpt-3.5-turbo", "user": "client-bob"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="authenticated-alice",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings=None,
+        version="test-version",
+    )
+
+    assert updated.get("user") == "client-bob"

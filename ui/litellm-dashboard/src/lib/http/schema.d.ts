@@ -22764,6 +22764,11 @@ export interface components {
              */
             otel?: boolean | null;
             /**
+             * Override User Param
+             * @description Controls what value the proxy stamps into the outgoing 'user' field, overriding any client-supplied value. 'user_id': sets it to the authenticated user_id from the API key (for multi-gateway identity propagation). 'key_hash': sets it to a hash of the API key (for provider-side abuse tracking, same as litellm_settings.overwrite_user_with_key_hash). null (default): preserves the client-supplied value.
+             */
+            override_user_param?: ("user_id" | "key_hash") | null;
+            /**
              * Pass Through Endpoints
              * @description Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through
              */
