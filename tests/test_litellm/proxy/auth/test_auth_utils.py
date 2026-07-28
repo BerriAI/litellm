@@ -569,41 +569,101 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
     )
 
 
-def test_get_model_from_request_resolves_batch_id_deployment_to_model_name():
-    """Regression for #32580: managed batch retrieve/cancel encode the deployment
-    model_id (a sha256 hash) into the batch id. The auth layer must resolve that
-    hash back to the public model group name so team model-access checks compare
-    against the model group, not the raw deployment hash."""
-    import base64
+_BATCH_DEPLOYMENT_ID = "8d0eaa7e6c6f54a425dfd0062cb6b0dc"
 
+
+def _managed_batch_router():
     from litellm.router import Router
 
-    router = Router(
+    return Router(
         model_list=[
             {
                 "model_name": "bedrock-batch-model",
                 "litellm_params": {
                     "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
                 },
-                "model_info": {"id": "8d0eaa7e6c6f54a425dfd0062cb6b0dc"},
-            }
+                "model_info": {"id": _BATCH_DEPLOYMENT_ID},
+            },
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"id": "a-different-deployment-id"},
+            },
         ]
     )
 
-    decoded_batch_id = (
-        "litellm_proxy;model_id:8d0eaa7e6c6f54a425dfd0062cb6b0dc;"
-        "llm_batch_id:provider-batch-123"
-    )
-    batch_id = base64.urlsafe_b64encode(decoded_batch_id.encode()).decode().rstrip("=")
 
+def _encode_managed_id(decoded: str) -> str:
+    return base64.urlsafe_b64encode(decoded.encode()).decode().rstrip("=")
+
+
+_MANAGED_BATCH_ID = _encode_managed_id(
+    f"litellm_proxy;model_id:{_BATCH_DEPLOYMENT_ID};llm_batch_id:provider-batch-123"
+)
+_MANAGED_BATCH_OUTPUT_FILE_ID = _encode_managed_id(
+    f"litellm_proxy;model_id:{_BATCH_DEPLOYMENT_ID};llm_batch_id:provider-batch-123;"
+    "llm_output_file_id:provider-file-456"
+)
+
+
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        ("/v1/batches/{batch_id}", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/batches/{batch_id}/cancel", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/files/{file_id}", {"file_id": _MANAGED_BATCH_OUTPUT_FILE_ID}),
+        ("/v1/files/{file_id}/content", {"file_id": _MANAGED_BATCH_OUTPUT_FILE_ID}),
+    ],
+)
+def test_get_model_from_request_resolves_batch_id_deployment_to_model_name(route, request_data):
+    """Regression for #32580: managed batch retrieve/cancel and managed batch output
+    file reads encode the deployment model_id into the resource id. The auth layer must
+    resolve that id back to the public model group name so model-access checks compare
+    against the model group, not the raw deployment id."""
     assert (
         get_model_from_request(
-            request_data={"batch_id": batch_id},
-            route="/v1/batches/{batch_id}",
-            llm_router=router,
+            request_data=request_data,
+            route=route,
+            llm_router=_managed_batch_router(),
         )
         == "bedrock-batch-model"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        ("/v1/batches/{batch_id}", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/batches/{batch_id}/cancel", {"batch_id": _MANAGED_BATCH_ID}),
+        ("/v1/files/{file_id}/content", {"file_id": _MANAGED_BATCH_OUTPUT_FILE_ID}),
+    ],
+)
+async def test_managed_batch_routes_pass_team_model_access_check(route, request_data):
+    """End-to-end regression for #32580: a team scoped to the batch model group got
+    ``team_model_access_denied`` on retrieve/cancel because the deployment id, not the
+    model group, was authorized. Fails pre-fix with the deployment id in the message."""
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    llm_router = _managed_batch_router()
+    model = get_model_from_request(request_data=request_data, route=route, llm_router=llm_router)
+
+    assert (
+        await can_team_access_model(
+            model=model,
+            team_object=LiteLLM_TeamTable(team_id="team-batch", models=["bedrock-batch-model"]),
+            llm_router=llm_router,
+        )
+        is True
+    )
+
+    with pytest.raises(Exception, match="team not allowed to access model"):
+        await can_team_access_model(
+            model=model,
+            team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),
+            llm_router=llm_router,
+        )
 
 
 def test_get_model_from_request_resolves_character_id_model_with_router():
