@@ -43,7 +43,7 @@ class _Action(str, enum.Enum):
     GUARDRAIL_INTERVENED = "GUARDRAIL_INTERVENED"
 
 
-def _coerce_end_of_stream_only(value: Any) -> bool:
+def _coerce_end_of_stream_only(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, str):
@@ -51,14 +51,14 @@ def _coerce_end_of_stream_only(value: Any) -> bool:
     return bool(value)
 
 
-def _coerce_sampling_rate(value: Any) -> int:
+def _coerce_sampling_rate(value: object) -> int:
     if value is None or value == "":
         return 5
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise ValueError(f"streaming_sampling_rate must be an integer >= 1, got {value!r}")
     try:
-        rate = int(value)
-    except (TypeError, ValueError) as e:
+        rate = int(float(value))
+    except ValueError as e:
         raise ValueError(f"streaming_sampling_rate must be an integer >= 1, got {value!r}") from e
     if rate != float(value) or rate < 1:
         raise ValueError(f"streaming_sampling_rate must be an integer >= 1, got {value!r}")
@@ -73,8 +73,8 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: Optional[str] = None,
         monitor_mode: Optional[bool] = None,
         block_failures: Optional[bool] = None,
-        streaming_end_of_stream_only: Optional[bool] = None,
-        streaming_sampling_rate: Optional[int] = None,
+        streaming_end_of_stream_only: bool | None = None,
+        streaming_sampling_rate: int | None = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)

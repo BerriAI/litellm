@@ -49,11 +49,11 @@ class NomaV2GuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="When true, fail closed on Noma API errors.",
     )
-    streaming_end_of_stream_only: Optional[bool] = Field(
+    streaming_end_of_stream_only: bool | None = Field(
         default=None,
         description="When true, scan the assembled response once at end of stream instead of scanning sampled chunks during the stream.",
     )
-    streaming_sampling_rate: Optional[int] = Field(
+    streaming_sampling_rate: int | None = Field(
         default=None,
         ge=1,
         description=(

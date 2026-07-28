@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def _get_config_value(litellm_params: object, optional_params: object, attribute_name: str) -> Optional[object]:
+def _get_config_value(litellm_params: object, optional_params: object, attribute_name: str) -> object | None:
     if optional_params is not None:
         value = (
             optional_params.get(attribute_name)
