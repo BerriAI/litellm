@@ -1290,7 +1290,12 @@ class AmazonConverseConfig(BaseConfig):
 
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
-        if parallel_tool_use_config is not None and bedrock_converse_supports_parallel_tool_use_config(model):
+        request_has_tools: bool = bool(cast("dict[str, object]", inference_params).get("tools"))
+        if (
+            parallel_tool_use_config is not None
+            and request_has_tools
+            and bedrock_converse_supports_parallel_tool_use_config(model)
+        ):
             additional_request_params = self._merge_parallel_tool_use_config(
                 additional_request_params, parallel_tool_use_config
             )
@@ -1573,9 +1578,9 @@ class AmazonConverseConfig(BaseConfig):
                     bedrock_tools.append(ToolBlock(cachePoint=cache_point))
                     break
 
+        tool_choice_values: Optional[ToolChoiceValuesBlock] = inference_params.pop("tool_choice", None)
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
-            tool_choice_values: ToolChoiceValuesBlock = inference_params.pop("tool_choice", None)
             bedrock_tool_config = ToolConfigBlock(
                 tools=bedrock_tools,
             )

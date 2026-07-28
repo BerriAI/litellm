@@ -620,7 +620,7 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
         config = AmazonConverseConfig()
         optional_params = config.map_openai_params(
             model="anthropic.claude-sonnet-5",
-            non_default_params={"parallel_tool_calls": False},
+            non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
             optional_params={},
             drop_params=False,
         )
@@ -656,7 +656,7 @@ def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
     config = AmazonConverseConfig()
     optional_params = config.map_openai_params(
         model=model,
-        non_default_params={"parallel_tool_calls": False},
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
         optional_params={},
         drop_params=False,
     )
@@ -669,6 +669,146 @@ def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
     )
 
     assert "tool_choice" not in data.get("additionalModelRequestFields", {})
+
+
+def test_toolless_tool_choice_does_not_leak_into_inference_config():
+    """Regression for #34420: tool_choice on a toolless request must not reach inferenceConfig.
+
+    Bedrock rejects a tool_choice that is not accompanied by a toolConfig, so a
+    plain chat completion that carries tool_choice (e.g. from an agent framework)
+    used to 400.
+    """
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model="anthropic.claude-sonnet-5",
+        non_default_params={"tool_choice": "auto"},
+        optional_params={},
+        drop_params=True,
+    )
+
+    data = config._transform_request_helper(
+        model="anthropic.claude-sonnet-5",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert "tool_choice" not in data["inferenceConfig"]
+    assert "toolConfig" not in data
+
+
+def test_toolless_parallel_tool_calls_config_not_emitted():
+    """Regression for #34420: parallel_tool_calls on a toolless request must not emit a tool_choice block.
+
+    disable_parallel_tool_use is a tool_choice directive; emitting it with no
+    toolConfig (as agent frameworks trigger by defaulting parallel_tool_calls on
+    every turn) made Bedrock 400.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-5",
+            non_default_params={"parallel_tool_calls": False},
+            optional_params={},
+            drop_params=False,
+        )
+
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-5",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+
+        assert "tool_choice" not in data.get("additionalModelRequestFields", {})
+        assert "toolConfig" not in data
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_empty_tools_list_parallel_tool_calls_config_not_emitted():
+    """Regression for #34420: an empty tools list must be treated as no tools.
+
+    An empty list produces no toolConfig, so the disable_parallel_tool_use block
+    would leak into additionalModelRequestFields with no tools to govern; the gate
+    must test tool presence by truthiness, not mere key membership.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-5",
+            non_default_params={"parallel_tool_calls": False, "tools": []},
+            optional_params={},
+            drop_params=False,
+        )
+
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-5",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+
+        assert "tool_choice" not in data.get("additionalModelRequestFields", {})
+        assert "toolConfig" not in data
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_with_tools_parallel_and_tool_choice_both_emitted():
+    """With tools present, both toolConfig.toolChoice and the parallel-tool-use block are emitted."""
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params = config.map_openai_params(
+            model="anthropic.claude-sonnet-5",
+            non_default_params={
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": _TOOL_PARAM,
+            },
+            optional_params={},
+            drop_params=False,
+        )
+
+        data = config._transform_request_helper(
+            model="anthropic.claude-sonnet-5",
+            system_content_blocks=[],
+            optional_params=optional_params,
+            messages=None,
+        )
+
+        assert data["toolConfig"]["toolChoice"] == {"auto": {}}
+        assert data["additionalModelRequestFields"]["tool_choice"] == {
+            "type": "auto",
+            "disable_parallel_tool_use": True,
+        }
+        assert "tool_choice" not in data["inferenceConfig"]
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_transform_response_with_computer_use_tool():
