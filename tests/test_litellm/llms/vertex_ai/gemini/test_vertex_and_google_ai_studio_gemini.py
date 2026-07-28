@@ -4402,7 +4402,7 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     v = VertexGeminiConfig()
 
-    # Test pass-through
+    # Test pass-through with normalization (FLEX -> flex)
     optional_params = {}
     non_default_params = {"service_tier": "FLEX"}
 
@@ -4415,7 +4415,20 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     assert result["service_tier"] == "flex"
 
-    # Test auto -> priority
+    # Test prefixed enum normalization (SERVICE_TIER_PRIORITY -> priority)
+    optional_params_prefixed = {}
+    non_default_params_prefixed = {"service_tier": "SERVICE_TIER_PRIORITY"}
+
+    result_prefixed = v.map_openai_params(
+        non_default_params=non_default_params_prefixed,
+        optional_params=optional_params_prefixed,
+        model="gemini-3-pro-preview",
+        drop_params=True,
+    )
+
+    assert result_prefixed["service_tier"] == "priority"
+
+    # Test auto -> omitted (lets provider decide)
     optional_params_auto = {}
     non_default_params_auto = {"service_tier": "auto"}
 
@@ -4426,9 +4439,9 @@ def test_vertex_ai_service_tier_in_map_openai_params():
         drop_params=True,
     )
 
-    assert result_auto["service_tier"] == "priority"
+    assert "service_tier" not in result_auto
 
-    # Test AUTO (uppercase) -> priority
+    # Test AUTO (uppercase) -> omitted
     optional_params_auto_upper = {}
     non_default_params_auto_upper = {"service_tier": "AUTO"}
 
@@ -4439,7 +4452,46 @@ def test_vertex_ai_service_tier_in_map_openai_params():
         drop_params=True,
     )
 
-    assert result_auto_upper["service_tier"] == "priority"
+    assert "service_tier" not in result_auto_upper
+
+
+@pytest.mark.parametrize(
+    "service_tier, provider, expect_headers",
+    [
+        ("priority", "vertex_ai", True),
+        ("flex", "vertex_ai", True),
+        ("priority", "vertex_ai_beta", True),
+        ("priority", "gemini", False),
+        ("flex", "gemini", False),
+        ("auto", "vertex_ai", False),
+        ("standard", "vertex_ai", False),
+    ],
+)
+def test_vertex_ai_validate_environment_service_tier_headers(
+    service_tier, provider, expect_headers
+):
+    """validate_environment should inject Vertex AI tier headers for priority/flex
+    on Vertex AI only, not Google AI Studio."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    headers = v.validate_environment(
+        headers=None,
+        model="gemini-3.5-flash-lite",
+        messages=[],
+        optional_params={"service_tier": service_tier},
+        litellm_params={"custom_llm_provider": provider},
+        api_key="test-key",
+    )
+
+    if expect_headers:
+        assert headers["X-Vertex-AI-LLM-Request-Type"] == "shared"
+        assert headers["X-Vertex-AI-LLM-Shared-Request-Type"] == service_tier
+    else:
+        assert "X-Vertex-AI-LLM-Request-Type" not in headers
+        assert "X-Vertex-AI-LLM-Shared-Request-Type" not in headers
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():

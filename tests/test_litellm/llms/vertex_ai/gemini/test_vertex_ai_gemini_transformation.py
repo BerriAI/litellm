@@ -197,23 +197,64 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-def test_service_tier_forwarded_to_vertex_ai():
-    """Test that service_tier in optional_params is mapped to serviceTier in request body."""
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {"service_tier": "flex"}
-    litellm_params = {}
-
+@pytest.mark.parametrize(
+    "service_tier",
+    ["flex", "FLEX", "priority", "standard", "default", "SERVICE_TIER_FLEX"],
+)
+def test_service_tier_not_in_vertex_ai_request_body(service_tier):
+    """
+    Vertex AI: service_tier should NOT be in the request body.
+    Tier routing is handled via X-Vertex-AI-LLM-Shared-Request-Type headers
+    set in validate_environment(), not the serviceTier body field.
+    See: https://github.com/BerriAI/litellm/issues/34914
+    """
     result = _transform_request_body(
-        messages=messages,
+        messages=[{"role": "user", "content": "test"}],
         model="gemini-2.5-pro",
-        optional_params=optional_params,
+        optional_params={"service_tier": service_tier},
         custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
+        litellm_params={},
         cached_content=None,
     )
 
-    assert "serviceTier" in result
-    assert result["serviceTier"] == "flex"
+    assert "serviceTier" not in result
+
+
+@pytest.mark.parametrize(
+    "service_tier, expected",
+    [
+        ("flex", "flex"),
+        ("PRIORITY", "priority"),
+        ("SERVICE_TIER_FLEX", "flex"),
+    ],
+)
+def test_service_tier_forwarded_to_google_ai_studio_as_lowercase(service_tier, expected):
+    """Google AI Studio's generativelanguage API only accepts the lowercase enum names"""
+    result = _transform_request_body(
+        messages=[{"role": "user", "content": "test"}],
+        model="gemini-2.5-pro",
+        optional_params={"service_tier": service_tier},
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert result["serviceTier"] == expected
+
+
+@pytest.mark.parametrize("service_tier", ["auto", "default", "scale"])
+def test_service_tier_omitted_from_gemini_body_for_non_routing_tiers(service_tier):
+    """Non-routing tiers (auto, default, scale) should be omitted, not sent to the body."""
+    result = _transform_request_body(
+        messages=[{"role": "user", "content": "test"}],
+        model="gemini-2.5-pro",
+        optional_params={"service_tier": service_tier},
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert "serviceTier" not in result
 
 
 def test_extra_body_cache_not_forwarded_to_vertex_ai():
