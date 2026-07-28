@@ -164,18 +164,39 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
+ROUTER_DEPLOYMENT_METADATA_KEYS = frozenset(
+    {
+        "model_group",
+        "model_group_alias",
+        "model_info",
+        "deployment",
+        "deployment_model_name",
+        "api_base",
+    }
+)
+
+
 def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
     """
-    Helper to get litellm metadata for spend tracking
+    Merge spend-tracking fields that live in `metadata` into `litellm_metadata`.
 
-    PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    Both dicts can be present on the same request: the proxy and the Router write auth
+    (`user_api_key*`) and deployment attribution (`model_group`, `model_info`, ...) into
+    `metadata`, while a caller or a pre-call guardrail can create `litellm_metadata`.
+    Reading only `litellm_metadata` then loses those fields.
+
+    `user_api_key*` values in `metadata` are proxy-authoritative and win. Deployment
+    attribution is only filled in when absent from `litellm_metadata`, so the Router keeps
+    precedence on the endpoints where it writes to `litellm_metadata` directly.
     """
-    potential_spend_tracking_metadata_substring = "user_api_key"
-    for key, value in metadata.items():
-        if potential_spend_tracking_metadata_substring in key:
-            litellm_metadata[key] = value
-    return litellm_metadata
+    return {
+        **litellm_metadata,
+        **{
+            key: value
+            for key, value in metadata.items()
+            if "user_api_key" in key or (key in ROUTER_DEPLOYMENT_METADATA_KEYS and key not in litellm_metadata)
+        },
+    }
 
 
 def get_metadata_variable_name_from_kwargs(

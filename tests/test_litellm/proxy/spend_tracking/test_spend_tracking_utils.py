@@ -1065,6 +1065,37 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
     ), f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
 
 
+def test_get_logging_payload_keeps_router_model_group_when_guardrail_adds_litellm_metadata():
+    """
+    A pre-call guardrail creates `litellm_metadata` holding only the auth fields, while the
+    Router records deployment attribution in `metadata`. Spend logs must still be attributable
+    to the model group and the deployment.
+    """
+    kwargs = {
+        "model": "claude-sonnet-4-6",
+        "custom_llm_provider": "anthropic",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "model_group": "router-model-group",
+                "model_info": {"id": "deployment-id-123"},
+            },
+            "litellm_metadata": {"user_api_key_user_id": "test-user"},
+        },
+    }
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model_group"] == "router-model-group"
+    assert payload["model_id"] == "deployment-id-123"
+    assert payload["user"] == "test-user"
+
+
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
