@@ -2433,6 +2433,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    override_user_param: Optional[Literal["user_id", "key_hash"]] = Field(
+        None,
+        description="Controls what value the proxy stamps into the outgoing 'user' field, overriding any client-supplied value. "
+        "'user_id': sets it to the authenticated user_id from the API key (for multi-gateway identity propagation). "
+        "'key_hash': sets it to a hash of the API key (for provider-side abuse tracking, same as litellm_settings.overwrite_user_with_key_hash). "
+        "null (default): preserves the client-supplied value.",
+    )
     mcp_required_fields: Optional[List[str]] = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
