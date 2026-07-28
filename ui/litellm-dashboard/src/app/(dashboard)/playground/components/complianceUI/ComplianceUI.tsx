@@ -182,6 +182,12 @@ export default function ComplianceUI({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [quickTestMessages]);
 
+  useEffect(() => {
+    return () => {
+      batchAbortControllerRef.current?.abort();
+    };
+  }, []);
+
   const allFrameworks: ComplianceFramework[] = (() => {
     if (customPrompts.length === 0) return frameworks;
     const fwMap = new Map<string, Map<string, CompliancePrompt[]>>();
