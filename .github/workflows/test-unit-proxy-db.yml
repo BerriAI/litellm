@@ -174,6 +174,7 @@ jobs:
               tests/proxy_unit_tests/test_skills_db.py
               tests/proxy_unit_tests/test_update_daily_tag_spend.py
               tests/proxy_unit_tests/test_update_spend.py
+              tests/proxy_unit_tests/test_vantage_endpoints.py
               tests/proxy_unit_tests/test_proxy_encrypt_decrypt.py
             workers: 4
             dist: loadscope

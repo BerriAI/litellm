@@ -476,6 +476,10 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
             if k.lower() not in ("content-encoding", "content-length")
         }
 
+        # Requests built with `files=` (multipart) have a streaming body, so
+        # `.content` raises httpx.RequestNotRead. Guard the access so the
+        # masked error can still be constructed when the original upload used
+        # multipart — otherwise the real HTTPStatusError gets swallowed.
         try:
             request_content = original_error.request.content
         except httpx.RequestNotRead:
