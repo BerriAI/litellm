@@ -56,7 +56,9 @@ class TestGithubCopilotResponsesAPITransformation:
         """Test that get_complete_url returns correct GitHub Copilot endpoint"""
         # Mock authenticator to return default base
         mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_base.return_value = "https://api.individual.githubcopilot.com"
+        mock_auth_instance.get_api_base.side_effect = lambda api_base=None: (
+            api_base or "https://api.individual.githubcopilot.com"
+        )
         mock_authenticator_class.return_value = mock_auth_instance
 
         config = GithubCopilotResponsesAPIConfig()
@@ -67,11 +69,11 @@ class TestGithubCopilotResponsesAPITransformation:
             f"Expected GitHub Copilot responses endpoint, got {url}"
         )
 
-        custom_url = config.get_complete_url(api_base="https://untrusted.example.com", litellm_params={})
-        assert custom_url == "https://api.individual.githubcopilot.com/responses"
+        custom_url = config.get_complete_url(api_base="https://api.business.githubcopilot.com", litellm_params={})
+        assert custom_url == "https://api.business.githubcopilot.com/responses"
 
-        url_with_slash = config.get_complete_url(api_base="https://untrusted.example.com/", litellm_params={})
-        assert url_with_slash == "https://api.individual.githubcopilot.com/responses"
+        url_with_slash = config.get_complete_url(api_base="https://api.githubcopilot.com/", litellm_params={})
+        assert url_with_slash == "https://api.githubcopilot.com/responses"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_default_headers(self, mock_authenticator_class, monkeypatch):
