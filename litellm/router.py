@@ -320,6 +320,26 @@ _HTTP_FRAMING_HEADERS: frozenset[str] = frozenset(
     }
 )
 
+_BROWSER_SECURITY_HEADERS: frozenset[str] = frozenset(
+    {
+        "access-control-allow-origin",
+        "access-control-allow-credentials",
+        "access-control-allow-methods",
+        "access-control-allow-headers",
+        "access-control-expose-headers",
+        "content-security-policy",
+        "content-security-policy-report-only",
+        "clear-site-data",
+        "strict-transport-security",
+        "x-frame-options",
+        "cross-origin-opener-policy",
+        "cross-origin-embedder-policy",
+        "cross-origin-resource-policy",
+    }
+)
+
+_UNSAFE_PROXY_RESPONSE_HEADERS: frozenset[str] = _HTTP_FRAMING_HEADERS | _BROWSER_SECURITY_HEADERS
+
 
 def _strip_http_framing_headers(exc: BaseException) -> None:
     headers = getattr(exc, "headers", None)

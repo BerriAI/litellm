@@ -3015,6 +3015,28 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert "transfer-encoding" not in proxy_exc.headers
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
+    async def test_strips_browser_security_headers(self):
+        exc = litellm.RateLimitError(
+            message="Resource exhausted",
+            llm_provider="vertex_ai",
+            model="gemini-2.0-flash",
+        )
+        exc.headers = {
+            "access-control-allow-origin": "https://evil.example.com",
+            "content-security-policy": "default-src https://evil.example.com",
+            "clear-site-data": '"cache", "cookies", "storage"',
+            "strict-transport-security": "max-age=0",
+            "x-frame-options": "ALLOWALL",
+            "x-request-id": "abc-123",
+        }
+        proxy_exc = await self._invoke(exc)
+        assert "access-control-allow-origin" not in proxy_exc.headers
+        assert "content-security-policy" not in proxy_exc.headers
+        assert "clear-site-data" not in proxy_exc.headers
+        assert "strict-transport-security" not in proxy_exc.headers
+        assert "x-frame-options" not in proxy_exc.headers
+        assert proxy_exc.headers["x-request-id"] == "abc-123"
+
 
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
