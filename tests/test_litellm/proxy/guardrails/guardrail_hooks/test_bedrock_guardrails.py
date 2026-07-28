@@ -3456,6 +3456,64 @@ async def test_apply_guardrail_merges_usage_and_outputs_across_chunks_when_both_
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_recurses_past_first_bisection_into_four_chunks():
+    """A payload that is still too large after one bisection must keep splitting
+    -- chunking is not capped at two pieces. Four messages where both the
+    whole-content call AND both first-level halves are too large must recurse
+    one level deeper into four chunks that all fit, not give up after the
+    first split."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+
+    messages = [
+        {"role": "user", "content": "message one"},
+        {"role": "user", "content": "message two"},
+        {"role": "user", "content": "message three"},
+        {"role": "user", "content": "message four"},
+    ]
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    # Depth-first recursion order for 4 items bisected down to single items:
+    # whole -> [1,2] -> [1] -> [2] -> [3,4] -> [3] -> [4]. Only single-item
+    # calls (positions 3, 4, 6, 7) fit; every multi-item call is too large.
+    responses = [
+        _too_large_validation_httpx_response(),  # whole content: [1,2,3,4]
+        _too_large_validation_httpx_response(),  # first half: [1,2]
+        _passing_bedrock_httpx_response("message one"),
+        _passing_bedrock_httpx_response("message two"),
+        _too_large_validation_httpx_response(),  # second half: [3,4]
+        _passing_bedrock_httpx_response("message three"),
+        _passing_bedrock_httpx_response("message four"),
+    ]
+
+    async def _post_side_effect(*_args, **_kwargs):
+        return responses.pop(0)
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = _post_side_effect
+
+        result = await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=messages,
+            request_data={"model": "bedrock-nova-micro"},
+        )
+
+    # 1 whole-content + 2 first-level halves + 4 second-level quarters = 7.
+    assert mock_post.await_count == 7
+    assert not responses
+    assert result.get("action") == "NONE"
+    output_texts = [o.get("text") for o in result.get("outputs") or []]
+    assert output_texts == ["message one", "message two", "message three", "message four"]
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_does_not_chunk_when_grounding_present():
     """Contextual-grounding requests are scored holistically against the whole
     source; chunking them would silently produce misleading grounding scores.
