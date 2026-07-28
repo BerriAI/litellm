@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.response_construction import construct_responses_api_response
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
     record_output_item_chunk,
@@ -206,10 +207,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
         if "created_at" in response_payload:
             response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
-        try:
-            return ResponsesAPIResponse(**response_payload)
-        except Exception:
-            return ResponsesAPIResponse.model_construct(**response_payload)
+        return construct_responses_api_response(response_payload)
 
     def _extract_error_message(self, parsed_chunk: Dict[str, Any]) -> Optional[str]:
         error_obj = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")

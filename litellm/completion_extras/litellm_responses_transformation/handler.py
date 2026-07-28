@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
 
 from typing_extensions import TypedDict
 
+from litellm.responses.response_construction import construct_responses_api_response
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
@@ -51,10 +52,7 @@ class ResponsesToCompletionBridgeHandler:
         if isinstance(response_obj, ResponsesAPIResponse):
             response = response_obj
         elif isinstance(response_obj, dict):
-            try:
-                response = ResponsesAPIResponse(**response_obj)
-            except Exception:
-                response = ResponsesAPIResponse.model_construct(**response_obj)
+            response = construct_responses_api_response(response_obj)
         else:
             raise ValueError("Unexpected responses stream payload")
 

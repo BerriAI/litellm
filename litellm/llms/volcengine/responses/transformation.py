@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.response_construction import construct_responses_api_response
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -259,12 +260,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
 
-        try:
-            response = ResponsesAPIResponse.model_validate(raw_response_json)
-        except Exception:
-            verbose_logger.debug("Volcengine Responses API: falling back to model_construct for response parsing.")
-            construct_response: Callable[..., ResponsesAPIResponse] = ResponsesAPIResponse.model_construct
-            response = construct_response(**raw_response_json)
+        response = construct_responses_api_response(raw_response_json)
 
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers

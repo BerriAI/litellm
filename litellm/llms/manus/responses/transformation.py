@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.response_construction import construct_responses_api_response
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
@@ -216,11 +217,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # This allows the response object to be created even when the API doesn't return an id
             raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
 
-        try:
-            response = ResponsesAPIResponse(**raw_response_json)
-        except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
-            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+        response = construct_responses_api_response(raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
@@ -304,11 +301,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # Generate a placeholder id for failed responses
             raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
 
-        try:
-            response = ResponsesAPIResponse(**raw_response_json)
-        except Exception:
-            verbose_logger.debug(f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct")
-            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+        response = construct_responses_api_response(raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
