@@ -4,6 +4,7 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
     map_finish_reason,
     reconstruct_model_name,
@@ -49,6 +50,68 @@ class TestGetOrCreateMetadataBucket:
         assert key == "litellm_metadata"
         assert isinstance(request_data["litellm_metadata"], dict)
         assert bucket is request_data["litellm_metadata"]
+
+
+class TestGetLitellmMetadataFromKwargs:
+    """Spend tracking reads the router deployment values from the merged metadata, so a
+    guardrail-created `litellm_metadata` must not shadow them away."""
+
+    def test_carries_router_deployment_values_from_metadata(self):
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "model_group": "router-model-group",
+                    "model_info": {"id": "deployment-id"},
+                },
+                "litellm_metadata": {"user_api_key_user_id": "test-user"},
+            }
+        }
+
+        metadata = get_litellm_metadata_from_kwargs(kwargs)
+
+        assert metadata["model_group"] == "router-model-group"
+        assert metadata["model_info"] == {"id": "deployment-id"}
+        assert metadata["user_api_key_user_id"] == "test-user"
+
+    def test_carries_auth_values_from_metadata(self):
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"user_api_key_hash": "hashed-key", "unrelated": "dropped"},
+                "litellm_metadata": {"model_group": "litellm-metadata-group"},
+            }
+        }
+
+        metadata = get_litellm_metadata_from_kwargs(kwargs)
+
+        assert metadata["user_api_key_hash"] == "hashed-key"
+        assert metadata["model_group"] == "litellm-metadata-group"
+        assert "unrelated" not in metadata
+
+    def test_litellm_metadata_deployment_values_win(self):
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"model_group": "stale-group"},
+                "litellm_metadata": {"model_group": "current-group"},
+            }
+        }
+
+        assert get_litellm_metadata_from_kwargs(kwargs)["model_group"] == "current-group"
+
+    def test_does_not_mutate_the_request_metadata(self):
+        litellm_metadata = {"user_api_key_user_id": "test-user"}
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "model_group": "router-model-group",
+                    "user_api_key_hash": "hashed-key",
+                },
+                "litellm_metadata": litellm_metadata,
+            }
+        }
+
+        get_litellm_metadata_from_kwargs(kwargs)
+
+        assert litellm_metadata == {"user_api_key_user_id": "test-user"}
 
 
 def test_reconstruct_model_name_prefers_deployment_value():

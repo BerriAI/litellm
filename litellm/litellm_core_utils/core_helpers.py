@@ -164,18 +164,25 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
+ROUTER_SPEND_TRACKING_METADATA_KEYS = frozenset({"model_group", "model_info"})
+
+
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: dict[str, object], metadata: dict[str, object]
+) -> dict[str, object]:
     """
     Helper to get litellm metadata for spend tracking
 
-    PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'.
+    Handles the case where both `litellm_metadata` and `metadata` are present in the kwargs:
+    the auth values (`user_api_key*`) and the router deployment values (`model_group`,
+    `model_info`) live in `metadata`, so they'd otherwise be lost when `litellm_metadata` wins.
     """
-    potential_spend_tracking_metadata_substring = "user_api_key"
-    for key, value in metadata.items():
-        if potential_spend_tracking_metadata_substring in key:
-            litellm_metadata[key] = value
-    return litellm_metadata
+    carried_over = {
+        key: value
+        for key, value in metadata.items()
+        if "user_api_key" in key or (key in ROUTER_SPEND_TRACKING_METADATA_KEYS and not litellm_metadata.get(key))
+    }
+    return {**litellm_metadata, **carried_over}
 
 
 def get_metadata_variable_name_from_kwargs(
