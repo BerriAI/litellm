@@ -106,10 +106,9 @@ class AgentRegistry:
 
     def get_public_agent_list(self) -> list[AgentResponse]:
         public_agent_list: list[AgentResponse] = []
-        if litellm.public_agent_groups is None:
-            return public_agent_list
         for agent in self.agent_list:
-            if agent.agent_id in litellm.public_agent_groups:
+            agent_params = agent.litellm_params or {}
+            if agent_params.get("is_public", False):
                 public_agent_list.append(agent)
         return public_agent_list
 

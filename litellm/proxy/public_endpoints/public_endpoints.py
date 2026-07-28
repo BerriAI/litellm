@@ -206,13 +206,9 @@ async def public_model_hub():
     response_model=List[AgentCard],
 )
 async def get_agents(request: Request):
-    import litellm
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
     agents = global_agent_registry.get_public_agent_list()
-
-    if litellm.public_agent_groups is None:
-        return []
 
     return [
         {
@@ -220,7 +216,6 @@ async def get_agents(request: Request):
             "url": get_custom_url(str(request.base_url), route=f"a2a/{agent.agent_id}"),
         }
         for agent in agents
-        if agent.agent_id in litellm.public_agent_groups
     ]
 
 
