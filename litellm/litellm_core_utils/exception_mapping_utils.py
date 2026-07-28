@@ -1121,27 +1121,27 @@ def _map_vertex_exception(
             litellm_debug_info=extra_information,
         )
     elif (
-            "429 quota exceeded" in error_str.lower()
-            or "quota exceeded for" in error_str.lower()
-            or "resource exhausted" in error_str.lower()
-            or "resource has been exhausted" in error_str.lower()
-            or "status_code=429" in error_str.lower()
-            or "indexerror: list index out of range" in error_str.lower()
-            or "429 unable to submit request because the service is temporarily out of capacity." in error_str.lower()
-        ):
-            raise RateLimitError(
-                message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
-                model=model,
-                llm_provider=custom_llm_provider,
-                litellm_debug_info=extra_information,
-                response=httpx.Response(
-                    status_code=429,
-                    request=httpx.Request(
-                        method="POST",
-                        url=" https://cloud.google.com/vertex-ai/",
-                    ),
+        "429 quota exceeded" in error_str.lower()
+        or "quota exceeded for" in error_str.lower()
+        or "resource exhausted" in error_str.lower()
+        or "resource has been exhausted" in error_str.lower()
+        or "status_code=429" in error_str.lower()
+        or "indexerror: list index out of range" in error_str.lower()
+        or "429 unable to submit request because the service is temporarily out of capacity." in error_str.lower()
+    ):
+        raise RateLimitError(
+            message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
+            model=model,
+            llm_provider=custom_llm_provider,
+            litellm_debug_info=extra_information,
+            response=httpx.Response(
+                status_code=429,
+                request=httpx.Request(
+                    method="POST",
+                    url=" https://cloud.google.com/vertex-ai/",
                 ),
-            )
+            ),
+        )
     elif "403" in error_str.lower():
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
@@ -1173,7 +1173,7 @@ def _map_vertex_exception(
                 ),
             ),
         )
-    
+
     elif (
         isinstance(getattr(original_exception, "status_code", None), int)
         and 500 <= original_exception.status_code < 600
