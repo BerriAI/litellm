@@ -1,5 +1,7 @@
 "use client";
 
+import { useKeyDetailRouting } from "@/app/(dashboard)/api-keys/detailNavigation";
+import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -18,7 +20,7 @@ import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@
 import { KeyRound } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS } from "./keyTableColumns";
 
@@ -47,7 +49,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const { data: fetchedTeams } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
-  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const { keyId: selectedKeyId, openKey, close: closeKeyDetail } = useKeyDetailRouting();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -103,9 +105,18 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }, []);
 
   const columns = useMemo(
-    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: setSelectedKey }),
-    [allTeams, organizations],
+    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => openKey(key.token) }),
+    [allTeams, organizations, openKey],
   );
+
+  const selectedKeyFromList = useMemo(
+    () => keyList.find((key) => key.token === selectedKeyId),
+    [keyList, selectedKeyId],
+  );
+  const { data: fetchedSelectedKey, isError: selectedKeyLoadFailed } = useKeyInfo(selectedKeyId, {
+    enabled: !selectedKeyFromList,
+  });
+  const selectedKey = selectedKeyFromList ?? fetchedSelectedKey;
 
   const teamOptions = useMemo(
     () =>
@@ -142,12 +153,15 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     [allTeams, organizations],
   );
 
-  if (selectedKey) {
+  if (selectedKeyId) {
+    if (!selectedKey && !selectedKeyLoadFailed) {
+      return <div className="p-4 text-sm text-muted-foreground">Loading key...</div>;
+    }
     return (
       <div className="w-full h-full overflow-hidden">
         <KeyInfoView
-          keyId={selectedKey.token}
-          onClose={() => setSelectedKey(null)}
+          keyId={selectedKeyId}
+          onClose={closeKeyDetail}
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}

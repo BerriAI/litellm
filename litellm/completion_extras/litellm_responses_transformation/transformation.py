@@ -35,6 +35,7 @@ from litellm.responses.sse_output_recovery import (
     record_output_item_chunk,
     record_output_text_chunk,
 )
+from litellm.responses.utils import normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
@@ -320,6 +321,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["tool_choice"] = (  # type: ignore[assignment]
                     self._normalize_tool_choice_for_responses_api(value)
                 )
+            elif key == "stream_options":
+                stream_options = normalize_responses_api_stream_options(value)
+                if stream_options is not None:
+                    responses_api_request["stream_options"] = stream_options
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
             elif key == "previous_response_id":
@@ -360,8 +365,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 continue
             if key == "instructions" and instructions:
                 request_data["instructions"] = instructions
-            elif key == "stream_options" and isinstance(value, dict):
-                request_data["stream_options"] = value.get("include_obfuscation")
             elif key == "user" and isinstance(value, str):
                 # OpenAI API requires user param to be max 64 chars - truncate if longer
                 if len(value) <= 64:
@@ -1074,6 +1077,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         super().__init__(streaming_response, sync_stream, json_mode)
+        self._chat_completion_id: str | None = None
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1381,4 +1385,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
         verbose_logger.debug(f"Chat provider: transform_streaming_response called with chunk: {chunk}")
-        return OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
+        return self._with_stream_scoped_id(
+            OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chunk)
+        )
+
+    def _with_stream_scoped_id(self, chunk: "ModelResponseStream") -> "ModelResponseStream":
+        if self._chat_completion_id is None:
+            self._chat_completion_id = chunk.id
+        else:
+            chunk.id = self._chat_completion_id
+        return chunk

@@ -28,6 +28,7 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -208,13 +209,7 @@ export interface Organization {
   teams: any[] | null;
   users: any[] | null;
   members: any[] | null;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    mcp_toolsets?: string[];
-    vector_stores: string[];
-  };
+  object_permission?: ObjectPermission | null;
 }
 
 export interface CredentialItem {
@@ -1176,35 +1171,6 @@ export const organizationInfoCall = async (accessToken: string, organizationID: 
     }
 
     const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
-};
-
-export const organizationCreateCall = async (
-  accessToken: string,
-  formValues: Record<string, any>, // Assuming formValues is an object
-) => {
-  try {
-    if (formValues.metadata) {
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        console.error("Failed to parse metadata:", error);
-        throw new Error("Failed to parse metadata: " + error);
-      }
-    }
-
-    const data = await apiClient.post(`/organization/new`, {
-      accessToken,
-      body: {
-        ...formValues, // Include formValues in the request body
-      },
-    });
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4783,45 +4749,6 @@ export const uiSpendLogDetailsCall = async (accessToken: string, logId: string, 
   }
 };
 
-export const getInternalUserSettings = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/get/internal_user_settings`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch SSO settings:", error);
-    throw error;
-  }
-};
-
-export const updateInternalUserSettings = async (accessToken: string, settings: Record<string, any>) => {
-  try {
-    // Construct base URL
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/update/internal_user_settings` : `/update/internal_user_settings`;
-
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(settings),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error(errorData);
-    }
-
-    const data = await response.json();
-    NotificationsManager.success("Internal user settings updated successfully");
-    return data;
-  } catch (error) {
-    console.error("Failed to update internal user settings:", error);
-    throw error;
-  }
-};
-
 export const fetchOpenAPIRegistry = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/openapi-registry` : `/v1/mcp/openapi-registry`;
@@ -7600,7 +7527,6 @@ export interface ToolSpendDailyEntry {
 export interface ToolSpendResponse {
   by_tool: ToolSpendEntry[];
   daily: ToolSpendDailyEntry[];
-  total_spend: number;
   start_date: string | null;
   end_date: string | null;
 }

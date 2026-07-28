@@ -617,6 +617,75 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
+    def test_update_sso_settings_maps_saml_fields_to_env_vars(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """SAML settings entered in the admin UI must be applied as the SAML_* env
+        vars the SAML handler reads, and the allow-unsolicited toggle must map to
+        the 'true'/'false' string the handler expects."""
+        import json
+        import os
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        for var in (
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+            "SAML_SP_ENTITY_ID",
+            "SAML_ALLOW_UNSOLICITED",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        new_sso_settings = {
+            "saml_idp_metadata_url": "https://idp.example.com/metadata",
+            "saml_sp_entity_id": "https://proxy.example.com/sso/saml/metadata",
+            "saml_allow_unsolicited": "true",
+            "proxy_base_url": "https://proxy.example.com",
+            "user_email": "admin@example.com",
+        }
+
+        try:
+            response = client.patch("/update/sso_settings", json=new_sso_settings)
+
+            assert response.status_code == 200
+
+            assert os.environ.get("SAML_IDP_METADATA_URL") == "https://idp.example.com/metadata"
+            assert os.environ.get("SAML_SP_ENTITY_ID") == "https://proxy.example.com/sso/saml/metadata"
+            assert os.environ.get("SAML_ALLOW_UNSOLICITED") == "true"
+            assert "SAML_IDP_METADATA_XML" not in os.environ
+
+            stored = json.loads(
+                mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["create"]["sso_settings"]
+            )
+            assert stored["saml_idp_metadata_url"] == "https://idp.example.com/metadata"
+            assert stored["saml_allow_unsolicited"] == "true"
+        finally:
+            for var in (
+                "SAML_IDP_METADATA_URL",
+                "SAML_IDP_METADATA_XML",
+                "SAML_SP_ENTITY_ID",
+                "SAML_ALLOW_UNSOLICITED",
+            ):
+                os.environ.pop(var, None)
+
     def test_update_sso_settings_audits_when_env_cleanup_fails(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
@@ -2609,6 +2678,142 @@ def test_update_ui_settings_writes_audit_log(monkeypatch):
         assert after["disable_custom_api_keys"] is True
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.fixture
+def mock_team_lookup(monkeypatch):
+    """Back /update/internal_user_settings with a fake team table.
+
+    Yields the set of team ids that exist; the test mutates it before the call.
+    Also exposes the find_many mock so a test can assert the lookup was skipped.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    existing_team_ids: set = set()
+
+    async def _find_many(where):
+        requested = where["team_id"]["in"]
+        return [{"team_id": team_id} for team_id in requested if team_id in existing_team_ids]
+
+    find_many = AsyncMock(side_effect=_find_many)
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teamtable.find_many = find_many
+
+    member_budget_update = AsyncMock()
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+    monkeypatch.setattr(
+        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.update_default_team_member_budget",
+        member_budget_update,
+    )
+
+    return {
+        "existing_team_ids": existing_team_ids,
+        "find_many": find_many,
+        "member_budget_update": member_budget_update,
+    }
+
+
+def test_update_internal_user_settings_rejects_unknown_team_object(mock_proxy_config, mock_auth, mock_team_lookup):
+    """Regression: saving a default team that doesn't exist used to return 200,
+    then silently fail for every SSO user because the membership write 404s."""
+    mock_team_lookup["existing_team_ids"].add("real-team")
+
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={
+            "max_budget": 10.0,
+            "teams": [
+                {"team_id": "real-team", "max_budget_in_team": 5.0},
+                {"team_id": "ghost-team"},
+            ],
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-team" in resp.json()["detail"]["error"]
+    assert "real-team" not in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+    assert mock_team_lookup["member_budget_update"].await_count == 0, (
+        "per-member budgets must not be written before the team ids are validated"
+    )
+
+    import litellm
+
+    assert litellm.default_internal_user_params == {}
+
+
+def test_update_internal_user_settings_rejects_unknown_team_string(mock_proxy_config, mock_auth, mock_team_lookup):
+    """The bare-string team shape must be validated too."""
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={"teams": ["ghost-team"]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-team" in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+
+
+def test_update_internal_user_settings_rejects_duplicate_team_ids(mock_proxy_config, mock_auth, mock_team_lookup):
+    """Listing a team twice makes its per-member budget a race between the two
+    entries, so the payload is rejected rather than silently resolved."""
+    mock_team_lookup["existing_team_ids"].add("real-team")
+
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={
+            "teams": [
+                {"team_id": "real-team", "max_budget_in_team": 5.0},
+                {"team_id": "real-team", "max_budget_in_team": 50.0},
+            ]
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "real-team" in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+
+
+def test_update_internal_user_settings_saves_when_all_teams_exist(mock_proxy_config, mock_auth, mock_team_lookup):
+    """Valid team ids still save, and still reach the per-member budget update."""
+    mock_team_lookup["existing_team_ids"].update({"team-a", "team-b"})
+
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={
+            "max_budget": 10.0,
+            "teams": [
+                {"team_id": "team-a", "max_budget_in_team": 5.0},
+                {"team_id": "team-b"},
+            ],
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [team["team_id"] for team in resp.json()["settings"]["teams"]] == [
+        "team-a",
+        "team-b",
+    ]
+    assert mock_proxy_config["save_call_count"]() == 1
+    mock_team_lookup["member_budget_update"].assert_awaited_once()
+
+
+def test_update_internal_user_settings_without_teams_skips_team_lookup(mock_proxy_config, mock_auth, mock_team_lookup):
+    """Settings changes that don't touch teams must not pay for a DB round trip."""
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={"max_budget": 10.0},
+    )
+
+    assert resp.status_code == 200, resp.text
+    mock_team_lookup["find_many"].assert_not_awaited()
+    assert mock_proxy_config["save_call_count"]() == 1
 
 
 def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):

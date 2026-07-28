@@ -16,6 +16,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -1449,6 +1450,8 @@ class PrometheusLogger(CustomLogger):
         prompt_details = usage_object.get("prompt_tokens_details") or {}
         completion_details = usage_object.get("completion_tokens_details") or {}
 
+        cache_creation_detail_tokens = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+
         detail_metrics: List[Tuple[Any, DEFINED_PROMETHEUS_METRICS, Any]] = [
             (
                 self.litellm_input_cached_tokens_metric,
@@ -1458,7 +1461,7 @@ class PrometheusLogger(CustomLogger):
             (
                 self.litellm_input_cache_creation_tokens_metric,
                 "litellm_input_cache_creation_tokens_metric",
-                (prompt_details.get("cache_creation_tokens") if isinstance(prompt_details, dict) else None),
+                cache_creation_detail_tokens,
             ),
             (
                 self.litellm_input_audio_tokens_metric,
@@ -1597,27 +1600,12 @@ class PrometheusLogger(CustomLogger):
             )
 
         # Provider prompt caching metrics are independent of LiteLLM cache_hit.
-        provider_cache_read_tokens = 0
-        provider_cache_creation_tokens = 0
         usage_obj = (standard_logging_payload.get("metadata", {}) or {}).get("usage_object")
         if isinstance(usage_obj, dict):
-            # Prefer explicit provider cache fields when available.
-            _read = usage_obj.get("cache_read_input_tokens")
-            _write = usage_obj.get("cache_creation_input_tokens")
-
-            if isinstance(_read, int):
-                provider_cache_read_tokens = _read
-            if isinstance(_write, int):
-                provider_cache_creation_tokens = _write
-
-            # Fallback to prompt_tokens_details.cached_tokens (common normalization point).
-            # Only fallback when the explicit field is genuinely absent (None).
-            if _read is None:
-                prompt_details = usage_obj.get("prompt_tokens_details")
-                if isinstance(prompt_details, dict):
-                    cached_tokens = prompt_details.get("cached_tokens")
-                    if isinstance(cached_tokens, int):
-                        provider_cache_read_tokens = cached_tokens
+            (
+                provider_cache_read_tokens,
+                provider_cache_creation_tokens,
+            ) = PrometheusLogger._resolve_provider_cache_tokens(usage_obj)
 
             if provider_cache_read_tokens > 0:
                 PrometheusLogger._inc_labeled_counter(
@@ -1638,6 +1626,40 @@ class PrometheusLogger(CustomLogger):
                     label_context=label_context,
                     amount=float(provider_cache_creation_tokens),
                 )
+
+    @staticmethod
+    def _resolve_provider_cache_tokens(usage_obj: Mapping[str, object]) -> tuple[int, int]:
+        # Prefer explicit provider cache fields when available.
+        _read = usage_obj.get("cache_read_input_tokens")
+        _write = usage_obj.get("cache_creation_input_tokens")
+
+        provider_cache_read_tokens = _read if isinstance(_read, int) else 0
+        provider_cache_creation_tokens = _write if isinstance(_write, int) else 0
+
+        # Fallback to prompt_tokens_details (common normalization point).
+        # Only fallback when the explicit field is genuinely absent (None).
+        prompt_details = usage_obj.get("prompt_tokens_details")
+        if _read is None and isinstance(prompt_details, dict):
+            cached_tokens = prompt_details.get("cached_tokens")
+            if isinstance(cached_tokens, int):
+                provider_cache_read_tokens = cached_tokens
+
+        if _write is None:
+            write_tokens = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
+            if write_tokens is not None:
+                provider_cache_creation_tokens = write_tokens
+
+        return provider_cache_read_tokens, provider_cache_creation_tokens
+
+    @staticmethod
+    def _resolve_cache_write_tokens(prompt_details: object) -> int | None:
+        if not isinstance(prompt_details, dict):
+            return None
+        for key in ("cache_write_tokens", "cache_creation_tokens"):
+            value = prompt_details.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        return None
 
     def _increment_mcp_tool_call_metrics(
         self,

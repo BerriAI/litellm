@@ -7392,6 +7392,71 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
 
 
 @pytest.mark.asyncio
+async def test_saml_callback_blocked_when_admin_ui_disabled():
+    """An IdP-initiated assertion must not mint a UI session when the admin UI is
+    disabled; the ACS enforces DISABLE_ADMIN_UI like the SP-initiated login route."""
+    from litellm.proxy.management_endpoints.ui_sso import saml_callback
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}):
+        response = await saml_callback(SimpleNamespace(cookies={}))
+
+    assert response.status_code == 200
+    assert "Admin UI is Disabled" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
+    """An IdP-initiated assertion must not bypass the >5 free-SSO-user Enterprise gate
+    that /sso/key/generate enforces; the ACS re-checks it after validating the assertion,
+    so the entitlement DB query never runs on unvalidated input."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import saml_callback
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+
+    call_order: list[str] = []
+
+    async def _fake_handle_acs(**kwargs):
+        call_order.append("validate")
+        return CustomOpenID(
+            id="dana@litellm.ai",
+            email="dana@litellm.ai",
+            first_name=None,
+            last_name=None,
+            display_name="dana",
+            picture=None,
+            provider="saml",
+            team_ids=[],
+            user_role=None,
+        )
+
+    async def _fake_count_billable_users():
+        call_order.append("count")
+        return 6
+
+    async def _stream():
+        yield b"SAMLResponse=signed-response"
+
+    request_double = SimpleNamespace(cookies={}, headers={}, stream=_stream)
+
+    with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
+        "litellm.proxy.proxy_server.master_key", "sk-1234"
+    ), patch(
+        "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
+        new=_fake_handle_acs,
+    ), patch(
+        "litellm.repositories.user_repository.UserRepository.count_billable_users",
+        new=AsyncMock(side_effect=_fake_count_billable_users),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await saml_callback(request_double)
+
+    assert str(exc.value.code) == "403"
+    assert call_order == ["validate", "count"]
+
+
+@pytest.mark.asyncio
 async def test_cli_poll_key_tolerates_missing_user_row():
     """The CLI poll must still mint the JWT when the user lookup raises,
     e.g. the user row was created moments ago and a negative-cache window

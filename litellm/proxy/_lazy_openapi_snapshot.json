@@ -26858,12 +26858,6 @@
                 }
               ],
               "title": "Start Date"
-            },
-            "total_spend": {
-              "default": 0.0,
-              "description": "Deduplicated spend of every request that called at least one tool in the window; less than the sum of per-tool attributed spend whenever multi-tool requests exist",
-              "title": "Total Spend",
-              "type": "number"
             }
           },
           "title": "ToolSpendResponse",
@@ -27417,7 +27411,7 @@
       },
       "/v1/tool/spend": {
         "get": {
-          "description": "Spend attributed to each tool over a date range, for the Cost Optimization dashboard.\n\nJoins ``LiteLLM_SpendLogToolIndex`` (which tool names ran on which request) to\n``LiteLLM_SpendLogs`` (what the request cost). A request that used multiple tools\ncounts its full spend toward each of those tools, so per-tool numbers are\nattributions. ``total_spend`` is the deduplicated spend of every request that\ncalled at least one tool in the window, so it never double counts.",
+          "description": "Spend attributed to each tool over a date range, for the Cost Optimization dashboard.\n\nReads the ``LiteLLM_DailyToolSpend`` rollup, written at request time from invoked\ntools only (MCP tool calls and response tool_calls; declaring a tool without\ninvoking it does not count). A request that invoked multiple tools counts its\nfull spend toward each of them, so per-tool numbers are attributions and do not\nsum to a deduplicated total.\n\n``by_tool`` is the top ``TOOL_SPEND_TOP_TOOLS`` tools by spend, aggregated in\nSQL, and ``daily`` covers only those tools, so the response is bounded by\ndays x TOOL_SPEND_TOP_TOOLS regardless of the requested range or how many\ndistinct tool names exist.",
           "operationId": "get_tool_spend_v1_tool_spend_get",
           "parameters": [
             {
@@ -27588,7 +27582,7 @@
       },
       "/v1/tool/{tool_name}/logs": {
         "get": {
-          "description": "Return paginated spend logs for requests that used this tool (from SpendLogToolIndex).",
+          "description": "Return paginated spend logs for requests that invoked this tool (from SpendLogToolIndex).\nDeclaring a tool in a request body without the model invoking it does not create an entry.",
           "operationId": "get_tool_usage_logs_v1_tool__tool_name__logs_get",
           "parameters": [
             {

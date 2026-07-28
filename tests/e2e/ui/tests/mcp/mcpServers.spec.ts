@@ -16,7 +16,7 @@ test.describe("MCP Servers", () => {
 
     // Open the discovery modal, then drop into the custom-server form
     await page.getByRole("button", { name: /Add New MCP Server/i }).click();
-    const discovery = page.locator(".ant-modal:visible").filter({ hasText: "Add MCP Server" });
+    const discovery = page.getByRole("dialog").filter({ hasText: "Add MCP Server" });
     await expect(discovery).toBeVisible({ timeout: 5_000 });
     await discovery.getByRole("button", { name: /Custom Server/i }).click();
 

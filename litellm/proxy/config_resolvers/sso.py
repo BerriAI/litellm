@@ -36,6 +36,10 @@ SSO_DESCRIPTORS: tuple[FieldDescriptor, ...] = (
     FieldDescriptor("generic_token_endpoint", "generic_token_endpoint", "GENERIC_TOKEN_ENDPOINT"),
     FieldDescriptor("generic_userinfo_endpoint", "generic_userinfo_endpoint", "GENERIC_USERINFO_ENDPOINT"),
     FieldDescriptor("generic_scope", "generic_scope", "GENERIC_SCOPE", default="openid email profile"),
+    FieldDescriptor("saml_idp_metadata_url", "saml_idp_metadata_url", "SAML_IDP_METADATA_URL"),
+    FieldDescriptor("saml_idp_metadata_xml", "saml_idp_metadata_xml", "SAML_IDP_METADATA_XML"),
+    FieldDescriptor("saml_sp_entity_id", "saml_sp_entity_id", "SAML_SP_ENTITY_ID"),
+    FieldDescriptor("saml_allow_unsolicited", "saml_allow_unsolicited", "SAML_ALLOW_UNSOLICITED"),
     FieldDescriptor("proxy_base_url", "proxy_base_url", "PROXY_BASE_URL"),
 )
 

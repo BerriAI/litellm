@@ -12,7 +12,13 @@ import { keyInfoV1Call } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import type { LogEntry } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
-import { DEFAULT_LOGS_SORTING, LOG_FILTER_IDS, useLogFilterLogic } from "./log_filter_logic";
+import {
+  DEFAULT_LOGS_SORTING,
+  formatLogsWindow,
+  getLogsWindowEndBound,
+  LOG_FILTER_IDS,
+  useLogFilterLogic,
+} from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
@@ -75,6 +81,14 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     isCustomDate,
     sorting,
   });
+
+  // Follow the table's own last fetch so a live-tail refresh carries the filter
+  // window with it; before the first fetch, fall back to the stored end time.
+  const windowEndBound = getLogsWindowEndBound(logsQuery.dataUpdatedAt || Date.parse(endTime));
+  const logsWindow = useMemo(
+    () => formatLogsWindow(startTime, endTime, isCustomDate, windowEndBound),
+    [startTime, endTime, isCustomDate, windowEndBound],
+  );
 
   const keyInfoQueryOptions: UseQueryOptions<KeyResponse | null> = {
     queryKey: ["requestLogsKeyInfo", selectedKeyIdInfoView, accessToken],
@@ -232,7 +246,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         onKeyHashClick={handleKeyHashClick}
         onSessionClick={handleSessionClick}
         teams={allTeams ?? []}
-        accessToken={accessToken}
+        logsWindow={logsWindow}
         toolbarChildren={
           <LogsTableToolbar
             startTime={startTime}

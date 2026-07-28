@@ -22,18 +22,18 @@ import pytest
 
 from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
-from e2e_http import Result, Success, UnknownApiError, unwrap
+from e2e_http import Result, Success, UnknownApiError
 from lifecycle import ResourceManager
 from mcp_client import McpCallToolResponse, McpClient, McpToolArguments
 
 pytestmark = pytest.mark.e2e
 
 # Stage runs several data-plane pods behind the shared key, and each picks up a
-# newly registered guardrail only on its next periodic DB sync (~30s in
+# newly registered guardrail or MCP server only on its next periodic DB sync (~30s in
 # proxy_server.py). Every pod is guaranteed to have refreshed only once a full sync
-# interval has elapsed since the create; before then a banned call routed to a
-# lagging pod passes through as legitimate in-flight propagation, not a leak.
-GUARDRAIL_FULL_SYNC_SECONDS = 40.0
+# interval has elapsed since the later of those two writes; before then a banned call
+# routed to a lagging pod passes through as legitimate in-flight propagation, not a leak.
+FULL_SYNC_SECONDS = 40.0
 POST_SYNC_VERIFICATION_CALLS = 4
 
 
@@ -50,6 +50,30 @@ def _poll_until_blocked(
             return last
         time.sleep(client.proxy.poll_interval)
         last = search(f"tell me about {banned_keyword}")
+    return last
+
+
+def _pod_lacks_mcp_server(result: Result[McpCallToolResponse]) -> bool:
+    """True when the pod that served the call answered as though the MCP server or its
+    tool does not exist (500 "Tool ... not found"), i.e. its MCP registry has not synced
+    yet and the request never reached the guardrail at all."""
+    if not isinstance(result, UnknownApiError) or result.status_code != 500:
+        return False
+    body = result.body.lower()
+    return "not found" in body and ("tool" in body or "server" in body)
+
+
+def _search_on_synced_pod(
+    search: Callable[[str], Result[McpCallToolResponse]], query: str, client: McpClient
+) -> Result[McpCallToolResponse]:
+    """Issue `query`, retrying to the poll deadline only while the serving pod does not
+    know the MCP server yet. Every other outcome, guardrail block or pass-through, comes
+    back untouched so the caller's assertion still decides it."""
+    deadline = time.monotonic() + client.proxy.poll_timeout
+    last = search(query)
+    while _pod_lacks_mcp_server(last) and time.monotonic() < deadline:
+        time.sleep(client.proxy.poll_interval)
+        last = search(query)
     return last
 
 
@@ -72,15 +96,11 @@ class TestMcpToolCallGuardrail:
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
         server_id = register_datadog_mcp(client, resources)
+        server_registered_at = time.monotonic()
         key = client.generate_key(user_id=f"e2e-mcp-guard-{marker}", mcp_servers=[server_id])
         resources.defer(lambda: client.proxy.delete_key(key))
 
-        tools = unwrap(client.list_tools(key))
-        tool_name = tools.tool_name_containing(server_id, SEARCH_LOGS_TOOL)
-        assert tool_name is not None, (
-            f"granted key never saw {SEARCH_LOGS_TOOL} on server {server_id}; "
-            f"tools={tools.tool_names_for_server(server_id)}"
-        )
+        tool_name = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
 
         def search(query: str) -> Result[McpCallToolResponse]:
             arguments: McpToolArguments = {
@@ -110,31 +130,33 @@ class TestMcpToolCallGuardrail:
             case _:
                 pytest.fail(
                     "content_filter never blocked the banned keyword on the MCP tool call within "
-                    f"{client.proxy.poll_timeout}s (guardrail sync to the data plane never landed); "
-                    f"last result: {blocked}"
+                    f"{client.proxy.poll_timeout}s (the guardrail or the MCP server never synced to "
+                    f"the data plane); last result: {blocked}"
                 )
 
         # The block above only proves the one pod that served it has synced; another
         # pod could still lack the guardrail and let the banned call reach Datadog.
-        # Wait out the full sync interval from the create so every pod has refreshed
-        # from the DB, then require the banned call to stay blocked across several
-        # attempts. A pass-through now is a genuine partial-propagation leak, not a
-        # race. Client load balancing still can't guarantee every pod is hit, so this
+        # Wait out the full sync interval from the later of the guardrail create and the
+        # MCP server registration (each syncs on its own clock, so the earlier write's
+        # deadline can elapse while a pod still lacks the other) so every pod has
+        # refreshed from the DB, then require the banned call to stay blocked across
+        # several attempts. A pass-through now is a genuine partial-propagation leak, not
+        # a race. Client load balancing still can't guarantee every pod is hit, so this
         # samples several worker selections rather than proving all pods synced.
-        sync_remaining = guardrail_created_at + GUARDRAIL_FULL_SYNC_SECONDS - time.monotonic()
+        sync_remaining = max(guardrail_created_at, server_registered_at) + FULL_SYNC_SECONDS - time.monotonic()
         if sync_remaining > 0:
             time.sleep(sync_remaining)
         for attempt in range(1, POST_SYNC_VERIFICATION_CALLS + 1):
-            reblocked = search(f"still about {banned_keyword} #{attempt}")
+            reblocked = _search_on_synced_pod(search, f"still about {banned_keyword} #{attempt}", client)
             assert isinstance(reblocked, UnknownApiError) and reblocked.status_code == 400, (
-                "after the guardrail sync interval every data-plane pod must block the banned "
-                f"keyword, but attempt {attempt} of {POST_SYNC_VERIFICATION_CALLS} was allowed "
-                f"through (a pod still lacks the guardrail): {reblocked}"
+                "after the sync interval every data-plane pod must block the banned keyword, but "
+                f"attempt {attempt} of {POST_SYNC_VERIFICATION_CALLS} was not blocked (a pod still "
+                f"lacks the guardrail, or never synced the MCP server): {reblocked}"
             )
             if attempt < POST_SYNC_VERIFICATION_CALLS:
                 time.sleep(client.proxy.poll_interval)
 
-        allowed = search(f"e2e-clean-{marker}")
+        allowed = _search_on_synced_pod(search, f"e2e-clean-{marker}", client)
         match allowed:
             case Success(data=result):
                 assert result.is_error is not True, (

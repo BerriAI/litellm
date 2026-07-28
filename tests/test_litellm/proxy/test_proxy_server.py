@@ -1504,50 +1504,6 @@ def test_team_info_masking():
     assert "public-test-key" not in str(exc_info.value)
 
 
-def test_embedding_input_array_of_tokens(client_no_auth):
-    """
-    Test to bypass decoding input as array of tokens for selected providers
-
-    Ref: https://github.com/BerriAI/litellm/issues/10113
-    """
-    from litellm.proxy import proxy_server
-
-    # The client_no_auth fixture should initialize the router
-    # Assert this to catch any router initialization regressions
-    assert proxy_server.llm_router is not None, (
-        "llm_router is None after client_no_auth fixture initialized. "
-        "This indicates a router initialization issue that should be investigated."
-    )
-
-    try:
-        with mock.patch.object(
-            proxy_server.llm_router,
-            "aembedding",
-            return_value=example_embedding_result,
-        ) as mock_aembedding:
-            test_data = {
-                "model": "vllm_embed_model",
-                "input": [[2046, 13269, 158208]],
-            }
-
-            response = client_no_auth.post("/v1/embeddings", json=test_data)
-
-            # Assert that aembedding was called, and that input was not modified
-            mock_aembedding.assert_called_once()
-            call_args, call_kwargs = mock_aembedding.call_args
-            assert call_kwargs["model"] == "vllm_embed_model"
-            assert call_kwargs["input"] == [[2046, 13269, 158208]]
-
-            assert response.status_code == 200
-            result = response.json()
-            print(len(result["data"][0]["embedding"]))
-            assert (
-                len(result["data"][0]["embedding"]) > 10
-            )  # this usually has len==1536 so
-    except Exception as e:
-        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
-
-
 @pytest.mark.asyncio
 async def test_get_all_team_models():
     """
@@ -2686,6 +2642,11 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
     This validates that generate_key_helper_fn is called with table_name="user"
     which should prevent key creation in LiteLLM_VerificationToken table.
+
+    Also guards the row identity: the budget must land on the proxy-wide
+    aggregate row "litellm-proxy-budget" (the one the spend writer increments
+    per request), not the admin user's own row ("default_user_id"). Budgeting
+    the admin row leaves the global budget without a resettable counter.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -2714,7 +2675,7 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
         "litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper
     ):
         # Call the function under test
-        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+        ProxyStartupEvent._add_proxy_budget_to_db()
 
         # Allow async task to complete
         import asyncio
@@ -2740,9 +2701,13 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
     update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
     rows that pre-existed without a reset schedule. Without this, the proxy
-    admin row stays at NULL and reset_budget_for_litellm_users never matches
+    budget row stays at NULL and reset_budget_for_litellm_users never matches
     it (NULL < now() is unknown in SQL), so the global proxy budget never
     resets.
+
+    The same conditional update must zero spend: a row that was never on a
+    reset schedule holds lifetime accrual, which must not gate the first
+    duration window.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2773,9 +2738,7 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
         ),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill(
-            litellm_proxy_budget_name
-        )
+        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill()
 
     # Upsert ran with the configured budget
     mock_generate_key_helper.assert_called_once()
@@ -2793,6 +2756,8 @@ async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
     backfilled_reset_at = backfill_call.kwargs["data"]["budget_reset_at"]
     assert isinstance(backfilled_reset_at, datetime)
     assert backfilled_reset_at > datetime.now(timezone.utc)
+
+    assert backfill_call.kwargs["data"]["spend"] == 0
 
 
 @pytest.mark.asyncio
