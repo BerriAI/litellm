@@ -27214,6 +27214,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
+        "supports_video_input": true,
         "supports_vision": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000
