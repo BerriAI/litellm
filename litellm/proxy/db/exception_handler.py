@@ -167,6 +167,18 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_deadlock_error(e: Exception) -> bool:
+        """True iff ``e`` is a Postgres deadlock (P2034 / 40P01) surfaced through prisma."""
+        import prisma
+
+        if not isinstance(e, prisma.errors.PrismaError):
+            return False
+        if getattr(e, "code", None) == "P2034":
+            return True
+        error_message = str(e).lower()
+        return "deadlock detected" in error_message or "40p01" in error_message
+
+    @staticmethod
     def is_prisma_engine_internal_error(e: Exception) -> bool:
         """True iff ``e`` is a non-``PrismaError`` exception raised from inside
         prisma-client-py's query-engine layer.
