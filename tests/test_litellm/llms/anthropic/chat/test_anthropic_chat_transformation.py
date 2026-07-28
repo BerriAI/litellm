@@ -23,7 +23,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
     AnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.utils import ServerToolUse
+from litellm.types.utils import ServerToolUse, Usage
 
 
 def test_response_format_transformation_unit_test():
@@ -5845,3 +5845,25 @@ def test_top_k_forwarded_at_transform_on_models_that_accept_it():
     )
 
     assert result["top_k"] == 40
+
+
+def test_is_anthropic_usage_object_distinguishes_chat_usage():
+    """Chat-shaped Usage mirrors cache_read_input_tokens alongside prompt_tokens that already
+    include the cache tokens, so treating it as Anthropic usage would re-add them and
+    double-count the prompt. Only the Anthropic shape, where input_tokens excludes cache
+    tokens, may take the Anthropic mapping."""
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014}
+    )
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_creation_input_tokens": 10}
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        Usage(
+            prompt_tokens=4017,
+            completion_tokens=5,
+            total_tokens=4022,
+            cache_read_input_tokens=4014,
+        ).model_dump()
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object({"input_tokens": 3, "output_tokens": 5})
