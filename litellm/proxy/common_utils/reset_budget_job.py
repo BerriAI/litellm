@@ -701,9 +701,7 @@ class ResetBudgetJob:
         # against naive UTC `now` and the reset fires late by the offset
         # (#34896).
         reset_at = (
-            datetime.fromisoformat(reset_at_str.replace("Z", "+00:00"))
-            .astimezone(timezone.utc)
-            .replace(tzinfo=None)
+            datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
         )
         if reset_at > now:
             return False
