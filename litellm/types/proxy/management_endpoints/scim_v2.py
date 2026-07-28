@@ -131,6 +131,7 @@ class SCIMUser(SCIMResource):
 class SCIMMember(BaseModel):
     value: str  # User ID
     display: Optional[str] = None  # Username or email
+    type: str | None = None
 
 
 class SCIMGroup(SCIMResource):

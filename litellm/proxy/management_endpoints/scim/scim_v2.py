@@ -5,7 +5,8 @@ This is an enterprise feature and requires a premium license.
 """
 
 import re
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from collections.abc import Sequence
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 from fastapi import (
     APIRouter,
@@ -50,7 +51,11 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
-from litellm.proxy.utils import _premium_user_check, handle_exception_on_proxy
+from litellm.proxy.utils import (
+    PrismaClient,
+    _premium_user_check,
+    handle_exception_on_proxy,
+)
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -371,6 +376,133 @@ async def _recompute_scim_member_roles(prisma_client: Any, user_ids: Iterable[st
         )
 
 
+class _ResolvedUserMember(NamedTuple):
+    user_id: str
+
+
+class _SkippedGroupMember(NamedTuple):
+    value: str
+    reason: Literal["nested_group", "existing_team"]
+
+
+class _UnknownMember(NamedTuple):
+    value: str
+
+
+_ClassifiedGroupMember = Union[_ResolvedUserMember, _SkippedGroupMember, _UnknownMember]
+
+MissingMemberPolicy = Literal["provision", "passthrough"]
+
+
+async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient) -> _ClassifiedGroupMember:
+    """
+    Decide what a single SCIM group member refers to.
+
+    A LiteLLM team only holds users, so nested groups (``"type": "Group"``, sent
+    by Entra) and ids that name an existing team are not members at all. The user
+    lookup runs before the team lookup so a user whose id happens to collide with
+    a team id keeps syncing as a member.
+    """
+    value = member.value
+    if not value or not value.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid member: user ID cannot be empty."},
+        )
+
+    if member.type is not None and member.type.lower() == "group":
+        return _SkippedGroupMember(value=value, reason="nested_group")
+
+    user = await UserRepository(prisma_client).table.find_unique(where={"user_id": value})
+    if user is not None:
+        return _ResolvedUserMember(user_id=value)
+
+    team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": value})
+    if team is not None:
+        return _SkippedGroupMember(value=value, reason="existing_team")
+
+    return _UnknownMember(value=value)
+
+
+def _admitted_member_ids(
+    classified: tuple[_ClassifiedGroupMember, ...], admitted_unknown: frozenset[str]
+) -> tuple[str, ...]:
+    """Member ids that survive resolution, in the order the request listed them."""
+    return tuple(
+        entry.user_id if isinstance(entry, _ResolvedUserMember) else entry.value
+        for entry in classified
+        if isinstance(entry, _ResolvedUserMember)
+        or (isinstance(entry, _UnknownMember) and entry.value in admitted_unknown)
+    )
+
+
+async def _resolve_group_member_ids(
+    members: Sequence[SCIMMember],
+    created_via: str,
+    prisma_client: PrismaClient,
+    missing_member_policy: MissingMemberPolicy = "provision",
+) -> GroupMemberExtractionResult:
+    """
+    Resolve SCIM group members to LiteLLM user ids, dropping members that are not users.
+
+    Unknown ids are handled by ``missing_member_policy``:
+    - ``provision``: create them when litellm_settings.scim_upsert_user is True
+      (default), otherwise reject the request per SCIM 2.0.
+    - ``passthrough``: return them untouched. Used for member removals, where
+      creating a user just to drop it again would be pure phantom-user churn and
+      rejecting an id the IdP no longer knows about would wedge the sync.
+
+    Raises:
+        HTTPException: 400 when a member id is empty, or when scim_upsert_user is
+        False and a member id is neither an existing user, an existing team, nor a
+        nested group.
+    """
+    classified = tuple([await _classify_group_member(member, prisma_client) for member in members])
+
+    for skipped in (entry for entry in classified if isinstance(entry, _SkippedGroupMember)):
+        verbose_proxy_logger.info(
+            "SCIM: ignoring non-user group member '%s' (%s); LiteLLM teams contain users only",
+            skipped.value,
+            skipped.reason,
+        )
+
+    existing_member_ids = tuple(entry.user_id for entry in classified if isinstance(entry, _ResolvedUserMember))
+    unknown_ids = tuple(entry.value for entry in classified if isinstance(entry, _UnknownMember))
+
+    if missing_member_policy == "passthrough":
+        return GroupMemberExtractionResult(
+            existing_member_ids=existing_member_ids,
+            created_users=(),
+            all_member_ids=_admitted_member_ids(classified, frozenset(unknown_ids)),
+        )
+
+    if unknown_ids and not await _get_scim_upsert_user_setting():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"User with ID '{unknown_ids[0]}' does not exist. "
+                "Please create the user first via POST /Users before adding to group."
+            },
+        )
+
+    creations = tuple(
+        [
+            (user_id, await _create_user_if_not_exists(user_id=user_id, created_via=created_via))
+            for user_id in unknown_ids
+        ]
+    )
+    created_users = tuple(created for _, created in creations if created is not None)
+
+    return GroupMemberExtractionResult(
+        existing_member_ids=existing_member_ids,
+        created_users=created_users,
+        all_member_ids=_admitted_member_ids(
+            classified,
+            frozenset(user_id for user_id, created in creations if created is not None),
+        ),
+    )
+
+
 async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionResult:
     """
     Extract member IDs from SCIMGroup, validating that all users exist.
@@ -386,56 +518,10 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
         HTTPException: If scim_upsert_user is False and any member user does not exist (400 Bad Request)
     """
     prisma_client = await _get_prisma_client_or_raise_exception()
-    existing_member_ids = []
-    created_users = []
-    all_member_ids = []
-
-    # Check the feature flag
-    scim_upsert_user = await _get_scim_upsert_user_setting()
-
-    if group.members:
-        for member in group.members:
-            user_id = member.value
-
-            # Validate user_id is not empty
-            if not user_id or not user_id.strip():
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": "Invalid member: user ID cannot be empty."},
-                )
-
-            # Check if user exists
-            user = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
-
-            if user:
-                existing_member_ids.append(user_id)
-                all_member_ids.append(user_id)
-            else:
-                if scim_upsert_user:
-                    # Create the user if they don't exist (backward compatible behavior)
-                    created_user = await _create_user_if_not_exists(
-                        user_id=user_id, created_via="scim_group_membership"
-                    )
-                    if created_user:
-                        created_users.append(created_user)
-                        all_member_ids.append(user_id)
-                    # If creation failed, user is skipped (logged in helper)
-                else:
-                    # User doesn't exist - reject per SCIM 2.0 protocol
-                    # This prevents security issues where users not assigned to app
-                    # get provisioned via group membership
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": f"User with ID '{user_id}' does not exist. "
-                            "Please create the user first via POST /Users before adding to group."
-                        },
-                    )
-
-    return GroupMemberExtractionResult(
-        existing_member_ids=existing_member_ids,
-        created_users=created_users,
-        all_member_ids=all_member_ids,
+    return await _resolve_group_member_ids(
+        members=group.members or [],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
     )
 
 
@@ -448,7 +534,7 @@ async def _get_team_members_display(member_ids: List[str]) -> List[SCIMMember]:
         user = await UserRepository(prisma_client).table.find_unique(where={"user_id": member_id})
         if user:
             display_name = user.user_email or user.user_id
-            members.append(SCIMMember(value=user.user_id, display=display_name))
+            members.append(SCIMMember(value=user.user_id, display=display_name, type="User"))
 
     return members
 
@@ -862,6 +948,15 @@ def _get_schemas() -> list:
                             name="display",
                             type="string",
                             description="Member display name.",
+                        ),
+                        SCIMSchemaAttribute(
+                            name="type",
+                            type="string",
+                            multiValued=False,
+                            description=(
+                                'The type of member; canonical values are "User" and "Group". '
+                                "Members of type Group are ignored, LiteLLM teams contain users only."
+                            ),
                         ),
                     ],
                 ),
@@ -1336,21 +1431,41 @@ async def delete_user(
         raise handle_exception_on_proxy(e)
 
 
-def _extract_group_values(value: Any) -> List[str]:
+def _parse_member_entry(entry: object) -> SCIMMember | None:
+    """Parse one entry of a SCIM patch value, or None when it carries no id."""
+    if isinstance(entry, str):
+        return SCIMMember(value=entry)
+
+    if not isinstance(entry, dict):
+        return None
+
+    entry_value: object = entry.get("value")
+    if not entry_value:
+        return None
+
+    entry_display: object = entry.get("display")
+    entry_type: object = entry.get("type")
+    return SCIMMember(
+        value=str(entry_value),
+        display=str(entry_display) if entry_display is not None else None,
+        type=str(entry_type) if entry_type is not None else None,
+    )
+
+
+def _parse_member_entries(value: object) -> tuple[SCIMMember, ...]:
+    """Parse a SCIM patch value into members, keeping each entry's ``type``.
+
+    PATCH bodies bypass SCIMGroup parsing (SCIMPatchOperation.value is untyped),
+    so member objects arrive as raw dicts and the ``type`` that marks a nested
+    group would otherwise be lost.
+    """
+    entries: tuple[object, ...] = tuple(value) if isinstance(value, list) else (value,)
+    return tuple(member for member in (_parse_member_entry(entry) for entry in entries) if member is not None)
+
+
+def _extract_group_values(value: object) -> List[str]:
     """Return group ids from a SCIM patch value."""
-    group_values: List[str] = []
-    if isinstance(value, list):
-        for v in value:
-            if isinstance(v, dict) and v.get("value"):
-                group_values.append(str(v.get("value")))
-            elif isinstance(v, str):
-                group_values.append(v)
-    elif isinstance(value, dict):
-        if value.get("value"):
-            group_values.append(str(value.get("value")))
-    elif isinstance(value, str):
-        group_values.append(value)
-    return group_values
+    return [member.value for member in _parse_member_entries(value)]
 
 
 def _extract_ids_from_path_filter(path: str | None, attribute: str) -> List[str]:
@@ -2001,42 +2116,20 @@ async def _process_group_patch_operations(
                 metadata["externalId"] = str(value)
         elif path.startswith("members"):
             # Handle member operations
-            member_values = _extract_group_values(value)
-            if not member_values and value is None:
-                member_values = _extract_ids_from_path_filter(op.path, "members")
-            # Check the feature flag
-            scim_upsert_user = await _get_scim_upsert_user_setting()
-            # Validate all users exist or create them based on feature flag
-            valid_members = []
-            for member_id in member_values:
-                # Validate member_id is not empty
-                if not member_id or not member_id.strip():
-                    raise HTTPException(
-                        status_code=400,
-                        detail={"error": "Invalid member: user ID cannot be empty."},
-                    )
-
-                user = await UserRepository(prisma_client).table.find_unique(where={"user_id": member_id})
-                if user:
-                    valid_members.append(member_id)
-                else:
-                    if scim_upsert_user:
-                        # Create the user if they don't exist (backward compatible behavior)
-                        created_user = await _create_user_if_not_exists(
-                            user_id=member_id, created_via="scim_group_patch"
-                        )
-                        if created_user:
-                            valid_members.append(member_id)
-                        # If creation failed, user is skipped (logged in helper)
-                    else:
-                        # User doesn't exist - reject per SCIM 2.0 protocol
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "error": f"User with ID '{member_id}' does not exist. "
-                                "Please create the user first via POST /Users before adding to group."
-                            },
-                        )
+            patched_members = (
+                _parse_member_entries(value)
+                if value is not None
+                else tuple(
+                    SCIMMember(value=member_id) for member_id in _extract_ids_from_path_filter(op.path, "members")
+                )
+            )
+            member_result = await _resolve_group_member_ids(
+                members=patched_members,
+                created_via="scim_group_patch",
+                prisma_client=prisma_client,
+                missing_member_policy="passthrough" if op_type == "remove" else "provision",
+            )
+            valid_members = member_result.all_member_ids
 
             if op_type == "replace":
                 final_members = set(valid_members)
