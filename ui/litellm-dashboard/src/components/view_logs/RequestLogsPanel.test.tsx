@@ -352,6 +352,29 @@ describe("RequestLogsPanel", () => {
       });
     });
 
+    it("clicking a log row clears a lingering ?session_id= so the drawer shows the clicked log", async () => {
+      const user = userEvent.setup();
+      respondWith([
+        logEntry({ request_id: "req-a", session_id: "sess-a", session_total_count: 1 }),
+        logEntry({ request_id: "req-b" }),
+      ]);
+      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      await user.click(within(row("req-a") as HTMLElement).getByText("sess-a"));
+      await waitFor(() => expect(new URLSearchParams(window.location.search).get("session_id")).toBe("sess-a"));
+
+      await user.click(row("req-b") as HTMLElement);
+
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get("log_id")).toBe("req-b");
+      expect(params.get("session_id")).toBeNull();
+      await waitFor(() => {
+        expect(drawer()).toHaveAttribute("data-log-id", "req-b");
+        expect(drawer()).toHaveAttribute("data-session-id", "");
+      });
+    });
+
     it("browser back after opening via a session id closes the drawer", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-solo", session_id: "sess-solo", session_total_count: 1 })]);

@@ -21,6 +21,7 @@ export function useLogDetailRouting(): LogDetailRouting {
   const openLog = useCallback((requestId: string) => {
     navigateWithParams((params) => {
       params.set(LOG_ID_QUERY_PARAM, requestId);
+      params.delete(SESSION_ID_QUERY_PARAM);
     });
   }, []);
 
