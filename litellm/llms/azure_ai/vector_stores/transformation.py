@@ -37,8 +37,28 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
         super().__init__()
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        """
+        Every ``GET`` under ``/indexes/`` is a read: get details, stats, and the
+        document reads (GET-form search, ``$count``, point lookup, and the
+        GET forms of suggest and autocomplete).
+
+        ``POST`` splits by endpoint. Search, suggest, autocomplete, and analyze
+        are query endpoints, so they read; ``/docs/index`` is the batch endpoint
+        carrying upload, merge, mergeOrUpload, and delete actions, so it writes.
+
+        Patterns stay literal rather than ``{placeholder}`` templates because the
+        matcher falls back to the substring before a ``{``, which here is always
+        ``/indexes/`` -- broad enough that a templated read, matched first, would
+        shadow the ``/docs/index`` write.
+        """
         return {
-            "read": [("GET", "/indexes/"), ("POST", "/docs/search")],
+            "read": [
+                ("GET", "/indexes/"),
+                ("POST", "/docs/search"),
+                ("POST", "/docs/suggest"),
+                ("POST", "/docs/autocomplete"),
+                ("POST", "/analyze"),
+            ],
             "write": [("POST", "/docs/index")],
         }
 
