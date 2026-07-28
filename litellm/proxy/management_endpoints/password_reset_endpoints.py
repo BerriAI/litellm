@@ -9,7 +9,7 @@ Self-service password reset endpoints for internal (non-SSO) users.
 import secrets
 from datetime import timedelta
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
