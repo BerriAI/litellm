@@ -14,10 +14,6 @@ def levo_preset(
     allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     base = config_overrides or OpenTelemetryV2Config()
-    # ``get_levo_config()`` raises without Levo credentials. Propagate that raise for a
-    # global callback so a misconfigured deployment fails loud, but when an admin-owned
-    # Levo destination is the reason for construction it carries its own per-tenant
-    # credentials, so degrade to a global-exporter-less config rather than raising.
     try:
         cfg = _V1Levo.get_levo_config()
     except Exception:

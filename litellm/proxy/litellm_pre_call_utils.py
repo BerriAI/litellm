@@ -808,13 +808,13 @@ async def _apply_admin_logging_exporters(
             )
         )
     else:
-        destinations, backends = await _resolve_logging_exporters(user_api_key_dict)
+        try:
+            destinations, backends = await _resolve_logging_exporters(user_api_key_dict)
+        except Exception:  # noqa: BLE001  # best-effort telemetry setup must never break the request
+            return
     if not destinations:
         return
     _set_request_otel_destinations(destinations)
-    # Register on both success and failure: an admin-owned destination must
-    # capture a failed upstream call (its error gen-AI span) as well as a
-    # successful one, otherwise a 401/timeout lands a trace with no LLM-call span.
     existing_success = data.get("success_callback") or []
     data["success_callback"] = list(dict.fromkeys([*existing_success, *backends]))
     existing_failure = data.get("failure_callback") or []
@@ -1984,13 +1984,6 @@ async def add_litellm_data_to_request(
                 )
 
     # Team Callbacks controls
-    # OTEL destinations are admin-owned and resolved server-side below; a client must
-    # never set or override them. Drop any client value from every metadata carrier
-    # before the resolver runs so injection is inert regardless of the slot used: the
-    # top level, the request metadata key, and litellm_metadata (where the resolver
-    # stashes the admin-resolved value the dynamic-params reader later picks up). The
-    # server sets only litellm_metadata at resolve time, so wiping the others here
-    # removes client input only.
     data.pop("otel_destinations", None)
     for _carrier_key in (_metadata_variable_name, "litellm_metadata"):
         carrier = data.get(_carrier_key)
@@ -2007,11 +2000,6 @@ async def add_litellm_data_to_request(
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
 
-    # Admin-owned exporter assignment: resolve the union of exporters assigned across
-    # the request's identity chain (key + team + org) into fan-out destinations and
-    # activate their backends. Default-deny: an unassigned identity gets none. Reuse
-    # the result ``user_api_key_auth`` already cached on ``request.state`` so the
-    # resolver runs once per request, not twice.
     cached = getattr(getattr(request, "state", None), "otel_destinations", None)
     await _apply_admin_logging_exporters(data, user_api_key_dict, cached_destinations=cached)
 

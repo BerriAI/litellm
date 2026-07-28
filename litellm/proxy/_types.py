@@ -2859,8 +2859,6 @@ class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     created_at: datetime
     updated_at: datetime
-    # Destination names that will receive this org's traces (own logging_exporters
-    # plus auto-enabled destinations whose access grants the org). Names only.
     resolved_logging_exporters: Sequence[str] | None = None
 
 
@@ -3876,8 +3874,6 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: Optional[List[str]] = None
     access_group_mcp_server_ids: Optional[List[str]] = None
     access_group_agent_ids: Optional[List[str]] = None
-    # Destination names that will receive this team's traces (own logging_exporters
-    # plus auto-enabled destinations whose access grants the team). Names only.
     resolved_logging_exporters: Sequence[str] | None = None
 
 

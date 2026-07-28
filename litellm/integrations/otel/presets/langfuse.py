@@ -18,11 +18,6 @@ def langfuse_preset(
 ) -> OpenTelemetryV2Config:
     base = config_overrides or OpenTelemetryV2Config()
     mappers = ensure_mappers(base.mapper_names, "langfuse")
-    # ``get_langfuse_otel_config()`` raises without Langfuse keys. Propagate that raise
-    # for a global callback so a misconfigured deployment fails loud, but when an
-    # admin-owned Langfuse destination is the reason for construction it carries its own
-    # per-tenant keys, so degrade to a (global-exporter-less) mapper-only config -- or
-    # the gen-AI span falls to the generic logger and never reaches it.
     try:
         cfg = _V1Langfuse.get_langfuse_otel_config()
     except Exception:

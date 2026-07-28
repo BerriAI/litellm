@@ -113,10 +113,6 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     if not endpoint:
         return endpoint
     endpoint = endpoint.rstrip("/")
-    # Some vendors expose a complete traces ingest path that is NOT the OTLP-standard
-    # ``/v1/traces`` base: Splunk Observability uses ``/v2/trace/otlp`` and Langtrace
-    # ingests at ``/api/trace``. Appending ``/v1/traces`` to those 404s, so never
-    # rewrite them.
     if endpoint.endswith("/v1/traces") or "/v2/trace/otlp" in endpoint or endpoint.endswith("/api/trace"):
         return endpoint
     for other_signal in ("/v1/logs", "/v1/metrics"):
@@ -125,10 +121,6 @@ def _otlp_traces_endpoint(endpoint: str | None) -> str | None:
     return endpoint + "/v1/traces"
 
 
-# Backends whose OTLP transport is gRPC. Arize's OTLP endpoint
-# (``otlp.arize.com``) speaks gRPC; every other current preset speaks OTLP/HTTP.
-# Single source of truth shared by the per-tenant fan-out processor and the
-# ``TenantTracerCache`` so the two never disagree on a destination's transport.
 _GRPC_BACKENDS = frozenset({"arize"})
 
 

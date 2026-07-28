@@ -1022,8 +1022,6 @@ async def new_team(
             user_api_key_cache,
         )
 
-        # logging_exporters is proxy-admin only. Skip the check when the field
-        # isn't being written so unrelated /team/new calls stay cheap.
         if data.logging_exporters is not None:
             validate_logging_exporter_field(data.logging_exporters, user_api_key_dict)
 
@@ -1735,9 +1733,6 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
         )
 
-        # logging_exporters on /team/update is proxy-admin only. Pass the stored
-        # column value so the validator's no-op check sees a real change and a
-        # non-admin cannot clear an admin-assigned value.
         if data.logging_exporters is not None:
             validate_logging_exporter_field(
                 data.logging_exporters,

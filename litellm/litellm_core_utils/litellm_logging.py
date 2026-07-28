@@ -4058,11 +4058,6 @@ def _init_custom_logger_compatible_class(
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
         elif logging_integration == "generic":
-            # Generic OTLP passthrough: a vendor-neutral OpenTelemetryV2 logger whose
-            # per-destination exporter is attached by the admin-owned destination, so a
-            # ``generic`` destination gets the full trace (incl. the gen-AI span), not
-            # just proxy-internal spans. Only meaningful as an admin-owned destination,
-            # so there is no legacy fallback: None when no v2 logger is constructed.
             return _maybe_construct_otel_v2("generic", _in_memory_loggers)
         elif logging_integration == "pagerduty":
             for callback in _in_memory_loggers:
@@ -4232,11 +4227,6 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list) -> Op
         if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
             return callback
     try:
-        # An admin-owned destination carries its own per-tenant credentials, so a
-        # credential-mandatory preset may degrade rather than raise. A purely global
-        # callback with no destination must still raise on missing credentials; the
-        # raise is swallowed here so the caller defers to the legacy path and customers
-        # get the same loud error story they had before V2 landed.
         config = preset_fn(allow_missing_credentials=has_admin_dest)
     except Exception:
         return None

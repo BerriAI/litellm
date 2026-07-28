@@ -986,6 +986,57 @@ def test_lazy_activation_emits_llm_span_when_destination_resolves(monkeypatch):
     assert len(dests) == 1 and dests[0].endpoint == "https://otlp.example.com/v1"
 
 
+def test_no_upstream_reject_emits_no_deferred_span_even_with_destinations(monkeypatch):
+    """LIT-3850 regression: a post-auth rejection (rate-limit/budget/guardrail) fires
+    the failure callback with the ``LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL`` marker set,
+    a real ``standard_logging_object`` payload, AND admin-resolved destinations already
+    hoisted at auth time. This is the exact intersection the lazy-activation close path
+    misses: because destinations are present, the ``not destinations`` guard does not
+    fire, so only re-reading ``call.is_no_upstream_call`` keeps the close from
+    fabricating a ``chat`` span for a call that never reached a provider. It mirrors
+    ``test_lazy_activation_emits_llm_span_when_destination_resolves`` (which emits) with
+    the marker added; without the no-upstream check this close emits a phantom span into
+    the tenant's destination (live-reproduced: a 429 rate-limited request produced a
+    ``chat gflash`` span in the tenant sink)."""
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+    logger, exporter = _logger()
+    monkeypatch.setattr(logger, "callback_name", "in_memory")
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+
+    tracer_for_calls: list[tuple] = []
+
+    def _fake_tracers_for(default, destinations):
+        tracer_for_calls.append(destinations)
+        return (default,)
+
+    monkeypatch.setattr(logger._tenant_tracers, "tracers_for", _fake_tracers_for)
+    _anchor([
+            {
+                "callback_name": "in_memory",
+                "endpoint": "https://otlp.example.com/v1",
+                "headers": {"api_key": "k"},
+            }
+        ])
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "ProxyException", "error_code": "429"},
+    )
+    kwargs = _kwargs(payload=payload)
+    kwargs[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+
+    assert "call_1" not in logger._open_llm_calls
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    server.end()
+
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert "chat gpt-4o" not in names
+    assert tracer_for_calls == []
+
+
 def test_second_close_after_opened_call_does_not_emit_duplicate(monkeypatch):
     logger, exporter = _logger()
     monkeypatch.setattr(logger, "callback_name", "in_memory")

@@ -4751,8 +4751,6 @@ async def regenerate_key_fn(  # noqa: C901  # single endpoint handling many opti
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
-        # Look up the key's team once (the body may omit team_id); shared by the
-        # access-group, object-permission, and logging-exporter gates below.
         regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
         if _key_in_db.team_id is not None:
             try:

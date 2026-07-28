@@ -50,9 +50,6 @@ def agentops_preset(
     """
     settings = _AgentOpsSettings()
     base = config_overrides or OpenTelemetryV2Config()
-    # Contribute the global AgentOps exporter only when an API key is configured.
-    # Without it the lazy-auth exporter has nothing to mint a JWT from and every
-    # export fails; admin-owned destinations carry their own credentials.
     global_exporter = (
         (
             ExporterSpec(

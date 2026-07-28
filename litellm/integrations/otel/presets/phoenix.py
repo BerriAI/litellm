@@ -39,10 +39,6 @@ def phoenix_preset(
 ) -> OpenTelemetryV2Config:
     project_name = _PhoenixSettings().project_name
     base = config_overrides or OpenTelemetryV2Config()
-    # Contribute the global Phoenix exporter only when Phoenix is configured (a
-    # cloud API key or a collector endpoint). Otherwise the config defaults to
-    # http://localhost:6006 and would export there even when the operator only
-    # uses admin-owned Phoenix destinations.
     if any(os.environ.get(v) for v in _PHOENIX_ENV_VARS):
         cfg = _V1Phoenix.get_arize_phoenix_config()
         headers = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None

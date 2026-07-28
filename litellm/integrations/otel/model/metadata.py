@@ -194,10 +194,6 @@ class LLMCallEvent:
     # at ``pre_call``, or when the call closed before any payload materialized (so
     # there is nothing to stamp on the span).
     payload: "StandardLoggingPayload | None"
-    # The admin-resolved OTLP destinations (endpoint + auth headers) for this call's
-    # identity chain, fanned out to. Empty when none are assigned. Read from the
-    # server-only request ContextVar the proxy anchors at auth time, so it is never
-    # request-derived and never travels through the request or provider body.
     otel_destinations: tuple[OtelDestination, ...]
     # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
     # the ``pre_call`` hook but never made an upstream call, so they get no span.

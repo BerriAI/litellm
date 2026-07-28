@@ -166,10 +166,6 @@ class OpenTelemetryV2(CustomLogger):
         )
         self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
-        # call_ids for which the LLM-call span has already been emitted; lets
-        # _close_llm_call no-op on duplicate callbacks (success + failure both
-        # firing, or success firing twice) instead of double-exporting the
-        # deferred-emit span. Bounded LRU, same size as _open_llm_calls.
         self._closed_call_ids: OrderedDict[str, None] = OrderedDict()  # mutable-ok: bounded LRU of emitted call ids
         self._init_otel_logger_on_litellm_proxy()
 
@@ -273,9 +269,6 @@ class OpenTelemetryV2(CustomLogger):
         if call_id in self._open_llm_calls:
             return
         start_time_ns = to_ns(datetime.now())
-        # One live span per destination Resource group (Arize routing two projects
-        # yields two; header-routed backends yield one). Empty until a recordable
-        # parent is confirmed.
         spans: tuple[Span, ...] = ()
         # Parent to the request's anchored root span (stable across the request),
         # falling back to ambient on the SDK path. Open the span live only when
@@ -445,11 +438,6 @@ class OpenTelemetryV2(CustomLogger):
         call = LLMCallEvent.from_dict(kwargs)
         call_id = call.call_id
 
-        # Dedup guard: a normal close pops the carrier and emits a span. If a
-        # second close fires for the same call_id (success + failure callbacks
-        # are wired separately, custom callbacks can fan out, etc.), the
-        # carrier is already gone and a payload+destinations combination would
-        # otherwise emit a second deferred span.
         if call_id and call_id in self._closed_call_ids:
             return None
 
@@ -458,7 +446,7 @@ class OpenTelemetryV2(CustomLogger):
 
         if carrier is None:
             destinations = self._destinations_for_backend(call)
-            if payload is None or not destinations:
+            if call.is_no_upstream_call or payload is None or not destinations:
                 return None
             self._mark_closed(call_id)
             return self._emit_deferred_llm_call(

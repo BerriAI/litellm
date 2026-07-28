@@ -3086,10 +3086,6 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     turn_off_message_logging: Optional[bool]  # when true will not log messages
     litellm_disabled_callbacks: Optional[List[str]]
 
-    # Admin-owned OTEL v2 destinations, resolved server-side from the exporters
-    # assigned to the request's identity chain (key/team/user/org), fanned out to.
-    # Never request-settable: absent from the request-read whitelist in
-    # initialize_dynamic_callback_params, so a request body/metadata cannot set it.
     otel_destinations: Optional[Sequence[OtelDestinationParams]]
 
 

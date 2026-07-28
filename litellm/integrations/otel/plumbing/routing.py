@@ -39,14 +39,8 @@ from litellm.integrations.otel.plumbing.providers import (
     get_tracer,
 )
 
-# Exporter kinds that ignore endpoint/headers — never rewritten with a destination.
 _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 
-# Cap on distinct destination-scoped providers held at once. Destinations are
-# admin-owned (one per key/team), so this is resource hygiene rather than an
-# anti-abuse bound: it keeps the working set of active tenants resident. Evicted
-# providers are dropped without a synchronous shutdown (see _evict_if_full); their
-# exporter threads drain on their own and are reclaimed at process exit.
 _MAX_CACHED_PROVIDERS = 256
 
 
@@ -231,27 +225,8 @@ class TenantTracerCache:
         )
 
 
-# --- Proxy-internal span fan-out ------------------------------------------- #
-#
-# ``TenantTracerCache`` above routes the gen-AI LLM-call span (and its MCP-tool
-# sibling) to per-tenant destinations through clone providers. The processor below
-# handles the OTHER span class: the proxy-internal spans (FastAPI server span, the
-# ``auth`` phase, DB lookups, the post-call cost ledger) emitted on the MAIN
-# provider. It forwards each to every admin-resolved destination for the request,
-# reading them from the same server-only contextvar the cache's callers set, so both
-# routing paths share one source of truth for where a request's traces go.
-
-# Bound on cached per-destination processors. One processor per
-# ``(endpoint, sorted(headers))`` pair, so the working set is one entry per
-# admin-resolved tenant credential -- a real-world deployment with hundreds of
-# tenants stays well under this. Evicted entries are dropped (not shut down; see
-# the eviction site) and reclaimed at process exit.
 _MAX_CACHED_PROCESSORS = 256
 
-# Attribute set on every gen-AI LLM-call span by the v2 emitter. Used as the
-# unambiguous skip signal: only the LLM-call span carries this, and the per-backend
-# v2 logger already routes it to per-tenant destinations through the
-# TenantTracerCache clone provider's appended exporter.
 _GENAI_SPAN_ATTR = "gen_ai.operation.name"
 
 
@@ -325,19 +300,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         destinations = request_destinations()
         if not destinations:
             return
-        # The gen-AI LLM-call span (and the MCP tool-call sibling) is already routed
-        # to per-tenant destinations by the per-backend v2 logger via
-        # ``TenantTracerCache`` -- the logger picks the right attribute mapper
-        # (OpenInference for arize, GenAI semconv for langfuse_otel) and ships through
-        # the clone provider's appended exporter. Forwarding it here too would deliver
-        # a SECOND copy with the wrong vocabulary and a fresh span_id, surfacing in the
-        # destination as an orphaned duplicate. Skip.
         if _is_genai_span(span):
             return
-        # Proxy-internal spans (FastAPI server, ``auth`` phase, postgres lookups,
-        # post-call cost ledger) are generic OTel semantic-convention spans with no
-        # backend-specific vocabulary, so they ship to EVERY admin-resolved destination
-        # this request fans out to, regardless of the destination's ``callback_name``.
         for destination in destinations:
             processor = self._processor_for(destination)
             if processor is None:
@@ -401,11 +365,5 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return None
         self._processors[key] = processor
         if len(self._processors) > _MAX_CACHED_PROCESSORS:
-            # Evict the LRU entry but do NOT shut it down here: a
-            # ``BatchSpanProcessor`` may still hold spans queued on its exporter
-            # thread, and calling ``shutdown`` synchronously can drop or raise on those
-            # in-flight spans. Dropping the reference lets the worker drain naturally
-            # and be reclaimed at process exit. The cache is bounded, so the
-            # un-shut-down working set stays bounded.
             self._processors.popitem(last=False)
         return processor

@@ -28,10 +28,6 @@ def arize_preset(
     arize_cfg = _V1ArizeLogger.get_arize_config()
     headers = _arize_headers(arize_cfg)
     base = config_overrides or OpenTelemetryV2Config()
-    # Contribute the global Arize exporter only when Arize credentials are
-    # configured. Without them it points at the Arize cloud with no auth and every
-    # export fails PERMISSION_DENIED; admin-owned destinations carry their own
-    # credentials and are appended by the router instead.
     global_exporter = (
         (
             ExporterSpec(

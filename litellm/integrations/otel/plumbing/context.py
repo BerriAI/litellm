@@ -39,15 +39,6 @@ _PROPAGATOR = TraceContextTextMapPropagator()
 # request task, so there is nothing to leak.
 _request_root_span: "ContextVar[Span | None]" = ContextVar("litellm_otel_request_root_span", default=None)
 
-# Per-request admin-resolved destinations. Set once at the auth boundary (the
-# earliest point a request's identity is known) and read by the global-provider
-# fan-out processor at ``on_end`` time, so every span the proxy emits for this
-# request -- the FastAPI server span, the ``auth`` phase, DB lookups, the
-# batch-write cost ledger -- ships to every per-tenant destination the admin
-# assigned. Lives on a ``ContextVar`` so it follows the request task across
-# ``asyncio.create_task`` children (the success/failure logging callbacks close
-# the LLM span in a worker copied from the request context). Request-scoped: the
-# contextvar dies with the request task, so nothing leaks across requests.
 _request_destinations: 'ContextVar[tuple["OtelDestination", ...]]' = ContextVar(
     "litellm_otel_request_destinations", default=()
 )

@@ -104,12 +104,6 @@ def instrument_fastapi_app(app: Any) -> None:
     if not is_otel_v2_enabled():
         return
 
-    # Lazy: only the V2-enabled path needs the optional
-    # ``opentelemetry-instrumentation-fastapi`` package. Importing it at module top
-    # would make ``proxy_server``'s unconditional ``import`` of this module crash when
-    # the package is absent, even with the gate off. When V2 IS on, a missing package
-    # is a real misconfiguration -- without the server span the trace has no root and
-    # admin-owned destination traces are orphaned -- so it must be loud, not silent.
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     except ImportError:

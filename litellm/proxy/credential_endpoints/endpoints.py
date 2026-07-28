@@ -313,10 +313,6 @@ def update_db_credential(
 
         merged_credential.credential_values.update(encrypted_params)
 
-    # Merge the patch into the existing credential_info so a partial update (e.g. only
-    # access.teams) preserves credential_type/description/host AND the untouched
-    # access subfields (global/orgs/other teams in access). See
-    # _merge_credential_info for the surgical-access reasoning.
     if encrypted_credential.credential_info:
         if merged_credential.credential_info is None:
             merged_credential.credential_info = {}

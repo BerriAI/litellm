@@ -2592,13 +2592,6 @@ async def user_api_key_auth(
         )
         user_api_key_auth_obj.budget_reservation = None
 
-        # Admin-resolved OTEL destinations: anchor them on this request's task
-        # context BEFORE downstream spans close, so the global-provider fan-out
-        # processor forwards every span (server, auth, db, batch-write) to the
-        # admin-assigned per-tenant backends -- not just the gen-AI span the
-        # ``TenantTracerCache`` already routes. Also stashed on ``request.state``
-        # so ``_apply_admin_logging_exporters`` reuses the result instead of
-        # re-resolving.
         await _hoist_request_destinations(request, user_api_key_auth_obj)
 
         ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##

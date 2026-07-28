@@ -21,9 +21,6 @@ from litellm.integrations.langfuse.langfuse_otel import (
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.weave.weave_otel import _get_weave_authorization_header
 
-#: Reserved ``callback_vars`` key binding a key/team's logging callback to a named
-#: credential in the registry. It is a reference, resolved server-side; it is never
-#: forwarded as a request parameter.
 LOGGING_CREDENTIAL_NAME_KEY = LITELLM_LOGGING_CREDENTIAL_NAME_KEY
 
 
@@ -54,12 +51,6 @@ def _arize_destination(values: Mapping[str, str]) -> OtelDestination | None:
     if not space or not api_key:
         return None
     endpoint = values.get("arize_endpoint") or "https://otlp.arize.com/v1"
-    # Arize routes a trace to a project via the ``model_id`` Resource attribute
-    # (OpenInference convention), NOT an auth header like langfuse/weave do, so the
-    # project must ride the span Resource. Prefer the credential's own project, then
-    # fall back to the proxy-global ``ARIZE_PROJECT_NAME`` so an arize credential
-    # that omits the project still lands somewhere deterministic. Backends that route
-    # by header declare no resource_attributes; this stays arize-local.
     project = values.get("arize_project_name") or values.get("project_name") or os.environ.get("ARIZE_PROJECT_NAME")
     resource_attributes = {"model_id": project, "arize.project.name": project} if project else {}
     return OtelDestination(
@@ -73,13 +64,6 @@ def _weave_destination(values: Mapping[str, str]) -> OtelDestination | None:
     api_key = values.get("wandb_api_key")
     if not api_key:
         return None
-    # Weave's OTLP path is ``/otel/v1/traces`` (not the bare ``/v1/traces`` the
-    # generic exporter would append), so a host like ``https://trace.wandb.ai``
-    # must be completed here -- otherwise the export 404s and silently drops. The
-    # host itself defaults to the Weave cloud base (only dedicated/self-hosted wandb
-    # differs), so the endpoint is optional. Mirror the v1 integration's
-    # WEAVE_BASE_URL / WEAVE_OTEL_ENDPOINT and stay idempotent if the caller already
-    # supplied the full path or the ``/otel`` prefix.
     from litellm.integrations.weave.weave_otel import (
         WEAVE_BASE_URL,
         WEAVE_OTEL_ENDPOINT,
@@ -109,7 +93,6 @@ _ADAPTERS: Mapping[str, Callable[[Mapping[str, str]], OtelDestination | None]] =
     "weave_otel": _weave_destination,
 }
 
-#: OTEL v2 callbacks that can be routed to a per-key/team admin destination.
 OTEL_V2_DESTINATION_CALLBACKS = frozenset(_ADAPTERS)
 
 
