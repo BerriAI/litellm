@@ -183,17 +183,32 @@ class TestGitHubCopilotAuthenticator:
             assert token == mock_token
 
     def test_get_access_token_login(self, authenticator):
-        """Test logging in to get an access token."""
+        mock_token = "mock-access-token"
+        write_open = mock_open()
+
+        with (
+            patch.object(authenticator, "_login", return_value=mock_token) as mock_login,
+            patch("builtins.open", side_effect=(IOError, write_open.return_value)),
+        ):
+            token = authenticator.get_access_token()
+
+        assert token == mock_token
+        mock_login.assert_called_once()
+        write_open().write.assert_called_once_with(mock_token)
+
+    def test_get_access_token_survives_persistence_failure(self, authenticator):
         mock_token = "mock-access-token"
 
         with (
-            patch.object(authenticator, "_login", return_value=mock_token),
-            patch("builtins.open", mock_open()),
-            patch("builtins.open", side_effect=IOError) as mock_read,
+            patch.object(authenticator, "_login", return_value=mock_token) as mock_login,
+            patch("builtins.open", side_effect=IOError),
+            patch("litellm.llms.github_copilot.authenticator.verbose_logger.error") as mock_error,
         ):
             token = authenticator.get_access_token()
-            assert token == mock_token
-            authenticator._login.assert_called_once()
+
+        assert token == mock_token
+        mock_login.assert_called_once()
+        mock_error.assert_called_once_with("Error saving access token to file")
 
     def test_get_access_token_failure(self, authenticator):
         """Test that an exception is raised after multiple login failures."""
