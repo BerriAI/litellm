@@ -3400,3 +3400,187 @@ class TestEscalationKeywords:
             messages=[{"role": "user", "content": "LITELLM ESCALATE do better"}],
         )
         assert result.model == "o1-b"  # unchanged: no random hop to o1-a / o1-c
+
+
+class TestCacheWarmingConfig:
+    def test_cache_warming_config_defaults_disabled(self):
+        config = ComplexityRouterConfig()
+        assert config.cache_warming.enabled is False
+        assert config.cache_warming.refresh_interval_seconds == 270
+        assert config.cache_warming.session_ttl_seconds == 3600
+        assert config.cache_warming.idle_timeout_seconds == 600
+        assert config.cache_warming.max_sessions == 1000
+        assert config.cache_warming.warm_models is None
+
+    def test_cache_warming_coerces_from_nested_yaml_dict(self):
+        config = ComplexityRouterConfig(
+            cache_warming={"enabled": True, "refresh_interval_seconds": 120, "warm_models": ["sonnet", "opus"]}
+        )
+        assert config.cache_warming.enabled is True
+        assert config.cache_warming.refresh_interval_seconds == 120
+        assert config.cache_warming.warm_models == ("sonnet", "opus")
+
+    def test_cache_warming_and_adaptive_mutually_exclusive_raises(self):
+        with pytest.raises(ValueError, match="cache_warming and adaptive"):
+            ComplexityRouterConfig(
+                tiers={"SIMPLE": ["gpt-4o-mini"]},
+                adaptive=True,
+                cache_warming={"enabled": True},
+            )
+
+    def test_cache_warming_disabled_with_adaptive_is_allowed(self):
+        config = ComplexityRouterConfig(tiers={"SIMPLE": ["gpt-4o-mini"]}, adaptive=True)
+        assert config.cache_warming.enabled is False
+
+    def test_cache_warming_rejects_nonpositive_intervals(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(cache_warming={"enabled": True, "refresh_interval_seconds": 0})
+
+
+class TestCacheWarmingMarkerStamp:
+    @staticmethod
+    def _warming_router(mock_router_instance, session_affinity: bool = False) -> ComplexityRouter:
+        mock_router_instance.cache = DualCache()
+        return ComplexityRouter(
+            model_name="stamp-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "COMPLEX": "claude-sonnet-4-5"},
+                "session_affinity": session_affinity,
+                "cache_warming": {"enabled": True},
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_classify_path_stamps_marker(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.cache_warming.types import CACHE_WARMING_MARKER_KEY
+
+        router = self._warming_router(mock_router_instance)
+        request_kwargs = {"metadata": {"session_id": "s1"}}
+        response = await router.async_pre_routing_hook(
+            model="stamp-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hello there"}],
+        )
+        assert response is not None
+        assert CACHE_WARMING_MARKER_KEY not in request_kwargs["metadata"]
+        marker = request_kwargs["litellm_metadata"][CACHE_WARMING_MARKER_KEY]
+        assert marker["auto_router_model_name"] == "stamp-router"
+        assert marker["routed_model"] == response.model
+        assert marker["strategy_ref"] == router._cache_warming_ref
+
+    @pytest.mark.asyncio
+    async def test_affinity_pin_path_stamps_marker(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.cache_warming.types import CACHE_WARMING_MARKER_KEY
+
+        router = self._warming_router(mock_router_instance, session_affinity=True)
+        cache_key = router._get_session_affinity_cache_key("s2", {"metadata": {"session_id": "s2"}})
+        await mock_router_instance.cache.async_set_cache(key=cache_key, value="claude-sonnet-4-5")
+        request_kwargs = {"metadata": {"session_id": "s2"}}
+        response = await router.async_pre_routing_hook(
+            model="stamp-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hello again"}],
+        )
+        assert response is not None and response.model == "claude-sonnet-4-5"
+        assert CACHE_WARMING_MARKER_KEY not in request_kwargs["metadata"]
+        marker = request_kwargs["litellm_metadata"][CACHE_WARMING_MARKER_KEY]
+        assert marker["auto_router_model_name"] == "stamp-router"
+        assert marker["routed_model"] == "claude-sonnet-4-5"
+        assert marker["strategy_ref"] == router._cache_warming_ref
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_cache_warming_disabled(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.cache_warming.types import CACHE_WARMING_MARKER_KEY
+
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="stamp-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"SIMPLE": "gpt-4o-mini"}},
+        )
+        request_kwargs = {"metadata": {"session_id": "s3"}}
+        await router.async_pre_routing_hook(
+            model="stamp-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert CACHE_WARMING_MARKER_KEY not in request_kwargs["metadata"]
+        assert CACHE_WARMING_MARKER_KEY not in request_kwargs.get("litellm_metadata", {})
+
+    @pytest.mark.asyncio
+    async def test_stamp_lands_in_litellm_metadata_slot_when_present(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.cache_warming.types import CACHE_WARMING_MARKER_KEY
+
+        router = self._warming_router(mock_router_instance)
+        request_kwargs = {"litellm_metadata": {"session_id": "s4"}}
+        await router.async_pre_routing_hook(
+            model="stamp-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hello there"}],
+        )
+        assert CACHE_WARMING_MARKER_KEY in request_kwargs["litellm_metadata"]
+        assert "metadata" not in request_kwargs
+
+
+class TestCacheWarmingDispatcherRegistry:
+    @staticmethod
+    def _model_list(alias: str, enabled: bool = True) -> List[Dict]:
+        return [
+            {
+                "model_name": alias,
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "gpt-4o-mini"},
+                        "cache_warming": {"enabled": enabled},
+                    },
+                },
+            },
+            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini", "api_key": "test"}},
+        ]
+
+    @staticmethod
+    def _dispatchers() -> List:
+        from litellm.router_strategy.complexity_router.cache_warming.capture_hook import (
+            ComplexityCacheWarmingCaptureHook,
+        )
+
+        return litellm.logging_callback_manager.get_custom_loggers_for_type(ComplexityCacheWarmingCaptureHook)
+
+    def test_single_dispatcher_across_routers_and_reloads(self):
+        router_a = Router(model_list=self._model_list("auto-a"))
+        router_b = Router(model_list=self._model_list("auto-b"))
+        router_a.set_model_list(router_a.model_list)
+        router_b.set_model_list(router_b.model_list)
+        assert len(self._dispatchers()) == 1
+
+    def test_each_router_strategy_registered_under_its_own_ref(self):
+        from litellm.router_strategy.complexity_router.cache_warming.capture_hook import _WARMING_STRATEGIES
+
+        router_a = Router(model_list=self._model_list("auto-a"))
+        router_b = Router(model_list=self._model_list("auto-a"))
+        strategy_a = router_a.complexity_routers["auto-a"][0].strategy
+        strategy_b = router_b.complexity_routers["auto-a"][0].strategy
+        assert strategy_a._cache_warming_ref != strategy_b._cache_warming_ref
+        assert _WARMING_STRATEGIES.get(strategy_a._cache_warming_ref) is strategy_a
+        assert _WARMING_STRATEGIES.get(strategy_b._cache_warming_ref) is strategy_b
+
+    def test_disabled_warming_registers_nothing(self):
+        router = Router(model_list=self._model_list("auto-off", enabled=False))
+        strategy = router.complexity_routers["auto-off"][0].strategy
+        assert strategy._cache_warming_ref is None
+
+    def test_reload_replaces_registration_and_old_ref_goes_stale(self):
+        import gc
+
+        from litellm.router_strategy.complexity_router.cache_warming.capture_hook import _WARMING_STRATEGIES
+
+        router = Router(model_list=self._model_list("auto-r"))
+        old_ref = router.complexity_routers["auto-r"][0].strategy._cache_warming_ref
+        router.set_model_list(self._model_list("auto-r"))
+        new_strategy = router.complexity_routers["auto-r"][0].strategy
+        gc.collect()
+        assert new_strategy._cache_warming_ref != old_ref
+        assert _WARMING_STRATEGIES.get(new_strategy._cache_warming_ref) is new_strategy
+        assert _WARMING_STRATEGIES.get(old_ref) is None
