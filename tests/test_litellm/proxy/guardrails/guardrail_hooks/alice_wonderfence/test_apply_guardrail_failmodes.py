@@ -98,6 +98,43 @@ async def test_apply_guardrail_fail_closed_returns_500(guardrail_and_client, mak
 
 
 @pytest.mark.asyncio
+async def test_client_error_4xx_not_fail_open(make_guardrail, make_request_data):
+    """A persistent client/config error (the SDK raises Exception("<4xx>:...")
+    for an invalid/revoked api_key or app_id) must NOT fail open, even with
+    fail_open=True: it would silently disable scanning for every affected
+    request. It surfaces as HTTP 500 and the original inputs are not returned."""
+    guardrail, client = make_guardrail(fail_open=True)
+    guardrail._client_cache["default-api-key"] = client
+    client.evaluate_prompt.side_effect = Exception('401:{"detail":"invalid api key"}')
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["original"]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 500
+    client.evaluate_prompt.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transient_5xx_and_429_still_fail_open(make_guardrail, make_request_data):
+    """5xx and 429 are transient (matching the SDK's retry classification), so
+    fail_open still lets the request through unscanned."""
+    for status in ("503", "429"):
+        guardrail, client = make_guardrail(fail_open=True)
+        guardrail._client_cache["default-api-key"] = client
+        client.evaluate_prompt.side_effect = Exception(f"{status}:upstream unavailable")
+
+        out = await guardrail.apply_guardrail(
+            inputs={"texts": ["original"]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+        assert out["texts"] == ["original"], f"status {status} should fail open"
+
+
+@pytest.mark.asyncio
 async def test_malformed_override_does_not_fail_open(make_guardrail, make_request_data):
     """A non-string request-metadata app_id override must not slip through under
     fail_open: it resolves to a config error (500), not a swallowed exception

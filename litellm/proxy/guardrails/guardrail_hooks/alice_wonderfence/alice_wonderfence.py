@@ -62,6 +62,22 @@ if TYPE_CHECKING:
 logger = verbose_proxy_logger.getChild("alice_wonderfence")
 
 
+def _is_wonderfence_client_error(exc: Exception) -> bool:
+    """True for a persistent WonderFence client/config error.
+
+    The V2 SDK raises ``Exception("<status>:<body>")`` on an HTTP error, so an
+    invalid or revoked api_key / app_id surfaces as a 4xx. Such failures are
+    persistent, not a transient outage, so they must never fail open: doing so
+    would silently disable scanning for every affected request until the
+    credential is fixed. 429 and 5xx stay in the fail-open path, matching the
+    SDK's own retry classification (``utils.py``: 4xx except 429 is not retried).
+    """
+    head = str(exc).split(":", 1)[0].strip()
+    if not head.isdigit():
+        return False
+    return 400 <= int(head) < 500 and int(head) != 429
+
+
 class WonderFenceGuardrail(CustomGuardrail):
     """Alice WonderFence guardrail handler using the V2 SDK client.
 
@@ -282,7 +298,7 @@ class WonderFenceGuardrail(CustomGuardrail):
                 },
             ) from e
         except Exception as e:
-            if self.fail_open:
+            if self.fail_open and not _is_wonderfence_client_error(e):
                 # Log only — do not add to the applied-guardrails header. The
                 # header lists configured guardrail_names verbatim; consumers
                 # rely on its membership to decide whether scanning ran. A
@@ -298,9 +314,12 @@ class WonderFenceGuardrail(CustomGuardrail):
                     exc_info=e,
                 )
                 return inputs
+            # Either fail-open is off, or this is a persistent client/config
+            # error (4xx) that must never fail open — see
+            # _is_wonderfence_client_error.
             logger.error(
-                "Alice WonderFence unreachable; fail-open disabled, blocking "
-                "request. guardrail_name=%s input_type=%s error=%s",
+                "Alice WonderFence request failed and was not allowed through "
+                "(fail-open off or persistent client error). guardrail_name=%s input_type=%s error=%s",
                 self.guardrail_name,
                 input_type,
                 str(e),
