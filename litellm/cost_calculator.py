@@ -886,6 +886,8 @@ def _get_usage_object(
         return None
     if isinstance(usage_obj, Usage):
         return usage_obj
+    elif isinstance(usage_obj, dict) and litellm.AnthropicConfig.is_anthropic_usage_object(usage_obj):
+        return litellm.AnthropicConfig().calculate_usage(usage_object=usage_obj, reasoning_content=None)
     elif (
         usage_obj is not None
         and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
@@ -1251,7 +1253,13 @@ def completion_cost(
                     else:
                         _usage = usage_obj
 
-                    if ResponseAPILoggingUtils._is_response_api_usage(_usage):
+                    if litellm.AnthropicConfig.is_anthropic_usage_object(_usage):
+                        _usage = (
+                            litellm.AnthropicConfig()
+                            .calculate_usage(usage_object=_usage, reasoning_content=None)
+                            .model_dump()
+                        )
+                    elif ResponseAPILoggingUtils._is_response_api_usage(_usage):
                         _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                             _usage
                         ).model_dump()

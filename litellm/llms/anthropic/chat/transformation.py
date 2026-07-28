@@ -2122,6 +2122,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             compaction_blocks,
         )
 
+    @staticmethod
+    def is_anthropic_usage_object(usage_object: dict) -> bool:
+        """Anthropic reports prompt cache tokens as top-level ``cache_read_input_tokens`` /
+        ``cache_creation_input_tokens``; no other API surface uses those keys, and the
+        Responses API mapping would silently drop them.
+        """
+        if "prompt_tokens" in usage_object or "input_tokens" not in usage_object:
+            return False
+        return any(key in usage_object for key in ("cache_read_input_tokens", "cache_creation_input_tokens"))
+
     def calculate_usage(
         self,
         usage_object: dict,

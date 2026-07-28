@@ -3509,3 +3509,30 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details is not None
     assert combined_pair.prompt_tokens_details.cache_write_tokens == 100
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
+
+
+def test_completion_cost_prices_anthropic_shaped_cache_read_tokens():
+    """Regression: an Anthropic /v1/messages response reports cache reads as top-level
+    cache_read_input_tokens with input_tokens excluding them. Reading that usage as
+    Responses API usage dropped the cache tokens and billed the whole prompt at the
+    uncached input rate, overstating spend on cache hits."""
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "gpt-5.6-sol",
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": "1"}],
+        "usage": {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014},
+    }
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="gpt-5.6-sol",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(3 * 5e-6 + 4014 * 5e-7 + 5 * 3e-5, rel=1e-9)
