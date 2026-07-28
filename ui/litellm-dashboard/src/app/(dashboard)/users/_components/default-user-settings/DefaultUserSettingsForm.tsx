@@ -8,6 +8,7 @@ import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { BUDGET_DURATION_OPTIONS, NO_RESET } from "@/components/shared/form/budgetDuration";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -21,16 +22,6 @@ import { fetchClient } from "@/lib/http/api";
 
 import { buildBody, settingsToForm, type DefaultInternalUserParams, type InternalUserSettings } from "./mapper";
 import { defaultUserSettingsSchema, EMPTY_TEAM_ROW, type DefaultUserSettingsFormValues } from "./schema";
-
-const NO_RESET = "never";
-
-const BUDGET_DURATION_OPTIONS = [
-  { value: NO_RESET, label: "No reset" },
-  { value: "1h", label: "hourly" },
-  { value: "24h", label: "daily" },
-  { value: "7d", label: "weekly" },
-  { value: "30d", label: "monthly" },
-] as const;
 
 const TEAM_ROLE_OPTIONS = [
   { value: "user", label: "User" },

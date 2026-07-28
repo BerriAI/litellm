@@ -1,7 +1,7 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
 import TeamInfoView from "@/components/team/TeamInfo";
-import TeamSSOSettings from "@/components/TeamSSOSettings";
+import { DefaultTeamSettingsForm } from "@/app/(dashboard)/teams/_components/default-team-settings/DefaultTeamSettingsForm";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Accordion, AccordionBody, AccordionHeader, TextInput } from "@tremor/react";
@@ -531,7 +531,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           {
             key: "default-settings",
             label: "Default Team Settings",
-            children: <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />,
+            children: <DefaultTeamSettingsForm />,
           },
         ]
       : []),

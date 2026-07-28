@@ -5393,26 +5393,6 @@ export const tagDeleteCall = async (accessToken: string, tagName: string): Promi
   }
 };
 
-export const getDefaultTeamSettings = async (accessToken: string) => {
-  try {
-    const data = await apiClient.get(`/get/default_team_settings`, { accessToken });
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch default team settings:", error);
-    throw error;
-  }
-};
-
-export const updateDefaultTeamSettings = async (accessToken: string, settings: Record<string, any>) => {
-  try {
-    const data = await apiClient.patch(`/update/default_team_settings`, { accessToken, body: settings });
-    return data;
-  } catch (error) {
-    console.error("Failed to update default team settings:", error);
-    throw error;
-  }
-};
-
 export const getTeamPermissionsCall = async (accessToken: string, teamId: string) => {
   try {
     let url = proxyBaseUrl
