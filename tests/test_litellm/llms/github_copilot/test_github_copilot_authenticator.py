@@ -41,7 +41,6 @@ class TestGitHubCopilotAuthenticator:
             auth = Authenticator()
             assert auth.token_dir.endswith("/github_copilot")
             assert auth.access_token_file.endswith("/access-token")
-            assert auth.legacy_api_key_file.endswith("/api-key.json")
             mock_makedirs.assert_called_once()
 
     def test_ensure_token_dir(self):
@@ -54,51 +53,36 @@ class TestGitHubCopilotAuthenticator:
             mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
 
     def test_get_api_base_prefers_environment(self, authenticator):
-        with (
-            patch.dict(
-                os.environ,
-                {"GITHUB_COPILOT_API_BASE": "https://configured.githubcopilot.example"},
-                clear=True,
-            ),
-            patch("builtins.open", mock_open()) as mock_file,
+        with patch.dict(
+            os.environ,
+            {"GITHUB_COPILOT_API_BASE": "https://configured.githubcopilot.example"},
+            clear=True,
         ):
             assert authenticator.get_api_base() == "https://configured.githubcopilot.example"
-            mock_file.assert_not_called()
 
-    def test_get_api_base_uses_legacy_endpoint(self, authenticator):
-        legacy_cache = '{"token":"ignored","endpoints":{"api":"https://api.enterprise.githubcopilot.com"}}'
+    @pytest.mark.parametrize(
+        "api_base",
+        (
+            "http://api.githubcopilot.com",
+            "https://user:password@api.githubcopilot.com",
+            "https://api.githubcopilot.com?tenant=example",
+            "https://api.githubcopilot.com#fragment",
+        ),
+    )
+    def test_get_api_base_rejects_insecure_configuration(self, authenticator, api_base):
         with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("builtins.open", mock_open(read_data=legacy_cache)),
-        ):
-            assert authenticator.get_api_base() == "https://api.enterprise.githubcopilot.com"
-
-    def test_get_api_base_ignores_invalid_legacy_cache(self, authenticator):
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("builtins.open", mock_open(read_data="not-json")),
+            patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True),
             patch("litellm.llms.github_copilot.authenticator.verbose_logger.warning") as mock_warning,
         ):
             assert authenticator.get_api_base() is None
 
-        assert mock_warning.call_count == 1
-        assert "Error reading legacy GitHub Copilot API endpoint" in mock_warning.call_args.args[0]
-
-    def test_deprecated_api_key_url_warns(self):
-        with (
-            patch.dict(
-                os.environ,
-                {"GITHUB_COPILOT_API_KEY_URL": "https://deprecated.example.com/token"},
-                clear=True,
-            ),
-            patch("os.path.exists", return_value=True),
-            patch("litellm.llms.github_copilot.authenticator.verbose_logger.warning") as mock_warning,
-        ):
-            Authenticator()
-
         mock_warning.assert_called_once_with(
-            "GITHUB_COPILOT_API_KEY_URL is no longer used; LiteLLM sends the OAuth access token directly"
+            "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTPS URL without credentials, query, or fragment"
         )
+
+    def test_get_api_base_uses_default_when_unconfigured(self, authenticator):
+        with patch.dict(os.environ, {}, clear=True):
+            assert authenticator.get_api_base() is None
 
     def test_get_github_headers(self, authenticator):
         headers = authenticator._get_github_headers()
