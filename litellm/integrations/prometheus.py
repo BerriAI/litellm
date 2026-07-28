@@ -8,6 +8,7 @@ import math
 import os
 import sys
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -58,6 +59,7 @@ from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_value,
 )
 from litellm.types.utils import (
+    CallTypes,
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
 )
@@ -68,6 +70,34 @@ else:
     AsyncIOScheduler = Any
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+
+def _build_async_call_type_aliases() -> Mapping[str, str]:
+    """
+    Map each async call type onto its sync twin, derived from ``CallTypes`` at
+    import time so new call types are covered without touching this file.
+
+    ``CallTypes`` names every async variant after its sync one (``acompletion``
+    for ``completion``, ``a_add_message`` for ``add_message``). Matching is done
+    on member names rather than values, because stripping a leading ``a`` from
+    the value would corrupt sync call types that legitimately start with one:
+    ``add_message`` would become ``dd_message`` and ``anthropic_messages`` would
+    become ``nthropic_messages``.
+    """
+    names = {member.name: member.value for member in CallTypes}
+    aliases: dict[str, str] = {}
+    for name, value in names.items():
+        for prefix in ("a_", "a"):
+            if not name.startswith(prefix):
+                continue
+            twin = name[len(prefix) :]
+            if twin in names and twin != name:
+                aliases[value] = names[twin]
+                break
+    return MappingProxyType(aliases)
+
+
+_ASYNC_CALL_TYPE_ALIASES = _build_async_call_type_aliases()
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -1238,6 +1268,7 @@ class PrometheusLogger(CustomLogger):
             model_id=standard_logging_payload["model_id"],
             api_base=standard_logging_payload["api_base"],
             api_provider=standard_logging_payload["custom_llm_provider"],
+            call_type=self._normalize_call_type(standard_logging_payload.get("call_type")),
             exception_status=None,
             exception_class=None,
             custom_metadata_labels=get_custom_labels_from_metadata(metadata=combined_metadata),
@@ -2187,6 +2218,21 @@ class PrometheusLogger(CustomLogger):
         return False
 
     @staticmethod
+    def _normalize_call_type(call_type: str | None) -> str | None:
+        """
+        Collapse a call type onto its sync spelling so async and sync traffic for
+        the same operation share one series.
+
+        ``standard_logging_payload`` reports whichever entry point was used, so an
+        async chat completion arrives as ``acompletion`` and a sync one as
+        ``completion``. Labelling them separately would split every proxy's chat
+        traffic in two, since the proxy is async and the SDK is usually not.
+        """
+        if not call_type:
+            return None
+        return _ASYNC_CALL_TYPE_ALIASES.get(call_type, call_type)
+
+    @staticmethod
     def _extract_api_provider_from_request_data(request_data: dict) -> Optional[str]:
         """
         Best-effort provider for the client-side failure path.
@@ -2281,6 +2327,9 @@ class PrometheusLogger(CustomLogger):
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
                 api_provider=api_provider,
+                call_type=self._normalize_call_type(
+                    (request_data.get("standard_logging_object") or {}).get("call_type")
+                ),
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
             )
             _label_ctx = PrometheusLabelFactoryContext(enum_values)
@@ -2494,6 +2543,7 @@ class PrometheusLogger(CustomLogger):
                 tags=standard_logging_payload.get("request_tags", []),
                 client_ip=client_ip,
                 user_agent=user_agent,
+                call_type=self._normalize_call_type(standard_logging_payload.get("call_type")),
             )
 
             """
