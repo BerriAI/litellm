@@ -162,6 +162,35 @@ def test_wandb_model_api_pricing_entries():
         assert model_info["output_cost_per_token"] == output_cost
 
 
+def test_openrouter_qwen36_plus_above_256k_cache_creation_pricing():
+    """
+    Cache writes on openrouter/qwen/qwen3.6-plus above the 256K prompt-token
+    threshold must bill at the tiered cache_creation_input_token_cost_above_256k_tokens
+    rate ($1.625/M), not the base cache-write rate ($0.40625/M).
+    _get_token_base_cost only swaps the cache-creation rate when that key exists.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=300_000,
+        completion_tokens=1_000,
+        total_tokens=301_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=299_000, cache_creation_tokens=1_000
+        ),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="qwen/qwen3.6-plus", usage=usage, custom_llm_provider="openrouter"
+    )
+
+    expected_prompt_cost = 299_000 * 1.3e-06 + 1_000 * 1.625e-06
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(1_000 * 3.9e-06)
+
+
 def test_openrouter_qwen36_plus_model_info():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
