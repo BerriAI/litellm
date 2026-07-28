@@ -1290,7 +1290,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
-        request_has_tools: bool = bool(cast("dict[str, object]", inference_params).get("tools"))
+        request_has_tools: bool = bool(inference_params.get("tools"))
         if (
             parallel_tool_use_config is not None
             and request_has_tools
