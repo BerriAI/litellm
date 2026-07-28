@@ -20,8 +20,10 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     _extract_group_member_ids,
     _extract_ids_from_path_filter,
     _handle_team_membership_changes,
+    _parse_member_entries,
     _process_group_patch_operations,
     _recompute_scim_member_roles,
+    _resolve_group_member_ids,
     create_group,
     create_user,
     delete_group,
@@ -3889,15 +3891,24 @@ async def test_process_group_patch_remove_unknown_member_does_not_create_user(mo
     assert final_members == {"keep-user"}
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [
+        SCIMPatchOperation(op="remove", path='members[value eq "long-gone"]', value=None),
+        SCIMPatchOperation(op="remove", path="members", value=[{"value": "long-gone"}]),
+        SCIMPatchOperation(op="remove", path="members", value=[{"value": "long-gone", "type": "Group"}]),
+    ],
+    ids=["path-filter", "unknown-id", "nested-group"],
+)
 @pytest.mark.asyncio
 async def test_process_group_patch_remove_unknown_member_does_not_reject_in_strict_mode(
-    mocker, scim_upsert_user_disabled
+    mocker, scim_upsert_user_disabled, operation
 ):
     """Strict mode must not 400 a removal: refusing to drop an id the IdP already
     forgot leaves the roster permanently out of sync."""
     patch_ops = SCIMPatchOp(
         schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-        Operations=[SCIMPatchOperation(op="remove", path='members[value eq "long-gone"]', value=None)],
+        Operations=[operation],
     )
     existing_team = LiteLLM_TeamTable(
         team_id="parent-group",
@@ -3947,11 +3958,219 @@ async def test_process_group_patch_remove_drops_member_without_user_row(mocker, 
     assert final_members == {"keep-user"}
 
 
+_NESTED_GROUP_ID = "8f1e9d70-0000-4a0e-9a1e-nested"
+
+
+@pytest.mark.parametrize(
+    "member_entry, user_rows, team_rows",
+    [
+        ({"value": _NESTED_GROUP_ID, "type": "Group"}, {"keep-user", _NESTED_GROUP_ID}, set()),
+        ({"value": _NESTED_GROUP_ID, "type": "Group"}, {"keep-user"}, set()),
+        ({"value": _NESTED_GROUP_ID, "type": "Group"}, {"keep-user"}, {_NESTED_GROUP_ID}),
+        ({"value": _NESTED_GROUP_ID}, {"keep-user"}, {_NESTED_GROUP_ID}),
+    ],
+    ids=["phantom-user-row-exists", "user-row-already-deleted", "child-group-is-a-team", "untyped-team-id"],
+)
+@pytest.mark.asyncio
+async def test_process_group_patch_remove_discards_non_user_member(
+    mocker, scim_upsert_user_enabled, member_entry, user_rows, team_rows
+):
+    """Rosters written before nested groups were understood still carry those ids,
+    and the IdP removes them exactly as it added them; a removal that resolved its
+    ids first would classify them as non-users and leave them stuck on the team."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path="members", value=[member_entry])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[
+            Member(user_id="keep-user", role="user"),
+            Member(user_id=_NESTED_GROUP_ID, role="user"),
+        ],
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="phantom-user", key="phantom-key")),
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(mocker, users=user_rows, teams=team_rows),
+    )
+
+    create_user_mock.assert_not_called()
+    assert final_members == {"keep-user"}
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_add_keeps_member_typed_user_that_collides_with_team_id(
+    mocker, scim_upsert_user_enabled
+):
+    """The team lookup only exists to catch nested groups that arrive untyped. An id
+    the IdP calls a User is a user, and IdP ids collide with team ids easily."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "123456", "type": "User"}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[],
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="123456", key="new-key")),
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(mocker, users=set(), teams={"123456", "parent-group"}),
+    )
+
+    assert create_user_mock.call_args.kwargs["user_id"] == "123456"
+    assert final_members == {"123456"}
+
+
+@pytest.mark.parametrize("member_type", ["Device", " group ", "Machine"])
+@pytest.mark.asyncio
+async def test_process_group_patch_operations_skips_non_user_member_types(
+    mocker, scim_upsert_user_enabled, member_type
+):
+    """A team holds users, so a member that declares itself to be anything else is
+    dropped; enumerating the types worth skipping would leave the next one to leak."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "not-a-user", "type": member_type}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[],
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="phantom-user", key="phantom-key")),
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(mocker, users=set(), teams=set()),
+    )
+
+    create_user_mock.assert_not_called()
+    assert final_members == set()
+
+
+@pytest.mark.parametrize("member_type", ["direct", "Device"])
+@pytest.mark.asyncio
+async def test_process_group_patch_keeps_existing_user_with_unrecognized_type(
+    mocker, scim_upsert_user_enabled, member_type
+):
+    """Clients do stamp non-canonical types on real members (RFC 7643 defines
+    ``direct`` for ``User.groups``). Dropping a member whose id is a live user would
+    revoke that user's team access on the next full sync, so the type is only
+    grounds for skipping once the user lookup has missed."""
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="add", path="members", value=[{"value": "real-user", "type": member_type}])],
+    )
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[],
+    )
+    create_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=NewUserResponse(user_id="phantom-user", key="phantom-key")),
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=_member_resolution_prisma(mocker, users={"real-user"}, teams=set()),
+    )
+
+    create_user_mock.assert_not_called()
+    assert final_members == {"real-user"}
+
+
+@pytest.mark.parametrize(
+    "second_creation",
+    [None, NewUserResponse(user_id="dup-user", key="second-key")],
+    ids=["second-creation-fails", "both-creations-succeed"],
+)
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_dedupes_repeated_member(mocker, scim_upsert_user_enabled, second_creation):
+    """An id the request lists twice is one member. Admitting it twice writes a
+    duplicate members_with_roles row, and the second creation of the same id fails
+    against the real unique constraint even when the first one succeeded."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(side_effect=[NewUserResponse(user_id="dup-user", key="first-key"), second_creation]),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value="dup-user"), SCIMMember(value="dup-user")],
+        created_via="scim_group_membership",
+        prisma_client=_member_resolution_prisma(mocker, users=set(), teams=set()),
+    )
+
+    assert result.all_member_ids == ["dup-user"]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        SCIMPatchOperation(op="add", path="members", value=[{"value": "   "}]),
+        SCIMPatchOperation(op="remove", path="members", value=[{"value": "   "}]),
+        SCIMPatchOperation(op="remove", path='members[value eq "   "]', value=None),
+    ],
+    ids=["add", "remove", "remove-path-filter"],
+)
+@pytest.mark.asyncio
+async def test_process_group_patch_rejects_blank_member_id(mocker, scim_upsert_user_enabled, operation):
+    """A blank id names nobody. The removal path stopped resolving its members, so it
+    has to keep rejecting one on its own."""
+    patch_ops = SCIMPatchOp(schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"], Operations=[operation])
+    existing_team = LiteLLM_TeamTable(
+        team_id="parent-group",
+        team_alias="Parent Group",
+        members=[],
+        members_with_roles=[Member(user_id="keep-user", role="user")],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_group_patch_operations(
+            patch_ops=patch_ops,
+            existing_team=existing_team,
+            prisma_client=_member_resolution_prisma(mocker, users={"keep-user"}, teams=set()),
+        )
+
+    assert exc_info.value.status_code == 400
+
+
 def test_scim_member_round_trips_type():
     """``type`` has to survive parsing; dropping it is what made a nested group
     look like a user id."""
     assert SCIMMember.model_validate({"value": "x", "type": "Group"}).type == "Group"
     assert SCIMMember(value="x").type is None
+
+
+@pytest.mark.parametrize("junk_type", [123, True, {}, [], 1.5])
+def test_scim_member_treats_non_string_type_as_absent(junk_type):
+    """Before ``type`` was a field, junk in it was parsed away; typing the field must
+    not start rejecting those requests, and both parsers have to agree it is typeless."""
+    assert SCIMMember.model_validate({"value": "x", "type": junk_type}).type is None
+    assert _parse_member_entries([{"value": "x", "type": junk_type}])[0].type is None
 
 
 @pytest.mark.asyncio

@@ -133,6 +133,14 @@ class SCIMMember(BaseModel):
     display: Optional[str] = None  # Username or email
     type: str | None = None
 
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v: object) -> str | None:
+        """Anything that is not a string carries no canonical type, and rejecting the
+        request over it would be a regression: before this field existed the value was
+        parsed away silently."""
+        return v if isinstance(v, str) else None
+
 
 class SCIMGroup(SCIMResource):
     displayName: str
