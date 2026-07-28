@@ -34,7 +34,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
+        dynamic_api_base: Final = self.authenticator.get_api_base(api_base) or DEFAULT_GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:

@@ -23,15 +23,43 @@ DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 
 
-def _is_secure_api_base(api_base: str) -> bool:
-    parsed_api_base = urlsplit(api_base)
-    return (
-        parsed_api_base.scheme.lower() == "https"
-        and parsed_api_base.hostname is not None
-        and parsed_api_base.username is None
-        and parsed_api_base.password is None
-        and not parsed_api_base.query
-        and not parsed_api_base.fragment
+def _https_hostname(url: str) -> str | None:
+    parsed_url = urlsplit(url)
+    if (
+        parsed_url.scheme.lower() != "https"
+        or parsed_url.hostname is None
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        return None
+    return parsed_url.hostname.lower()
+
+
+def _configured_allowed_api_hosts() -> frozenset[str]:
+    configured_hosts = os.getenv("GITHUB_COPILOT_ALLOWED_API_HOSTS", "")
+    return frozenset(host.strip().lower() for host in configured_hosts.split(",") if host.strip())
+
+
+def _configured_oauth_hosts() -> tuple[str, ...]:
+    oauth_urls = (
+        os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL),
+        os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL),
+    )
+    return tuple(hostname for url in oauth_urls if (hostname := _https_hostname(url)) is not None)
+
+
+def _is_trusted_api_base(api_base: str) -> bool:
+    hostname = _https_hostname(api_base)
+    if hostname is None:
+        return False
+    if hostname == "githubcopilot.com" or hostname.endswith(".githubcopilot.com"):
+        return True
+    if hostname in _configured_allowed_api_hosts():
+        return True
+    return any(
+        hostname == oauth_host or hostname.endswith(f".{oauth_host}") for oauth_host in _configured_oauth_hosts()
     )
 
 
@@ -95,16 +123,18 @@ class Authenticator:
                 status_code=401,
             )
 
-    def get_api_base(self) -> str | None:
-        configured_api_base = os.getenv("GITHUB_COPILOT_API_BASE")
-        if configured_api_base is None:
-            return None
-        if not _is_secure_api_base(configured_api_base):
-            verbose_logger.warning(
-                "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTPS URL without credentials, query, or fragment"
-            )
-            return None
-        return configured_api_base
+    def get_api_base(self, api_base: str | None = None) -> str | None:
+        candidates = (
+            ("deployment api_base", api_base),
+            ("GITHUB_COPILOT_API_BASE", os.getenv("GITHUB_COPILOT_API_BASE")),
+        )
+        for source, candidate in candidates:
+            if candidate is None:
+                continue
+            if _is_trusted_api_base(candidate):
+                return candidate
+            verbose_logger.warning(f"Ignoring {source} because it is not a trusted HTTPS GitHub Copilot endpoint")
+        return None
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""

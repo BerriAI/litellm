@@ -76,7 +76,9 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.githubcopilot.com/embeddings"
 
     # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
+    config.authenticator.get_api_base.side_effect = lambda api_base=None: (
+        api_base or "https://api.enterprise.githubcopilot.com"
+    )
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -87,13 +89,13 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.enterprise.githubcopilot.com/embeddings"
 
     url = config.get_complete_url(
-        api_base="https://untrusted.example.com",
+        api_base="https://api.business.githubcopilot.com",
         api_key=None,
         model="github_copilot/text-embedding-3-small",
         optional_params={},
         litellm_params={},
     )
-    assert url == "https://api.enterprise.githubcopilot.com/embeddings"
+    assert url == "https://api.business.githubcopilot.com/embeddings"
 
 
 def test_github_copilot_embedding_config_transform_request():
