@@ -301,6 +301,22 @@ def _collect_response_file_search_vector_store_ids(data: Dict[str, Any]) -> set[
     return vector_store_ids
 
 
+def _collect_response_code_interpreter_container_ids(data: dict[str, Any]) -> set[str]:
+    container_ids: set[str] = set()
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return container_ids
+
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "code_interpreter":
+            continue
+        container_id = tool.get("container")
+        if isinstance(container_id, str) and container_id:
+            container_ids.add(container_id)
+
+    return container_ids
+
+
 async def _authorize_response_file_search_vector_stores(
     data: Dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
@@ -317,6 +333,30 @@ async def _authorize_response_file_search_vector_stores(
         await assert_user_can_access_vector_store_id(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
+        )
+
+
+async def _authorize_response_code_interpreter_containers(
+    data: dict[str, Any],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    container_ids = _collect_response_code_interpreter_container_ids(data)
+    if not container_ids:
+        return
+
+    from litellm.proxy.container_endpoints.ownership import (
+        assert_user_can_access_container,
+    )
+
+    custom_llm_provider = data.get("custom_llm_provider")
+    if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
+        custom_llm_provider = "openai"
+
+    for container_id in sorted(container_ids):
+        await assert_user_can_access_container(
+            container_id=container_id,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
         )
 
 
@@ -1168,6 +1208,10 @@ class ProxyBaseLLMRequestProcessing:
             self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
             await _authorize_response_file_search_vector_stores(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+            )
+            await _authorize_response_code_interpreter_containers(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
             )
