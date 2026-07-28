@@ -11,6 +11,7 @@ from .commands.agents import agent_commands
 from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
 from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
+from .commands.config import config_commands, get_config_value
 from .commands.credentials import credentials
 from .commands.encryption import encryption
 from .commands.http import http
@@ -65,7 +66,8 @@ def print_version(base_url: str, api_key: Optional[str]):
     "--base-url",
     envvar="LITELLM_PROXY_URL",
     show_envvar=True,
-    default="http://localhost:4000",
+    default=lambda: get_config_value("base_url") or "http://localhost:4000",
+    show_default="base_url from `lite config`, else http://localhost:4000",
     help="Base URL of the LiteLLM proxy server",
 )
 @click.option(
@@ -94,8 +96,11 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     # apiKeyHelper is invoked bare (no flags) -- commands that must work
     # unattended (print-token) need to tell "user didn't say" apart from
     # "user said localhost:4000 on purpose" so they can fall back to
-    # whatever server the stored token was actually issued for.
-    ctx.obj["base_url_explicit"] = ctx.get_parameter_source("base_url") != click.core.ParameterSource.DEFAULT
+    # whatever server the stored token was actually issued for. A base_url
+    # saved via `lite config set` counts as the user saying it.
+    ctx.obj["base_url_explicit"] = ctx.get_parameter_source("base_url") != click.core.ParameterSource.DEFAULT or bool(
+        get_config_value("base_url")
+    )
 
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:
@@ -141,6 +146,7 @@ cli.add_command(down)
 cli.add_command(model_groups)
 # Add the autoroute command group (QA auto-routing against your real proxy)
 cli.add_command(autoroute_group, name="autoroute")
+cli.add_command(config_commands)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import (
     clear_token,
     get_stored_api_key,
@@ -808,7 +809,8 @@ class TestPrintTokenCommand:
     since there is no explicit target to check it against. `--base-url`/
     `LITELLM_PROXY_URL` only enforces the match when a caller explicitly
     passes it (tracked via ctx.obj["base_url_explicit"], set by the `cli`
-    group from click's ParameterSource).
+    group from click's ParameterSource); a base_url saved via
+    `lite config set` counts as explicit too.
     """
 
     def setup_method(self):
@@ -928,3 +930,79 @@ class TestPrintTokenCommand:
         assert "sk-stale-key" not in result.output
         assert "lite login" in result.output
         mock_post.assert_not_called()
+
+
+def _write_home_json(home: Path, filename: str, payload: dict[str, object]) -> None:
+    litellm_dir = home / ".litellm"
+    litellm_dir.mkdir(exist_ok=True)
+    (litellm_dir / filename).write_text(json.dumps(payload))
+
+
+class TestPrintTokenWithConfigFile:
+    """A config-file base_url is a drop-in replacement for exporting
+    LITELLM_PROXY_URL, so print-token must treat it as an explicit server
+    choice: a token minted for a different proxy is never handed out."""
+
+    @pytest.fixture
+    def isolated_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+        return tmp_path
+
+    def test_config_base_url_mismatch_fails_closed(self, isolated_home):
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "https://server-a.example.com", "key": "sk-issued-for-a", "timestamp": time.time()},
+        )
+        _write_home_json(isolated_home, "config.json", {"base_url": "https://server-b.example.com"})
+
+        result = CliRunner().invoke(cli, ["auth", "print-token"])
+
+        assert result.exit_code == 1
+        assert "sk-issued-for-a" not in result.output
+        assert "Not authenticated for this server" in result.output
+
+    def test_config_base_url_match_prints_token(self, isolated_home):
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "https://server-a.example.com", "key": "sk-issued-for-a", "timestamp": time.time()},
+        )
+        _write_home_json(isolated_home, "config.json", {"base_url": "https://server-a.example.com"})
+
+        result = CliRunner().invoke(cli, ["auth", "print-token"])
+
+        assert result.exit_code == 0
+        assert result.stdout.strip() == "sk-issued-for-a"
+
+    def test_empty_config_base_url_treated_as_unset(self, isolated_home):
+        """A hand-edited config.json with base_url "" must behave like no config at all:
+        base_url falls back to the default AND explicitness stays False."""
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "https://server-a.example.com", "key": "sk-issued-for-a", "timestamp": time.time()},
+        )
+        _write_home_json(isolated_home, "config.json", {"base_url": ""})
+
+        result = CliRunner().invoke(cli, ["auth", "print-token"])
+
+        assert result.exit_code == 0
+        assert result.stdout.strip() == "sk-issued-for-a"
+
+    def test_bare_invocation_without_config_file_unchanged(self, isolated_home):
+        """No config file means base_url_explicit stays False, so the stored
+        token's own server is trusted (pre-config behavior must not regress)."""
+        _write_home_json(
+            isolated_home,
+            "token.json",
+            {"base_url": "https://server-a.example.com", "key": "sk-issued-for-a", "timestamp": time.time()},
+        )
+
+        result = CliRunner().invoke(cli, ["auth", "print-token"])
+
+        assert result.exit_code == 0
+        assert result.stdout.strip() == "sk-issued-for-a"
