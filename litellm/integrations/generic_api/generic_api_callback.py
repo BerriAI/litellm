@@ -158,12 +158,6 @@ class GenericAPILogger(CustomBatchLogger):
                 "endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
             )
 
-        # Preserve the raw config headers for cache-identity comparison in
-        # LoggingCallbackManager._add_custom_callback_generic_api_str. self.headers below
-        # is post-processed by _get_headers (it injects a Content-Type header and merges
-        # env/global headers), so comparing it against the raw config headers would never
-        # match and would recreate the logger on every re-resolution.
-        self.source_headers = dict(headers) if isinstance(headers, dict) else headers
         self.headers: Dict = self._get_headers(headers)
         self.endpoint: str = endpoint
         self.event_types: Optional[List[API_EVENT_TYPES]] = event_types

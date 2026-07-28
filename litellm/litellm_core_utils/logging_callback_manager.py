@@ -198,7 +198,7 @@ class LoggingCallbackManager:
             if (
                 isinstance(cached_logger, GenericAPILogger)
                 and cached_logger.endpoint == endpoint
-                and cached_logger.source_headers == headers
+                and cached_logger.headers == cached_logger._get_headers(headers)
                 and cached_logger.event_types == event_types
                 and cached_logger.log_format == (log_format if log_format is not None else "json_array")
                 and cached_logger.max_retries == max_retries
