@@ -41,6 +41,7 @@ from litellm.constants import (
 )
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
+    DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
@@ -175,6 +176,7 @@ if TYPE_CHECKING:
     from prisma.client import TransactionManager
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
 
     Span = Union[_Span, Any]
 else:
@@ -661,6 +663,10 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            # Surface the per-MCP-server rate-limit identity so the
+            # ParallelRequestLimiterV3 hook can apply mcp_rpm_limit on the
+            # synthetic call_mcp_tool payload (otherwise a key with
+            # mcp_rpm_limit could exceed it via the MCP path).
             "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
@@ -1400,6 +1406,14 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
+            parallel_guardrails: tuple[CustomGuardrail, ...] = tuple(
+                cb
+                for cb in caps.resolved_callbacks
+                if isinstance(cb, CustomGuardrail)
+                and getattr(cb, "run_in_parallel", False)
+                and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+            )
+
             deferred_route_exc: Optional[SensitiveDataRouteException] = None
             for _callback in caps.resolved_callbacks:
                 start_time = time.time()
@@ -1407,6 +1421,9 @@ class ProxyLogging:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
                         # Skip guardrails managed by a pipeline
                         if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                            continue
+
+                        if getattr(_callback, "run_in_parallel", False):
                             continue
 
                         result = await self._process_guardrail_callback(
@@ -1465,6 +1482,14 @@ class ProxyLogging:
             if deferred_route_exc is not None and data is not None:
                 data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
 
+            if parallel_guardrails and data is not None:
+                await self._run_parallel_pre_call_guardrails(
+                    guardrails=parallel_guardrails,
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+
             if data is not None:
                 self._process_guardrail_metadata(data)
 
@@ -1476,6 +1501,47 @@ class ProxyLogging:
             return data
         except Exception as e:
             raise e
+
+    async def _run_parallel_pre_call_guardrails(
+        self,
+        guardrails: tuple[CustomGuardrail, ...],
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        """
+        Run opted-in pre_call guardrails concurrently against one shared payload
+        snapshot. These guardrails are declared block-only, so any modified data
+        they return is discarded; they run for their blocking side effect (raising
+        to reject the request before it reaches the LLM). Every guardrail is
+        awaited to completion (``return_exceptions=True``) so a raise by one never
+        leaves the others running as unobserved background tasks. A guardrail that
+        blocks (any exception other than a reroute or passthrough) takes precedence
+        over one that only changes the request flow, so a fast reroute can never
+        let a slower block be bypassed; the request is rejected before it reaches
+        the LLM, preserving the pre-call barrier that ``during_call`` guardrails
+        cannot provide. Per-guardrail latency is recorded by
+        ``_process_guardrail_callback``'s own metrics.
+        """
+        results = await asyncio.gather(
+            *(
+                self._process_guardrail_callback(
+                    callback=callback,
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    event_type=GuardrailEventHooks.pre_call,
+                )
+                for callback in guardrails
+            ),
+            return_exceptions=True,
+        )
+        raised = tuple(result for result in results if isinstance(result, BaseException))
+        blocking = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
+        if blocking is not None:
+            raise blocking
+        if raised:
+            raise raised[0]
 
     async def _handle_sensitive_data_route_exception(
         self,
@@ -2277,8 +2343,15 @@ class ProxyLogging:
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
+            parallel_guardrails: tuple[CustomGuardrail, ...] = tuple(
+                callback for callback in guardrail_callbacks if getattr(callback, "run_in_parallel", False)
+            )
+
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
+                if getattr(callback, "run_in_parallel", False):
+                    continue
 
                 if (
                     callback.should_run_guardrail(
@@ -2316,6 +2389,15 @@ class ProxyLogging:
                 if guardrail_response is not None:
                     response = guardrail_response
 
+            if parallel_guardrails:
+                await self._run_parallel_post_call_guardrails(
+                    guardrails=parallel_guardrails,
+                    data=data,
+                    guardrail_data=guardrail_data,
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                )
+
             ############ Handle CustomLogger ###############################
             #################################################################
 
@@ -2328,6 +2410,65 @@ class ProxyLogging:
         except Exception as e:
             raise e
         return response
+
+    async def _run_parallel_post_call_guardrails(
+        self,
+        guardrails: tuple[CustomGuardrail, ...],
+        data: dict,
+        guardrail_data: dict,
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Run opted-in post_call guardrails concurrently against the response
+        produced by the sequential guardrails. These guardrails are declared
+        block-only, so any modified response they return is discarded; they run
+        for their blocking side effect (raising to reject the response before it
+        reaches the client). Every guardrail is awaited to completion
+        (``return_exceptions=True``) so a raise by one never leaves the others
+        running as unobserved background tasks. A guardrail that blocks (any
+        exception other than a passthrough) takes precedence over one that only
+        changes the response flow, so a fast passthrough can never let a slower
+        block be bypassed. Each per-guardrail coroutine sets ``guardrail_to_apply``
+        immediately before awaiting, and the unified hook pops it before its first
+        suspension point, so concurrent guardrails never race on that key.
+        """
+
+        async def _run_one(callback: CustomGuardrail) -> None:
+            if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
+                return
+            if "apply_guardrail" in type(callback).__dict__:
+                data["guardrail_to_apply"] = callback
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    unified_guardrail.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    ),
+                    "post_call",
+                )
+            else:
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    ),
+                    "post_call",
+                )
+
+        results = await asyncio.gather(
+            *(_run_one(callback) for callback in guardrails),
+            return_exceptions=True,
+        )
+        raised = tuple(result for result in results if isinstance(result, BaseException))
+        blocking = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
+        if blocking is not None:
+            raise blocking
+        if raised:
+            raise raised[0]
 
     async def post_call_response_headers_hook(
         self,
@@ -2778,6 +2919,8 @@ async def prefetch_config_params(prisma_client: Any, param_names: List[str]) -> 
 class PrismaClient:
     spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
+    tool_usage_transactions: List["ToolUsageTransaction"] = []
+    _tool_usage_transactions_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -5195,7 +5338,7 @@ class ProxyUpdateSpend:
                             )
 
                 break
-            except DB_CONNECTION_ERROR_TYPES as e:
+            except DB_RETRY_SAFE_ERROR_TYPES as e:
                 if i >= n_retry_times:  # If we've reached the maximum number of retries
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
@@ -5334,12 +5477,15 @@ async def update_spend(
         queue_size = len(prisma_client.spend_log_transactions)
     verbose_proxy_logger.debug("Spend Logs transactions: {}".format(queue_size))
 
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_usage_queue_size = len(prisma_client.tool_usage_transactions)
+
     # Process spend log transactions when called directly.
     # This keeps backwards compatibility with the old behavior.
     # See update_spend_logs_job and _monitor_spend_logs_queue for the new behavior.
     # Safe to keep: under high concurrency this can take up to ~30s to run,
     # so it's unlikely to overlap with monitor_spend_logs_queue.
-    if queue_size > 0:
+    if queue_size > 0 or tool_usage_queue_size > 0:
         await update_spend_logs_job(
             prisma_client=prisma_client,
             db_writer_client=db_writer_client,
@@ -5406,10 +5552,14 @@ async def update_spend_logs_job(
     n_retry_times = 3
     MAX_LOGS_PER_INTERVAL = 10000
 
-    # Atomically pop batch from queue
+    # Atomically pop batch from queue. The tool usage queue counts toward the
+    # emptiness check: a spend-log write failure aborts a run before the tool
+    # drain below, and those entries must not strand once the spend queue drains.
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-    if queue_size == 0:
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_queue_size = len(prisma_client.tool_usage_transactions)
+    if queue_size == 0 and tool_queue_size == 0:
         return
 
     async with prisma_client._spend_log_transactions_lock:
@@ -5440,17 +5590,23 @@ async def update_spend_logs_job(
             guardrail_tracking_err,
         )
 
-    # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
+    # Tool usage tracking: drain the request-time queue into the tool index and the
+    # LiteLLM_DailyToolSpend rollup. Never retried; a dropped batch is permanently
+    # absent from the rollup, so failures log at error.
+    async with prisma_client._tool_usage_transactions_lock:
+        tool_usage_to_process = prisma_client.tool_usage_transactions[:MAX_LOGS_PER_INTERVAL]
+        prisma_client.tool_usage_transactions = prisma_client.tool_usage_transactions[len(tool_usage_to_process) :]
     try:
-        from litellm.proxy.db.spend_log_tool_index import process_spend_logs_tool_usage
+        from litellm.proxy.db.spend_log_tool_index import flush_tool_usage_transactions
 
-        await process_spend_logs_tool_usage(
+        await flush_tool_usage_transactions(
             prisma_client=prisma_client,
-            logs_to_process=logs_to_process,
+            transactions=tool_usage_to_process,
         )
     except Exception as tool_tracking_err:
-        verbose_proxy_logger.warning(
-            "Spend tracking - tool usage tracking failed (non-fatal): %s",
+        verbose_proxy_logger.error(
+            "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",
+            len(tool_usage_to_process),
             tool_tracking_err,
         )
 
@@ -5486,9 +5642,13 @@ async def _monitor_spend_logs_queue(
 
     while True:
         try:
-            # Check queue size with lock protection
+            # Check queue sizes with lock protection; the tool usage queue keeps
+            # the monitor firing when a prior failed run left it nonempty.
             async with prisma_client._spend_log_transactions_lock:
-                queue_size = len(prisma_client.spend_log_transactions)
+                spend_queue_size = len(prisma_client.spend_log_transactions)
+            async with prisma_client._tool_usage_transactions_lock:
+                tool_queue_size = len(prisma_client.tool_usage_transactions)
+            queue_size = spend_queue_size + tool_queue_size
 
             if queue_size > 0:
                 if queue_size >= threshold:
@@ -5687,13 +5847,25 @@ def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
 
-def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Router]) -> dict:
+def _check_and_merge_model_level_guardrails(
+    data: dict,
+    llm_router: Optional[Router],
+    trust_client_model_info: bool = True,
+) -> dict:
     """
     Check if the model has guardrails defined and merge them with existing guardrails in the request data.
 
     Args:
         data: The request data dict
         llm_router: The LLM router instance to get deployment info from
+        trust_client_model_info: If False, ignore metadata.model_info.id and
+            resolve guardrails by alias-union only. Set to False on the
+            pre_call path because add_litellm_data_to_request preserves
+            client-supplied model_info when allow_client_pricing_override is
+            set, so a caller could spoof an unguarded model_info.id while
+            requesting a guarded alias and bypass guardrails (veria-ai HIGH
+            on #29654). Defaults to True for post_call paths where the
+            router has populated model_info.id itself.
 
     Returns:
         Modified data dict with merged guardrails (if any model-level guardrails exist)
@@ -5701,20 +5873,57 @@ def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Rou
     if llm_router is None:
         return data
 
-    # Get the model ID from the data
     metadata = data.get("metadata") or {}
+    litellm_metadata = data.get("litellm_metadata") or {}
     model_info = metadata.get("model_info") or {}
-    model_id = model_info.get("id", None)
+    model_id = model_info.get("id") if trust_client_model_info else None
+    # route_request resolves team-scoped public model names with the
+    # server-populated team id; pre_call lookup must do the same so
+    # team-scoped guardrails are not silently skipped (greptile/veria-ai
+    # Medium on #29654).
+    team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
 
-    if model_id is None:
-        return data
-
-    # Check if the model has guardrails
-    deployment = llm_router.get_deployment(model_id=model_id)
-    if deployment is None:
-        return data
-
-    model_level_guardrails = deployment.litellm_params.get("guardrails")
+    model_level_guardrails: Optional[list] = None
+    if model_id is not None:
+        deployment = llm_router.get_deployment(model_id=model_id)
+        if deployment is None:
+            return data
+        deployment_guardrails = deployment.litellm_params.get("guardrails")
+        # Bare-string guardrail names were truthy-accepted before; preserve
+        # that contract so post_call callers don't silently lose them.
+        if isinstance(deployment_guardrails, list):
+            model_level_guardrails = deployment_guardrails
+        elif deployment_guardrails:
+            model_level_guardrails = [deployment_guardrails]
+    else:
+        # Pre_call paths run before route_request picks a deployment, so we
+        # don't know which deployment's litellm_params.guardrails will apply.
+        # Take the UNION across all deployments in the group so a guardrail
+        # set on ANY eligible deployment still fires (#29652; addresses
+        # veria-ai HIGH on the single-deployment fallback that would skip
+        # non-first deployments).
+        model_alias = data.get("model")
+        if not isinstance(model_alias, str) or not model_alias:
+            return data
+        # Pass team_id so team-scoped public model names resolve the same way
+        # route_request resolves them; otherwise team-scoped deployments are
+        # invisible to this lookup and their guardrails are silently dropped.
+        deployments = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
+        seen: set = set()
+        union: list = []
+        for dep in deployments:
+            litellm_params_dep = dep.get("litellm_params") or {}
+            guardrails = litellm_params_dep.get("guardrails")
+            if isinstance(guardrails, str):
+                guardrails = [guardrails]
+            elif not isinstance(guardrails, list):
+                continue
+            for g in guardrails:
+                key = g if isinstance(g, str) else repr(g)
+                if key not in seen:
+                    seen.add(key)
+                    union.append(g)
+        model_level_guardrails = union or None
 
     if model_level_guardrails is None:
         return data

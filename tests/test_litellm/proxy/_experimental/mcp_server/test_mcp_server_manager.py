@@ -1220,6 +1220,53 @@ class TestMCPServerManager:
         assert spec.config.profile == "entra_obo"
 
     @pytest.mark.asyncio
+    async def test_upstream_resource_survives_db_credentials_round_trip(self):
+        """A server persisted through the management API carries upstream_resource in its
+        credentials blob, mirroring id_jag_resource. Without reading it back on the DB build, a
+        UI-created server silently drops the knob and keeps hitting invalid_target."""
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="res-db-1",
+            alias="res_db",
+            description="rfc8707 from db",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            credentials={
+                "client_id": "cid",
+                "client_secret": "csec",
+                "authorization_url": "https://idp.example.com/authorize",
+                "token_url": "https://idp.example.com/token",
+                "upstream_resource": "https://up.example.com/mcp",
+            },
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+        assert built.upstream_resource == "https://up.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_upstream_resource_loads_from_config(self):
+        """The config.yaml arm of the same field: mcp_servers entries must carry the knob onto the
+        registry entry, since a config-declared server never round-trips through the DB."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "strict_as": {
+                    "url": "https://strict.example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "authorization_code",
+                    "upstream_resource": "auto",
+                }
+            }
+        )
+
+        loaded = next(s for s in manager.get_registry().values() if s.name == "strict_as")
+        assert loaded.upstream_resource == "auto"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
     async def test_build_from_table_discovers_upstream_oauth_for_client_forwarded_modes(self, auth_type):
         """The gateway's relayed authorize flow (used by the browser-only Authorize) needs the

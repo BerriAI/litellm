@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Form } from "antd";
+import { Form, type FormInstance } from "antd";
 import { describe, expect, it, vi } from "vitest";
 import SSOModals from "./SSOModals";
 
@@ -412,6 +412,76 @@ describe("SSOModals", () => {
     expect(mockHandleShowInstructions).toHaveBeenCalled();
   });
 
+  it("should submit SAML settings with the unsolicited toggle mapped to a 'true'/'false' string", async () => {
+    const mockHandleShowInstructions = vi.fn();
+    vi.mocked(updateSSOSettings).mockResolvedValue({});
+    vi.mocked(getSSOSettings).mockResolvedValue({ values: {} });
+
+    let formInstance: FormInstance | null = null;
+
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      formInstance = form;
+
+      return (
+        <SSOModals
+          isAddSSOModalVisible={true}
+          isInstructionsModalVisible={false}
+          handleAddSSOOk={() => {}}
+          handleAddSSOCancel={() => {}}
+          handleShowInstructions={mockHandleShowInstructions}
+          handleInstructionsOk={() => {}}
+          handleInstructionsCancel={() => {}}
+          form={form}
+          accessToken="test-token"
+          ssoConfigured={false}
+        />
+      );
+    };
+
+    render(<TestWrapper />);
+
+    await waitFor(() => {
+      expect(getSSOSettings).toHaveBeenCalledWith("test-token");
+    });
+
+    formInstance?.setFieldsValue({ sso_provider: "saml" });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("IdP Metadata URL")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("Proxy Admin Email"), {
+      target: { value: "admin@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Proxy Base URL"), {
+      target: { value: "https://proxy.example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("IdP Metadata URL"), {
+      target: { value: "https://idp.example.com/metadata" },
+    });
+    fireEvent.change(screen.getByLabelText("SP Entity ID"), {
+      target: { value: "https://proxy.example.com/sso/saml/metadata" },
+    });
+    fireEvent.click(screen.getByLabelText("Allow IdP-initiated (unsolicited) responses"));
+
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      expect(updateSSOSettings).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          sso_provider: "saml",
+          saml_idp_metadata_url: "https://idp.example.com/metadata",
+          saml_sp_entity_id: "https://proxy.example.com/sso/saml/metadata",
+          saml_allow_unsolicited: "true",
+        }),
+      );
+    });
+
+    expect(mockHandleShowInstructions).toHaveBeenCalled();
+  });
+
   it("should show Clear button and clear SSO settings when configured", async () => {
     const mockHandleAddSSOOk = vi.fn();
     (updateSSOSettings as any).mockResolvedValue({});
@@ -462,6 +532,10 @@ describe("SSOModals", () => {
         generic_authorization_endpoint: null,
         generic_token_endpoint: null,
         generic_userinfo_endpoint: null,
+        saml_idp_metadata_url: null,
+        saml_idp_metadata_xml: null,
+        saml_sp_entity_id: null,
+        saml_allow_unsolicited: null,
         generic_scope: null,
         proxy_base_url: null,
         user_email: null,

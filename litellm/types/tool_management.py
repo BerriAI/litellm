@@ -124,12 +124,5 @@ class ToolSpendDailyEntry(BaseModel):
 class ToolSpendResponse(BaseModel):
     by_tool: List[ToolSpendEntry] = Field(default_factory=list)
     daily: List[ToolSpendDailyEntry] = Field(default_factory=list)
-    total_spend: float = Field(
-        0.0,
-        description=(
-            "Deduplicated spend of every request that called at least one tool in the window; "
-            "less than the sum of per-tool attributed spend whenever multi-tool requests exist"
-        ),
-    )
     start_date: str | None = None
     end_date: str | None = None
