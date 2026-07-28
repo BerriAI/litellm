@@ -60,6 +60,8 @@ def scripted_server(statuses: Sequence[int], *, slow: bool = False) -> Generator
         protocol_version = "HTTP/1.1"
 
         def _answer(self) -> None:
+            length = int(self.headers.get("content-length") or 0)
+            _ = self.rfile.read(length)
             status = next(scripted, statuses[-1])
             hits.append(status)
             if slow:
