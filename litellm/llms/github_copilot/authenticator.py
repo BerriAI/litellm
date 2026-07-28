@@ -37,28 +37,8 @@ def _https_hostname(url: str) -> str | None:
     return parsed_url.hostname.lower()
 
 
-def _configured_allowed_api_hosts() -> frozenset[str]:
-    configured_hosts = os.getenv("GITHUB_COPILOT_ALLOWED_API_HOSTS", "")
-    return frozenset(host.strip().lower() for host in configured_hosts.split(",") if host.strip())
-
-
-def _configured_oauth_hosts() -> tuple[str, ...]:
-    oauth_urls = (
-        os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL),
-        os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL),
-    )
-    return tuple(hostname for url in oauth_urls if (hostname := _https_hostname(url)) is not None)
-
-
-def _is_trusted_api_base(api_base: str) -> bool:
-    hostname = _https_hostname(api_base)
-    if hostname is None:
-        return False
-    if hostname == "githubcopilot.com" or hostname.endswith(".githubcopilot.com"):
-        return True
-    if hostname in _configured_allowed_api_hosts():
-        return True
-    return any(hostname == f"copilot-api.{oauth_host}" for oauth_host in _configured_oauth_hosts())
+def _is_secure_api_base(api_base: str) -> bool:
+    return _https_hostname(api_base) is not None
 
 
 class Authenticator:
@@ -129,9 +109,11 @@ class Authenticator:
         for source, candidate in candidates:
             if candidate is None:
                 continue
-            if _is_trusted_api_base(candidate):
+            if _is_secure_api_base(candidate):
                 return candidate
-            verbose_logger.warning(f"Ignoring {source} because it is not a trusted HTTPS GitHub Copilot endpoint")
+            verbose_logger.warning(
+                f"Ignoring {source} because it must be an HTTPS URL without credentials, query, or fragment"
+            )
         return None
 
     def _ensure_token_dir(self) -> None:
