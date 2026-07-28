@@ -2962,3 +2962,51 @@ async def test_acompletion_bridge_normalizes_stream_options_on_the_wire(
         assert "stream_options" not in request_body
     else:
         assert request_body["stream_options"] == expected_wire_stream_options
+
+
+def test_map_optional_params_verbosity_maps_to_text_verbosity():
+    """Chat Completions `verbosity` must map to Responses API `text.verbosity`.
+
+    Regression test: previously the chat->Responses bridge silently dropped
+    `verbosity`, so GPT-5.x + tools requests (which litellm routes through
+    /responses) always ran at the provider's default verbosity.
+    """
+    handler = LiteLLMResponsesTransformationHandler()
+
+    responses_api_request: dict = {}
+    handler._map_optional_params_to_responses_api_request(
+        optional_params={"verbosity": "low"},
+        responses_api_request=responses_api_request,  # type: ignore[arg-type]
+    )
+
+    assert responses_api_request["text"] == {"verbosity": "low"}
+
+
+def test_map_optional_params_verbosity_merges_with_response_format():
+    """`verbosity` and `response_format` both write text.* — neither may clobber
+    the other, in either iteration order."""
+    handler = LiteLLMResponsesTransformationHandler()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "out",
+            "schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+        },
+    }
+
+    # verbosity first, response_format second
+    request_a: dict = {}
+    handler._map_optional_params_to_responses_api_request(
+        optional_params={"verbosity": "high", "response_format": response_format},
+        responses_api_request=request_a,  # type: ignore[arg-type]
+    )
+    # response_format first, verbosity second
+    request_b: dict = {}
+    handler._map_optional_params_to_responses_api_request(
+        optional_params={"response_format": response_format, "verbosity": "high"},
+        responses_api_request=request_b,  # type: ignore[arg-type]
+    )
+
+    for request in (request_a, request_b):
+        assert request["text"]["verbosity"] == "high"
+        assert request["text"]["format"]["type"] == "json_schema"

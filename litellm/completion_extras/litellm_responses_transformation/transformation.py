@@ -316,7 +316,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = text_format  # type: ignore
+                    existing_text = dict(responses_api_request.get("text") or {})  # type: ignore[arg-type]
+                    responses_api_request["text"] = {**existing_text, **text_format}  # type: ignore
+            elif key == "verbosity":
+                # Chat Completions `verbosity` maps to `text.verbosity` on the
+                # Responses API. Merge so response_format's text.format and
+                # verbosity survive regardless of param ordering.
+                existing_text = dict(responses_api_request.get("text") or {})  # type: ignore[arg-type]
+                responses_api_request["text"] = {**existing_text, "verbosity": value}  # type: ignore
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = (  # type: ignore[assignment]
                     self._normalize_tool_choice_for_responses_api(value)
