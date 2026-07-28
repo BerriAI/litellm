@@ -8647,9 +8647,9 @@
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.05,
-        "output_cost_per_image_token": 4.7e-05,
-        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/new-mai-models-in-microsoft-foundry-across-text-image-voice-and-speech/4524632",
+        "output_cost_per_image": 0.1085,
+        "output_cost_per_image_token": 0.000106,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-mai-image-2-5-pro-and-mai-voice-2-flash-in-microsoft-foundry/4539446",
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"

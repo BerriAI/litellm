@@ -62,8 +62,8 @@ class TestAzureMAIImageGeneration:
         )
         assert pro_info["input_cost_per_token"] == 5e-06
         assert pro_info["input_cost_per_image_token"] == 8e-06
-        assert pro_info["output_cost_per_image_token"] == 4.7e-05
-        assert pro_info["output_cost_per_image"] == 0.05
+        assert pro_info["output_cost_per_image_token"] == 0.000106
+        assert pro_info["output_cost_per_image"] == 0.1085
 
         image_2e_info = litellm.get_model_info(
             model="azure_ai/MAI-Image-2e",
