@@ -6,6 +6,7 @@ Covers:
   - Cache hit reuses the same logger instance across repeated resolutions
   - Invalid empty log_format still raises ValueError
   - Genuine config change recreates the logger and cancels the old flush task
+  - Header rotation is compared on the effective headers, not the raw config ones
 """
 
 import asyncio
@@ -108,6 +109,51 @@ class TestGenericAPILoggerCaching:
 
             assert flush_task_a.cancelled() is False
             assert _generic_api_logger_cache["cb"] is logger_a
+        finally:
+            logger_a.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_env_header_rotation_recreates_logger(self, monkeypatch):
+        monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+        litellm.callback_settings = {
+            "cb": {
+                "callback_type": "generic_api",
+                "endpoint": "http://127.0.0.1:9/a",
+                "headers": {"X-Static": "s"},
+            }
+        }
+        logger_a = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
+
+        monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+        logger_b = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
+
+        try:
+            assert logger_a is not logger_b
+            assert logger_b.headers["Authorization"] == "Bearer new"
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await logger_a._flush_task
+            assert logger_a._flush_task.cancelled()
+        finally:
+            logger_b.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_env_header_shadowed_by_config_reuses_logger(self, monkeypatch):
+        monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer old")
+        litellm.callback_settings = {
+            "cb": {
+                "callback_type": "generic_api",
+                "endpoint": "http://127.0.0.1:9/a",
+                "headers": {"Authorization": "Bearer from-config"},
+            }
+        }
+        logger_a = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
+
+        monkeypatch.setenv("GENERIC_LOGGER_HEADERS", "Authorization=Bearer new")
+        logger_b = LoggingCallbackManager._add_custom_callback_generic_api_str("cb")
+
+        try:
+            assert logger_a is logger_b
         finally:
             logger_a.shutdown()
 
