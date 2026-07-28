@@ -118,7 +118,6 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           <Tabs
             value={dimension}
             onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}
-            className="mt-3"
           >
             <TabsList>
               <TabsTrigger value="key">By virtual key</TabsTrigger>
